@@ -1,9 +1,5 @@
 # public-html
 
-Hub address (always up to date):
-https://sahandazadee.github.io/public-html/
-
----
 
 ## Project HTML Pages
 
