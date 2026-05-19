@@ -1,7 +1,4 @@
-# public-html
-
-
-## Project HTML Pages
+# Public HTML Project Pages
 
 | Project | Folder | URL |
 |---------|--------|-----|
