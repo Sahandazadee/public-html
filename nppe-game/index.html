@@ -1,0 +1,1032 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="fa">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>بازی آموزشی NPPE</title>
+    <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Vazirmatn', sans-serif;
+            background: black;
+            color: #0f0;
+            margin: 0;
+            overflow: hidden;
+        }
+        #start-screen, #end-screen {
+            text-align: center;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #0f0;
+        }
+        #game-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        #progress {
+            font-size: 18px;
+            margin-bottom: 10px;
+        }
+        #question {
+            font-size: 24px;
+            margin-bottom: 20px;
+            text-shadow: 0 0 5px #0f0;
+        }
+        #options {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .option {
+            margin: 10px;
+            padding: 10px 20px;
+            background: #222;
+            color: #0f0;
+            border: 1px solid #0f0;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 16px;
+            font-weight: 300;
+        }
+        .option:hover {
+            background: #333;
+            box-shadow: 0 0 10px #0f0;
+        }
+        .option:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .option.correct {
+            background: green;
+        }
+        .option.incorrect {
+            background: red;
+        }
+        #feedback {
+            margin-top: 10px;
+            padding: 5px;
+            background: #111;
+            border: 1px solid #0f0;
+            border-radius: 5px;
+            font-size: 12px;
+            text-align: center;
+            line-height: 1.2;
+        }
+        #feedback .key-term {
+            color: #ffa500;
+            font-weight: bold;
+        }
+        #feedback em {
+            font-style: italic;
+        }
+        #timer-bar {
+            width: 80%;
+            height: 20px;
+            background: #333;
+            margin: 10px 0;
+        }
+        #timer-bar::before {
+            content: '';
+            display: block;
+            height: 100%;
+            width: 100%;
+            background: green;
+        }
+        #timer-warning {
+            font-size: 16px;
+            margin: 5px 0;
+        }
+        #score {
+            font-size: 18px;
+            margin-top: 10px;
+        }
+        #next-button {
+            margin-top: 10px;
+            padding: 10px 20px;
+            background: #222;
+            color: #0f0;
+            border: 1px solid #0f0;
+            cursor: pointer;
+        }
+        #next-button:hover {
+            background: #333;
+            box-shadow: 0 0 10px #0f0;
+        }
+        #bg-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            z-index: -1;
+        }
+    </style>
+</head>
+<body>
+    <div id="start-screen">
+        <h1>بازی آموزشی NPPE</h1>
+        <button id="start-button">شروع</button>
+    </div>
+    <div id="game-container">
+        <div id="progress">سوال 1 از 45</div>
+        <div id="question">سوال</div>
+        <div id="options">
+            <button class="option">گزینه 1</button>
+            <button class="option">گزینه 2</button>
+            <button class="option">گزینه 3</button>
+            <button class="option">گزینه 4</button>
+        </div>
+        <div id="timer-warning"></div>
+        <div id="feedback" style="display: none;"></div>
+        <div id="timer-bar"></div>
+        <div id="score">امتیاز: 0</div>
+        <button id="next-button" style="display: none;">سوال بعدی</button>
+    </div>
+    <div id="end-screen" style="display: none;">
+        <h1>بازی تمام شد</h1>
+        <p id="final-score">امتیاز نهایی: 0</p>
+        <button id="restart-button">بازی مجدد</button>
+    </div>
+    <canvas id="bg-canvas"></canvas>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Three.js setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 1;
+        const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('bg-canvas') });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        const stars = [];
+        for (let i = 0; i < 1000; i++) {
+            const geometry = new THREE.SphereGeometry(0.1, 24, 24);
+            const material = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            const star = new THREE.Mesh(geometry, material);
+            star.position.x = (Math.random() - 0.5) * 2000;
+            star.position.y = (Math.random() - 0.5) * 2000;
+            star.position.z = (Math.random() - 0.5) * 2000;
+            scene.add(star);
+            stars.push(star);
+        }
+        function animate() {
+            requestAnimationFrame(animate);
+            stars.forEach(star => {
+                star.position.z += 1;
+                if (star.position.z > 1000) star.position.z = -1000;
+            });
+            renderer.render(scene, camera);
+        }
+        animate();
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Game logic
+        const questions = [
+            {
+                question: "حرفه‌ها در کانادا چگونه تنظیم می‌شوند؟",
+                options: [
+                    "مستقیماً توسط قانون دولت کنترل می‌شوند",
+                    "اجازه دارند تحت قانون دولت خودشان را مدیریت کنند",
+                    "تابع الزامات کارفرمایان در زمینه‌های مرتبط هستند",
+                    "تابع الزامات کالج‌ها و دانشگاه‌ها با برنامه‌های مرتبط هستند"
+                ],
+                correct: 1,
+                explanation_en: "Professions in Canada are self-regulated under government acts, meaning they have the authority to govern themselves while following provincial laws.",
+                explanation_fa: "حرفه‌ها در کانادا تحت قوانین دولتی خودتنظیمی دارند، یعنی انجمن‌های حرفه‌ای خودشان را مدیریت می‌کنند اما طبق قوانین استانی عمل می‌کنند. گزینه درست است زیرا حرفه‌ها به جای کنترل مستقیم دولتی، توسط انجمن‌های خودتنظیم اداره می‌شوند.",
+                key_term: "self-regulated (خودتنظیمی)",
+                mnemonic: "حرفه‌ها مانند ماشین‌های خودران هستند که خودشان را تنظیم می‌کنند اما با قوانین جاده (دولت) هماهنگ‌اند.",
+                colors: { question: "#0f0", options: "#ffff00", feedback: "#e0e0e0" }
+            },
+            {
+                question: "در کانادا، چه کسی مسئول ایجاد قوانین برای تنظیم مهندسی و علوم زمین‌شناسی است؟",
+                options: [
+                    "دولت فدرال به تنهایی مسئول است",
+                    "دولت‌های استانی یا سرزمینی به تنهایی مسئول هستند",
+                    "دولت فدرال و استانی یا سرزمینی به طور مشترک مسئول هستند",
+                    "انجمن حرفه‌ای ملی به تنهایی مسئول است"
+                ],
+                correct: 1,
+                explanation_en: "Provincial or territorial governments are solely responsible for creating legislation to regulate engineering and geoscience.",
+                explanation_fa: "دولت‌های استانی یا سرزمینی به تنهایی مسئول ایجاد قوانین برای تنظیم مهندسی و علوم زمین‌شناسی هستند، زیرا این حرفه‌ها در سطح استانی تنظیم می‌شوند، نه فدرال یا ملی. گزینه درست است زیرا قانون‌گذاری در این حوزه به استان‌ها واگذار شده است.",
+                key_term: "Provincial regulation (تنظیم استانی)",
+                mnemonic: "مهندسی = قوانین استانی، نه فدرال.",
+                colors: { question: "#ff00ff", options: "#00ff00", feedback: "#f0f0f0" }
+            },
+            {
+                question: "مهم‌ترین اصل بنیادین حرفه‌های مهندسی و علوم زمین‌شناسی چیست؟",
+                options: [
+                    "قرار دادن رفاه عمومی بالاتر از منافع شخصی",
+                    "حل مشکلات از طریق کاربرد علم و فناوری",
+                    "تبدیل مفاهیم نظری به کاربردهای عملی",
+                    "عضو فعال انجمن حرفه‌ای بودن"
+                ],
+                correct: 0,
+                explanation_en: "The most important principle is placing public welfare above personal gain, ensuring professionals prioritize safety and public interest.",
+                explanation_fa: "مهم‌ترین اصل، قرار دادن رفاه عمومی بالاتر از منافع شخصی است، زیرا مهندسان و زمین‌شناسان باید ایمنی و منافع عمومی را در اولویت قرار دهند. گزینه درست است زیرا این اصل پایه اخلاق حرفه‌ای است.",
+                key_term: "Public welfare (رفاه عمومی)",
+                mnemonic: "مهندس خوب = رفاه عمومی اول.",
+                colors: { question: "#ff0000", options: "#00ffff", feedback: "#ffffff" }
+            },
+            {
+                question: "کدام اقدام برای فرد بدون مجوز تخلف محسوب نمی‌شود؟",
+                options: [
+                    "استفاده از عنوانی که نشان دهد فرد دارای مجوز است",
+                    "انجام مهندسی یا علوم زمین‌شناسی حرفه‌ای",
+                    "استفاده از مهری که نشان دهد فرد دارای مجوز است",
+                    "کار تحت نظارت اعضای حرفه‌ای"
+                ],
+                correct: 3,
+                explanation_en: "Working under the supervision of professional members is not an offense for unlicensed individuals, as it allows training without claiming licensure.",
+                explanation_fa: "کار تحت نظارت اعضای حرفه‌ای برای افراد بدون مجوز تخلف نیست، زیرا این کار به آن‌ها اجازه می‌دهد تحت هدایت حرفه‌ای‌ها آموزش ببینند بدون ادعای مجوز. گزینه درست است زیرا این تنها گزینه‌ای است که مجاز است.",
+                key_term: "Supervised work (کار تحت نظارت)",
+                mnemonic: "بدون مجوز = فقط با نظارت کار کن.",
+                colors: { question: "#ffff00", options: "#ff00ff", feedback: "#e0e0e0" }
+            },
+            {
+                question: "خودتنظیمی در حرفه‌های مهندسی و علوم زمین‌شناسی به چه معناست؟",
+                options: [
+                    "مردم عادی اعضای شورا را انتخاب می‌کنند",
+                    "اعضای دارای مجوز اعضای شورا را انتخاب می‌کنند",
+                    "دولت استانی یا سرزمینی اعضای شورا را انتخاب می‌کند",
+                    "شرکت‌های دارای مجوز در حوزه قضایی اعضای شورا را انتخاب می‌کنند"
+                ],
+                correct: 1,
+                explanation_en: "Self-regulation means most members of the association’s council are elected by licensed members, ensuring professionals govern themselves.",
+                explanation_fa: "خودتنظیمی یعنی اکثر اعضای شورای انجمن توسط اعضای دارای مجوز انتخاب می‌شوند، که تضمین می‌کند حرفه‌ای‌ها خودشان را اداره کنند. گزینه درست است زیرا این فرآیند دموکراتیک درون‌حرفه‌ای است.",
+                key_term: "Self-regulation (خودتنظیمی)",
+                mnemonic: "خودتنظیمی = انتخاب توسط حرفه‌ای‌ها.",
+                colors: { question: "#00ff00", options: "#ff0000", feedback: "#f0f0f0" }
+            },
+            {
+                question: "کد اخلاق حرفه‌ای توسط چه کسی تعیین می‌شود؟",
+                options: [
+                    "کمیسیون اخلاق حرفه‌ای",
+                    "شورای مهندسان حرفه‌ای کانادا و شورای زمین‌شناسان حرفه‌ای کانادا",
+                    "قانون مجلس",
+                    "انجمن حرفه‌ای استانی یا سرزمینی"
+                ],
+                correct: 3,
+                explanation_en: "The Code of Ethics is established by the provincial or territorial Professional Association, which oversees engineers’ conduct in each region.",
+                explanation_fa: "کد اخلاق حرفه‌ای توسط انجمن حرفه‌ای استانی یا سرزمینی تعیین می‌شود، زیرا این انجمن‌ها مسئول نظارت بر رفتار مهندسان در هر منطقه هستند. گزینه‌های دیگر اشتباه‌اند چون نه کمیسیون جداگانه‌ای وجود دارد، نه شورای ملی، و نه قانون مجلس مستقیماً این کد را تعیین می‌کند.",
+                key_term: "Professional Association (انجمن حرفه‌ای)",
+                mnemonic: "انجمن مثل یک باشگاه محلی است که قوانین اخلاقی اعضایش را وضع می‌کند.",
+                colors: { question: "#ff00ff", options: "#00ff00", feedback: "#ffffff" }
+            },
+            {
+                question: "هدف اصلی کد اخلاق حرفه‌ای چیست؟",
+                options: [
+                    "پایه‌ای برای تخصیص حقوق و مسئولیت‌های قانونی",
+                    "استانداردهایی برای رفتار مناسب در رابطه با کارفرمایان",
+                    "استانداردهای رفتار حرفه‌ای در رابطه با عموم و همکاران",
+                    "معیارهایی برای ارزیابی اتهامات بی‌کفایتی حرفه‌ای"
+                ],
+                correct: 2,
+                explanation_en: "The principal purpose is to set standards of professional conduct in relation to the public and fellow professionals, guiding ethical behavior.",
+                explanation_fa: "هدف اصلی، تعیین استانداردهای رفتار حرفه‌ای در رابطه با عموم و همکاران است، که رفتار اخلاقی را هدایت می‌کند. گزینه درست است زیرا کد اخلاق برای حفظ اعتماد عمومی و حرفه‌ای‌گری طراحی شده است.",
+                key_term: "Professional conduct (رفتار حرفه‌ای)",
+                mnemonic: "کد اخلاق = راهنمای رفتار با مردم و همکاران.",
+                colors: { question: "#ff0000", options: "#ffff00", feedback: "#e0e0e0" }
+            },
+            {
+                question: "نقش اصلی انجمن حرفه‌ای چیست؟",
+                options: [
+                    "بهبود حقوق و شرایط کاری اعضا",
+                    "کنترل تعداد حرفه‌ای‌های دارای مجوز",
+                    "استانداردسازی و کنترل خدمات اعضا",
+                    "تبلیغ خدمات اعضا"
+                ],
+                correct: 2,
+                explanation_en: "The major role is to standardize and control the services of its members, ensuring high-quality and ethical practice.",
+                explanation_fa: "نقش اصلی، استانداردسازی و کنترل خدمات اعضاست، که تضمین می‌کند خدمات با کیفیت بالا و اخلاقی ارائه شوند. گزینه درست است زیرا انجمن‌ها برای حفظ استانداردهای حرفه‌ای وجود دارند.",
+                key_term: "Standardization (استانداردسازی)",
+                mnemonic: "انجمن = نگهبان کیفیت خدمات.",
+                colors: { question: "#00ff00", options: "#ff00ff", feedback: "#f0f0f0" }
+            },
+            {
+                question: "حرفه‌ای که در یک انجمن کانادایی مجوز دارد، چگونه می‌تواند در انجمن دیگر مجوز بگیرد؟",
+                options: [
+                    "توافق تجارت بین‌استانی",
+                    "منشور فدرال",
+                    "قانون‌گذاری استانی",
+                    "توافق تجارت داخلی (AIT)"
+                ],
+                correct: 3,
+                explanation_en: "Professional mobility is enabled by the Agreement on Internal Trade (AIT), allowing licensure across Canadian associations.",
+                explanation_fa: "حرفه‌ای‌ها از طریق توافق تجارت داخلی (AIT) می‌توانند در انجمن‌های دیگر کانادا مجوز بگیرند. گزینه درست است زیرا AIT امکان انتقال مجوز بین استان‌ها را فراهم می‌کند.",
+                key_term: "Agreement on Internal Trade (توافق تجارت داخلی)",
+                mnemonic: "انتقال مجوز = AIT.",
+                colors: { question: "#ffff00", options: "#ff0000", feedback: "#ffffff" }
+            },
+            {
+                question: "مهم‌ترین معیار در ثبت تجربه کاری برای دریافت مجوز مهندسی چیست؟",
+                options: [
+                    "کاربرد تئوری، مدیریت",
+                    "کاربرد تئوری، تجربه عملی",
+                    "تجربه عملی، کاربرد تئوری",
+                    "تجربه عملی، مهارت‌های ارتباطی"
+                ],
+                correct: 2,
+                explanation_en: "The most important criterion is practical experience, followed by application of theory, as they demonstrate competence.",
+                explanation_fa: "مهم‌ترین معیار تجربه عملی است و سپس کاربرد تئوری، زیرا این دو نشان‌دهنده شایستگی حرفه‌ای هستند. گزینه درست است زیرا تجربه عملی پایه مجوز است.",
+                key_term: "Practical experience (تجربه عملی)",
+                mnemonic: "مجوز = تجربه عملی اول.",
+                colors: { question: "#ff00ff", options: "#00ff00", feedback: "#e0e0e0" }
+            },
+            {
+                question: "کدام عنوان برای یک عضو در حال آموزش (MIT) با دو سال تجربه مناسب است؟",
+                options: [
+                    "مهندس جونیور",
+                    "مهندس ناظر پروژه",
+                    "مهندس ارشد",
+                    "تحلیلگر فنی ارشد"
+                ],
+                correct: 3,
+                explanation_en: "Senior Technical Analyst is acceptable as it does not imply a licensed engineer status, unlike the other titles.",
+                explanation_fa: "تحلیلگر فنی ارشد مناسب است زیرا نشان‌دهنده وضعیت مهندس دارای مجوز نیست، برخلاف سایر عناوین. گزینه درست است زیرا عناوین مهندسی برای MIT ممنوع است.",
+                key_term: "Title restriction (محدودیت عنوان)",
+                mnemonic: "MIT = بدون عنوان مهندسی.",
+                colors: { question: "#ff0000", options: "#ffff00", feedback: "#f0f0f0" }
+            },
+            {
+                question: "یک حرفه‌ای چگونه تعریف می‌شود؟",
+                options: [
+                    "دارای مدرکی که به دلیل دانش تخصصی جایگاه بالایی دارد",
+                    "شایستگی در استفاده مسئولانه و اخلاقی از تخصص",
+                    "نظارت بر کیفیت فنی کار زیردستان",
+                    "آموزش و تجربه گسترده در یک زمینه خاص"
+                ],
+                correct: 1,
+                explanation_en: "A professional is characterized by competence in using expertise responsibly and ethically, reflecting their duty to the public.",
+                explanation_fa: "یک حرفه‌ای با شایستگی در استفاده مسئولانه و اخلاقی از تخصص تعریف می‌شود، که نشان‌دهنده وظیفه او نسبت به عموم است. گزینه درست است زیرا حرفه‌ای‌گری به اخلاق و مسئولیت وابسته است.",
+                key_term: "Competence (شایستگی)",
+                mnemonic: "حرفه‌ای = تخصص با اخلاق.",
+                colors: { question: "#00ff00", options: "#ff00ff", feedback: "#ffffff" }
+            },
+            {
+                question: "کدام‌یک از وظایف انجمن حرفه‌ای نیست؟",
+                options: [
+                    "هویت، جایگاه و مسیر شغلی به اعضا دادن",
+                    "تعیین استانداردهای حرفه‌ای که اعضا باید رعایت کنند",
+                    "حفاظت از اعضا در برابر اتهامات عمومی یا دولتی",
+                    "اطمینان از اینکه مدارک حرفه‌ای استانداردهای خاصی دارند"
+                ],
+                correct: 2,
+                explanation_en: "Protecting members from accusations is not a function; the association enforces standards, not shields members.",
+                explanation_fa: "حفاظت از اعضا در برابر اتهامات وظیفه انجمن نیست؛ انجمن استانداردهای حرفه‌ای را اجرا می‌کند، نه اینکه اعضا را محافظت کند. گزینه درست است زیرا انجمن برای نظارت است، نه دفاع.",
+                key_term: "Association role (نقش انجمن)",
+                mnemonic: "انجمن = استاندارد، نه سپر.",
+                colors: { question: "#ffff00", options: "#ff0000", feedback: "#e0e0e0" }
+            },
+            {
+                question: "کد اخلاق حرفه‌ای از نظر قانونی چگونه است؟",
+                options: [
+                    "غیرقابل اجرا",
+                    "الزام‌آور و توسط انجمن حرفه‌ای اجرا می‌شود",
+                    "غیرالزام‌آور اما توسط شرکت‌های حرفه‌ای اجرا می‌شود",
+                    "الزام‌آور و توسط دادگاه‌های استانی اجرا می‌شود"
+                ],
+                correct: 1,
+                explanation_en: "The Code of Ethics is binding and enforced by the Professional Association, ensuring adherence to ethical standards.",
+                explanation_fa: "کد اخلاق حرفه‌ای الزام‌آور است و توسط انجمن حرفه‌ای اجرا می‌شود، که اطمینان می‌دهد استانداردهای اخلاقی رعایت شوند. گزینه درست است زیرا انجمن مسئول اجرای کد است.",
+                key_term: "Code enforcement (اجرای کد)",
+                mnemonic: "کد اخلاق = قانون انجمن.",
+                colors: { question: "#ff00ff", options: "#00ff00", feedback: "#f0f0f0" }
+            },
+            {
+                question: "کد اخلاق حرفه‌ای چه وظیفه‌ای را در اولویت قرار می‌دهد؟",
+                options: [
+                    "حفظ شأن و اعتبار حرفه",
+                    "تعیین نیاز به اقدامات انضباطی توسط انجمن",
+                    "لیست قوانین پیشنهادی که به صورت داوطلبانه قابل پیروی است",
+                    "کم اهمیت است"
+                ],
+                correct: 1,
+                explanation_en: "The Code of Ethics is used by the Association to determine if disciplinary actions are required for breaches.",
+                explanation_fa: "کد اخلاق حرفه‌ای توسط انجمن برای تعیین نیاز به اقدامات انضباطی در صورت تخلف استفاده می‌شود. گزینه درست است زیرا کد ابزار اصلی نظارت انضباطی است.",
+                key_term: "Disciplinary action (اقدام انضباطی)",
+                mnemonic: "کد = نگهبان انضباط.",
+                colors: { question: "#ff0000", options: "#ffff00", feedback: "#ffffff" }
+            },
+            {
+                question: "انجمن برای چه مواردی می‌تواند یک عضو دارای مجوز را تنبیه کند؟",
+                options: [
+                    "سهل‌انگاری",
+                    "ناتوانی جسمی/ذهنی",
+                    "فساد",
+                    "همه موارد فوق"
+                ],
+                correct: 3,
+                explanation_en: "The Association can discipline for negligence, incompetence, or corruption, ensuring public safety.",
+                explanation_fa: "انجمن می‌تواند برای سهل‌انگاری، ناتوانی جسمی/ذهنی، یا فساد تنبیه کند، که ایمنی عمومی را تضمین می‌کند. گزینه درست است زیرا همه این موارد تخلفات جدی هستند.",
+                key_term: "Discipline (انضباط)",
+                mnemonic: "انجمن = پلیس حرفه‌ای.",
+                colors: { question: "#00ff00", options: "#ff00ff", feedback: "#e0e0e0" }
+            },
+            {
+                question: "فارغ‌التحصیل رشته زمین‌شناسی از دانشگاه بریتیش کلمبیا چه عنوانی می‌تواند استفاده کند؟",
+                options: [
+                    "G.I.T یا زمین‌شناس در حال آموزش",
+                    "زمین‌شناس",
+                    "زمین‌شناس فارغ‌التحصیل",
+                    "فارغ‌التحصیل UBC"
+                ],
+                correct: 3,
+                explanation_en: "UBC Graduate is the only title a non-licensed graduate can use, as others imply professional status.",
+                explanation_fa: "فارغ‌التحصیل UBC تنها عنوانی است که یک فارغ‌التحصیل بدون مجوز می‌تواند استفاده کند، زیرا سایر عناوین نشان‌دهنده وضعیت حرفه‌ای هستند. گزینه درست است زیرا عناوین حرفه‌ای نیاز به مجوز دارند.",
+                key_term: "Title usage (استفاده از عنوان)",
+                mnemonic: "بدون مجوز = فقط فارغ‌التحصیل.",
+                colors: { question: "#ffff00", options: "#ff0000", feedback: "#f0f0f0" }
+            },
+            {
+                question: "طبق کد اخلاق انجمن، وظیفه اصلی چیست؟",
+                options: [
+                    "نسبت به حرفه",
+                    "نسبت به عموم",
+                    "نسبت به دیگر مهندسان",
+                    "نسبت به مشتری"
+                ],
+                correct: 1,
+                explanation_en: "The paramount duty is to the public, prioritizing safety and welfare above all else.",
+                explanation_fa: "وظیفه اصلی نسبت به عموم است، که ایمنی و رفاه عمومی را در اولویت قرار می‌دهد. گزینه درست است زیرا مهندسان در درجه اول مسئول حفاظت از مردم هستند.",
+                key_term: "Public duty (وظیفه عمومی)",
+                mnemonic: "مهندس = محافظ مردم.",
+                colors: { question: "#ff00ff", options: "#00ff00", feedback: "#ffffff" }
+            },
+            {
+                question: "کدام‌یک از دلایل زیر نمی‌تواند منجر به تنبیه یک عضو حرفه‌ای شود؟",
+                options: [
+                    "عمل بدون توجه به کد اخلاق",
+                    "فعالیت‌هایی که به محیط‌زیست آسیب می‌رسانند",
+                    "کار روی پروژه‌ای که فرد در آن صلاحیت ندارد",
+                    "هیچ‌کدام"
+                ],
+                correct: 3,
+                explanation_en: "All listed reasons can lead to discipline, as they violate professional standards.",
+                explanation_fa: "همه دلایل ذکر شده می‌توانند منجر به تنبیه شوند، زیرا همگی استانداردهای حرفه‌ای را نقض می‌کنند. گزینه درست است زیرا هیچ استثنایی وجود ندارد.",
+                key_term: "Professional violation (تخلف حرفه‌ای)",
+                mnemonic: "تخلف = تنبیه حتمی.",
+                colors: { question: "#ff0000", options: "#ffff00", feedback: "#e0e0e0" }
+            },
+            {
+                question: "قانون، مقررات و آیین‌نامه‌ها به ترتیب توسط چه کسانی وضع می‌شوند؟",
+                options: [
+                    "دولت آلبرتا، APEGGA، Engineers Canada",
+                    "دولت فدرال کانادا، نهاد قانون‌گذاری آلبرتا، APEGGA",
+                    "نهاد قانون‌گذاری آلبرتا، APEGGA، APEGGA",
+                    "نهاد قانون‌گذاری آلبرتا، APEGGA، Engineers Canada"
+                ],
+                correct: 2,
+                explanation_en: "The Act is set by Alberta’s legislature, regulations by APEGGA, and bylaws by APEGGA.",
+                explanation_fa: "قانون توسط نهاد قانون‌گذاری آلبرتا، مقررات و آیین‌نامه‌ها توسط APEGGA وضع می‌شوند. گزینه درست است زیرا این ساختار قانونی در آلبرتا است.",
+                key_term: "Legislation (قانون‌گذاری)",
+                mnemonic: "قانون = آلبرتا، بقیه APEGGA.",
+                colors: { question: "#00ff00", options: "#ff00ff", feedback: "#f0f0f0" }
+            },
+            {
+                question: "برای محافظت از عضو حرفه‌ای در برابر هزینه‌های ناشی از سهل‌انگاری، چه باید کرد؟",
+                options: [
+                    "تشکیل شرکت",
+                    "مهر مهندس",
+                    "مجوز فعالیت",
+                    "بیمه خطاها و نقص‌ها"
+                ],
+                correct: 3,
+                explanation_en: "Errors and omissions insurance protects professionals from negligence costs, covering legal and financial liabilities.",
+                explanation_fa: "بیمه خطاها و نقص‌ها از حرفه‌ای‌ها در برابر هزینه‌های ناشی از سهل‌انگاری محافظت می‌کند، زیرا مسئولیت‌های قانونی و مالی را پوشش می‌دهد. گزینه درست است زیرا بیمه تنها راه محافظت مالی است.",
+                key_term: "Errors and omissions insurance (بیمه خطاها و نقص‌ها)",
+                mnemonic: "سهل‌انگاری = بیمه لازم.",
+                colors: { question: "#ffff00", options: "#ff0000", feedback: "#ffffff" }
+            },
+            {
+                question: "چند نفر باید نقشه‌های نهایی یک پروژه چندرشته‌ای را مهر کنند؟",
+                options: [
+                    "یک نفر",
+                    "تا پنج نفر",
+                    "همه افراد درگیر پروژه",
+                    "یک نفر برای حرفه‌ای تأییدکننده و یک نفر برای هر رشته"
+                ],
+                correct: 3,
+                explanation_en: "One approving professional and one for each discipline should seal the drawings to ensure accountability across specialties.",
+                explanation_fa: "یک حرفه‌ای تأییدکننده و یک نفر برای هر رشته باید نقشه‌ها را مهر کنند تا مسئولیت‌پذیری در همه تخصص‌ها تضمین شود. گزینه درست است زیرا هر رشته نیاز به مهر جداگانه دارد.",
+                key_term: "Professional seal (مهر حرفه‌ای)",
+                mnemonic: "نقشه چندرشته‌ای = مهر چندنفره.",
+                colors: { question: "#ff00ff", options: "#00ff00", feedback: "#e0e0e0" }
+            },
+            {
+                question: "کدام‌یک درباره شاهد متخصص در دادگاه نادرست است؟",
+                options: [
+                    "حرفه‌ای باید برای طرفی که او را استخدام کرده استدلال کند",
+                    "شاهد متخصص باید پیشینه و تجربه خود را توضیح دهد",
+                    "حرفه‌ای‌ها معمولاً برای حضور در دادگاه دستمزد می‌گیرند",
+                    "حرفه‌ای باید مسائل فنی را بی‌طرفانه توضیح دهد"
+                ],
+                correct: 0,
+                explanation_en: "A professional should not argue for the hiring party but remain unbiased, providing objective expertise.",
+                explanation_fa: "حرفه‌ای نباید برای طرفی که او را استخدام کرده استدلال کند، بلکه باید بی‌طرف بماند و تخصص عینی ارائه دهد. گزینه درست است زیرا بی‌طرفی اصل شاهد متخصص است.",
+                key_term: "Expert witness (شاهد متخصص)",
+                mnemonic: "شاهد = بی‌طرف، نه وکیل.",
+                colors: { question: "#ff0000", options: "#ffff00", feedback: "#f0f0f0" }
+            },
+            {
+                question: "شرکت ABC برای تولید ترامپولین باید چه شرایطی را طبق قانون فروش کالا رعایت کند؟",
+                options: [
+                    "کیفیت و دوام فوق‌العاده",
+                    "قابلیت اطمینان و مقرون‌به‌صرفه بودن",
+                    "ایمنی و مقرون‌به‌صرفه بودن",
+                    "ایمنی و کیفیت"
+                ],
+                correct: 3,
+                explanation_en: "The Sale of Goods Act requires safety and quality to protect the public, ensuring products meet standards.",
+                explanation_fa: "قانون فروش کالا ایمنی و کیفیت را برای حفاظت از عموم الزامی می‌کند، که تضمین می‌کند محصولات استاندارد باشند. گزینه درست است زیرا ایمنی و کیفیت اولویت قانونی هستند.",
+                key_term: "Sale of Goods Act (قانون فروش کالا)",
+                mnemonic: "ترامپولین = ایمن و باکیفیت.",
+                colors: { question: "#00ff00", options: "#ff00ff", feedback: "#ffffff" }
+            },
+            {
+                question: "به عنوان یک حرفه‌ای دارای مجوز، اگر دوستی نقشه‌ای را برای مهر کردن ارائه دهد، چه باید کرد؟",
+                options: [
+                    "امتناع کنید مگر اینکه بررسی کامل انجام دهید و مسئولیت بپذیرید",
+                    "بررسی کنید و مهر بزنید اما مسئولیت نپذیرید",
+                    "درخواست دستمزد کنید",
+                    "فوراً مهر بزنید چون به دوستتان اعتماد دارید"
+                ],
+                correct: 0,
+                explanation_en: "You must refuse unless you review thoroughly and accept responsibility, as the seal implies accountability.",
+                explanation_fa: "باید امتناع کنید مگر اینکه بررسی کامل انجام دهید و مسئولیت بپذیرید، زیرا مهر نشان‌دهنده مسئولیت شماست. گزینه درست است زیرا مهر زدن بدون بررسی غیرقانونی است.",
+                key_term: "Professional responsibility (مسئولیت حرفه‌ای)",
+                mnemonic: "مهر = مسئولیت کامل.",
+                colors: { question: "#ffff00", options: "#ff0000", feedback: "#e0e0e0" }
+            },
+            {
+                question: "چه زمانی می‌توان از عنوان 'مهندس در حال آموزش' استفاده کرد؟",
+                options: [
+                    "پس از دو سال کار تحت نظر مهندس دارای مجوز",
+                    "پس از ثبت‌نام در انجمن حاکم",
+                    "پس از فارغ‌التحصیلی از دانشگاه معتبر",
+                    "پس از قبولی در آزمون حرفه‌ای"
+                ],
+                correct: 1,
+                explanation_en: "The title 'Engineer-In-Training' is granted after registering with the governing Association.",
+                explanation_fa: "عنوان 'مهندس در حال آموزش' پس از ثبت‌نام در انجمن حاکم اعطا می‌شود. گزینه درست است زیرا ثبت‌نام شرط اصلی است.",
+                key_term: "Engineer-In-Training (مهندس در حال آموزش)",
+                mnemonic: "EIT = ثبت‌نام در انجمن.",
+                colors: { question: "#ff00ff", options: "#00ff00", feedback: "#f0f0f0" }
+            },
+            {
+                question: "اگر حرفه‌ای بدون مهر نقشه‌ای ارائه دهد که نیاز به مهر دارد، چه باید کند؟",
+                options: [
+                    "نقشه را امضا کند و شماره ثبت خود را اضافه کند",
+                    "از حرفه‌ای دیگر بخواهد نقشه را تأیید و مهر کند",
+                    "کپی مجوز خود را به نقشه‌ها ضمیمه کند",
+                    "از مهر همکار غایب استفاده کند"
+                ],
+                correct: 0,
+                explanation_en: "The professional should sign and affix their registration number, as only they are accountable for their work.",
+                explanation_fa: "حرفه‌ای باید نقشه را امضا کند و شماره ثبت خود را اضافه کند، زیرا فقط او مسئول کارش است. گزینه درست است زیرا استفاده از مهر دیگران غیرقانونی است.",
+                key_term: "Authentication (تأیید اصالت)",
+                mnemonic: "مهر = فقط خودت.",
+                colors: { question: "#ff0000", options: "#ffff00", feedback: "#ffffff" }
+            },
+            {
+                question: "انجمن برای چه مواردی می‌تواند عضو دارای مجوز را تنبیه کند؟",
+                options: [
+                    "سهل‌انگاری",
+                    "ناتوانی جسمی/ذهنی",
+                    "فساد",
+                    "همه موارد فوق"
+                ],
+                correct: 3,
+                explanation_en: "The Association can discipline for negligence, incompetence, or corruption, ensuring public safety.",
+                explanation_fa: "انجمن می‌تواند برای سهل‌انگاری، ناتوانی جسمی/ذهنی، یا فساد تنبیه کند، که ایمنی عمومی را تضمین می‌کند. گزینه درست است زیرا همه این موارد تخلفات جدی هستند.",
+                key_term: "Discipline (انضباط)",
+                mnemonic: "انجمن = پلیس حرفه‌ای.",
+                colors: { question: "#00ff00", options: "#ff00ff", feedback: "#e0e0e0" }
+            },
+            {
+                question: "اگر فردی بدون مجوز خود را 'مهندس صدا' معرفی کند، چه اقدامی ممکن است؟",
+                options: [
+                    "داوری",
+                    "تنبیه",
+                    "اجرا",
+                    "جرم مدنی"
+                ],
+                correct: 2,
+                explanation_en: "The Association may take enforcement action against someone misusing the title 'engineer' without a license.",
+                explanation_fa: "انجمن ممکن است علیه کسی که بدون مجوز از عنوان 'مهندس' استفاده کند، اقدام اجرایی انجام دهد. گزینه درست است زیرا این تخلف عنوان محسوب می‌شود.",
+                key_term: "Enforcement (اجرا)",
+                mnemonic: "عنوان جعلی = اجرای قانون.",
+                colors: { question: "#ffff00", options: "#ff0000", feedback: "#f0f0f0" }
+            },
+            {
+                question: "کد اخلاق درباره وظیفه نسبت به همکاران چه می‌گوید؟",
+                options: [
+                    "با احترام و حسن نیت با همکاران رفتار کنید",
+                    "با همکاران همان‌طور رفتار کنید که دوست دارید با شما رفتار شود",
+                    "هیچ بخشی درباره وظیفه نسبت به همکاران وجود ندارد",
+                    "با همکاران با ادب باشید اما در صورت سهل‌انگاری گزارش دهید"
+                ],
+                correct: 0,
+                explanation_en: "The Code of Ethics requires acting with courtesy and good will towards colleagues, promoting professional respect.",
+                explanation_fa: "کد اخلاق要求 با احترام و حسن نیت با همکاران رفتار کنید، که احترام حرفه‌ای را ترویج می‌دهد. گزینه درست است زیرا این اصل همکاری حرفه‌ای را تقویت می‌کند.",
+                key_term: "Duty to colleagues (وظیفه نسبت به همکاران)",
+                mnemonic: "همکار = احترام و حسن نیت.",
+                colors: { question: "#ff00ff", options: "#00ff00", feedback: "#ffffff" }
+            },
+            {
+                question: "وضعیت نقشه‌های مهرشده از 20 سال پیش چیست؟",
+                options: [
+                    "به دلیل قانون، مهر پس از 10 سال منقضی می‌شود",
+                    "یک سال پس از اتمام پروژه نامعتبر می‌شوند",
+                    "مهر تاریخ انقضا ندارد",
+                    "مهر تاریخ انقضا ندارد، اما مسئولیت حرفه‌ای پس از 5 سال پایان می‌یابد"
+                ],
+                correct: 2,
+                explanation_en: "The stamp does not have an expiry date, so the plans remain valid unless superseded.",
+                explanation_fa: "مهر تاریخ انقضا ندارد، بنابراین نقشه‌ها معتبر باقی می‌مانند مگر اینکه جایگزین شوند. گزینه درست است زیرا مهر دائمی است.",
+                key_term: "Stamp validity (اعتبار مهر)",
+                mnemonic: "مهر = همیشگی.",
+                colors: { question: "#ff0000", options: "#ffff00", feedback: "#e0e0e0" }
+            },
+            {
+                question: "کدام‌یک از شرایط زیر برای تحقق جرم مدنی لازم نیست؟",
+                options: [
+                    "متهم وظیفه مراقبت را نقض کرده است",
+                    "رفتار متهم باعث آسیب به شاکی شده است",
+                    "متهم باید با شاکی قرارداد داشته باشد",
+                    "متهم به شاکی وظیفه مراقبت داشته باشد"
+                ],
+                correct: 2,
+                explanation_en: "A contract is not required for a tort; duty of care, breach, and causation are sufficient.",
+                explanation_fa: "برای جرم مدنی نیازی به قرارداد نیست؛ وظیفه مراقبت، نقض آن، و ایجاد آسیب کافی است. گزینه درست است زیرا جرم مدنی به قرارداد وابسته نیست.",
+                key_term: "Tort (جرم مدنی)",
+                mnemonic: "جرم مدنی = بدون قرارداد.",
+                colors: { question: "#00ff00", options: "#ff00ff", feedback: "#f0f0f0" }
+            },
+            {
+                question: "کدام ویژگی حرفه‌ای‌ها را از غیرحرفه‌ای‌ها متمایز می‌کند؟",
+                options: [
+                    "حرفه‌ای‌ها معمولاً دستمزد بیشتری دارند",
+                    "وفاداری",
+                    "حرفه‌ای‌ها با شغلشان شناخته می‌شوند",
+                    "تسلط بر دانش تخصصی"
+                ],
+                correct: 3,
+                explanation_en: "Command of highly specialized knowledge is the key distinction, reflecting expertise and training.",
+                explanation_fa: "تسلط بر دانش تخصصی مهم‌ترین ویژگی است، که نشان‌دهنده تخصص و آموزش است. گزینه درست است زیرا حرفه‌ای‌گری به دانش عمیق وابسته است.",
+                key_term: "Specialized knowledge (دانش تخصصی)",
+                mnemonic: "حرفه‌ای = استاد دانش.",
+                colors: { question: "#ffff00", options: "#ff0000", feedback: "#ffffff" }
+            },
+            {
+                question: "اگر با همکارتان کسب‌وکاری راه‌اندازی کنید و او فقط سرمایه‌گذاری کند، این چه نوع شراکتی است؟",
+                options: [
+                    "شرکت",
+                    "مشارکت عمومی",
+                    "مشارکت محدود",
+                    "مالکیت انفرادی"
+                ],
+                correct: 2,
+                explanation_en: "A limited partnership allows one partner to invest without participating in management.",
+                explanation_fa: "مشارکت محدود اجازه می‌دهد یک شریک سرمایه‌گذاری کند بدون مشارکت در مدیریت. گزینه درست است زیرا این نوع مشارکت برای سرمایه‌گذار غیرفعال طراحی شده است.",
+                key_term: "Limited partnership (مشارکت محدود)",
+                mnemonic: "سرمایه بدون دخالت = مشارکت محدود.",
+                colors: { question: "#ff00ff", options: "#00ff00", feedback: "#e0e0e0" }
+            },
+            {
+                question: "کدام‌یک بخشی از فرآیند انتخاب مبتنی بر کیفیت (QBS) نیست؟",
+                options: [
+                    "درخواست پیشنهادهای دقیق",
+                    "اطمینان از اینکه هزینه‌های مشاوره بیش از 5٪ هزینه پروژه نباشد",
+                    "مذاکره برای هزینه مناسب بر اساس محدوده توافق‌شده",
+                    "انتخاب فهرست کوتاه از شرکت‌های واجد شرایط"
+                ],
+                correct: 1,
+                explanation_en: "Ensuring consulting fees don’t exceed 5% is not part of QBS, which focuses on quality over cost caps.",
+                explanation_fa: "اطمینان از اینکه هزینه‌های مشاوره بیش از 5٪ نباشد بخشی از QBS نیست، زیرا QBS بر کیفیت تمرکز دارد، نه سقف هزینه. گزینه درست است زیرا QBS به انتخاب کیفی مربوط است.",
+                key_term: "Quality-Based Selection (انتخاب مبتنی بر کیفیت)",
+                mnemonic: "QBS = کیفیت، نه سقف هزینه.",
+                colors: { question: "#ff0000", options: "#ffff00", feedback: "#f0f0f0" }
+            },
+            {
+                question: "CEAB مخفف چیست؟",
+                options: [
+                    "هیئت اعتباربخشی مهندسی کانادا",
+                    "مرکز هیئت اعتباربخشی مهندسان",
+                    "هیئت اعتباربخشی مهندسی گواهی‌شده",
+                    "هیئت تقدیر مهندسی کنونی"
+                ],
+                correct: 0,
+                explanation_en: "CEAB stands for Canadian Engineering Accreditation Board, which evaluates engineering programs.",
+                explanation_fa: "CEAB مخفف هیئت اعتباربخشی مهندسی کاناداست، که برنامه‌های مهندسی را ارزیابی می‌کند. گزینه درست است زیرا این نهاد مسئول اعتباربخشی است.",
+                key_term: "CEAB (هیئت اعتباربخشی مهندسی کانادا)",
+                mnemonic: "CEAB = اعتبار مهندسی.",
+                colors: { question: "#00ff00", options: "#ff00ff", feedback: "#ffffff" }
+            },
+            {
+                question: "کدام‌یک احتمالاً جریمه کمیته انضباطی برای نقض قانون استانی نیست؟",
+                options: [
+                    "خدمات اجتماعی",
+                    "جریمه نقدی",
+                    "لغو مجوز",
+                    "تعلیق مجوز"
+                ],
+                correct: 0,
+                explanation_en: "Community service is not a typical penalty; fines, revocation, or suspension are more common.",
+                explanation_fa: "خدمات اجتماعی معمولاً جریمه نیست؛ جریمه نقدی، لغو یا تعلیق مجوز رایج‌تر هستند. گزینه درست است زیرا خدمات اجتماعی کمتر اعمال می‌شود.",
+                key_term: "Disciplinary penalty (جریمه انضباطی)",
+                mnemonic: "جریمه = پول یا مجوز، نه خدمت.",
+                colors: { question: "#ffff00", options: "#ff0000", feedback: "#e0e0e0" }
+            },
+            {
+                question: "هدف اصلی کد اخلاق حرفه‌ای چیست؟",
+                options: [
+                    "پایه‌ای برای تخصیص حقوق و مسئولیت‌های قانونی",
+                    "استانداردهایی برای رفتار با کارفرمایان",
+                    "راهنمایی برای حفظ استانداردهای بالای حرفه‌ای با عموم و همکاران",
+                    "معیارهایی برای ارزیابی اتهامات بی‌کفایتی"
+                ],
+                correct: 2,
+                explanation_en: "It provides guidelines for high standards of professional conduct with the public and colleagues.",
+                explanation_fa: "کد اخلاق راهنمایی برای حفظ استانداردهای بالای حرفه‌ای با عموم و همکاران ارائه می‌دهد. گزینه درست است زیرا تمرکز کد بر رفتار حرفه‌ای است.",
+                key_term: "Professional conduct (رفتار حرفه‌ای)",
+                mnemonic: "کد = راهنمای رفتار حرفه‌ای.",
+                colors: { question: "#ff00ff", options: "#00ff00", feedback: "#f0f0f0" }
+            },
+            {
+                question: "یکی از مهم‌ترین الزامات برای ورود به حرفه مهندسی یا علوم زمین‌شناسی چیست؟",
+                options: [
+                    "کاربرد تئوری",
+                    "ارائه سخنرانی",
+                    "برنامه‌ریزی مسیر شغلی",
+                    "کار در استان‌های مختلف"
+                ],
+                correct: 0,
+                explanation_en: "Applying theory through experience is a key requirement for licensure.",
+                explanation_fa: "کاربرد تئوری از طریق تجربه یکی از الزامات کلیدی برای دریافت مجوز است. گزینه درست است زیرا تجربه عملی و تئوری پایه حرفه است.",
+                key_term: "Application of theory (کاربرد تئوری)",
+                mnemonic: "مجوز = تئوری در عمل.",
+                colors: { question: "#ff0000", options: "#ffff00", feedback: "#ffffff" }
+            },
+            {
+                question: "کدام‌یک نادرست است؟",
+                options: [
+                    "برای مجوز حرفه‌ای، نیاز به 4 سال تجربه تحت نظر حرفه‌ای دارای مجوز است",
+                    "داوطلب باید دارای شخصیت و شهرت خوب باشد",
+                    "مهندس دارای مجوز در یک استان نیازی به ثبت‌نام در استان دیگر ندارد",
+                    "داوطلب باید دانش قوی در اخلاق و قوانین تخصصی داشته باشد"
+                ],
+                correct: 2,
+                explanation_en: "Engineers must register in each province to practice, as licensure is province-specific.",
+                explanation_fa: "مهندسان باید در هر استان برای فعالیت ثبت‌نام کنند، زیرا مجوز استانی است. گزینه درست است زیرا ثبت‌نام در هر استان الزامی است.",
+                key_term: "Provincial licensure (مجوز استانی)",
+                mnemonic: "مجوز = هر استان جدا.",
+                colors: { question: "#00ff00", options: "#ff00ff", feedback: "#e0e0e0" }
+            },
+            {
+                question: "نقش انجمن استانی یا سرزمینی چیست؟",
+                options: [
+                    "حفاظت از عموم",
+                    "کنترل کیفیت کار حرفه‌ای‌ها",
+                    "تنبیه حرفه‌ای‌هایی که کد اخلاق را رعایت نمی‌کنند",
+                    "همه موارد فوق"
+                ],
+                correct: 3,
+                explanation_en: "The association protects the public, controls quality, and disciplines violations, ensuring professional standards.",
+                explanation_fa: "انجمن از عموم محافظت می‌کند، کیفیت کار را کنترل می‌کند و تخلفات را تنبیه می‌کند، که استانداردهای حرفه‌ای را تضمین می‌کند. گزینه درست است زیرا همه این‌ها وظایف انجمن هستند.",
+                key_term: "Association duties (وظایف انجمن)",
+                mnemonic: "انجمن = محافظ، کنترل‌کننده، تنبیه‌کننده.",
+                colors: { question: "#ffff00", options: "#ff0000", feedback: "#f0f0f0" }
+            },
+            {
+                question: "کدام‌یک درباره مهر حرفه‌ای درست است؟",
+                options: [
+                    "مهر متعلق به انجمن است",
+                    "عدم استفاده از مهر، مهندس را از مسئولیت معاف می‌کند",
+                    "می‌توان از مهر به عنوان لوگوی شرکت استفاده کرد",
+                    "مهر دقت محاسبات و نقشه‌ها را تضمین می‌کند"
+                ],
+                correct: 0,
+                explanation_en: "The seal is the property of the Association, used to authenticate professional work.",
+                explanation_fa: "مهر متعلق به انجمن است و برای تأیید اصالت کار حرفه‌ای استفاده می‌شود. گزینه درست است زیرا مهر مالکیت انجمن است.",
+                key_term: "Professional seal (مهر حرفه‌ای)",
+                mnemonic: "مهر = مال انجمن.",
+                colors: { question: "#ff00ff", options: "#00ff00", feedback: "#ffffff" }
+            },
+            {
+                question: "آخرین مرحله در آماده‌سازی اسناد نهایی چیست؟",
+                options: [
+                    "بررسی دوباره نقشه‌ها و محاسبات",
+                    "امضا، مهر و تاریخ زدن سند",
+                    "اضافه کردن یادداشت‌های تغییرات",
+                    "همه موارد فوق"
+                ],
+                correct: 1,
+                explanation_en: "Affixing the seal, signing, and dating is the final step to authenticate documents.",
+                explanation_fa: "امضا، مهر و تاریخ زدن سند آخرین مرحله برای تأیید اصالت اسناد است. گزینه درست است زیرا این مرحله نهایی تأیید است.",
+                key_term: "Document authentication (تأیید سند)",
+                mnemonic: "آخرین قدم = مهر و امضا.",
+                colors: { question: "#ff0000", options: "#ffff00", feedback: "#e0e0e0" }
+            },
+            {
+                question: "اصل بنیادین حرفه‌های مهندسی، زمین‌شناسی و ژئوفیزیک چیست؟",
+                options: [
+                    "قرار دادن رفاه عمومی بالاتر از منافع شخصی",
+                    "حل مشکلات با کاربرد علم و فناوری",
+                    "تبدیل تئوری به کاربرد عملی",
+                    "عضو فعال انجمن حرفه‌ای بودن"
+                ],
+                correct: 0,
+                explanation_en: "Placing public welfare above personal gain is the core principle, prioritizing safety.",
+                explanation_fa: "قرار دادن رفاه عمومی بالاتر از منافع شخصی اصل اصلی است، که ایمنی را در اولویت قرار می‌دهد. گزینه درست است زیرا این پایه اخلاق حرفه‌ای است.",
+                key_term: "Public welfare (رفاه عمومی)",
+                mnemonic: "حرفه‌ای = مردم اول.",
+                colors: { question: "#00ff00", options: "#ff00ff", feedback: "#f0f0f0" }
+            },
+            {
+                question: "افراد متخلف از رفتار غیرحرفه‌ای یا عملکرد غیرماهرانه ممکن است به چه چیزی محکوم نشوند؟",
+                options: [
+                    "پرداخت جریمه",
+                    "انجام خدمات اجتماعی داوطلبانه",
+                    "گذراندن دوره‌های آموزش مداوم",
+                    "کار تحت نظارت یک عضو حرفه‌ای"
+                ],
+                correct: 1,
+                explanation_en: "Voluntary community service is not a typical penalty for unprofessional conduct.",
+                explanation_fa: "خدمات اجتماعی داوطلبانه معمولاً جریمه‌ای برای رفتار غیرحرفه‌ای نیست. گزینه درست است زیرا سایر گزینه‌ها جریمه‌های رایج هستند.",
+                key_term: "Penalty (جریمه)",
+                mnemonic: "تخلف = جریمه، نه خدمت داوطلبانه.",
+                colors: { question: "#ffff00", options: "#ff0000", feedback: "#ffffff" }
+            }
+        ];
+
+        let currentQuestionIndex = 0;
+        let score = 0;
+        let timerInterval;
+        const timePerQuestion = 60;
+
+        function applyColors() {
+            const q = questions[currentQuestionIndex];
+            document.getElementById('question').style.color = q.colors.question;
+            const options = document.getElementsByClassName('option');
+            for (let opt of options) {
+                opt.style.color = q.colors.options;
+                opt.style.borderColor = q.colors.options;
+            }
+            document.getElementById('feedback').style.color = q.colors.feedback;
+        }
+
+        function startGame() {
+            document.getElementById('start-screen').style.display = 'none';
+            document.getElementById('game-container').style.display = 'flex';
+            loadQuestion();
+        }
+
+        function loadQuestion() {
+            const q = questions[currentQuestionIndex];
+            document.getElementById('progress').innerText = `سوال ${currentQuestionIndex + 1} از ${questions.length}`;
+            document.getElementById('question').innerText = q.question;
+            const options = document.getElementsByClassName('option');
+            q.options.forEach((opt, index) => {
+                options[index].innerText = opt;
+                options[index].onclick = () => selectAnswer(index);
+                options[index].classList.remove('correct', 'incorrect');
+                options[index].disabled = false;
+            });
+            applyColors();
+            document.getElementById('feedback').style.display = 'none';
+            document.getElementById('next-button').style.display = 'none';
+            startTimer();
+        }
+
+        function startTimer() {
+            let timeLeft = timePerQuestion;
+            const timerBar = document.getElementById('timer-bar');
+            const timerWarning = document.getElementById('timer-warning');
+            timerBar.style.width = '100%';
+            timerBar.style.background = 'green';
+            timerWarning.innerText = `زمان باقی‌مانده: ${timeLeft} ثانیه`;
+            timerInterval = setInterval(() => {
+                timeLeft--;
+                const percentage = (timeLeft / timePerQuestion) * 100;
+                timerBar.style.width = percentage + '%';
+                timerWarning.innerText = `زمان باقی‌مانده: ${timeLeft} ثانیه`;
+                if (percentage > 50) {
+                    timerBar.style.background = 'green';
+                } else if (percentage > 20) {
+                    timerBar.style.background = '#ffff00';
+                } else {
+                    timerBar.style.background = 'red';
+                    timerWarning.style.color = 'red';
+                }
+                if (timeLeft <= 0) {
+                    clearInterval(timerInterval);
+                    selectAnswer(-1);
+                }
+            }, 1000);
+        }
+
+        function selectAnswer(selectedIndex) {
+            clearInterval(timerInterval);
+            const q = questions[currentQuestionIndex];
+            const feedback = document.getElementById('feedback');
+            const options = document.getElementsByClassName('option');
+            for (let opt of options) {
+                opt.disabled = true;
+            }
+            if (selectedIndex === q.correct) {
+                score += 10;
+                feedback.innerHTML = '<span style="color: green">درست است!</span>';
+                options[selectedIndex].classList.add('correct');
+                playSound('correct');
+            } else {
+                feedback.innerHTML = '<span style="color: red">غلط است!</span> جواب درست: ' + q.options[q.correct];
+                if (selectedIndex >= 0) options[selectedIndex].classList.add('incorrect');
+                options[q.correct].classList.add('correct');
+                playSound('incorrect');
+            }
+            feedback.innerHTML += '<br>توضیح: ' + q.explanation_fa + '<br>Explanation: ' + q.explanation_en + '<br>کلمه کلیدی: <span class="key-term">' + q.key_term + '</span><br>نشانه: <em>' + q.mnemonic + '</em>';
+            feedback.style.display = 'block';
+            document.getElementById('score').innerText = 'امتیاز: ' + score;
+            document.getElementById('next-button').style.display = 'block';
+        }
+
+        function nextQuestion() {
+            currentQuestionIndex++;
+            if (currentQuestionIndex < questions.length) {
+                loadQuestion();
+            } else {
+                endGame();
+            }
+        }
+
+        function endGame() {
+            document.getElementById('game-container').style.display = 'none';
+            document.getElementById('end-screen').style.display = 'block';
+            document.getElementById('final-score').innerText = 'امتیاز نهایی: ' + score;
+        }
+
+        document.getElementById('start-button').onclick = startGame;
+        document.getElementById('next-button').onclick = nextQuestion;
+        document.getElementById('restart-button').onclick = () => {
+            currentQuestionIndex = 0;
+            score = 0;
+            document.getElementById('end-screen').style.display = 'none';
+            startGame();
+        };
+
+        function playSound(type) {
+            const audio = new Audio(type + '.mp3');
+            audio.play();
+        }
+    </script>
+</body>
+</html>
+
