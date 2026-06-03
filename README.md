@@ -6,7 +6,6 @@
 | Distance Sensor PCB | distance-sensor-pcb/ | [open](https://sahandazadee.github.io/public-html/distance-sensor-pcb/) |
 | PCB Routing Guide | distance-sensor-pcb/routing-guide.html | [open](https://sahandazadee.github.io/public-html/distance-sensor-pcb/routing-guide.html) |
 | J1 USB-C Pin Map | distance-sensor-pcb/j1-pinmap.html | [open](https://sahandazadee.github.io/public-html/distance-sensor-pcb/j1-pinmap.html) |
-| F.Cu Trace Viewer | distance-sensor-pcb/trace-viewer.html | [open](https://sahandazadee.github.io/public-html/distance-sensor-pcb/trace-viewer.html) |
 | Peyksafar | peyksafar/ | [open](https://sahandazadee.github.io/public-html/peyksafar/) |
 | Project Structure Generator | project-structure-generator/ | [open](https://sahandazadee.github.io/public-html/project-structure-generator/) |
 | Habit Tracker | habit-tracker/ | [open](https://sahandazadee.github.io/public-html/habit-tracker/) |
