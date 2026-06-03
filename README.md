@@ -6,6 +6,7 @@
 | Distance Sensor PCB | distance-sensor-pcb/ | [open](https://sahandazadee.github.io/public-html/distance-sensor-pcb/) |
 | PCB Routing Guide | distance-sensor-pcb/routing-guide.html | [open](https://sahandazadee.github.io/public-html/distance-sensor-pcb/routing-guide.html) |
 | J1 USB-C Pin Map | distance-sensor-pcb/j1-pinmap.html | [open](https://sahandazadee.github.io/public-html/distance-sensor-pcb/j1-pinmap.html) |
+| J1 3D Conflict Viewer | distance-sensor-pcb/j1_3d_viewer.html | [open](https://sahandazadee.github.io/public-html/distance-sensor-pcb/j1_3d_viewer.html) |
 | Peyksafar | peyksafar/ | [open](https://sahandazadee.github.io/public-html/peyksafar/) |
 | Project Structure Generator | project-structure-generator/ | [open](https://sahandazadee.github.io/public-html/project-structure-generator/) |
 | Habit Tracker | habit-tracker/ | [open](https://sahandazadee.github.io/public-html/habit-tracker/) |
@@ -28,10 +29,13 @@ public-html/
 Original files stay in their private repos.
 Only copies live here for public rendering via GitHub Pages.
 
-## Rule
+## Rule (CRITICAL)
 
-Every time a new HTML file is created for any project:
-1. Create folder: public-html/PROJECTNAME/index.html
-2. Add a card to index.html hub
-3. Add a row to this README table
-4. Add link in the project's private repo README
+This README table must ALWAYS exactly mirror the HTML files in each folder —
+every `.html` page gets exactly one row. No missing rows, no dead links.
+
+Every time an HTML file is added / renamed / removed in any project folder:
+1. Update this README table in the SAME commit (add/rename/remove the row)
+2. Use a descriptive page name (not "index"), and the github.io URL
+3. Verify each linked file actually exists before committing
+4. Add the github.io link in the project's private repo README too
