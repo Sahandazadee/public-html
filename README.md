@@ -12,7 +12,7 @@
 | Digital Clock | digital-clock/ | [open](https://sahandazadee.github.io/public-html/digital-clock/) |
 | NPPE Game | nppe-game/ | [open](https://sahandazadee.github.io/public-html/nppe-game/) |
 | 3D Simulator | 3dsimulator/ | [open](https://sahandazadee.github.io/public-html/3dsimulator/) |
-| Phil's Lab PCB Rules ← منتقل شد | — | [ریپوی جدید](https://sahandazadee.github.io/pcb-rules/) |
+| Phil's Lab PCB Rules ← منتقل شد | github.com/Sahandazadee/pcb-rules | [open](https://sahandazadee.github.io/pcb-rules/) |
 
 ---
 
