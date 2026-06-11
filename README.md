@@ -14,14 +14,7 @@
 | Digital Clock | digital-clock/ | [open](https://sahandazadee.github.io/public-html/digital-clock/) |
 | NPPE Game | nppe-game/ | [open](https://sahandazadee.github.io/public-html/nppe-game/) |
 | 3D Simulator | 3dsimulator/ | [open](https://sahandazadee.github.io/public-html/3dsimulator/) |
-| Phil's Lab PCB Rules (Index) | phils-lab-pcb-rules/index.html | [open](https://sahandazadee.github.io/public-html/phils-lab-pcb-rules/index.html) |
-| Phil's Lab — Schematic Rules (S1–S67) | phils-lab-pcb-rules/schematic-rules.html | [open](https://sahandazadee.github.io/public-html/phils-lab-pcb-rules/schematic-rules.html) |
-| Phil's Lab — PCB Layout Rules (P1–P81) | phils-lab-pcb-rules/pcb-layout-rules.html | [open](https://sahandazadee.github.io/public-html/phils-lab-pcb-rules/pcb-layout-rules.html) |
-| Phil's Lab — Verified Design Parameters | phils-lab-pcb-rules/design-parameters.html | [open](https://sahandazadee.github.io/public-html/phils-lab-pcb-rules/design-parameters.html) |
-| Phil's Lab — Schematic Rules FA (فارسی) | phils-lab-pcb-rules/schematic-rules-fa.html | [open](https://sahandazadee.github.io/public-html/phils-lab-pcb-rules/schematic-rules-fa.html) |
-| Phil's Lab — PCB Layout Rules FA (فارسی) | phils-lab-pcb-rules/pcb-layout-rules-fa.html | [open](https://sahandazadee.github.io/public-html/phils-lab-pcb-rules/pcb-layout-rules-fa.html) |
-| Phil's Lab — Persian Summary (FA) | phils-lab-pcb-rules/readme-fa.html | [open](https://sahandazadee.github.io/public-html/phils-lab-pcb-rules/readme-fa.html) |
-| Phil's Lab — Interactive Beginner Guide | phils-lab-pcb-rules/interactive-guide.html | [open](https://sahandazadee.github.io/public-html/phils-lab-pcb-rules/interactive-guide.html) |
+| Phil's Lab PCB Rules ← منتقل شد | — | [ریپوی جدید](https://sahandazadee.github.io/pcb-rules/) |
 
 ---
 
