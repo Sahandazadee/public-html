@@ -5,8 +5,6 @@
 | Hello Sahand | hello-sahand/ | [open](https://sahandazadee.github.io/public-html/hello-sahand/) |
 | Distance Sensor PCB | distance-sensor-pcb/ | [open](https://sahandazadee.github.io/public-html/distance-sensor-pcb/) |
 | PCB Routing Guide | distance-sensor-pcb/routing-guide.html | [open](https://sahandazadee.github.io/public-html/distance-sensor-pcb/routing-guide.html) |
-| J1 USB-C Pin Map | distance-sensor-pcb/j1-pinmap.html | [open](https://sahandazadee.github.io/public-html/distance-sensor-pcb/j1-pinmap.html) |
-| J1 3D Conflict Viewer | distance-sensor-pcb/j1_3d_viewer.html | [open](https://sahandazadee.github.io/public-html/distance-sensor-pcb/j1_3d_viewer.html) |
 | Peyksafar | peyksafar/ | [open](https://sahandazadee.github.io/public-html/peyksafar/) |
 | Project Structure Generator | project-structure-generator/ | [open](https://sahandazadee.github.io/public-html/project-structure-generator/) |
 | Habit Tracker | habit-tracker/ | [open](https://sahandazadee.github.io/public-html/habit-tracker/) |
