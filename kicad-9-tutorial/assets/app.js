@@ -41,6 +41,14 @@
     if (a === 'lang') applyLang(root.getAttribute('data-lang') === 'fa' ? 'en' : 'fa');
     if (a === 'theme') applyTheme(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
     if (a === 'nav') document.body.classList.toggle('nav-open');
+    if (a === 'summary') {
+      var body = t.nextElementSibling;
+      if (body && body.classList.contains('summary-body')) {
+        var isOpen = t.getAttribute('aria-expanded') === 'true';
+        if (isOpen) { body.setAttribute('hidden',''); t.setAttribute('aria-expanded','false'); }
+        else { body.removeAttribute('hidden'); t.setAttribute('aria-expanded','true'); }
+      }
+    }
   });
 
   /* ---- scroll-spy for in-page section nav ---- */
