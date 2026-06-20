@@ -13,6 +13,7 @@
 | NPPE Game | nppe-game/ | [open](https://sahandazadee.github.io/public-html/nppe-game/) |
 | 3D Simulator | 3dsimulator/ | [open](https://sahandazadee.github.io/public-html/3dsimulator/) |
 | Phil's Lab PCB Rules ← منتقل شد | github.com/Sahandazadee/pcb-rules | [open](https://sahandazadee.github.io/pcb-rules/) |
+| **KiCad 9 Tutorial** (11 lessons, FA/EN) | kicad-9-tutorial/ | [open](https://sahandazadee.github.io/public-html/kicad-9-tutorial/) |
 
 ---
 
