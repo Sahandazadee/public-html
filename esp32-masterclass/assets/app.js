@@ -441,17 +441,17 @@
       s += '<rect x="' + (q[0] - 96) + '" y="' + (q[1] - 12) + '" width="84" height="24" rx="6" fill="#2a3244"/><text x="' + (q[0] - 54) + '" y="' + (q[1] + 5) + '" text-anchor="middle" font-size="13" font-weight="700" fill="#ffd166" font-family="JetBrains Mono,monospace">' + esc(p) + '</text>';
       s += '<circle cx="' + (q[0] - 4) + '" cy="' + q[1] + '" r="5.5" fill="#e8c35a" stroke="#8a6d1c"/>';
     });
-    var dots = {};
+    var dots = {}, labels = "";
     spec.wires.forEach(function (w, i) {
       var a = pos[w[0]], b = pos[w[1]];
       if (!a || !b) { console.warn("wire endpoint missing", w); return; }
       var lx = chanX + i * laneGap, col = WC[w[2]] || w[2] || "#f08a24";
       s += '<path d="M' + a[0] + ' ' + a[1] + ' H' + lx + ' V' + b[1] + ' H' + b[0] + '" fill="none" stroke="' + col + '" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" opacity=".92"/>';
       [a, b].forEach(function (q) { var k = q.join(","); dots[k] = (dots[k] || 0) + 1; });
-      if (w[3]) s += '<text x="' + (lx + 5) + '" y="' + ((a[1] + b[1]) / 2) + '" font-size="11" fill="' + col + '" font-weight="700">' + esc(w[3]) + '</text>';
+      if (w[3]) labels += '<text x="' + (lx + 6) + '" y="' + ((a[1] + b[1]) / 2 + 4) + '" font-size="11" fill="' + col + '" font-weight="700" stroke="#fbfcfe" stroke-width="4" paint-order="stroke" direction="ltr" unicode-bidi="plaintext">' + esc(w[3]) + '</text>';
     });
     Object.keys(dots).forEach(function (k) { if (dots[k] > 1) { var q = k.split(","); s += '<circle cx="' + q[0] + '" cy="' + q[1] + '" r="6.5" fill="#152033"/>'; } });
-    s += partsSvg + '</svg>';
+    s += partsSvg + labels + '</svg>';
     var legend = '<div class="wire-legend"><span><i style="background:' + WC.red + '"></i>تغذیه (3V3 یا 5V)</span><span><i style="background:' + WC.black + '"></i>زمین GND</span><span><i style="background:' + WC.orange + '"></i>سیگنال خروجی</span><span><i style="background:' + WC.blue + '"></i>سیگنال ورودی / داده</span><span><i style="background:' + WC.green + '"></i>ساعت / SCL / SCK</span><span><i style="background:' + WC.yellow + '"></i>داده I2C (SDA) / TX</span></div>';
     var table = '<details><summary>جدول اتصال‌ها (برای چک کردن سیم به سیم)</summary><div class="table-wrap"><table><tr><th>#</th><th>از</th><th>به</th><th>رنگ پیشنهادی سیم</th></tr>' +
       spec.wires.map(function (w, i) { return '<tr><td>' + fa(i + 1) + '</td><td class="ltr">' + esc(w[0]) + '</td><td class="ltr">' + esc(w[1]) + '</td><td><i style="display:inline-block;width:22px;height:6px;border-radius:3px;background:' + (WC[w[2]] || w[2]) + '"></i> ' + esc(w[2] || "") + '</td></tr>'; }).join("") + '</table></div></details>';
