@@ -1,19 +1,20 @@
 # Public HTML Project Pages
 
-| Project | Folder | URL |
-|---------|--------|-----|
-| Hello Sahand | hello-sahand/ | [open](https://sahandazadee.github.io/public-html/hello-sahand/) |
-| Distance Sensor PCB | distance-sensor-pcb/ | [open](https://sahandazadee.github.io/public-html/distance-sensor-pcb/) |
-| PCB Routing Guide | distance-sensor-pcb/routing-guide.html | [open](https://sahandazadee.github.io/public-html/distance-sensor-pcb/routing-guide.html) |
-| Peyksafar | peyksafar/ | [open](https://sahandazadee.github.io/public-html/peyksafar/) |
-| Project Structure Generator | project-structure-generator/ | [open](https://sahandazadee.github.io/public-html/project-structure-generator/) |
-| Habit Tracker | habit-tracker/ | [open](https://sahandazadee.github.io/public-html/habit-tracker/) |
-| Perry Clock | perry-clock/ | [open](https://sahandazadee.github.io/public-html/perry-clock/) |
-| Digital Clock | digital-clock/ | [open](https://sahandazadee.github.io/public-html/digital-clock/) |
-| NPPE Game | nppe-game/ | [open](https://sahandazadee.github.io/public-html/nppe-game/) |
-| 3D Simulator | 3dsimulator/ | [open](https://sahandazadee.github.io/public-html/3dsimulator/) |
-| Phil's Lab PCB Rules ← منتقل شد | github.com/Sahandazadee/pcb-rules | [open](https://sahandazadee.github.io/pcb-rules/) |
-| **KiCad 9 Tutorial** (11 lessons, FA/EN) | kicad-9-tutorial/ | [open](https://sahandazadee.github.io/public-html/kicad-9-tutorial/) |
+| Project | Folder | URL | Notes |
+|---------|--------|-----|-------|
+| Hello Sahand | hello-sahand/ | [open](https://sahandazadee.github.io/public-html/hello-sahand/) | — |
+| Distance Sensor PCB | distance-sensor-pcb/ | [open](https://sahandazadee.github.io/public-html/distance-sensor-pcb/) | — |
+| PCB Routing Guide | distance-sensor-pcb/routing-guide.html | [open](https://sahandazadee.github.io/public-html/distance-sensor-pcb/routing-guide.html) | — |
+| Peyksafar | peyksafar/ | [open](https://sahandazadee.github.io/public-html/peyksafar/) | — |
+| Project Structure Generator | project-structure-generator/ | [open](https://sahandazadee.github.io/public-html/project-structure-generator/) | — |
+| Habit Tracker | habit-tracker/ | [open](https://sahandazadee.github.io/public-html/habit-tracker/) | — |
+| Perry Clock | perry-clock/ | [open](https://sahandazadee.github.io/public-html/perry-clock/) | — |
+| Digital Clock | digital-clock/ | [open](https://sahandazadee.github.io/public-html/digital-clock/) | — |
+| NPPE Game | nppe-game/ | [open](https://sahandazadee.github.io/public-html/nppe-game/) | — |
+| 3D Simulator | 3dsimulator/ | [open](https://sahandazadee.github.io/public-html/3dsimulator/) | — |
+| Phil's Lab PCB Rules | github.com/Sahandazadee/pcb-rules | [open](https://sahandazadee.github.io/pcb-rules/) | منتقل شد به ریپوی جدا |
+| **KiCad 9 Tutorial** | kicad-9-tutorial/ | [open](https://sahandazadee.github.io/public-html/kicad-9-tutorial/) | 11 درس، FA/EN |
+| **C از صفر** | c-az-sefr/ | [open](https://sahandazadee.github.io/public-html/c-az-sefr/) | 18 درس تعاملی C برای embedded، فارسی RTL |
 
 ---
 
