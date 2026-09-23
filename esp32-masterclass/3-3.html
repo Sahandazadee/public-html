@@ -1,0 +1,910 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>I2C، SPI و UART: نمایشگر OLED، سنسور DHT22، کارت SD و GPS · مستر کلاس ESP32</title>
+<meta name="description" content="سه پروتکل سریال اصلی ESP32 به زبان ساده: I2C با اسکنر و نمایشگر OLED SSD1306، سنسور DHT22 و نمایش دما روی OLED، SPI با کارت microSD و ثبت CSV، و UART با ماژول GPS NEO-6M، جمله NMEA و TinyGPSPlus.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="3-3">
+
+<p class="lede">تا این‌جا هر قطعه یک سیم جدا داشت و ESP32 فقط «ولتاژ» آن را می‌خواند یا می‌نوشت. ولی نمایشگر، کارت حافظه و GPS «حرف» می‌زنند: عدد، متن و دستور رد و بدل می‌کنند. برای این کار سه زبان استاندارد هست: I2C، SPI و UART. در این درس هر سه را از پایه یاد می‌گیری و با هر کدام یک پروژه واقعی می‌سازی. این طولانی‌ترین درس فصل است؛ بخش به بخش جلو برو و هر بخش را قبل از بعدی امتحان کن.</p>
+
+<div class="goals">
+  <div><h4>🎯 بعد از این درس می‌توانی</h4><ul>
+    <li>بگویی هر پروتکل چند سیم دارد، چطور کار می‌کند و کی کدام را انتخاب کنی</li>
+    <li>با اسکنر I2C آدرس هر دستگاه را پیدا کنی و روی نمایشگر OLED متن و عدد بنویسی</li>
+    <li>دما و رطوبت را با DHT22 بخوانی و روی OLED نشان بدهی</li>
+    <li>روی کارت microSD فایل CSV بنویسی و دوباره بخوانی</li>
+    <li>جمله NMEA ی GPS را بخوانی، معنی کنی و با TinyGPSPlus مختصات بگیری</li>
+  </ul></div>
+  <div><h4>🧰 پیش‌نیاز و وسایل</h4><ul>
+    <li>درس‌های <a href="3-1.html">۳.۱</a> (millis و Pull-up) و <a href="2-3.html">۲.۳</a> (Serial Monitor)</li>
+    <li>نمایشگر OLED ی ۰٫۹۶ اینچ SSD1306 (نسخه I2C، ۴ پایه)</li>
+    <li>سنسور DHT22 (یا ماژول ۳ پایه آن) + مقاومت ۱۰ کیلو</li>
+    <li>ماژول کارت microSD (SPI) و یک کارت ۳۲ گیگ یا کمتر</li>
+    <li>ماژول GPS NEO-6M (مثلا GY-NEO6MV2) با آنتن</li>
+  </ul></div>
+</div>
+
+<div class="gallery">
+  <figure><div class="frame"><img src="assets/img/oled-photo1.jpg" alt="نمایشگر OLED صفر و نود و شش صدم اینچ"></div><figcaption>OLED ی ۰٫۹۶ اینچ SSD1306<span class="src">تصویر: ThingPulse (esp8266-oled-ssd1306)، مجوز MIT</span></figcaption></figure>
+  <figure><div class="frame"><img src="assets/img/dht22.svg" alt="سنسور DHT22"></div><figcaption>سنسور دما و رطوبت DHT22<span class="src">تصویر: Fritzing، مجوز CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="assets/img/sdmodule.svg" alt="ماژول کارت SD"></div><figcaption>ماژول کارت microSD با رابط SPI<span class="src">تصویر: Fritzing، مجوز CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="assets/img/bme280.svg" alt="ماژول BME280"></div><figcaption>BME280: سنسور I2C واقعی<span class="src">تصویر: Fritzing، مجوز CC BY-SA 3.0</span></figcaption></figure>
+</div>
+
+<h2 id="big-picture">تصویر بزرگ: چرا «پروتکل»؟</h2>
+<p>پروتکل یعنی «قرارداد گفت‌وگو»: چند سیم داریم، چه کسی اول حرف می‌زند، هر بیت چقدر طول می‌کشد و دستگاه‌ها چطور همدیگر را صدا می‌زنند. هر سه پروتکل این درس <b>سریال</b> هستند: بیت‌ها را یکی‌یکی پشت سر هم روی یک سیم می‌فرستند، نه هشت‌تا هشت‌تا روی هشت سیم. این کار سیم‌ها را کم می‌کند.</p>
+
+<div class="callout analogy"><div class="ct">سه جور گفت‌وگو در زندگی</div>
+<p><b>UART</b> مثل تلفن بین دو نفر است: هر کدام یک دهان (TX) و یک گوش (RX) دارد و فقط همین دو نفر با هم حرف می‌زنند. <b>I2C</b> مثل کلاس درس است: یک معلم (Master) و چند شاگرد روی یک خط مشترک؛ معلم اسم (آدرس) هر شاگرد را صدا می‌زند و فقط همان جواب می‌دهد. <b>SPI</b> مثل معلمی است که با هر شاگرد یک سیم «دست بلند کن» جدا (CS) دارد؛ سریع‌تر است چون لازم نیست اسم صدا بزند، ولی به ازای هر شاگرد یک سیم بیشتر لازم دارد.</p></div>
+
+<div class="table-wrap"><table>
+<tr><th>ویژگی</th><th>I2C</th><th>SPI</th><th>UART</th></tr>
+<tr><td>تعداد سیم (بدون تغذیه)</td><td>۲: <code>SDA</code>، <code>SCL</code></td><td>۳ + یکی برای هر دستگاه: <code>MOSI</code>، <code>MISO</code>، <code>SCK</code>، <code>CS</code></td><td>۲: <code>TX</code>، <code>RX</code> (ضربدری)</td></tr>
+<tr><td>ساعت مشترک</td><td>دارد (SCL)</td><td>دارد (SCK)</td><td>ندارد؛ هر دو طرف باید سرعت (Baud) یکسان داشته باشند</td></tr>
+<tr><td>سرعت معمول</td><td>۱۰۰ یا ۴۰۰ کیلوبیت در ثانیه</td><td>چند تا ده‌ها مگابیت در ثانیه</td><td>۹۶۰۰ تا ۱۱۵۲۰۰ بیت در ثانیه (رایج)</td></tr>
+<tr><td>تعداد دستگاه</td><td>ده‌ها دستگاه روی دو سیم</td><td>چند دستگاه؛ هر کدام یک CS</td><td>فقط دو دستگاه</td></tr>
+<tr><td>شیوه انتخاب دستگاه</td><td>آدرس ۷ بیتی (مثلا <code>0x3C</code>)</td><td>پایین کشیدن سیم CS همان دستگاه</td><td>لازم نیست؛ فقط دو طرف</td></tr>
+<tr><td>پین‌های پیش‌فرض ESP32</td><td>SDA=<code>GPIO21</code>، SCL=<code>GPIO22</code></td><td>VSPI: MOSI=<code>23</code>، MISO=<code>19</code>، SCK=<code>18</code>، CS=<code>5</code></td><td>Serial2 با پین‌های صریح؛ در این درس RX=<code>GPIO16</code>، TX=<code>GPIO17</code></td></tr>
+<tr><td>قطعه‌های نمونه</td><td>OLED، BME280، MPU6050، RTC DS3231</td><td>کارت SD، نمایشگر TFT، ماژول LoRa</td><td>GPS، ماژول سیم‌کارت، ارتباط با کامپیوتر</td></tr>
+</table></div>
+
+<figure><div class="frame"><svg viewBox="0 0 760 520" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="نمودار سه باس I2C، SPI و UART">
+  <!-- I2C -->
+  <text x="20" y="28" font-size="16" font-weight="800" fill="#152033">I2C</text>
+  <rect x="20" y="50" width="120" height="90" rx="10" fill="#1b1f2a"/><text x="80" y="100" font-size="14" font-weight="700" text-anchor="middle" fill="#fff">ESP32</text>
+  <line x1="140" y1="75" x2="720" y2="75" stroke="#e6b800" stroke-width="4"/>
+  <line x1="140" y1="115" x2="720" y2="115" stroke="#1e9e4a" stroke-width="4"/>
+  <text x="150" y="68" font-size="12" fill="#a07e00" font-weight="700">SDA (data)</text>
+  <text x="150" y="132" font-size="12" fill="#1e9e4a" font-weight="700">SCL (clock)</text>
+  <g font-size="12" text-anchor="middle" fill="#152033">
+    <rect x="300" y="150" width="110" height="46" rx="8" fill="#eef2f8" stroke="#6b7280"/><text x="355" y="170">OLED</text><text x="355" y="187" font-family="JetBrains Mono,monospace">0x3C</text>
+    <rect x="450" y="150" width="110" height="46" rx="8" fill="#eef2f8" stroke="#6b7280"/><text x="505" y="170">BME280</text><text x="505" y="187" font-family="JetBrains Mono,monospace">0x76</text>
+    <rect x="600" y="150" width="110" height="46" rx="8" fill="#eef2f8" stroke="#6b7280"/><text x="655" y="170">RTC</text><text x="655" y="187" font-family="JetBrains Mono,monospace">0x68</text>
+  </g>
+  <g stroke-width="3"><line x1="335" y1="75" x2="335" y2="150" stroke="#e6b800"/><line x1="375" y1="115" x2="375" y2="150" stroke="#1e9e4a"/><line x1="485" y1="75" x2="485" y2="150" stroke="#e6b800"/><line x1="525" y1="115" x2="525" y2="150" stroke="#1e9e4a"/><line x1="635" y1="75" x2="635" y2="150" stroke="#e6b800"/><line x1="675" y1="115" x2="675" y2="150" stroke="#1e9e4a"/></g>
+  <!-- SPI -->
+  <text x="20" y="236" font-size="16" font-weight="800" fill="#152033">SPI</text>
+  <rect x="20" y="250" width="120" height="130" rx="10" fill="#1b1f2a"/><text x="80" y="320" font-size="14" font-weight="700" text-anchor="middle" fill="#fff">ESP32</text>
+  <line x1="140" y1="265" x2="620" y2="265" stroke="#1e9e4a" stroke-width="4"/>
+  <line x1="140" y1="290" x2="620" y2="290" stroke="#f08a24" stroke-width="4"/>
+  <line x1="140" y1="315" x2="620" y2="315" stroke="#2563eb" stroke-width="4"/>
+  <text x="150" y="260" font-size="12" fill="#1e9e4a" font-weight="700">SCK</text>
+  <text x="190" y="285" font-size="12" fill="#c46a12" font-weight="700">MOSI (ESP32 → device)</text>
+  <text x="190" y="332" font-size="12" fill="#2563eb" font-weight="700">MISO (device → ESP32)</text>
+  <path d="M140 350 H360 V395" fill="none" stroke="#8b3fd6" stroke-width="3"/><text x="150" y="346" font-size="12" fill="#8b3fd6" font-weight="700">CS1</text>
+  <path d="M140 368 H560 V395" fill="none" stroke="#e0457a" stroke-width="3"/><text x="400" y="364" font-size="12" fill="#e0457a" font-weight="700">CS2</text>
+  <g font-size="12" text-anchor="middle" fill="#152033">
+    <rect x="300" y="395" width="120" height="40" rx="8" fill="#eef2f8" stroke="#6b7280"/><text x="360" y="420">SD card</text>
+    <rect x="500" y="395" width="120" height="40" rx="8" fill="#eef2f8" stroke="#6b7280"/><text x="560" y="420">TFT</text>
+  </g>
+  <g stroke-width="2.5"><line x1="320" y1="265" x2="320" y2="395" stroke="#1e9e4a"/><line x1="335" y1="290" x2="335" y2="395" stroke="#f08a24"/><line x1="385" y1="315" x2="385" y2="395" stroke="#2563eb"/><line x1="520" y1="265" x2="520" y2="395" stroke="#1e9e4a"/><line x1="535" y1="290" x2="535" y2="395" stroke="#f08a24"/><line x1="585" y1="315" x2="585" y2="395" stroke="#2563eb"/></g>
+  <!-- UART -->
+  <text x="20" y="470" font-size="16" font-weight="800" fill="#152033">UART</text>
+  <rect x="90" y="450" width="120" height="60" rx="10" fill="#1b1f2a"/><text x="150" y="486" font-size="14" font-weight="700" text-anchor="middle" fill="#fff">ESP32</text>
+  <rect x="520" y="450" width="120" height="60" rx="10" fill="#eef2f8" stroke="#6b7280"/><text x="580" y="486" font-size="14" text-anchor="middle" fill="#152033">GPS</text>
+  <text x="222" y="466" font-size="12" fill="#152033" font-family="JetBrains Mono,monospace">TX2 (17)</text>
+  <text x="222" y="503" font-size="12" fill="#152033" font-family="JetBrains Mono,monospace">RX2 (16)</text>
+  <text x="508" y="466" font-size="12" text-anchor="end" fill="#152033" font-family="JetBrains Mono,monospace">RX</text>
+  <text x="508" y="503" font-size="12" text-anchor="end" fill="#152033" font-family="JetBrains Mono,monospace">TX</text>
+  <line x1="290" y1="462" x2="480" y2="462" stroke="#e6b800" stroke-width="3" marker-end="url(#ar)"/>
+  <line x1="480" y1="499" x2="290" y2="499" stroke="#2563eb" stroke-width="3" marker-end="url(#ar)"/>
+  <defs><marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="#152033"/></marker></defs>
+</svg></div>
+<figcaption>سه باس کنار هم. I2C: همه دستگاه‌ها روی همان دو سیم، با آدرس جدا. SPI: سه سیم مشترک و یک CS جدا برای هر دستگاه. UART: فقط دو دستگاه، و TX هر کدام به RX دیگری.</figcaption></figure>
+
+<!-- ================= I2C ================= -->
+<h2 id="i2c">I2C: دو سیم، ده‌ها دستگاه</h2>
+<p>I2C (بخوان «آی‌تو‌سی» یا «آی‌اسکوئرسی») دو سیم دارد: <b>SDA</b> برای داده و <b>SCL</b> برای ساعت. ESP32 نقش <b>Master</b> (رئیس) را دارد: فقط او می‌تواند گفت‌وگو را شروع کند و ساعت را می‌سازد. دستگاه‌ها (Slave یا Target) فقط وقتی آدرسشان صدا زده شود جواب می‌دهند.</p>
+
+<h3>گفت‌وگوی I2C قدم به قدم</h3>
+<pre class="mermaid">sequenceDiagram
+  participant M as ESP32 (Master)
+  participant O as OLED (0x3C)
+  participant B as BME280 (0x76)
+  M->>O: START + address 0x3C + write
+  O-->>M: ACK (I am here)
+  Note over B: address does not match, stays silent
+  M->>O: data bytes
+  O-->>M: ACK after each byte
+  M->>O: STOP</pre>
+<p>ESP32 اول آدرس را روی خط می‌فرستد. همه دستگاه‌ها آن را می‌شنوند، ولی فقط دستگاهی که آدرسش همین است با یک بیت «ACK» (بله، این‌جام) جواب می‌دهد. اگر هیچ‌کس جواب ندهد، ESP32 «NACK» می‌بیند و می‌فهمد دستگاهی با این آدرس نیست. همین ترفند، پایه «اسکنر I2C» است.</p>
+
+<div class="callout why"><div class="ct">چرا I2C به مقاومت Pull-up نیاز دارد؟</div>
+<p>در I2C هیچ دستگاهی سیم را به ۳٫۳ ولت «هل» نمی‌دهد؛ دستگاه‌ها فقط می‌توانند سیم را به GND «بکشند» (به این «Open-Drain» می‌گویند). پس یک مقاومت Pull-up (معمولا ۴٫۷ یا ۱۰ کیلو) باید سیم را در حالت عادی به ۳٫۳ ولت برگرداند؛ همان ایده درس ۳.۱. خبر خوب: تقریبا همه ماژول‌های آماده (OLED، BME280 و…) این مقاومت‌ها را روی خودشان دارند، پس معمولا لازم نیست چیزی اضافه کنی. این طراحی باعث می‌شود اگر دو دستگاه هم‌زمان بخواهند حرف بزنند، اتصال کوتاه پیش نیاید.</p></div>
+
+<div class="callout warn"><div class="ct">ماژول ۵ ولتی و I2C</div>
+<p>اگر یک ماژول I2C را با 5V تغذیه کنی و Pull-up های روی آن به همان ۵ ولت وصل باشند، خطوط SDA و SCL ۵ ولت می‌شوند و به ESP32 آسیب می‌زنند. OLED و BME280 را همیشه با <b>3V3</b> تغذیه کن. برای ماژول‌هایی که حتما ۵ ولت می‌خواهند، مبدل سطح (Level Shifter) لازم است.</p></div>
+
+<h3 id="scanner">اسکنر I2C: اولین قدم با هر ماژول جدید</h3>
+<p>قبل از هر کتابخانه‌ای، اول مطمئن شو ESP32 دستگاه را «می‌بیند». این برنامه همه آدرس‌های ممکن را یکی‌یکی صدا می‌زند و آن‌هایی را که جواب می‌دهند چاپ می‌کند.</p>
+<div class="code" data-file="I2C_Scanner.ino" id="c1"><pre>
+// اسکنر I2C: چه دستگاه‌هایی روی باس هستند؟
+#include &lt;Wire.h&gt;
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(21, 22);                 // SDA=21, SCL=22 (پیش‌فرض ESP32)
+  Serial.println("I2C scanner...");
+}
+
+void loop() {
+  int found = 0;
+  for (uint8_t addr = 1; addr &lt; 127; addr++) {
+    Wire.beginTransmission(addr);     // «کسی با این آدرس هست؟»
+    uint8_t err = Wire.endTransmission();
+    if (err == 0) {                   // 0 = جواب داد (ACK)
+      Serial.printf("Found device at 0x%02X\n", addr);
+      found++;
+    }
+  }
+  if (found == 0) Serial.println("No I2C devices found. Check wiring!");
+  Serial.println("----");
+  delay(5000);
+}
+</pre></div>
+<ol class="walk" data-for="c1">
+  <li data-lines="2"><b class="what">کتابخانه Wire.</b> کتابخانه داخلی I2C در آردوینو. نصب لازم ندارد.
+    <span class="why">اسمش از «سیم» می‌آید چون I2C را «Two-Wire» هم می‌گویند.</span></li>
+  <li data-lines="6"><b class="what">Wire.begin(SDA، SCL).</b> باس I2C را روی پین‌های ۲۱ و ۲۲ راه می‌اندازد و ESP32 را Master می‌کند.
+    <span class="why">در ESP32 تقریبا هر پینی می‌تواند I2C باشد (ماتریس GPIO). ۲۱ و ۲۲ پیش‌فرض‌اند و <code>Wire.begin()</code> خالی هم همین‌ها را استفاده می‌کند؛ ولی نوشتن صریح پین‌ها باعث می‌شود اگر روزی پین دیگری لازم شد، بدانی کجا را عوض کنی.</span></li>
+  <li data-lines="12"><b class="what">حلقه روی همه آدرس‌ها.</b> از ۱ تا ۱۲۶.
+    <span class="why">آدرس I2C هفت بیتی است (۰ تا ۱۲۷)؛ آدرس ۰ برای «همه» (General Call) و ۱۲۷ و چند آدرس دیگر رزرو هستند. <code>uint8_t</code> یعنی عدد ۸ بیتی مثبت (۰ تا ۲۵۵).</span></li>
+  <li data-lines="13-14"><b class="what">در زدن.</b> <code>beginTransmission</code> آدرس را آماده می‌کند و <code>endTransmission</code> واقعا آن را می‌فرستد و نتیجه را برمی‌گرداند.
+    <span class="why">بدون فرستادن هیچ داده‌ای فقط می‌پرسیم «هستی؟». این کار برای هیچ دستگاهی ضرر ندارد.</span></li>
+  <li data-lines="15-18"><b class="what">نتیجه ۰ یعنی ACK.</b> آدرس به صورت هگزادسیمال چاپ می‌شود؛ <code>%02X</code> یعنی «مبنای ۱۶، دو رقمی، با حروف بزرگ».
+    <span class="why">دیتاشیت‌ها و کتابخانه‌ها آدرس را همیشه هگز می‌نویسند (<code>0x3C</code>)، پس ما هم همین‌طور چاپ می‌کنیم تا مستقیم قابل مقایسه باشد. کدهای خطای دیگر: ۲ یعنی NACK برای آدرس (کسی نیست).</span></li>
+  <li data-lines="20-22"><b class="what">گزارش و تکرار هر ۵ ثانیه.</b>
+    <span class="why">تکرار باعث می‌شود بتوانی وسط کار سیم را درست کنی و بدون ریست کردن نتیجه را ببینی.</span></li>
+</ol>
+<div class="serial">I2C scanner...
+Found device at 0x3C
+----</div>
+
+<h3 id="oled">نمایشگر OLED ی ۰٫۹۶ اینچ (SSD1306)</h3>
+<p>این نمایشگر کوچک ۱۲۸ × ۶۴ پیکسل دارد و هر پیکسل خودش نور می‌دهد (پس نور پس‌زمینه ندارد، کنتراستش عالی است و کم مصرف است). تراشه راه‌انداز آن SSD1306 است و نسخه ۴ پایه آن با I2C کار می‌کند. آدرس تقریبا همیشه <code>0x3C</code> است؛ بعضی مدل‌ها با جابه‌جا کردن یک مقاومت پشت برد <code>0x3D</code> می‌شوند. (پشت برد گاهی «0x78» نوشته شده؛ این همان 0x3C است که یک بیت به چپ شیفت داده شده، یعنی آدرس ۸ بیتی. در کد همیشه <code>0x3C</code> بنویس.)</p>
+<div class="gallery">
+  <figure><div class="frame"><img src="assets/img/oled-photo1.jpg" alt="OLED در حال نمایش متن"></div><figcaption>OLED ی ۰٫۹۶ اینچ روشن<span class="src">تصویر: ThingPulse، مجوز MIT</span></figcaption></figure>
+  <figure><div class="frame"><img src="assets/img/oled-photo2.jpg" alt="OLED متصل به برد"></div><figcaption>ترتیب پایه‌ها روی برد را بخوان؛ همه یکسان نیستند<span class="src">تصویر: ThingPulse، مجوز MIT</span></figcaption></figure>
+</div>
+<div class="callout warn"><div class="ct">ترتیب پایه‌ها را از روی خود ماژول بخوان</div>
+<p>بعضی OLED ها <code>GND VCC SCL SDA</code> هستند و بعضی <code>VCC GND SCL SDA</code>. جابه‌جا وصل کردن VCC و GND می‌تواند ماژول را بسوزاند. قبل از وصل کردن، نوشته کنار پایه‌ها را بخوان، نه عکس اینترنت را.</p></div>
+
+<p><b>کتابخانه‌ها:</b> از <code>Sketch › Include Library › Manage Libraries…</code> این را نصب کن: <a href="https://github.com/adafruit/Adafruit_SSD1306" target="_blank" rel="noopener">Adafruit SSD1306</a>. هنگام نصب می‌پرسد وابستگی‌ها (<a href="https://github.com/adafruit/Adafruit-GFX-Library" target="_blank" rel="noopener">Adafruit GFX Library</a> و Adafruit BusIO) را هم نصب کند؛ بگو <b>Install All</b>. کتابخانه SSD1306 با تراشه صحبت می‌کند و GFX ابزار رسم (متن، خط، مستطیل، دایره) را می‌دهد.</p>
+
+<h4>دستگاه مختصات صفحه</h4>
+<figure><div class="frame"><svg viewBox="0 0 640 330" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="دستگاه مختصات OLED">
+  <defs><marker id="ax" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="#2563eb"/></marker></defs>
+  <rect x="80" y="50" width="384" height="192" fill="#0b1020" stroke="#6b7280" stroke-width="2"/>
+  <line x1="80" y1="36" x2="500" y2="36" stroke="#2563eb" stroke-width="2.5" marker-end="url(#ax)"/>
+  <line x1="66" y1="50" x2="66" y2="280" stroke="#2563eb" stroke-width="2.5" marker-end="url(#ax)"/>
+  <text x="508" y="41" font-size="14" fill="#2563eb" font-weight="700">x</text>
+  <text x="60" y="298" font-size="14" fill="#2563eb" font-weight="700">y</text>
+  <text x="80" y="28" font-size="12" fill="#152033" font-family="JetBrains Mono,monospace">(0,0)</text>
+  <text x="470" y="262" font-size="12" fill="#152033" font-family="JetBrains Mono,monospace">(127,63)</text>
+  <text x="88" y="72" font-size="18" fill="#9fe8ff" font-family="JetBrains Mono,monospace">Hello ESP32!</text>
+  <text x="88" y="140" font-size="36" fill="#9fe8ff" font-family="JetBrains Mono,monospace">n = 7</text>
+  <rect x="80" y="200" width="384" height="42" fill="none" stroke="#9fe8ff" stroke-width="2"/>
+  <rect x="86" y="206" width="84" height="30" fill="#9fe8ff"/>
+  <text x="560" y="72" font-size="12" text-anchor="middle" fill="#152033" direction="rtl">اندازه ۱: ۶×۸ پیکسل</text>
+  <text x="560" y="130" font-size="12" text-anchor="middle" fill="#152033" direction="rtl">اندازه ۲: ۱۲×۱۶</text>
+  <text x="560" y="224" font-size="12" text-anchor="middle" fill="#152033" direction="rtl">drawRect + fillRect</text>
+  <text x="272" y="318" font-size="13" text-anchor="middle" fill="#4d5b70" direction="rtl">مبدأ گوشه بالا چپ است؛ y به سمت پایین زیاد می‌شود</text>
+</svg></div>
+<figcaption>صفحه ۱۲۸ × ۶۴ (با مقیاس ۳ برابر). برخلاف ریاضی مدرسه، y به سمت <b>پایین</b> زیاد می‌شود. این قرارداد در تقریبا همه نمایشگرها و گرافیک کامپیوتری یکسان است.</figcaption></figure>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"OLED","name":"OLED ۰٫۹۶ اینچ SSD1306 (I2C)","pins":[["GND","زمین"],["VCC","تغذیه ۳٫۳ ولت"],["SCL","ساعت"],["SDA","داده"]]}
+  ],
+  "wires":[["GND","OLED.GND","black"],["3V3","OLED.VCC","red"],["GPIO22","OLED.SCL","green"],["GPIO21","OLED.SDA","yellow"]]
+}</script><figcaption>فقط چهار سیم. SDA به GPIO21 و SCL به GPIO22.</figcaption></div>
+
+<div class="code" data-file="OLED_Hello.ino" id="c2"><pre>
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+
+const int SCREEN_W = 128;
+const int SCREEN_H = 64;
+Adafruit_SSD1306 display(SCREEN_W, SCREEN_H, &amp;Wire, -1);   // -1 = بدون پین ریست
+
+int counter = 0;
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("SSD1306 not found!");
+    while (true) delay(1000);        // این‌جا بایست
+  }
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+}
+
+void loop() {
+  display.clearDisplay();             // ۱) بافر را پاک کن
+  display.setTextSize(1);             // حروف 6×8 پیکسل
+  display.setCursor(0, 0);
+  display.println("Hello ESP32!");
+  display.setTextSize(2);             // حروف 12×16 پیکسل
+  display.setCursor(0, 24);
+  display.print("n = ");
+  display.println(counter);
+  display.drawRect(0, 50, 128, 14, SSD1306_WHITE);                 // قاب نوار
+  display.fillRect(2, 52, (counter % 25) * 5, 10, SSD1306_WHITE);  // نوار پیشرفت
+  display.display();                  // ۲) بافر را روی صفحه بفرست
+  counter++;
+  delay(500);
+}
+</pre></div>
+<ol class="walk" data-for="c2">
+  <li data-lines="1-3"><b class="what">سه کتابخانه.</b> Wire برای I2C، GFX برای رسم، SSD1306 برای خود نمایشگر.
+    <span class="why">این تقسیم کار باعث می‌شود همان دستورهای رسم GFX را روی ده‌ها نمایشگر دیگر (TFT رنگی و…) هم استفاده کنی.</span></li>
+  <li data-lines="5-7"><b class="what">ساختن شیء نمایشگر.</b> اندازه صفحه، باس I2C (<code>&amp;Wire</code>) و پین ریست (<code>-1</code> یعنی ندارد).
+    <span class="why">علامت <code>&amp;</code> یعنی «آدرس» شیء Wire؛ به کتابخانه می‌گوییم از کدام باس استفاده کند (ESP32 دو باس I2C دارد). ماژول‌های ۴ پایه پین ریست ندارند.</span></li>
+  <li data-lines="14-17"><b class="what">راه‌اندازی با بررسی خطا.</b> <code>begin</code> آدرس <code>0x3C</code> را می‌گیرد؛ <code>SSD1306_SWITCHCAPVCC</code> یعنی ولتاژ بالای پنل را مدار داخلی خود ماژول بسازد. اگر نشد، پیام می‌دهد و در یک حلقه بی‌پایان می‌ایستد.
+    <span class="why">بدون این بررسی، برنامه با نمایشگر ناموجود ادامه می‌داد و تو فقط یک صفحه سیاه می‌دیدی بدون هیچ سرنخی. <code>begin</code> همچنین ۱ کیلوبایت RAM برای بافر (۱۲۸ × ۶۴ ÷ ۸) رزرو می‌کند.</span></li>
+  <li data-lines="19"><b class="what">رنگ متن.</b> SSD1306 تک‌رنگ است: <code>SSD1306_WHITE</code> یعنی پیکسل روشن (رنگ واقعی بسته به مدل سفید، آبی یا زرد است).
+    <span class="why">پیش‌فرض رنگ متن در GFX ممکن است با پس‌زمینه یکی باشد؛ بدون این خط متن نامرئی می‌شود. یک بار در setup کافی است.</span></li>
+  <li data-lines="23"><b class="what">مرحله ۱: پاک کردن بافر.</b>
+    <span class="why">همه دستورهای رسم روی یک «بوم» در RAM ی ESP32 نقاشی می‌کنند، نه مستقیم روی صفحه. اگر پاک نکنی، عدد جدید روی عدد قبلی نوشته می‌شود و درهم می‌شود.</span></li>
+  <li data-lines="24-30"><b class="what">متن با اندازه و مکان.</b> <code>setTextSize</code> بزرگی، <code>setCursor(x, y)</code> گوشه بالا چپ حرف اول، و <code>print/println</code> خود متن یا عدد.
+    <span class="why">دقیقا مثل Serial؛ چون کلاس نمایشگر از Print ارث می‌برد، همان print و println را دارد. y=24 را انتخاب کردیم تا زیر خط اول (ارتفاع ۸) فاصله داشته باشد.</span></li>
+  <li data-lines="31-32"><b class="what">شکل‌ها.</b> <code>drawRect(x, y, عرض، ارتفاع، رنگ)</code> قاب و <code>fillRect</code> مستطیل توپر. عرض نوار با <code>(counter % 25) * 5</code> از ۰ تا ۱۲۰ پیکسل تغییر می‌کند.
+    <span class="why"><code>%</code> باقیمانده تقسیم است، پس عدد بعد از ۲۴ به ۰ برمی‌گردد و نوار از اول پر می‌شود. ۱۲۰ + ۲ کمتر از عرض داخلی قاب است، پس از قاب بیرون نمی‌زند.</span></li>
+  <li data-lines="33"><b class="what">مرحله ۲: display().</b> کل بافر را از طریق I2C به نمایشگر می‌فرستد.
+    <span class="why">فراموش کردن این خط رایج‌ترین دلیل «صفحه خالی» است. ارسال ۱۰۲۴ بایت در ۴۰۰ کیلوهرتز حدود ۲۵ میلی‌ثانیه طول می‌کشد، پس بهتر است همه تغییرات را اول در بافر انجام بدهی و یک بار display کنی.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="c2">
+<p>در Wokwi از زبانه <b>Library Manager</b> کتابخانه <code>Adafruit SSD1306</code> را اضافه کن (GFX را خودش می‌آورد؛ اگر خطای Adafruit_GFX دیدی، آن را هم جدا اضافه کن). کد اسکنر I2C را هم می‌توانی در همین مدار اجرا کنی تا <code>0x3C</code> را ببینی.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled1", "top": 60, "left": 200, "attrs": { "i2cAddress": "0x3c" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="dht22">DHT22: دما و رطوبت (و یک اعتراف صادقانه)</h2>
+<p>DHT22 (که با اسم AM2302 هم فروخته می‌شود) دما را از ۴۰− تا ۸۰ درجه با دقت حدود ۰٫۵± درجه و رطوبت نسبی را از ۰ تا ۱۰۰٪ با دقت حدود ۲ تا ۵٪ اندازه می‌گیرد. ارزان و محبوب است.</p>
+<div class="callout warn"><div class="ct">DHT22 یک سنسور I2C <b>نیست</b></div>
+<p>در برنامه این دوره DHT22 کنار I2C آمده، چون معمولا با OLED ی I2C استفاده می‌شود. ولی باید صادق باشیم: DHT22 از یک پروتکل <b>اختصاصی تک‌سیمه</b> استفاده می‌کند که نه I2C است و نه پروتکل 1-Wire شرکت Dallas. ESP32 یک پالس شروع می‌فرستد و سنسور با ۴۰ بیت جواب می‌دهد که مقدار هر بیت با <b>طول</b> پالس HIGH مشخص می‌شود (حدود ۲۶ تا ۲۸ میکروثانیه = ۰، حدود ۷۰ میکروثانیه = ۱). کتابخانه این زمان‌ها را دقیق اندازه می‌گیرد. نتیجه عملی: DHT22 سیم مخصوص به خودش را لازم دارد و نمی‌تواند روی SDA/SCL با بقیه شریک شود.</p>
+<p>اگر یک سنسور محیطی واقعا I2C می‌خواهی، <b>BME280</b> را ببین: دما، رطوبت و فشار هوا، دقیق‌تر و سریع‌تر، روی همان دو سیم OLED با آدرس <code>0x76</code> یا <code>0x77</code>. (مراقب باش: BMP280 ی ارزان‌تر شبیه آن است ولی رطوبت ندارد.)</p></div>
+
+<div class="gallery">
+  <figure><div class="frame"><img src="assets/img/dht22.svg" alt="DHT22"></div><figcaption>DHT22: پروتکل تک‌سیمه اختصاصی<span class="src">تصویر: Fritzing، مجوز CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="assets/img/bme280.svg" alt="BME280"></div><figcaption>BME280: I2C واقعی<span class="src">تصویر: Fritzing، مجوز CC BY-SA 3.0</span></figcaption></figure>
+</div>
+
+<p><b>پایه‌های DHT22 چهار پایه</b> (از چپ، وقتی مشبک رو به توست): ۱ = VCC، ۲ = DATA، ۳ = وصل نیست (NC)، ۴ = GND. خط DATA مثل I2C «Open-Drain» است و یک مقاومت Pull-up ۱۰ کیلو بین DATA و VCC لازم دارد. ماژول‌های ۳ پایه (روی یک برد کوچک) این مقاومت را خودشان دارند. DHT22 با ۳٫۳ تا ۶ ولت کار می‌کند؛ ما آن را با 3V3 تغذیه می‌کنیم تا خط DATA هرگز بیش از ۳٫۳ ولت نشود.</p>
+
+<div class="code" data-file="DHT22_Read.ino" id="c3"><pre>
+#include &lt;DHT.h&gt;
+
+const int DHT_PIN = 4;
+DHT dht(DHT_PIN, DHT22);         // نوع سنسور: DHT22 (AM2302)
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+}
+
+void loop() {
+  delay(2000);                     // DHT22 حداکثر هر 2 ثانیه یک خواندن
+  float h = dht.readHumidity();
+  float t = dht.readTemperature(); // سلسیوس
+  if (isnan(h) || isnan(t)) {
+    Serial.println("DHT read failed!");
+    return;                        // این دور را رها کن
+  }
+  Serial.printf("T=%.1f C  H=%.1f %%\n", t, h);
+}
+</pre></div>
+<ol class="walk" data-for="c3">
+  <li data-lines="1"><b class="what">کتابخانه DHT.</b> <a href="https://github.com/adafruit/DHT-sensor-library" target="_blank" rel="noopener">DHT sensor library</a> از Adafruit؛ در Library Manager «DHT sensor library» را جست‌وجو کن و وابستگی <b>Adafruit Unified Sensor</b> را هم نصب کن.
+    <span class="why">پیاده‌سازی زمان‌بندی میکروثانیه‌ای پروتکل کار ساده‌ای نیست؛ کتابخانه جاافتاده آن را انجام می‌دهد.</span></li>
+  <li data-lines="3-4"><b class="what">شیء سنسور روی GPIO4.</b> نوع سنسور را <code>DHT22</code> می‌گوییم.
+    <span class="why">DHT11 و DHT22 قالب داده متفاوت دارند؛ نوع اشتباه یعنی اعداد بی‌معنی. GPIO4 یک پایه امن و همه‌کاره است.</span></li>
+  <li data-lines="12"><b class="what">صبر ۲ ثانیه‌ای.</b>
+    <span class="why">DHT22 هر ۲ ثانیه یک اندازه‌گیری جدید انجام می‌دهد. خواندن سریع‌تر یا خطا می‌دهد یا عدد قبلی را تکرار می‌کند. (کتابخانه خودش هم خواندن‌های زیر ۲ ثانیه را با عدد قبلی جواب می‌دهد.)</span></li>
+  <li data-lines="13-14"><b class="what">خواندن رطوبت و دما.</b> هر دو <code>float</code> (عدد اعشاری) هستند.
+    <span class="why"><code>readTemperature(true)</code> فارنهایت می‌دهد؛ بدون ورودی سلسیوس است.</span></li>
+  <li data-lines="15-18"><b class="what">بررسی NaN.</b> اگر خواندن شکست بخورد، کتابخانه به جای عدد مقدار ویژه <code>NaN</code> (Not a Number) برمی‌گرداند. <code>isnan</code> آن را تشخیص می‌دهد و <code>return</code> بقیه loop را رها می‌کند.
+    <span class="why">بدون این بررسی، <code>nan</code> روی صفحه و در لاگ ذخیره می‌شد یا در محاسبه‌ها همه چیز را NaN می‌کرد. قانون حرفه‌ای: هر عدد سنسور را قبل از استفاده اعتبارسنجی کن.</span></li>
+  <li data-lines="19"><b class="what">چاپ با یک رقم اعشار.</b> <code>%.1f</code> یعنی عدد اعشاری با یک رقم بعد از ممیز.
+    <span class="why">دقت سنسور حدود نیم درجه است؛ چاپ ۲۵٫۳۴۷۱ درجه فقط دقت دروغین نشان می‌دهد.</span></li>
+</ol>
+<div class="serial">T=24.6 C  H=41.2 %
+T=24.6 C  H=41.3 %
+DHT read failed!
+T=24.7 C  H=41.3 %</div>
+<p>یک خطای گاه‌به‌گاه طبیعی است (پروتکل به زمان‌بندی حساس است). اگر همه خواندن‌ها خطاست، به جدول عیب‌یابی پایین نگاه کن.</p>
+
+<h3 id="weather">پروژه: ایستگاه هواشناسی کوچک (DHT22 روی OLED)</h3>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"OLED","name":"OLED SSD1306 (I2C)","pins":[["GND","زمین"],["VCC","۳٫۳ ولت"],["SCL","ساعت I2C"],["SDA","داده I2C"]]},
+    {"id":"DHT","name":"DHT22 (چهار پایه)","img":"dht22.svg","pins":[["VCC","پایه ۱"],["DATA","پایه ۲"],["NC","پایه ۳ (وصل نکن)"],["GND","پایه ۴"]]},
+    {"id":"R1","name":"مقاومت ۱۰ کیلو (Pull-up)","img":"resistor.svg","pins":[["1","به 3V3"],["2","به DATA"]]}
+  ],
+  "wires":[["GND","OLED.GND","black"],["3V3","OLED.VCC","red"],["GPIO22","OLED.SCL","green"],["GPIO21","OLED.SDA","yellow"],["3V3","DHT.VCC","red"],["GPIO4","DHT.DATA","blue"],["DHT.GND","GND","black"],["3V3","R1.1","red"],["R1.2","DHT.DATA","blue"]]
+}</script><figcaption>OLED روی I2C (۲۱/۲۲) و DHT22 روی GPIO4 با Pull-up ی ۱۰ کیلو. اگر ماژول سه پایه DHT22 داری، مقاومت را حذف کن.</figcaption></div>
+
+<div class="code" data-file="Weather_OLED.ino" id="c4"><pre>
+// ایستگاه هواشناسی کوچک: DHT22 روی OLED
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+DHT dht(4, DHT22);
+
+unsigned long lastRead = 0;
+
+void showMessage(const char *msg) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println(msg);
+  display.display();
+}
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found!");
+    while (true) delay(1000);
+  }
+  display.setTextColor(SSD1306_WHITE);
+  dht.begin();
+  showMessage("Waiting for DHT22...");
+}
+
+void loop() {
+  if (millis() - lastRead &lt; 2000) return;   // هنوز ۲ ثانیه نشده
+  lastRead = millis();
+
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) {
+    showMessage("DHT22 read error!");
+    Serial.println("DHT22 read error");
+    return;
+  }
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("Temperature");
+  display.setTextSize(2);
+  display.setCursor(0, 12);
+  display.printf("%.1f C", t);
+  display.setTextSize(1);
+  display.setCursor(0, 36);
+  display.println("Humidity");
+  display.setTextSize(2);
+  display.setCursor(0, 48);
+  display.printf("%.1f %%", h);
+  display.display();
+
+  Serial.printf("T=%.1f C  H=%.1f %%\n", t, h);
+}
+</pre></div>
+<ol class="walk" data-for="c4">
+  <li data-lines="2-5"><b class="what">چهار کتابخانه با هم.</b> همان کتابخانه‌های دو برنامه قبلی.
+    <span class="why">ترکیب پروژه‌ها در میکروکنترلر معمولا همین است: include ها و شیءها کنار هم، setup ها پشت سر هم، loop ها در هم.</span></li>
+  <li data-lines="7-8"><b class="what">دو شیء: نمایشگر و سنسور.</b> این بار اعداد را مستقیم نوشتیم (۱۲۸، ۶۴، ۴).
+    <span class="why">برای کوتاهی؛ در پروژه بزرگ‌تر همان ثابت‌های نام‌دار بهترند.</span></li>
+  <li data-lines="12-18"><b class="what">تابع کمکی showMessage.</b> یک متن کوچک را در بالای صفحه نشان می‌دهد. <code>const char *msg</code> یعنی «یک متن ثابت».
+    <span class="why">پیام «منتظر باش» و «خطا» هر دو همین کار را لازم دارند؛ یک تابع، دو استفاده. نمایش خطا روی خود دستگاه مهم است، چون دستگاه نهایی به کامپیوتر وصل نیست که Serial را ببینی.</span></li>
+  <li data-lines="33-34"><b class="what">زمان‌بندی با millis و return.</b> اگر ۲ ثانیه نگذشته، فورا از loop برگرد.
+    <span class="why">این یک شکل کوتاه از الگوی millis درس ۳.۱ است: «نگهبان در ورودی». loop آزاد می‌ماند و بعدا می‌توانی دکمه یا کار دیگری را <b>قبل</b> از این خط اضافه کنی.</span></li>
+  <li data-lines="36-42"><b class="what">خواندن و اعتبارسنجی.</b> در صورت خطا، پیام روی OLED و Serial.
+    <span class="why">صفحه نباید عدد قدیمی را طوری نشان بدهد که انگار تازه است؛ کاربر باید بفهمد سنسور مشکل دارد.</span></li>
+  <li data-lines="44-57"><b class="what">چیدمان صفحه.</b> عنوان کوچک (اندازه ۱) و عدد بزرگ (اندازه ۲) برای دما در بالا و رطوبت در پایین. <code>display.printf</code> مثل Serial.printf کار می‌کند.
+    <span class="why">مختصات y را حساب کردیم: عنوان در y=0 (ارتفاع ۸)، عدد در y=12 (ارتفاع ۱۶ تا y=28)، عنوان دوم در y=36، عدد دوم در y=48 تا y=64، دقیقا لبه پایین صفحه. همیشه جمع ارتفاع‌ها را با ۶۴ مقایسه کن.</span></li>
+  <li data-lines="59"><b class="what">گزارش سریال.</b>
+    <span class="why">نمایشگر برای کاربر، Serial برای تو هنگام عیب‌یابی.</span></li>
+</ol>
+<div class="callout tip"><div class="ct">علامت درجه</div>
+<p>فونت پیش‌فرض GFX در جایگاه ۲۴۷ یک دایره کوچک دارد. به جای <code>"%.1f C"</code> می‌توانی بنویسی: <code>display.printf("%.1f", t); display.write(247); display.print("C");</code>.</p></div>
+<div class="wokwi" data-board="esp32" data-code-from="c4">
+<p>در Library Manager ی Wokwi این‌ها را اضافه کن: <code>Adafruit SSD1306</code>، <code>DHT sensor library</code> (و اگر خطا دیدی <code>Adafruit GFX Library</code> و <code>Adafruit Unified Sensor</code>). سنسور DHT22 ی Wokwi مقاومت Pull-up لازم ندارد. روی آن کلیک کن و با اسلایدرها دما و رطوبت را عوض کن. پایه داده آن در Wokwi اسم <code>SDA</code> دارد، ولی گولش را نخور: I2C نیست.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled1", "top": 60, "left": 200, "attrs": { "i2cAddress": "0x3c" } },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -20, "left": -150, "attrs": { "temperature": "24.5", "humidity": "40" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:4", "blue", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<!-- ================= SPI ================= -->
+<h2 id="spi">SPI: سریع، با یک سیم انتخاب برای هر دستگاه</h2>
+<p>SPI چهار سیم دارد:</p>
+<ul>
+  <li><b>SCK</b> (ساعت): ESP32 می‌سازد؛ هر تیک یک بیت.</li>
+  <li><b>MOSI</b> (Master Out, Slave In): داده از ESP32 به دستگاه.</li>
+  <li><b>MISO</b> (Master In, Slave Out): داده از دستگاه به ESP32.</li>
+  <li><b>CS</b> (Chip Select، گاهی SS): وقتی ESP32 این سیم را LOW کند، یعنی «با تو هستم». هر دستگاه CS جدای خودش را دارد.</li>
+</ul>
+<p>چون داده در دو سیم جدا هم‌زمان رفت و برگشت می‌کند (Full-Duplex) و آدرس‌دهی لازم نیست، SPI خیلی سریع‌تر از I2C است. برای همین کارت حافظه و نمایشگرهای رنگی (که حجم داده زیاد دارند) SPI هستند. ESP32 کلاسیک دو باس SPI آزاد دارد: VSPI (پیش‌فرض آردوینو، پین‌های ۱۸، ۱۹، ۲۳ و ۵) و HSPI.</p>
+
+<h3 id="sd">ماژول کارت microSD</h3>
+<figure><div class="frame"><img src="assets/img/sdmodule.svg" alt="ماژول کارت میکرو اس دی"></div><figcaption>ماژول microSD با پایه‌های GND، VCC، MISO، MOSI، SCK و CS.<span class="src">تصویر: Fritzing، مجوز CC BY-SA 3.0</span></figcaption></figure>
+<div class="callout warn"><div class="ct">سه تله رایج قبل از شروع</div>
+<p><b>۱) ولتاژ ماژول:</b> کارت SD فقط ۳٫۳ ولت است. ماژول‌های آبی رایج (با تراشه رگولاتور AMS1117 و مبدل سطح 74LVC125 روی برد) برای ورودی VCC شان <b>۵ ولت</b> می‌خواهند؛ اگر 3V3 بدهی، بعد از رگولاتور ولتاژ کافی نمی‌ماند و کارت گاهی کار می‌کند و گاهی نه. ماژول‌های ساده بدون رگولاتور باید <b>3V3</b> بگیرند و ۵ ولت آن‌ها و کارت را می‌سوزاند. روی برد ماژول را نگاه کن: تراشه سه پایه رگولاتور دارد؟ ← 5V. ندارد؟ ← 3V3.</p>
+<p><b>۲) فرمت:</b> کتابخانه SD ی ESP32 کارت <b>FAT32</b> (یا FAT16) می‌خواهد. کارت‌های ۶۴ گیگ به بالا معمولا exFAT فرمت شده‌اند و کار نمی‌کنند. ساده‌ترین راه: کارت ۴ تا ۳۲ گیگ، فرمت FAT32 با ابزار رسمی SD Card Formatter.</p>
+<p><b>۳) CS:</b> شماره پین CS در کد باید دقیقا همان پینی باشد که سیم CS به آن وصل است (این‌جا GPIO5).</p></div>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"SD","name":"ماژول microSD (SPI)","img":"sdmodule.svg","pins":[["GND","زمین"],["VCC","5V یا 3V3 (ماژول را ببین!)"],["MISO","داده به ESP32 (گاهی DO)"],["MOSI","داده به کارت (گاهی DI)"],["SCK","ساعت (گاهی CLK)"],["CS","انتخاب تراشه"]]}
+  ],
+  "wires":[["GND","SD.GND","black"],["5V","SD.VCC","red","ماژول با رگولاتور"],["GPIO19","SD.MISO","blue"],["GPIO23","SD.MOSI","orange"],["GPIO18","SD.SCK","green"],["GPIO5","SD.CS","purple"]]
+}</script><figcaption>باس VSPI: MISO=19، MOSI=23، SCK=18، CS=5. این نقشه برای ماژول رایج با رگولاتور است (VCC به 5V). اگر ماژول تو رگولاتور ندارد، VCC را به 3V3 بده.</figcaption></div>
+
+<div class="code" data-file="SD_Log.ino" id="c5"><pre>
+// ثبت داده روی کارت microSD با SPI (VSPI)
+#include &lt;SPI.h&gt;
+#include &lt;SD.h&gt;
+
+const int SD_CS = 5;              // CS؛ بقیه: SCK=18, MISO=19, MOSI=23
+const char *LOG_FILE = "/log.csv";
+
+void setup() {
+  Serial.begin(115200);
+  if (!SD.begin(SD_CS)) {
+    Serial.println("SD mount failed! (wiring, CS, FAT32?)");
+    while (true) delay(1000);
+  }
+  uint8_t type = SD.cardType();
+  if (type == CARD_NONE) {
+    Serial.println("No SD card inserted");
+    while (true) delay(1000);
+  }
+  Serial.printf("Card size: %llu MB\n", SD.cardSize() / (1024 * 1024));
+
+  if (!SD.exists(LOG_FILE)) {                 // فایل نیست؟ سرتیتر بنویس
+    File f = SD.open(LOG_FILE, FILE_WRITE);
+    f.println("millis,value");
+    f.close();
+  }
+
+  File f = SD.open(LOG_FILE, FILE_APPEND);    // به ته فایل اضافه کن
+  if (f) {
+    f.printf("%lu,%d\n", millis(), 42);
+    f.close();                                // بستن = ذخیره واقعی
+    Serial.println("Line appended.");
+  }
+
+  f = SD.open(LOG_FILE, FILE_READ);           // خواندن کل فایل
+  Serial.println("---- log.csv ----");
+  while (f.available()) Serial.write(f.read());
+  f.close();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="c5">
+  <li data-lines="2-3"><b class="what">دو کتابخانه داخلی.</b> SPI برای باس و SD برای سیستم فایل FAT. هر دو همراه هسته ESP32 نصب‌اند.
+    <span class="why">نصب جدا لازم نیست. مراقب باش کتابخانه «SD» ی مخصوص آردوینو (از Library Manager) را نصب نکنی؛ ممکن است با نسخه ESP32 قاطی شود.</span></li>
+  <li data-lines="5-6"><b class="what">پین CS و اسم فایل.</b> اسم فایل در ESP32 باید با <code>/</code> شروع شود.
+    <span class="why">کتابخانه SD ی ESP32 مسیر کامل از ریشه کارت می‌خواهد؛ <code>"log.csv"</code> بدون اسلش خطا می‌دهد. پسوند CSV یعنی «مقادیر جداشده با کاما» که اکسل و گوگل‌شیت مستقیم باز می‌کنند.</span></li>
+  <li data-lines="10-13"><b class="what">SD.begin(CS).</b> باس SPI پیش‌فرض (18/19/23) را راه می‌اندازد، با کارت صحبت می‌کند و سیستم فایل را «سوار» (Mount) می‌کند.
+    <span class="why">اگر شکست خورد، سه مظنون اصلی را در پیام نوشتیم: سیم‌کشی، CS و فرمت. پیام خطای خوب نصف عیب‌یابی است.</span></li>
+  <li data-lines="14-19"><b class="what">نوع و اندازه کارت.</b> <code>cardType</code> نوع (MMC، SD، SDHC) را می‌دهد و <code>cardSize</code> اندازه را به بایت (عدد ۶۴ بیتی؛ برای همین <code>%llu</code>).
+    <span class="why">دیدن اندازه درست (مثلا ۱۵۰۰۰ مگابایت برای کارت ۱۶ گیگ) ثابت می‌کند ارتباط SPI کاملا سالم است.</span></li>
+  <li data-lines="21-25"><b class="what">فایل جدید؟ سرتیتر.</b> اگر فایل وجود ندارد، با <code>FILE_WRITE</code> ساخته می‌شود و خط اول (نام ستون‌ها) نوشته می‌شود.
+    <span class="why"><code>FILE_WRITE</code> در ESP32 فایل موجود را <b>از اول بازنویسی</b> می‌کند (پاک می‌کند). برای همین فقط وقتی فایل نیست از آن استفاده می‌کنیم.</span></li>
+  <li data-lines="27-32"><b class="what">اضافه کردن یک خط.</b> <code>FILE_APPEND</code> فایل را باز می‌کند و به ته آن اضافه می‌کند. خط CSV: زمان و یک مقدار نمونه (۴۲). <code>if (f)</code> یعنی «اگر فایل باز شد».
+    <span class="why">در یک لاگر واقعی به جای ۴۲ دمای DHT22 را می‌نویسی (تمرین ۲). <code>close()</code> ضروری است: داده اول در بافر RAM جمع می‌شود و فقط با close (یا <code>flush</code>) واقعا روی کارت نوشته می‌شود. قطع برق قبل از close = داده گم‌شده.</span></li>
+  <li data-lines="34-37"><b class="what">خواندن و چاپ کل فایل.</b> تا وقتی بایتی مانده (<code>available</code>)، یکی بخوان و عینا به Serial بفرست.
+    <span class="why">این ثابت می‌کند نوشتن واقعا انجام شده. <code>Serial.write</code> بایت را همان‌طور که هست می‌فرستد (برخلاف print که عدد را به متن تبدیل می‌کند).</span></li>
+  <li data-lines="40"><b class="what">loop خالی.</b>
+    <span class="why">همه کار یک بار در setup انجام شد. هر بار دکمه EN را بزنی، یک خط جدید اضافه می‌شود.</span></li>
+</ol>
+<div class="serial">Card size: 15193 MB
+Line appended.
+---- log.csv ----
+millis,value
+412,42
+398,42</div>
+<div class="wokwi" data-board="esp32" data-code-from="c5">
+<p>Wokwi یک کارت microSD مجازی دارد. در شبیه‌ساز، VCC ماژول را به 3V3 وصل کرده‌ایم (کارت مجازی رگولاتور ندارد). کتابخانه لازم نیست؛ SD و SPI داخلی‌اند.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-microsd-card", "id": "sd1", "top": 40, "left": 220, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "sd1:GND", "esp:GND.2", "black", [] ],
+    [ "sd1:VCC", "esp:3V3", "red", [] ],
+    [ "sd1:DO", "esp:19", "blue", [] ],
+    [ "sd1:DI", "esp:23", "orange", [] ],
+    [ "sd1:SCK", "esp:18", "green", [] ],
+    [ "sd1:CS", "esp:5", "purple", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<!-- ================= UART ================= -->
+<h2 id="uart">UART: قدیمی‌ترین و ساده‌ترین</h2>
+<p>تو از روز اول با UART کار کرده‌ای: <code>Serial.print</code> از طریق UART0 (پین‌های TX0=GPIO1 و RX0=GPIO3) به تراشه USB برد و از آن‌جا به کامپیوتر می‌رود. UART ساعت مشترک ندارد؛ به جایش دو طرف از قبل روی یک <b>سرعت</b> (Baud Rate) توافق می‌کنند، مثلا ۹۶۰۰ بیت در ثانیه. هر بایت با یک بیت شروع (Start) و یک بیت پایان (Stop) بسته‌بندی می‌شود تا گیرنده بفهمد کجا شروع و تمام می‌شود.</p>
+<figure><div class="frame"><svg viewBox="0 0 700 200" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="قاب یک بایت در UART">
+  <path d="M40 60 H100 V140 H160 V60 H220 V140 H340 V60 H400 V140 H460 V60 H520 V140 H580 V60 H660" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <g font-size="12" text-anchor="middle" fill="#152033">
+    <text x="70" y="45">idle</text><text x="130" y="45" fill="#d6453d" font-weight="700">Start</text>
+    <text x="190" y="45">1</text><text x="250" y="45">0</text><text x="310" y="45">0</text><text x="370" y="45">1</text><text x="430" y="45">0</text><text x="490" y="45">1</text><text x="550" y="45">0</text><text x="610" y="45">1</text>
+    <text x="640" y="170" fill="#12a37f" font-weight="700">Stop</text>
+  </g>
+  <g stroke="#dbe2ec"><line x1="100" y1="30" x2="100" y2="150"/><line x1="160" y1="30" x2="160" y2="150"/><line x1="220" y1="30" x2="220" y2="150"/><line x1="280" y1="30" x2="280" y2="150"/><line x1="340" y1="30" x2="340" y2="150"/><line x1="400" y1="30" x2="400" y2="150"/><line x1="460" y1="30" x2="460" y2="150"/><line x1="520" y1="30" x2="520" y2="150"/><line x1="580" y1="30" x2="580" y2="150"/><line x1="640" y1="30" x2="640" y2="150"/></g>
+  <text x="370" y="190" font-size="13" text-anchor="middle" fill="#4d5b70" direction="rtl">هر خانه در ۹۶۰۰ baud حدود ۱۰۴ میکروثانیه است؛ ۸ بیت داده (کم‌ارزش‌ترین اول) بین Start و Stop</text>
+</svg></div>
+<figcaption>قالب <code>8N1</code>: ۱ بیت شروع (LOW)، ۸ بیت داده، بدون بیت توازن (N)، ۱ بیت پایان (HIGH). اگر دو طرف سرعت متفاوت داشته باشند، گیرنده بیت‌ها را در لحظه‌های اشتباه نمونه می‌گیرد و حروف درهم می‌بیند.</figcaption></figure>
+<div class="callout analogy"><div class="ct">TX به RX: دهان به گوش</div>
+<p>TX (فرستنده) یک دستگاه باید به RX (گیرنده) دستگاه دیگر برود، و برعکس. اگر TX را به TX وصل کنی، مثل این است که دو نفر دهان به دهان حرف بزنند و هیچ‌کدام نشنوند. این «ضربدری» بودن رایج‌ترین اشتباه UART است.</p></div>
+
+<h3 id="serial2">Serial2: یک UART آزاد برای ماژول‌ها</h3>
+<p>ESP32 کلاسیک سه UART دارد: <code>Serial</code> (UART0، مشغول USB)، <code>Serial1</code> و <code>Serial2</code>. به لطف ماتریس GPIO، هر UART را می‌توان به تقریبا هر پینی وصل کرد. روی خیلی از بردها کنار GPIO16 و GPIO17 نوشته شده RX2 و TX2 و بیشتر آموزش‌ها همین‌ها را استفاده می‌کنند؛ ما هم برای GPS از Serial2 روی ۱۶ و ۱۷ استفاده می‌کنیم.</p>
+<div class="callout warn"><div class="ct">پین‌ها را همیشه صریح بنویس</div>
+<p>در هسته ۳، اگر <code>Serial2.begin(9600)</code> را بدون پین صدا بزنی، پیش‌فرض ESP32 کلاسیک <b>GPIO4 و GPIO25</b> است، نه ۱۶ و ۱۷ (پیش‌فرض Serial1 هم GPIO26 و GPIO27 است). این تغییر برای دور ماندن از پین‌های PSRAM در ماژول‌های WROVER انجام شده. کدهای قدیمی که پین نمی‌دهند و GPS را روی ۱۶/۱۷ فرض می‌کنند، در هسته ۳ هیچ داده‌ای نمی‌گیرند. پس همیشه چهار ورودی کامل بنویس:</p></div>
+<div class="code" data-file="snippet.ino" data-lang="cpp" id="c6"><pre>
+Serial2.begin(9600, SERIAL_8N1, 16, 17);   // baud, قالب, RX, TX
+</pre></div>
+<ol class="walk" data-for="c6">
+  <li data-lines="1"><b class="what">چهار ورودی.</b> سرعت ۹۶۰۰، قالب 8N1، پین RX ی ESP32 (۱۶) و پین TX ی ESP32 (۱۷).
+    <span class="why">ترتیب «اول RX، بعد TX» است و از دید ESP32 نوشته می‌شود. ۹۶۰۰ سرعت پیش‌فرض کارخانه NEO-6M است. (روی ماژول‌های WROVER، GPIO16 و ۱۷ به PSRAM وصل‌اند؛ آن‌جا مثلا ۴ و ۲۵ را انتخاب کن و سیم‌کشی را هم عوض کن.)</span></li>
+</ol>
+
+<h3 id="gps">ماژول GPS NEO-6M</h3>
+<p>ماژول GY-NEO6MV2 تراشه u-blox NEO-6M، یک آنتن سرامیکی مربعی، یک باتری یا خازن پشتیبان (برای به خاطر سپردن اطلاعات ماهواره‌ها) و یک LED دارد. خروجی آن روی UART متن ساده است: هر ثانیه چند «جمله» NMEA.</p>
+<figure><div class="frame"><svg viewBox="0 0 640 300" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="ماژول GPS NEO-6M و پایه‌های آن">
+  <rect x="120" y="40" width="300" height="200" rx="10" fill="#1f5fa8" stroke="#123f73" stroke-width="2"/>
+  <rect x="165" y="90" width="110" height="110" rx="6" fill="#d9d2b6" stroke="#8a826a" stroke-width="2"/>
+  <text x="220" y="140" font-size="13" text-anchor="middle" fill="#152033" font-weight="700">u-blox</text>
+  <text x="220" y="158" font-size="13" text-anchor="middle" fill="#152033" font-weight="700">NEO-6M</text>
+  <circle cx="335" cy="95" r="16" fill="#c0c7d2" stroke="#6b7280" stroke-width="2"/>
+  <text x="335" y="128" font-size="11" text-anchor="middle" fill="#e8eef8" direction="rtl">باتری/خازن</text>
+  <circle cx="335" cy="165" r="6" fill="#7fe07f"/>
+  <text x="335" y="190" font-size="11" text-anchor="middle" fill="#e8eef8">LED</text>
+  <rect x="300" y="210" width="40" height="20" rx="3" fill="#d4af37"/>
+  <text x="320" y="252" font-size="11" text-anchor="middle" fill="#152033" direction="rtl">سوکت آنتن</text>
+  <g font-family="JetBrains Mono,monospace" font-size="13" font-weight="700">
+    <rect x="420" y="70" width="30" height="16" fill="#d4af37"/><text x="462" y="83" fill="#d6453d">VCC</text>
+    <rect x="420" y="110" width="30" height="16" fill="#d4af37"/><text x="462" y="123" fill="#2563eb">RX</text>
+    <rect x="420" y="150" width="30" height="16" fill="#d4af37"/><text x="462" y="163" fill="#a07e00">TX</text>
+    <rect x="420" y="190" width="30" height="16" fill="#d4af37"/><text x="462" y="203" fill="#222">GND</text>
+  </g>
+  <text x="620" y="83" font-size="12" text-anchor="start" fill="#152033" direction="rtl">۳٫۳ تا ۵ ولت</text>
+  <text x="620" y="123" font-size="12" text-anchor="start" fill="#152033" direction="rtl">← از TX2 (GPIO17)</text>
+  <text x="620" y="163" font-size="12" text-anchor="start" fill="#152033" direction="rtl">→ به RX2 (GPIO16)</text>
+  <text x="620" y="203" font-size="12" text-anchor="start" fill="#152033" direction="rtl">زمین مشترک</text>
+  <text x="270" y="280" font-size="12" text-anchor="middle" fill="#4d5b70" direction="rtl">طرح ساده‌شده ماژول GY-NEO6MV2 (آنتن سرامیکی جدا با کابل به سوکت وصل می‌شود)</text>
+</svg></div>
+<figcaption>نقشه ساده ماژول. ترتیب و اسم پایه‌ها را روی ماژول خودت چک کن.</figcaption></figure>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"GPS","name":"ماژول GPS NEO-6M","pins":[["VCC","تغذیه"],["RX","گیرنده ماژول"],["TX","فرستنده ماژول"],["GND","زمین"]]}
+  ],
+  "wires":[["3V3","GPS.VCC","red"],["GPIO17","GPS.RX","yellow","TX2 → RX"],["GPIO16","GPS.TX","blue","RX2 ← TX"],["GND","GPS.GND","black"]]
+}</script><figcaption>ضربدری: TX2 ی ESP32 (GPIO17) به RX ماژول، و TX ماژول به RX2 ی ESP32 (GPIO16). ماژول GY-NEO6MV2 رگولاتور دارد و با 3V3 یا 5V کار می‌کند و سطح منطقی آن ۳٫۳ ولت است.</figcaption></div>
+<div class="callout tip"><div class="ct">فقط خواندن؟ یک سیم کافی است</div>
+<p>برای گرفتن موقعیت، ESP32 فقط گوش می‌دهد. پس سیم GPIO17 → RX ماژول اختیاری است (برای تنظیمات پیشرفته مثل تغییر سرعت یا نرخ به‌روزرسانی لازم می‌شود).</p></div>
+
+<h3>قدم ۱: جمله‌های خام را ببین</h3>
+<div class="code" data-file="GPS_Raw.ino" id="c7"><pre>
+// دیدن جمله‌های خام NMEA از GPS
+const int GPS_RX = 16;   // RX2 ی ESP32 ← TX ماژول GPS
+const int GPS_TX = 17;   // TX2 ی ESP32 → RX ماژول GPS
+
+void setup() {
+  Serial.begin(115200);                                  // USB به کامپیوتر
+  Serial2.begin(9600, SERIAL_8N1, GPS_RX, GPS_TX);       // UART2 به GPS
+  Serial.println("Waiting for NMEA...");
+}
+
+void loop() {
+  while (Serial2.available()) {        // هر بایتی از GPS رسید
+    Serial.write(Serial2.read());      // عینا به Serial Monitor بفرست
+  }
+}
+</pre></div>
+<ol class="walk" data-for="c7">
+  <li data-lines="6-7"><b class="what">دو UART با دو سرعت.</b> Serial با ۱۱۵۲۰۰ به کامپیوتر و Serial2 با ۹۶۰۰ به GPS.
+    <span class="why">هر UART سرعت خودش را دارد. سرعت GPS را ماژول تعیین می‌کند (۹۶۰۰)؛ سرعت USB را ما. چون سمت کامپیوتر سریع‌تر است، هیچ داده‌ای عقب نمی‌ماند.</span></li>
+  <li data-lines="12-14"><b class="what">پل ساده.</b> تا وقتی بایتی در صف دریافت Serial2 هست، بخوان و به Serial بفرست.
+    <span class="why"><code>while</code> (نه <code>if</code>) تا همه بایت‌های رسیده در یک دور خالی شوند. این برنامه «پل» بهترین ابزار عیب‌یابی هر ماژول UART است: اول ببین ماژول اصلا حرف می‌زند یا نه.</span></li>
+</ol>
+<div class="serial">$GPRMC,083559.00,A,3542.12345,N,05124.54321,E,0.004,,230926,,,A*6B
+$GPVTG,,T,,M,0.004,N,0.007,K,A*2C
+$GPGGA,083559.00,3542.12345,N,05124.54321,E,1,08,1.01,1190.2,M,-24.6,M,,*4E
+$GPGSA,A,3,10,23,15,20,18,24,13,29,,,,,1.83,1.01,1.52*0A
+$GPGLL,3542.12345,N,05124.54321,E,083559.00,A,A*6E</div>
+<p>(نمونه ساختگی برای تهران؛ checksum ها واقعی نیستند.) اگر ماهواره پیدا نکرده باشد، جمله‌ها با کاماهای خالی می‌آیند؛ مثلا <code>$GPGGA,083559.00,,,,,0,00,99.99,,,,,,*6A</code>. این یعنی ارتباط سالم است و فقط باید صبر کنی.</p>
+
+<h3 id="nmea">کالبدشکافی یک جمله GGA</h3>
+<p>بیا نمونه کلاسیک مستندات NMEA را فیلد به فیلد باز کنیم:</p>
+<div class="serial">$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47</div>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>فیلد</th><th>مقدار</th><th>معنی</th></tr>
+<tr><td>۰</td><td>نوع جمله</td><td><code>$GPGGA</code></td><td><code>GP</code> = سیستم GPS، <code>GGA</code> = «داده موقعیت» (Global Positioning System Fix Data)</td></tr>
+<tr><td>۱</td><td>زمان UTC</td><td><code>123519</code></td><td>ساعت ۱۲:۳۵:۱۹ به وقت جهانی (برای ایران ۳:۳۰ اضافه کن)</td></tr>
+<tr><td>۲</td><td>عرض جغرافیایی</td><td><code>4807.038</code></td><td>قالب <code>ddmm.mmm</code>: ۴۸ درجه و ۰۷٫۰۳۸ دقیقه</td></tr>
+<tr><td>۳</td><td>نیمکره</td><td><code>N</code></td><td>شمالی (S = جنوبی)</td></tr>
+<tr><td>۴</td><td>طول جغرافیایی</td><td><code>01131.000</code></td><td>قالب <code>dddmm.mmm</code>: ۰۱۱ درجه و ۳۱٫۰۰۰ دقیقه</td></tr>
+<tr><td>۵</td><td>شرق/غرب</td><td><code>E</code></td><td>شرقی (W = غربی)</td></tr>
+<tr><td>۶</td><td>کیفیت Fix</td><td><code>1</code></td><td>۰ = بی‌موقعیت، ۱ = GPS عادی، ۲ = DGPS</td></tr>
+<tr><td>۷</td><td>تعداد ماهواره</td><td><code>08</code></td><td>۸ ماهواره در محاسبه استفاده شده</td></tr>
+<tr><td>۸</td><td>HDOP</td><td><code>0.9</code></td><td>ضریب خطای افقی؛ هر چه کمتر بهتر (زیر ۲ خوب است)</td></tr>
+<tr><td>۹-۱۰</td><td>ارتفاع</td><td><code>545.4,M</code></td><td>۵۴۵٫۴ متر بالاتر از سطح میانگین دریا</td></tr>
+<tr><td>۱۱-۱۲</td><td>جدایی ژئوئید</td><td><code>46.9,M</code></td><td>اختلاف بیضی‌گون زمین و سطح دریا در این نقطه</td></tr>
+<tr><td>۱۳-۱۴</td><td>داده DGPS</td><td>خالی</td><td>عمر تصحیح دیفرانسیلی و شناسه ایستگاه؛ این‌جا استفاده نشده</td></tr>
+<tr><td>—</td><td>Checksum</td><td><code>*47</code></td><td>XOR همه حروف بین <code>$</code> و <code>*</code>، به هگز. اگر نخواند، جمله خراب رسیده و دور ریخته می‌شود.</td></tr>
+</table></div>
+<div class="callout example"><div class="ct">تبدیل به درجه اعشاری (برای گوگل مپ)</div>
+<p>NMEA درجه و دقیقه می‌دهد، ولی نقشه‌ها درجه اعشاری می‌خواهند. هر درجه ۶۰ دقیقه است:</p>
+<p>عرض: <code>48 + 07.038 ÷ 60 = 48 + 0.1173 = 48.1173°</code> · طول: <code>11 + 31.000 ÷ 60 = 11.5167°</code>.</p>
+<p>اگر S یا W بود، عدد منفی می‌شود. اشتباه رایج: خواندن <code>4807.038</code> به عنوان ۴۸٫۰۷ درجه؛ این جای تو را چند کیلومتر جابه‌جا می‌کند. کتابخانه TinyGPSPlus این تبدیل را خودش انجام می‌دهد.</p></div>
+
+<h3 id="tinygps">قدم ۲: TinyGPSPlus، تجزیه خودکار</h3>
+<p>کتابخانه <a href="https://github.com/mikalhart/TinyGPSPlus" target="_blank" rel="noopener">TinyGPSPlus</a> (از Mikal Hart؛ در Library Manager «TinyGPSPlus» را جست‌وجو کن) حروف را یکی‌یکی می‌گیرد، جمله‌ها را تشخیص می‌دهد، checksum را بررسی می‌کند و عددها را آماده تحویل می‌دهد.</p>
+<div class="code" data-file="GPS_TinyGPSPlus.ino" id="c8"><pre>
+#include &lt;TinyGPSPlus.h&gt;
+
+TinyGPSPlus gps;
+unsigned long lastPrint = 0;
+
+void setup() {
+  Serial.begin(115200);
+  Serial2.begin(9600, SERIAL_8N1, 16, 17);
+}
+
+void loop() {
+  while (Serial2.available()) {
+    gps.encode(Serial2.read());        // هر حرف را به تجزیه‌گر بده
+  }
+
+  if (millis() - lastPrint &gt;= 1000) {
+    lastPrint = millis();
+    if (gps.location.isValid()) {
+      Serial.printf("Lat=%.6f  Lon=%.6f  Sats=%lu  Alt=%.1fm\n",
+                    gps.location.lat(), gps.location.lng(),
+                    (unsigned long)gps.satellites.value(), gps.altitude.meters());
+    } else {
+      Serial.printf("No fix yet... sats=%lu chars=%lu\n",
+                    (unsigned long)gps.satellites.value(), (unsigned long)gps.charsProcessed());
+    }
+    if (millis() &gt; 5000 &amp;&amp; gps.charsProcessed() &lt; 10) {
+      Serial.println("No data from GPS: check TX->RX wiring and baud!");
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="c8">
+  <li data-lines="1-3"><b class="what">کتابخانه و شیء gps.</b>
+    <span class="why">یک شیء همه داده‌ها را نگه می‌دارد: <code>gps.location</code>، <code>gps.satellites</code>، <code>gps.altitude</code>، <code>gps.time</code>، <code>gps.speed</code> و…</span></li>
+  <li data-lines="12-14"><b class="what">تغذیه تجزیه‌گر.</b> هر بایت رسیده به <code>gps.encode</code> داده می‌شود.
+    <span class="why">این حلقه باید مدام و سریع اجرا شود. اگر در loop یک <code>delay(1000)</code> بگذاری، صف دریافت UART (حدود ۱۲۸ تا ۲۵۶ بایت) پر می‌شود و بخشی از جمله‌ها گم می‌شوند. برای همین چاپ را با millis زمان‌بندی کردیم، نه delay.</span></li>
+  <li data-lines="16-17"><b class="what">گزارش هر یک ثانیه.</b> الگوی millis.
+    <span class="why">GPS به طور پیش‌فرض ثانیه‌ای یک بار موقعیت می‌دهد؛ چاپ سریع‌تر فایده‌ای ندارد.</span></li>
+  <li data-lines="18-21"><b class="what">اگر موقعیت معتبر است.</b> <code>isValid()</code> می‌گوید آیا تا حالا یک موقعیت درست دریافت شده. <code>lat()</code> و <code>lng()</code> درجه اعشاری (منفی برای S و W) می‌دهند؛ <code>%.6f</code> شش رقم اعشار، یعنی حدود ۱۰ سانتی‌متر.
+    <span class="why">دقت واقعی NEO-6M حدود ۲٫۵ متر است، ولی شش رقم اعشار استاندارد رایج نقشه‌هاست. خط ۱۹ تا ۲۱ در واقع یک دستور است که برای خوانایی در سه خط شکسته شده.</span></li>
+  <li data-lines="22-25"><b class="what">هنوز Fix نداریم.</b> تعداد ماهواره‌های دیده‌شده و تعداد حروف پردازش‌شده را نشان می‌دهد.
+    <span class="why">«chars» که بالا می‌رود یعنی سیم‌کشی درست است و فقط باید صبر کنی. این دو عدد، دو مشکل کاملا متفاوت را از هم جدا می‌کنند.</span></li>
+  <li data-lines="26-28"><b class="what">هشدار سیم‌کشی.</b> اگر بعد از ۵ ثانیه کمتر از ۱۰ حرف رسیده، مشکل در سیم یا سرعت است.
+    <span class="why">پیام خطای مشخص بهتر از سکوت است. رایج‌ترین علت: TX و RX جابه‌جا.</span></li>
+</ol>
+<div class="serial">No fix yet... sats=0 chars=1834
+No fix yet... sats=3 chars=2310
+Lat=35.702058  Lon=51.409054  Sats=7  Alt=1190.2m</div>
+
+<div class="callout warn"><div class="ct">GPS آسمان می‌خواهد و صبر</div>
+<p>سیگنال ماهواره‌های GPS بسیار ضعیف است و از سقف بتنی عبور نمی‌کند. آنتن را کنار پنجره باز یا بهتر، بیرون ساختمان زیر آسمان باز بگذار (سمت سرامیکی آنتن رو به بالا). اولین روشن شدن (Cold Start) ممکن است از حدود نیم دقیقه در شرایط ایدئال تا چند دقیقه یا بیشتر طول بکشد، چون ماژول باید فهرست ماهواره‌ها را از خود سیگنال دانلود کند. دفعه‌های بعد (اگر باتری پشتیبان پر باشد) خیلی سریع‌تر است. روی بیشتر ماژول‌های GY-NEO6MV2، LED وقتی Fix گرفت شروع به چشمک زدن ثانیه‌ای می‌کند. داخل خانه و پشت میز؟ به احتمال زیاد هرگز Fix نمی‌گیری. این خرابی ماژول نیست.</p></div>
+
+<div class="callout info"><div class="ct">GPS در Wokwi؟</div>
+<p>Wokwi قطعه رسمی NEO-6M ندارد. چند پروژه ساخته کاربران با «Custom Chip» (تراشه سفارشی که با زبان C نوشته می‌شود) در Wokwi پیدا می‌شود که جمله‌های NMEA ساختگی تولید می‌کنند؛ این‌ها رسمی نیستند و کیفیتشان تضمین‌شده نیست. پیشنهاد این دوره: بخش GPS را با سخت‌افزار واقعی انجام بده. برای تمرین تجزیه بدون سخت‌افزار، می‌توانی جمله نمونه بالا را در کد به صورت یک رشته بنویسی و حرف‌به‌حرف به <code>gps.encode()</code> بدهی.</p></div>
+
+<h2 id="video">ویدیوی کمکی</h2>
+<div class="video" data-yt="G6Q_7uE9EKE" data-title="I2C with ESP32 - I2C Tricks &amp; Tips with the ESP32" data-channel="DroneBot Workshop" data-lang="انگلیسی">
+  <div class="sum"><ul>
+    <li>بخش ابتدایی ویدیو درباره اصول باس I2C (Master، آدرس، Pull-up) را با دقت ببین و با نمودار ترتیبی همین درس مقایسه کن.</li>
+    <li>به قسمتی که دو باس I2C ی ESP32 را هم‌زمان استفاده می‌کند توجه کن: وقتی دو ماژول آدرس یکسان دارند، این راه حل است.</li>
+    <li>بخش ساختن یک دستگاه I2C ی سفارشی (Peripheral) را فعلا اختیاری ببین؛ برای این درس لازم نیست.</li>
+  </ul></div>
+</div>
+<p>مراجع: <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/i2c.html" target="_blank" rel="noopener">مستندات I2C</a>، <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/spi.html" target="_blank" rel="noopener">SPI</a> و <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/serial.html" target="_blank" rel="noopener">Serial (UART)</a> در Arduino-ESP32، و <a href="https://github.com/espressif/arduino-esp32/tree/master/libraries/SD" target="_blank" rel="noopener">کتابخانه SD ی ESP32</a>.</p>
+
+<h2 id="debug">وقتی کار نمی‌کند: عیب‌یابی به تفکیک پروتکل</h2>
+<h3>I2C و OLED</h3>
+<div class="table-wrap"><table>
+<tr><th>علامت</th><th>علت محتمل</th><th>راه حل</th></tr>
+<tr><td>اسکنر: <code>No I2C devices found</code></td><td>SDA و SCL جابه‌جا، سیم شل، یا ماژول بی‌برق</td><td>SDA=21 و SCL=22 را چک کن؛ ولتاژ VCC ماژول را با مولتی‌متر ببین.</td></tr>
+<tr><td>اسکنر دستگاه را پیدا می‌کند ولی <code>SSD1306 not found</code></td><td>آدرس در کد با آدرس اسکنر فرق دارد (0x3D به جای 0x3C)</td><td>آدرسی را که اسکنر نشان داد در <code>display.begin</code> بنویس.</td></tr>
+<tr><td>برنامه اجرا می‌شود ولی صفحه سیاه است</td><td><code>display.display()</code> فراموش شده</td><td>بعد از هر مجموعه رسم، display() را صدا بزن.</td></tr>
+<tr><td>متن روی هم افتاده و درهم است</td><td><code>clearDisplay()</code> در ابتدای هر فریم نیست</td><td>هر بار: clear ← رسم ← display.</td></tr>
+<tr><td>اسکنر آدرس‌های تصادفی یا همه آدرس‌ها را نشان می‌دهد</td><td>Pull-up نیست (ماژول بدون مقاومت) یا سیم‌ها خیلی بلند</td><td>مقاومت ۴٫۷ کیلو از SDA و SCL به 3V3؛ سیم‌ها زیر ۳۰ سانتی‌متر.</td></tr>
+<tr><td>دو ماژول با آدرس یکسان</td><td>مثلا دو OLED با 0x3C</td><td>جامپر آدرس روی یکی را عوض کن، یا دومی را روی باس دوم (<code>Wire1</code>) با پین‌های دیگر ببر.</td></tr>
+</table></div>
+<h3>DHT22</h3>
+<div class="table-wrap"><table>
+<tr><th>علامت</th><th>علت محتمل</th><th>راه حل</th></tr>
+<tr><td>همیشه <code>DHT read failed</code> یا nan</td><td>Pull-up نیست، پایه اشتباه، یا نوع سنسور در کد DHT11 است</td><td>۱۰ کیلو بین DATA و VCC؛ پایه ۲ به GPIO4؛ <code>DHT22</code> در سازنده.</td></tr>
+<tr><td>گاهی خطا، بیشتر وقت‌ها درست</td><td>خواندن زودتر از ۲ ثانیه یا سیم خیلی بلند</td><td>فاصله ۲ ثانیه؛ اعتبارسنجی با isnan و نادیده گرفتن خطای تک.</td></tr>
+<tr><td>دما چند درجه بیشتر از واقعیت</td><td>گرمای خود ESP32 یا رگولاتور به سنسور می‌رسد</td><td>سنسور را چند سانتی‌متر دورتر از برد بگذار.</td></tr>
+</table></div>
+<h3>SPI و کارت SD</h3>
+<div class="table-wrap"><table>
+<tr><th>علامت</th><th>علت محتمل</th><th>راه حل</th></tr>
+<tr><td><code>SD mount failed</code></td><td>کارت exFAT/NTFS، VCC اشتباه (3V3 برای ماژول رگولاتوردار)، CS اشتباه، یا MISO/MOSI جابه‌جا</td><td>کارت ≤۳۲ گیگ با FAT32؛ VCC طبق نوع ماژول؛ CS=5؛ MOSI=23، MISO=19.</td></tr>
+<tr><td>گاهی mount می‌شود، گاهی نه</td><td>تغذیه ضعیف (کارت هنگام نوشتن جهش جریان دارد) یا سیم بلند</td><td>سیم‌های کوتاه؛ ماژول رگولاتوردار روی 5V؛ خازن ۱۰ میکروفاراد کنار ماژول.</td></tr>
+<tr><td>فایل هست ولی خالی است</td><td><code>close()</code> صدا زده نشده یا برق قبلش قطع شده</td><td>بعد از هر نوشتن close یا flush.</td></tr>
+<tr><td>هر بار فایل از اول نوشته می‌شود</td><td><code>FILE_WRITE</code> به جای <code>FILE_APPEND</code></td><td>برای اضافه کردن FILE_APPEND.</td></tr>
+</table></div>
+<h3>UART و GPS</h3>
+<div class="table-wrap"><table>
+<tr><th>علامت</th><th>علت محتمل</th><th>راه حل</th></tr>
+<tr><td>هیچ چیزی نمی‌رسد (chars=0)</td><td>TX به TX وصل شده</td><td>TX ماژول ← GPIO16 (RX2).</td></tr>
+<tr><td>حروف درهم و عجیب</td><td>سرعت اشتباه (مثلا ۱۱۵۲۰۰ به جای ۹۶۰۰)</td><td><code>Serial2.begin(9600, ...)</code>.</td></tr>
+<tr><td>جمله‌ها می‌رسند ولی کاماهای خالی و Fix=0</td><td>ماژول هنوز ماهواره پیدا نکرده</td><td>بیرون ساختمان، آنتن رو به آسمان، ۵ تا ۱۵ دقیقه صبر در بار اول.</td></tr>
+<tr><td>مختصات چند کیلومتر اشتباه</td><td>تبدیل دستی ddmm.mmm به درجه اشتباه</td><td>تقسیم دقیقه بر ۶۰، یا lat()/lng() کتابخانه.</td></tr>
+<tr><td>در برنامه بزرگ، GPS گاهی داده را از دست می‌دهد</td><td>delay طولانی در loop و پر شدن صف UART</td><td>delay را حذف کن و الگوی millis؛ یا با <code>Serial2.setRxBufferSize(1024)</code> <b>قبل</b> از begin صف را بزرگ کن.</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>با هر ماژول جدید، <b>ترتیب ثابت</b> من را اجرا کن و هیچ مرحله‌ای را جا نینداز: (۱) دیتاشیت یا نوشته روی ماژول: ولتاژ و ترتیب پایه‌ها. (۲) سیم‌کشی با رنگ درست و چک کردن جدول اتصال سیم‌به‌سیم. (۳) ساده‌ترین برنامه ممکن: اسکنر I2C، پل UART، یا <code>SD.begin</code> تنها. (۴) فقط بعد از دیدن جواب در مرحله ۳، سراغ کتابخانه کامل و پروژه برو. کسی که مستقیم از مرحله ۱ به پروژه کامل می‌پرد، وقتی کار نکرد نمی‌داند مشکل در کدام لایه است. این درس سه پروتکل داشت؛ هر سه را جدا تمرین کن تا دستت بیاید، بعد ترکیبشان کن.</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">روی باس I2C یک OLED و یک BME280 داری. ESP32 چطور مشخص می‌کند با کدام حرف می‌زند؟</p>
+  <ol><li data-why="I2C سیم انتخاب جدا ندارد؛ این روش SPI است.">با یک سیم CS جدا برای هر کدام</li><li>با فرستادن آدرس ۷ بیتی هر دستگاه در ابتدای پیام</li><li data-why="همه دستگاه‌ها روی همان SDA و SCL هستند.">هر کدام SDA جدا دارند</li><li data-why="سرعت برای همه روی باس یکسان است.">با سرعت‌های مختلف</li></ol>
+  <div class="fb">هر دستگاه I2C یک آدرس دارد (مثلا OLED <code>0x3C</code> و BME280 <code>0x76</code>) و فقط به آدرس خودش جواب می‌دهد.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">اسکنر I2C آدرس <code>0x3C</code> را پیدا کرده، کد OLED بدون خطا اجرا می‌شود ولی صفحه هیچ چیزی نشان نمی‌دهد. محتمل‌ترین اشکال؟</p>
+  <ol><li data-why="اسکنر دستگاه را پیدا کرد، پس سیم‌ها درست‌اند.">SDA و SCL جابه‌جا هستند</li><li data-why="با Pull-up ناقص اسکنر هم معمولا چیزی پیدا نمی‌کرد.">مقاومت Pull-up لازم است</li><li data-why="begin خطا نداد، پس آدرس درست است.">آدرس اشتباه است</li><li><code>display.display()</code> صدا زده نشده</li></ol>
+  <div class="fb">دستورهای رسم فقط در بافر RAM نقاشی می‌کنند؛ <code>display()</code> بافر را به صفحه می‌فرستد.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">کدام جمله درباره DHT22 درست است؟</p>
+  <ol><li>پروتکل تک‌سیمه اختصاصی دارد و I2C نیست؛ حداقل ۲ ثانیه بین خواندن‌ها لازم است</li><li data-why="DHT22 آدرس I2C ندارد؛ BME280 است که روی SDA/SCL می‌نشیند.">یک سنسور I2C با آدرس 0x76 است</li><li data-why="خواندن سریع‌تر از هر ۲ ثانیه یا خطا می‌دهد یا عدد تکراری.">می‌توان آن را هر ۱۰ میلی‌ثانیه خواند</li><li data-why="خط DATA ی DHT22 نسخه ۴ پایه به Pull-up نیاز دارد.">هرگز به مقاومت Pull-up نیاز ندارد</li></ol>
+  <div class="fb">DHT22 بیت‌ها را با طول پالس رمز می‌کند. برای سنسور محیطی I2C واقعی، BME280.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">در SPI، سیم MISO چه کاری می‌کند؟</p>
+  <ol><li data-why="ساعت روی SCK است.">ساعت را می‌سازد</li><li data-why="این کار CS است.">دستگاه را انتخاب می‌کند</li><li>داده را از دستگاه به ESP32 می‌آورد</li><li data-why="این MOSI است: Master Out.">داده را از ESP32 به دستگاه می‌برد</li></ol>
+  <div class="fb">MISO = Master In, Slave Out. در ESP32 پیش‌فرض VSPI آن GPIO19 است.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">کد SD روی کارت ۱۲۸ گیگ جدید <code>SD mount failed</code> می‌دهد، ولی همان سیم‌کشی با کارت ۸ گیگ قدیمی کار می‌کند. چرا؟</p>
+  <ol><li data-why="سیم‌کشی با کارت دیگر کار کرد، پس درست است.">MISO و MOSI جابه‌جا هستند</li><li>کارت بزرگ احتمالا exFAT فرمت شده و کتابخانه FAT32 می‌خواهد</li><li data-why="ESP32 کارت‌های SDHC را پشتیبانی می‌کند؛ مشکل فرمت است.">ESP32 کارت‌های بزرگ‌تر از ۴ گیگ را نمی‌شناسد</li><li data-why="CS در هر دو حالت یکسان بود.">CS باید GPIO15 باشد</li></ol>
+  <div class="fb">کارت‌های بالای ۳۲ گیگ معمولا exFAT هستند. کارت ۳۲ گیگ یا کمتر با FAT32 مطمئن‌ترین انتخاب است.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">در <code>Serial2.begin(9600, SERIAL_8N1, 16, 17)</code>، پایه TX ماژول GPS باید به کدام پین ESP32 وصل شود؟</p>
+  <ol><li data-why="GPIO17 پایه TX خود ESP32 است؛ TX به TX یعنی هیچ‌کس نمی‌شنود.">GPIO17</li><li data-why="GPIO1 پایه TX0 ی USB است.">GPIO1</li><li data-why="GPIO3 گیرنده UART0 (USB) است و آپلود را خراب می‌کند.">GPIO3</li><li>GPIO16</li></ol>
+  <div class="fb">ورودی سوم (۱۶) RX ی ESP32 است. فرستنده ماژول ← گیرنده ESP32: ضربدری.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">GPS مقدار <code>3542.12345,N</code> گزارش کرده. عرض جغرافیایی به درجه اعشاری تقریبا چقدر است؟</p>
+  <ol><li data-why="این همان اشتباه رایج است: دقیقه را مستقیم اعشار خواندی.">35.42</li><li data-why="۳۵۴۲ درجه روی زمین معنی ندارد!">3542.12</li><li>35.702</li><li data-why="علامت منفی فقط برای S است.">-35.702</li></ol>
+  <div class="fb"><code>35 + 42.12345 ÷ 60 ≈ 35.702°</code>. قالب NMEA درجه و دقیقه است، نه درجه اعشاری.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+<div class="exercise"><div class="ct">تمرین ۱: نمودار دما روی OLED</div>
+<p>پروژه ایستگاه هواشناسی را طوری تغییر بده که ۶۴ خواندن آخر دما را در یک آرایه نگه دارد و در نیمه راست صفحه (x از ۶۴ تا ۱۲۷) یک نمودار خطی ساده بکشد. دمای ۱۵ درجه پایین نمودار و ۳۵ درجه بالای آن باشد.</p>
+<details><summary>راهنمایی</summary><p><code>float hist[64];</code> و هر بار مقادیر را یک خانه جلو ببر (یا یک اندیس چرخشی نگه دار). برای هر نقطه: <code>int y = map(t * 10, 150, 350, 63, 0);</code> (ضرب در ۱۰ چون map با عدد صحیح کار می‌کند) و <code>display.drawLine(x1, y1, x2, y2, SSD1306_WHITE)</code> بین نقاط پشت سر هم. y را با <code>constrain</code> در ۰ تا ۶۳ نگه دار.</p></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۲: لاگر دما روی کارت SD</div>
+<p>DHT22 و کارت SD را ترکیب کن: هر ۱۰ ثانیه یک خط <code>millis,temp,humidity</code> به <code>/weather.csv</code> اضافه کن. خواندن‌های nan را ننویس. فایل را بعدا در اکسل باز کن و نمودار بکش.</p>
+<details><summary>راهنمایی</summary><p>DHT22 روی GPIO4 است و با پین‌های SPI (۵، ۱۸، ۱۹، ۲۳) تداخلی ندارد. در loop با millis هر ۱۰۰۰۰ms: بخوان، با isnan چک کن، <code>SD.open(..., FILE_APPEND)</code>، <code>f.printf("%lu,%.1f,%.1f\n", millis(), t, h)</code> و close.</p></details>
+<details><summary>جواب</summary>
+<div class="code" data-file="Weather_Logger.ino"><pre>
+#include &lt;SPI.h&gt;
+#include &lt;SD.h&gt;
+#include &lt;DHT.h&gt;
+
+DHT dht(4, DHT22);
+unsigned long lastLog = 0;
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  if (!SD.begin(5)) {
+    Serial.println("SD mount failed!");
+    while (true) delay(1000);
+  }
+  if (!SD.exists("/weather.csv")) {
+    File f = SD.open("/weather.csv", FILE_WRITE);
+    f.println("millis,temp,humidity");
+    f.close();
+  }
+}
+
+void loop() {
+  if (millis() - lastLog &lt; 10000) return;
+  lastLog = millis();
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) { Serial.println("DHT error, skipped"); return; }
+  File f = SD.open("/weather.csv", FILE_APPEND);
+  if (!f) { Serial.println("open failed"); return; }
+  f.printf("%lu,%.1f,%.1f\n", millis(), t, h);
+  f.close();
+  Serial.printf("logged %.1f C %.1f %%\n", t, h);
+}
+</pre></div>
+<ol class="walk">
+  <li data-lines="15-19"><b class="what">سرتیتر فقط یک بار.</b> مثل برنامه SD_Log.
+    <span class="why">اگر هر بار سرتیتر بنویسی، وسط داده‌ها خط متنی می‌افتد و اکسل نمودار را خراب می‌کشد.</span></li>
+  <li data-lines="23-24"><b class="what">نگهبان زمان.</b> هر ۱۰ ثانیه یک بار.
+    <span class="why">هر نوشتن روی کارت SD کمی عمر آن را مصرف می‌کند؛ لاگ کردن سریع‌تر از نیاز، فقط فایل را بزرگ و کارت را فرسوده می‌کند.</span></li>
+  <li data-lines="27-31"><b class="what">نوشتن امن.</b> nan رد می‌شود، اگر فایل باز نشد رد می‌شود، و بعد از هر خط close.
+    <span class="why">لاگر معمولا ساعت‌ها بدون نظارت کار می‌کند؛ باید با هر خطای تکی کنار بیاید و قطع برق ناگهانی حداکثر یک خط را از بین ببرد.</span></li>
+</ol>
+</details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۳: سرعت‌سنج GPS روی OLED</div>
+<p>با TinyGPSPlus سرعت (<code>gps.speed.kmph()</code>) را با اندازه متن ۳ و تعداد ماهواره‌ها را با اندازه ۱ روی OLED نشان بده. تا Fix نگرفته، «Searching...» و تعداد حروف دریافتی را نشان بده. با یک پاوربانک در ماشین یا دوچرخه امتحان کن.</p>
+<details><summary>راهنمایی</summary><p>OLED روی I2C (۲۱، ۲۲) و GPS روی UART2 (۱۶، ۱۷) هیچ پین مشترکی ندارند. حلقه <code>gps.encode</code> را بدون delay نگه دار و صفحه را فقط هر ۵۰۰ms با millis به‌روز کن. از <code>gps.speed.isValid()</code> هم استفاده کن.</p></details>
+</div>
+
+<div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
+<p><b>I2C</b> دو سیم (SDA=21، SCL=22) با Pull-up و آدرس برای هر دستگاه دارد؛ اول اسکنر، بعد کتابخانه؛ OLED در <code>0x3C</code> با چرخه clear ← رسم ← <code>display()</code>. DHT22 پروتکل تک‌سیمه خودش را دارد (نه I2C)، Pull-up ی ۱۰ کیلو و حداقل ۲ ثانیه فاصله می‌خواهد و خروجی‌اش را با <code>isnan</code> چک کن. <b>SPI</b> (VSPI: 23/19/18 و CS=5) سریع است و برای کارت SD ی FAT32 با <code>FILE_APPEND</code> و <code>close()</code>؛ <b>UART</b> ضربدری است (TX به RX)، سرعت دو طرف باید یکسان باشد، و GPS روی <code>Serial2.begin(9600, SERIAL_8N1, 16, 17)</code> جمله NMEA می‌فرستد که TinyGPSPlus آن را به درجه اعشاری تبدیل می‌کند؛ فقط زیر آسمان باز.</p></div>
+
+</article>
+</body>
+</html>

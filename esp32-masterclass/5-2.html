@@ -1,0 +1,678 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESP-NOW: ارتباط مستقیم دو ESP32 بدون مودم · مستر کلاس ESP32</title>
+<meta name="description" content="آموزش ESP-NOW با هسته آردوینو ESP32 نسخه ۳: آدرس MAC، ساختار پیام با struct، فرستنده و گیرنده، ارتباط دوطرفه با تایید و دما، کانال مشترک با Wi-Fi و عیب‌یابی.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="5-2">
+
+<p class="lede">تا حالا هر ارتباط بی‌سیمی که ساختی به یک مودم یا یک سرور وسط نیاز داشت. ولی اگر در حیاط، باغ یا کارگاه مودمی نباشد چه؟ اگر بخواهی یک دکمه در دست تو، در کمتر از چند میلی‌ثانیه چراغی را آن طرف ساختمان روشن کند چه؟ <b>ESP-NOW</b> پروتکل اختصاصی Espressif است که دو (یا چند) ESP32 را <b>مستقیم</b> و بدون هیچ مودمی به هم وصل می‌کند. در این درس یک ریموت می‌سازی: دکمه روی برد A، LED روی برد B، و برد B دمای خودش را به عنوان رسید برمی‌گرداند.</p>
+
+<div class="goals">
+  <div><h4>🎯 بعد از این درس می‌توانی</h4><ul>
+    <li>بگویی ESP-NOW چیست و کی از آن به جای Wi-Fi، MQTT یا BLE استفاده کنی</li>
+    <li>آدرس MAC برد را درست بخوانی (و بفهمی چرا گاهی صفر نشان می‌دهد)</li>
+    <li>با <code>struct</code> یک «قالب پیام» بسازی و با <code>sizeof</code> و <code>memcpy</code> بفرستی و بگیری</li>
+    <li>امضای درست Callbackها در هسته ۳ را بنویسی و کد قدیمی ۲.x را تشخیص بدهی</li>
+    <li>ارتباط دوطرفه با تایید (ACK) و زمان انتظار (Timeout) بسازی</li>
+    <li>ESP-NOW را هم‌زمان با Wi-Fi روی یک کانال راه بیندازی</li>
+  </ul></div>
+  <div><h4>🧰 پیش‌نیاز و وسایل</h4><ul>
+    <li>درس <a href="3-1.html">۳.۱</a> (دکمه و Debounce) و <a href="4-1.html">۴.۱</a> (Wi-Fi)</li>
+    <li><b>دو</b> برد ESP32 و دو کابل USB دیتا (اگر یک کامپیوتر داری، دو پنجره Arduino IDE یا دو پورت)</li>
+    <li>برد A: یک دکمه فشاری</li>
+    <li>برد B: یک LED + مقاومت ۲۲۰ اهم، و (برای بخش دوطرفه) سنسور DHT22 + مقاومت ۱۰ کیلواهم</li>
+  </ul></div>
+</div>
+
+<h2 id="what">ESP-NOW چیست؟</h2>
+<p>ESP-NOW از همان رادیوی ۲٫۴ گیگاهرتز Wi-Fi که داخل ESP32 است استفاده می‌کند، ولی کل تشریفات Wi-Fi (اتصال به مودم، گرفتن IP، TCP، دست دادن و...) را کنار می‌گذارد. هر پیام یک بسته کوچک است که مستقیم با «آدرس MAC» برد مقصد فرستاده می‌شود؛ درست مثل این که به جای رفتن به اداره پست، نامه را مستقیم از پنجره به همسایه بدهی.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره: بی‌سیم واکی‌تاکی در برابر تلفن</div>
+<p>Wi-Fi و MQTT مثل تلفن زدن است: شماره می‌گیری، مرکز مخابرات (مودم و Broker) تو را وصل می‌کند و بعد حرف می‌زنی. از هر جای دنیا کار می‌کند، ولی بدون مرکز مخابرات هیچ. ESP-NOW مثل واکی‌تاکی است: دکمه را می‌زنی و صدا مستقیم به دستگاه دیگر می‌رسد. سریع است و مرکزی لازم ندارد، ولی فقط تا جایی که صدا برسد، و پیام‌ها کوتاه است.</p></div>
+
+<pre class="mermaid">flowchart TB
+  subgraph W["Wi-Fi + MQTT: هفت ایستگاه"]
+    direction LR
+    A1["ESP32 A"] --> R1["مودم"] --> I1(("اینترنت")) --> BR["Broker"] --> I1b(("اینترنت")) --> R2["مودم"] --> B1["ESP32 B"]
+  end
+  subgraph N["ESP-NOW: مستقیم"]
+    direction LR
+    A2["ESP32 A"] -->|"با آدرس MAC"| B2["ESP32 B"]
+  end</pre>
+
+<h3>کی ESP-NOW، کی بقیه؟</h3>
+<div class="table-wrap"><table>
+<tr><th>ویژگی</th><th>ESP-NOW</th><th>Wi-Fi + MQTT</th><th>BLE (بلوتوث کم‌مصرف)</th></tr>
+<tr><td>مودم یا Broker لازم دارد؟</td><td><b>نه</b></td><td>بله، هر دو</td><td>نه</td></tr>
+<tr><td>برد (بدون آنتن خارجی)</td><td>داخل خانه ده‌ها متر؛ فضای باز معمولا چند صد متر (بسته به آنتن و موانع)</td><td>محدود به پوشش مودم، ولی از طریق اینترنت هر جای دنیا</td><td>معمولا ده‌ها متر</td></tr>
+<tr><td>تاخیر یک پیام</td><td>چند میلی‌ثانیه</td><td>ده‌ها تا صدها میلی‌ثانیه (مسیر اینترنت)</td><td>ده‌ها میلی‌ثانیه (بسته به فاصله اتصال)</td></tr>
+<tr><td>حداکثر داده هر پیام</td><td>۲۵۰ بایت (نسخه ۱)؛ نسخه ۲ تا ۱۴۷۰ بایت (توضیح پایین)</td><td>عملا نامحدود (با تنظیم بافر)</td><td>معمولا ۲۰ تا چند صد بایت</td></tr>
+<tr><td>با گوشی حرف می‌زند؟</td><td>نه، فقط بین تراشه‌های Espressif</td><td>بله (اپ MQTT یا داشبورد)</td><td>بله</td></tr>
+<tr><td>زمان روشن شدن تا اولین پیام</td><td>خیلی کوتاه؛ عالی برای سنسور باتری‌خور که بیدار می‌شود، می‌فرستد و می‌خوابد</td><td>چند ثانیه (اتصال Wi-Fi و Broker)</td><td>متوسط</td></tr>
+<tr><td>مثال مناسب</td><td>ریموت، زنگ در، سنسورهای باغ که به یک برد مرکزی گزارش می‌دهند</td><td>داشبورد، کنترل از بیرون خانه</td><td>کنترل با اپ گوشی از نزدیک</td></tr>
+</table></div>
+
+<div class="callout info"><div class="ct">چند عدد رسمی (از مستندات ESP-IDF)</div>
+<p>حداکثر <b>۲۰ همتا (Peer)</b> در دفترچه آدرس هر برد، که به طور پیش‌فرض حداکثر <b>۶ تای آن‌ها رمزنگاری‌شده</b> می‌توانند باشند. طول داده در ESP-NOW نسخه ۱ حداکثر <b>۲۵۰ بایت</b> است. هسته‌های جدیدتر (بر پایه ESP-IDF 5.4 به بعد) ESP-NOW <b>نسخه ۲</b> را دارند که تا <b>۱۴۷۰ بایت</b> می‌فرستد؛ ولی دستگاه نسخه ۱ پیام بلندتر از ۲۵۰ بایت را کوتاه می‌کند یا دور می‌ریزد. توصیه این درس: تا وقتی مطمئن نیستی همه بردها نسخه ۲ دارند، پیام را <b>زیر ۲۵۰ بایت</b> نگه دار. (ما در این درس فقط ۸ و ۱۲ بایت می‌فرستیم!)</p></div>
+
+<h2 id="mac">قدم اول: آدرس MAC برد را پیدا کن</h2>
+<p>آدرس MAC یک شماره ۶ بایتی است که کارخانه روی هر تراشه ESP32 نوشته، مثل <code>24:6F:28:AB:CD:EF</code>. مثل پلاک خانه است: ESP-NOW نامه را با همین پلاک به مقصد می‌رساند. هر عدد دو رقمی یک بایت در مبنای ۱۶ (هگز) است.</p>
+
+<div class="code" data-file="GetMac.ino" id="mac1"><pre>
+#include &lt;WiFi.h&gt;
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  Serial.print("Before WiFi.mode: ");
+  Serial.println(WiFi.macAddress());   // احتمالا 00:00:00:00:00:00
+
+  WiFi.mode(WIFI_STA);                 // رادیوی Wi-Fi روشن می‌شود
+  while (!WiFi.STA.started()) {
+    delay(10);
+  }
+  Serial.print("STA MAC: ");
+  Serial.println(WiFi.macAddress());
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="mac1">
+  <li data-lines="5-7"><b class="what">خواندن MAC قبل از روشن شدن Wi-Fi.</b> عمدا یک بار MAC را <b>قبل</b> از <code>WiFi.mode</code> چاپ می‌کنیم.
+    <span class="why">در هسته ۳ آردوینو، <code>WiFi.macAddress()</code> آدرس را از «رابط شبکه» (Network Interface) می‌خواند و این رابط تا Wi-Fi راه نیفتد وجود ندارد؛ برای همین <code>00:00:00:00:00:00</code> می‌گیری. خیلی از دانشجوها همین صفرها را در کد فرستنده کپی می‌کنند و بعد ساعت‌ها دنبال مشکل می‌گردند.</span></li>
+  <li data-lines="9"><b class="what">WiFi.mode(WIFI_STA).</b> رادیو را در حالت ایستگاه (Station) روشن می‌کند؛ لازم نیست به هیچ مودمی وصل شود.
+    <span class="why">ESP-NOW روی رابط STA یا AP کار می‌کند و ما همیشه STA را انتخاب می‌کنیم. هر رابط MAC جدای خودش را دارد (MAC رابط AP معمولا یک واحد بیشتر است)؛ پس MAC همان رابطی را بردار که ESP-NOW رویش کار می‌کند.</span></li>
+  <li data-lines="10-12"><b class="what">صبر تا رابط STA واقعا شروع شود.</b> <code>WiFi.STA.started()</code> وقتی <code>true</code> می‌شود که راه‌اندازی رادیو تمام شده باشد.
+    <span class="why">روشن شدن Wi-Fi روی یک Task جدا و چند میلی‌ثانیه طول می‌کشد. مثال‌های رسمی Espressif برای ESP-NOW هم دقیقا همین حلقه انتظار را دارند.</span></li>
+  <li data-lines="13-14"><b class="what">MAC واقعی.</b> حالا آدرس درست چاپ می‌شود. آن را روی یک تکه چسب کاغذی بنویس و روی برد بچسبان!
+    <span class="why">در ادامه دو برد داری و MACها شبیه هم‌اند. برچسب زدن جلوی اشتباه گرفتن برد A و B را می‌گیرد.</span></li>
+</ol>
+<div class="serial">Before WiFi.mode: 00:00:00:00:00:00
+STA MAC: 24:6F:28:AB:CD:EF</div>
+<p>این برنامه را روی <b>برد B (گیرنده)</b> آپلود کن و MAC آن را یادداشت کن. برای نوشتن در کد، هر بخش را با <code>0x</code> شروع کن: <code>24:6F:28:AB:CD:EF</code> می‌شود <code>{0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF}</code>.</p>
+
+<h2 id="struct">قالب پیام: struct، sizeof و memcpy</h2>
+<p>ESP-NOW فقط «یک مشت بایت» می‌فرستد و نمی‌داند معنی آن‌ها چیست. ما باید قراری بگذاریم که بایت اول تا چهارم یعنی شماره پیام، بایت پنجم یعنی روشن یا خاموش و... این قرار را در C++ با <code>struct</code> (ساختار) می‌نویسیم.</p>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره: فرم چاپی</div>
+<p><code>struct</code> مثل یک فرم اداری چاپی است: خانه اول «شماره»، خانه دوم «وضعیت». فرستنده فرم را پر می‌کند و می‌فرستد. گیرنده باید <b>دقیقا همان فرم</b> را داشته باشد تا بداند هر خانه چه معنی دارد. اگر گیرنده فرم نسخه قدیمی را داشته باشد که جای خانه‌ها فرق دارد، عدد دما را به جای شماره می‌خواند!</p></div>
+
+<div class="callout example"><div class="ct">حساب کن: sizeof واقعا چند است؟</div>
+<p>قالب فرمان ما: <code>uint32_t seq</code> (۴ بایت) + <code>bool ledOn</code> (۱ بایت). جمع = ۵ بایت؟ نه! <code>sizeof(CommandMsg)</code> روی ESP32 برابر <b>۸</b> است. کامپایلر بعد از bool سه بایت خالی (Padding) می‌گذارد تا اندازه کل مضرب ۴ شود، چون پردازنده ۳۲ بیتی عددهای ۴ بایتی را از آدرس‌های مضرب ۴ سریع‌تر می‌خواند. قالب جواب: ۴ + ۱ + ۳ (خالی) + <code>float</code> ۴ = <b>۱۲</b> بایت.</p>
+<p>نتیجه عملی: اگر یک طرف ESP32 و طرف دیگر یک تراشه یا کامپایلر دیگر باشد (مثلا ESP8266)، Padding ممکن است فرق کند. بین دو ESP32 با یک هسته مشکلی نیست. برای اطمینان کامل می‌شود <code>__attribute__((packed))</code> را بعد از <code>struct</code> نوشت تا Padding حذف شود.</p></div>
+
+<ul>
+  <li><code>sizeof(x)</code> تعداد بایت‌های x را در زمان کامپایل می‌دهد. همیشه از آن استفاده کن، هرگز عدد را دستی ننویس.</li>
+  <li><code>memcpy(مقصد, مبدا, تعداد)</code> تعدادی بایت را عینا از یک جای حافظه به جای دیگر کپی می‌کند. با آن بایت‌های رسیده را روی متغیر struct خودمان می‌ریزیم.</li>
+  <li><code>(uint8_t *)&amp;cmd</code> یعنی «آدرس متغیر cmd را به عنوان آرایه‌ای از بایت ببین». <code>&amp;</code> آدرس می‌دهد و <code>(uint8_t *)</code> نوع را عوض می‌کند، بدون این که داده‌ای تغییر کند.</li>
+</ul>
+
+<h2 id="oneway">پروژه ۱: ریموت یک‌طرفه (دکمه روی A، LED روی B)</h2>
+
+<h3>سیم‌کشی برد A (فرستنده)</h3>
+<div class="wiring"><script type="application/json">{
+  "board":"برد A (فرستنده)",
+  "parts":[
+    {"id":"BTN","name":"دکمه فشاری","img":"button.svg","pins":[["1","یک طرف دکمه"],["2","طرف مقابل (قطری)"]]}
+  ],
+  "wires":[["GPIO4","BTN.1","blue"],["BTN.2","GND","black"]]
+}</script><figcaption>دکمه بین GPIO4 و GND. مقاومت لازم نیست چون از Pull-up داخلی (<code>INPUT_PULLUP</code>) استفاده می‌کنیم: فشرده = LOW، رها = HIGH. دو پایه‌ای را انتخاب کن که با فشردن به هم وصل می‌شوند (معمولا دو پایه قطری).</figcaption></div>
+
+<h3>سیم‌کشی برد B (گیرنده)</h3>
+<div class="wiring"><script type="application/json">{
+  "board":"برد B (گیرنده)",
+  "parts":[
+    {"id":"R1","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","طرف GPIO"],["2","طرف LED"]]},
+    {"id":"LED1","name":"LED","img":"led.svg","pins":[["A","آند (+) پایه بلند"],["K","کاتد (−) پایه کوتاه"]]},
+    {"id":"DHT1","name":"DHT22 (فقط پروژه ۲)","img":"dht22.svg","pins":[["VCC","۳٫۳ ولت"],["DATA","داده"],["NC","وصل نمی‌شود"],["GND","زمین"]]},
+    {"id":"R2","name":"مقاومت ۱۰ کیلواهم","img":"resistor.svg","pins":[["1","به 3V3"],["2","به DATA"]]}
+  ],
+  "wires":[["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"],["3V3","DHT1.VCC","red"],["GPIO27","DHT1.DATA","blue"],["DHT1.GND","GND","black"],["R2.1","3V3","red"],["R2.2","DHT1.DATA","blue"]]
+}</script><figcaption>LED روی GPIO4 با مقاومت ۲۲۰ اهم. سنسور DHT22 روی GPIO27 با Pull-up ده کیلواهم را فقط برای پروژه دوطرفه لازم داری؛ برای پروژه ۱ می‌توانی آن را نبندی.</figcaption></div>
+
+<h3>کد برد A (فرستنده)</h3>
+<div class="code" data-file="Sender_OneWay.ino — برد A" id="send1"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+
+// MAC برد B را اینجا بنویس (از برنامه GetMac)
+uint8_t receiverMac[] = {0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF};
+
+const int BUTTON_PIN = 4;
+
+// قالب پیام: باید در فرستنده و گیرنده دقیقا یکی باشد
+typedef struct {
+  uint32_t seq;     // شماره پیام
+  bool ledOn;       // LED روشن باشد یا نه
+} CommandMsg;
+
+CommandMsg cmd = {0, false};
+int lastReading = HIGH;
+int stableState = HIGH;
+unsigned long lastChange = 0;
+
+// هسته 3.3 به بعد: ورودی اول از نوع wifi_tx_info_t است
+void onSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "  delivered" : "  delivery FAILED");
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_send_cb(onSent);
+
+  esp_now_peer_info_t peer = {};
+  memcpy(peer.peer_addr, receiverMac, 6);
+  peer.channel = 0;          // 0 یعنی همان کانالی که الان رویش هستیم
+  peer.encrypt = false;
+  if (esp_now_add_peer(&amp;peer) != ESP_OK) {
+    Serial.println("Failed to add peer");
+    while (true) delay(1000);
+  }
+  Serial.println("Sender ready. Press the button.");
+}
+
+void loop() {
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) {        // تغییر جدید: زمان‌سنج لرزش از نو
+    lastChange = millis();
+    lastReading = reading;
+  }
+  if (millis() - lastChange &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) {          // دکمه واقعا فشرده شد
+      cmd.seq++;
+      cmd.ledOn = !cmd.ledOn;
+      esp_err_t r = esp_now_send(receiverMac, (uint8_t *)&amp;cmd, sizeof(cmd));
+      Serial.printf("Sent #%lu ledOn=%d (%s)\n", (unsigned long)cmd.seq, cmd.ledOn, r == ESP_OK ? "queued" : esp_err_to_name(r));
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="send1">
+  <li data-lines="1-2"><b class="what">دو کتابخانه.</b> <code>WiFi.h</code> برای روشن کردن رادیو و <code>esp_now.h</code> که API اصلی ESP-NOW از ESP-IDF است.
+    <span class="why">ESP-NOW رادیوی Wi-Fi را لازم دارد، حتی اگر هرگز به مودم وصل نشوی. هر دو کتابخانه همراه هسته ESP32 نصب شده‌اند؛ چیزی برای نصب نیست.</span></li>
+  <li data-lines="5"><b class="what">آدرس گیرنده.</b> آرایه ۶ بایتی با MAC برد B.
+    <span class="why">اشتباه در حتی یک رقم یعنی پیام به هیچ‌کس نمی‌رسد و Callback ارسال «FAILED» می‌گوید. این رایج‌ترین خطای ESP-NOW است.</span></li>
+  <li data-lines="10-13"><b class="what">تعریف قالب پیام.</b> <code>typedef struct {...} CommandMsg;</code> یک نوع داده جدید به اسم <code>CommandMsg</code> می‌سازد با دو خانه.
+    <span class="why"><code>uint32_t</code> یعنی عدد صحیح بی‌علامت دقیقا ۳۲ بیتی؛ برخلاف <code>int</code> اندازه‌اش روی همه تراشه‌ها یکی است، که برای فرستادن داده بین دستگاه‌ها مهم است. شماره پیام (seq) کمک می‌کند بفهمیم پیامی گم شده یا تکراری رسیده.</span></li>
+  <li data-lines="15-18"><b class="what">متغیرهای سراسری.</b> خود پیام با مقدار اولیه، و سه متغیر برای Debounce دکمه.
+    <span class="why">مقدار این‌ها باید بین دورهای loop بماند، پس سراسری‌اند. منطق Debounce همان درس ۳.۱ است.</span></li>
+  <li data-lines="20-23"><b class="what">Callback ارسال.</b> بعد از هر ارسال، ESP-NOW این تابع را با نتیجه صدا می‌زند: <code>ESP_NOW_SEND_SUCCESS</code> یا <code>ESP_NOW_SEND_FAIL</code>.
+    <span class="why">موفقیت یعنی رادیوی برد B بسته را در لایه MAC دریافت و تایید کرده؛ <b>نه</b> این که برنامه B آن را پردازش کرده. اگر B روشن نباشد یا MAC غلط باشد، FAIL می‌گیری. امضای این تابع در نسخه‌ها عوض شده؛ کادر زرد پایین را حتما بخوان.</span></li>
+  <li data-lines="29-30"><b class="what">روشن کردن رادیو.</b> حالت STA و صبر تا شروع کامل.
+    <span class="why"><code>esp_now_init</code> باید <b>بعد</b> از روشن شدن Wi-Fi صدا زده شود؛ وگرنه خطا می‌دهد.</span></li>
+  <li data-lines="32-36"><b class="what">راه‌اندازی ESP-NOW و ثبت Callback.</b> اگر <code>esp_now_init</code> موفق نبود، برنامه را در یک حلقه بی‌پایان نگه می‌داریم.
+    <span class="why">ادامه دادن بدون ESP-NOW فقط خطاهای گیج‌کننده بعدی می‌سازد. «زود و بلند شکست بخور» (Fail fast) عادت خوبی است.</span></li>
+  <li data-lines="38-45"><b class="what">اضافه کردن همتا (Peer).</b> یک ساختار <code>esp_now_peer_info_t</code> را صفر می‌کنیم (<code>= {}</code>)، MAC را در آن کپی می‌کنیم، کانال را ۰ و رمزنگاری را خاموش می‌گذاریم و با <code>esp_now_add_peer</code> به دفترچه آدرس اضافه می‌کنیم.
+    <span class="why">ESP-NOW فقط به MACهایی که در دفترچه هستند پیام تکی (Unicast) می‌فرستد. کانال ۰ یعنی «همان کانال فعلی رادیو»؛ دو برد به طور پیش‌فرض روی یک کانال (معمولا ۱) روشن می‌شوند. صفر کردن ساختار مهم است: بدون آن فیلدهایی که ننوشته‌ایم مقدار آشغال دارند.</span></li>
+  <li data-lines="50-54"><b class="what">تشخیص هر تغییر خام دکمه.</b> هر بار ورودی با قبلی فرق کند، زمان را ثبت می‌کنیم.
+    <span class="why">کنتاکت دکمه در لحظه فشردن چند میلی‌ثانیه «می‌لرزد» و چند بار صفر و یک می‌شود. بدون Debounce یک فشار ممکن است دو فرمان بفرستد و LED روشن و فورا خاموش شود.</span></li>
+  <li data-lines="55-57"><b class="what">وضعیت پایدار.</b> اگر ۳۰ میلی‌ثانیه تغییری نبود و وضعیت با وضعیت پایدار قبلی فرق دارد، آن را قبول می‌کنیم؛ فقط لبه «فشرده شدن» (LOW) فرمان می‌فرستد.
+    <span class="why">با این روش، لرزش موقع <b>رها کردن</b> دکمه هم فرمان اضافه نمی‌سازد.</span></li>
+  <li data-lines="58-61"><b class="what">ساختن و فرستادن پیام.</b> شماره یکی زیاد و وضعیت برعکس می‌شود. <code>esp_now_send(مقصد, بایت‌ها, طول)</code> پیام را در صف ارسال می‌گذارد و فورا برمی‌گردد.
+    <span class="why"><code>ESP_OK</code> فقط یعنی «در صف گذاشته شد»؛ نتیجه واقعی چند میلی‌ثانیه بعد در <code>onSent</code> می‌آید. <code>esp_err_to_name</code> کد خطا را به اسم خوانا (مثلا <code>ESP_ERR_ESPNOW_NOT_FOUND</code> یعنی Peer اضافه نشده) تبدیل می‌کند.</span></li>
+</ol>
+
+<div class="callout warn"><div class="ct">امضای Callbackها در نسخه‌های مختلف (آموزش‌های اینترنت را با دقت بخوان)</div>
+<p><b>Callback دریافت:</b> در هسته <b>۳.x</b> امضا <code>void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len)</code> است و MAC فرستنده در <code>info-&gt;src_addr</code> است. در هسته <b>۲.x</b> امضا <code>void onRecv(const uint8_t *mac, const uint8_t *data, int len)</code> بود. بیشتر آموزش‌های اینترنت (حتی ویدیوی همین درس) نسخه ۲ را دارند و روی هسته ۳ با خطای <code>invalid conversion</code> کامپایل نمی‌شوند.</p>
+<p><b>Callback ارسال:</b> در هسته ۲.x و ۳.۰ تا ۳.۲ امضا <code>void onSent(const uint8_t *mac_addr, esp_now_send_status_t status)</code> بود. از هسته <b>۳.۳.۰</b> (بر پایه ESP-IDF 5.5) امضا شد <code>void onSent(const wifi_tx_info_t *info, esp_now_send_status_t status)</code> و MAC مقصد در <code>info-&gt;des_addr</code> است. اگر خطای <code>invalid conversion from 'void (*)(const uint8_t*, esp_now_send_status_t)'</code> گرفتی، یعنی کد قدیمی را روی هسته جدید کامپایل می‌کنی. نسخه هسته‌ات را در <code>Tools › Board › Boards Manager</code> ببین. اگر کدی باید روی هر دو کار کند:</p>
+<div class="code" data-file="نسخه سازگار با هر دو" id="compat"><pre>
+#if ESP_ARDUINO_VERSION &gt;= ESP_ARDUINO_VERSION_VAL(3, 3, 0)
+void onSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+#else
+void onSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+#endif
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "delivered" : "FAILED");
+}
+</pre></div>
+<ol class="walk" data-for="compat">
+  <li data-lines="1-5"><b class="what">انتخاب امضا در زمان کامپایل.</b> <code>#if</code> پیش‌پردازنده است: قبل از کامپایل، بر اساس نسخه هسته فقط یکی از دو خط اول تابع باقی می‌ماند.
+    <span class="why">ماکروهای <code>ESP_ARDUINO_VERSION</code> را خود هسته تعریف می‌کند. بدنه تابع مشترک است چون از ورودی اول استفاده نمی‌کنیم.</span></li>
+  <li data-lines="6-7"><b class="what">بدنه مشترک.</b> فقط وضعیت را چاپ می‌کند.
+    <span class="why">اگر MAC را لازم داشتی، در شاخه جدید از <code>info-&gt;des_addr</code> و در شاخه قدیم از <code>mac_addr</code> بخوان.</span></li>
+</ol></div>
+
+<h3>کد برد B (گیرنده)</h3>
+<div class="code" data-file="Receiver_OneWay.ino — برد B" id="recv1"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+
+const int LED_PIN = 4;
+
+typedef struct {
+  uint32_t seq;
+  bool ledOn;
+} CommandMsg;
+
+CommandMsg incoming;
+volatile bool gotMsg = false;
+
+// امضای هسته 3.x: اطلاعات فرستنده + داده + طول
+void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len != sizeof(CommandMsg)) return;   // اندازه اشتباه؟ نادیده بگیر
+  memcpy(&amp;incoming, data, sizeof(incoming));
+  gotMsg = true;                          // کار اصلی را loop انجام می‌دهد
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  Serial.print("Receiver MAC: ");
+  Serial.println(WiFi.macAddress());
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_recv_cb(onRecv);
+}
+
+void loop() {
+  if (gotMsg) {
+    gotMsg = false;
+    digitalWrite(LED_PIN, incoming.ledOn ? HIGH : LOW);
+    Serial.printf("Got #%lu -&gt; LED %s\n", (unsigned long)incoming.seq, incoming.ledOn ? "ON" : "OFF");
+  }
+}
+</pre></div>
+<ol class="walk" data-for="recv1">
+  <li data-lines="6-9"><b class="what">همان قالب پیام.</b> کپی دقیق struct فرستنده، با همان ترتیب و همان نوع‌ها.
+    <span class="why">اگر در فرستنده ترتیب <code>seq</code> و <code>ledOn</code> را عوض کنی ولی اینجا نه، بایت‌ها سر جای اشتباه خوانده می‌شوند و هیچ خطایی هم نمی‌گیری؛ فقط رفتار عجیب. در پروژه‌های بزرگ این struct را در یک فایل <code>.h</code> مشترک می‌گذارند.</span></li>
+  <li data-lines="11-12"><b class="what">جای پیام و پرچم.</b> <code>incoming</code> آخرین پیام را نگه می‌دارد و <code>gotMsg</code> خبر می‌دهد پیام تازه رسیده. <code>volatile</code> به کامپایلر می‌گوید «این متغیر ممکن است از جای دیگری عوض شود؛ هر بار از حافظه بخوانش».
+    <span class="why">Callback روی Task دیگری (Task رادیوی Wi-Fi) اجرا می‌شود، نه روی loop. بدون <code>volatile</code> کامپایلر ممکن است مقدار را کش کند و loop هرگز تغییرش را نبیند.</span></li>
+  <li data-lines="15-19"><b class="what">Callback دریافت.</b> اول طول را چک می‌کنیم، بعد بایت‌ها را روی <code>incoming</code> کپی می‌کنیم و پرچم را بالا می‌بریم. <code>info</code> اطلاعاتی مثل MAC فرستنده (<code>info-&gt;src_addr</code>) و قدرت سیگنال (<code>info-&gt;rx_ctrl-&gt;rssi</code>) دارد.
+    <span class="why">چک طول جلوی خواندن پیام‌های ناقص یا پیام‌های برنامه دیگر را می‌گیرد. کار سنگین (چاپ، digitalWrite، خواندن سنسور) را در Callback نکن: مستندات Espressif می‌گوید این تابع در Task پراولویت Wi-Fi اجرا می‌شود و طولانی شدنش دریافت‌های بعدی را مختل می‌کند. الگوی «پرچم در Callback، کار در loop» را حفظ کن.</span></li>
+  <li data-lines="24-27"><b class="what">روشن کردن رادیو و چاپ MAC.</b> همان کار برنامه GetMac.
+    <span class="why">چاپ MAC در خود گیرنده یعنی هر وقت برد را عوض کردی، آدرس جدید را بی‌دردسر می‌بینی.</span></li>
+  <li data-lines="29-33"><b class="what">راه‌اندازی و ثبت Callback دریافت.</b> گیرنده لازم نیست فرستنده را به عنوان Peer اضافه کند.
+    <span class="why">طبق مستندات، بدون Peer هم پیام تکی رمزنگاری‌نشده و پیام همگانی (Broadcast) دریافت می‌شود. Peer فقط برای <b>فرستادن</b> (و دریافت رمزنگاری‌شده) لازم است.</span></li>
+  <li data-lines="36-41"><b class="what">اجرای فرمان در loop.</b> اگر پرچم بالا بود، پایینش می‌آوریم، LED را تنظیم و نتیجه را چاپ می‌کنیم.
+    <span class="why">یک نکته صادقانه: اگر دو پیام خیلی پشت سر هم برسند، ممکن است پیام دوم وسط خواندن اولی روی <code>incoming</code> نوشته شود. برای ریموت دستی این اتفاق عملا نمی‌افتد؛ برای داده پرسرعت از صف FreeRTOS (<code>xQueueSend</code>) استفاده می‌کنند.</span></li>
+</ol>
+<p>هر دو برنامه را آپلود کن (A با MAC برد B)، Serial Monitor هر دو را باز کن و دکمه را بزن:</p>
+<div class="serial">[A] Sender ready. Press the button.
+[A] Sent #1 ledOn=1 (queued)
+[A]   delivered
+[B] Got #1 -&gt; LED ON
+[A] Sent #2 ledOn=0 (queued)
+[A]   delivered
+[B] Got #2 -&gt; LED OFF</div>
+
+<div class="callout info"><div class="ct">در Wokwi چه؟</div>
+<p>در زمان نوشتن این درس، شبیه‌ساز Wokwi <b>ارتباط ESP-NOW بین دو برد</b> را شبیه‌سازی نمی‌کند (درخواست این قابلیت در مخزن wokwi-features هنوز باز است). پس این درس فقط با دو برد واقعی کامل می‌شود. برنامه GetMac را می‌توانی در Wokwi اجرا کنی، ولی MAC مجازی آن به کار برد واقعی نمی‌آید.</p></div>
+
+<h2 id="twoway">پروژه ۲: ارتباط دوطرفه با تایید و دما</h2>
+<p>در پروژه ۱ برد A فقط می‌دانست رادیوی B بسته را گرفته. ولی آیا LED واقعا روشن شد؟ در پروژه ۲، B بعد از اجرای فرمان یک <b>جواب</b> برمی‌گرداند: شماره همان فرمان، وضعیت واقعی LED و دمای محیط خودش. A اگر تا ۵۰۰ میلی‌ثانیه جواب نگرفت، اعلام خطا می‌کند. این الگوی «درخواست، جواب، مهلت» (Request/Response + Timeout) پایه همه پروتکل‌های قابل اعتماد است.</p>
+
+<pre class="mermaid">sequenceDiagram
+  participant A as برد A (دکمه)
+  participant B as برد B (LED + DHT22)
+  A->>B: CommandMsg {seq=5, ledOn=true}
+  Note over B: LED روشن، دما خوانده شد
+  B->>A: ReplyMsg {seq=5, ledOn=true, tempC=24.6}
+  Note over A: seq یکی است ✅ رسید تایید شد
+  A->>B: CommandMsg {seq=6, ledOn=false}
+  Note over B: برد B خاموش است ❌
+  Note over A: ۵۰۰ میلی‌ثانیه گذشت، جوابی نیامد → خطا</pre>
+
+<div class="code" data-file="BoardA_TwoWay.ino — برد A" id="twoA"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+
+uint8_t boardB[] = {0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF};   // MAC برد B
+const int BUTTON_PIN = 4;
+const int STATUS_LED = 2;      // LED داخلی برد (اگر برد تو دارد)
+
+typedef struct {
+  uint32_t seq;
+  bool ledOn;
+} CommandMsg;
+
+typedef struct {
+  uint32_t seq;      // شماره فرمانی که این جواب مال آن است
+  bool ledOn;        // وضعیت واقعی LED روی B
+  float tempC;       // دمای B (یا NAN اگر سنسور خطا داد)
+} ReplyMsg;
+
+CommandMsg cmd = {0, false};
+ReplyMsg reply;
+volatile bool gotReply = false;
+bool waiting = false;
+unsigned long sentAt = 0;
+int lastReading = HIGH, stableState = HIGH;
+unsigned long lastChange = 0;
+
+void onSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+  if (status != ESP_NOW_SEND_SUCCESS) Serial.println("  radio: not delivered");
+}
+
+void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len != sizeof(ReplyMsg)) return;
+  if (memcmp(info-&gt;src_addr, boardB, 6) != 0) return;   // فقط از B قبول کن
+  memcpy(&amp;reply, data, sizeof(reply));
+  gotReply = true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(STATUS_LED, OUTPUT);
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_send_cb(onSent);
+  esp_now_register_recv_cb(onRecv);
+  esp_now_peer_info_t peer = {};
+  memcpy(peer.peer_addr, boardB, 6);
+  peer.channel = 0;
+  peer.encrypt = false;
+  esp_now_add_peer(&amp;peer);
+}
+
+void sendCommand() {
+  cmd.seq++;
+  cmd.ledOn = !cmd.ledOn;
+  digitalWrite(STATUS_LED, LOW);            // تا تایید نیامده، خاموش
+  esp_now_send(boardB, (uint8_t *)&amp;cmd, sizeof(cmd));
+  Serial.printf("-&gt; #%lu ledOn=%d\n", (unsigned long)cmd.seq, cmd.ledOn);
+  waiting = true;
+  sentAt = millis();
+}
+
+void loop() {
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChange = millis(); lastReading = reading; }
+  if (millis() - lastChange &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) sendCommand();
+  }
+
+  if (gotReply) {
+    gotReply = false;
+    if (waiting &amp;&amp; reply.seq == cmd.seq) {
+      waiting = false;
+      digitalWrite(STATUS_LED, HIGH);         // تایید رسید
+      Serial.printf("&lt;- ack #%lu, LED on B is %s, temp %.1f C (%lu ms)\n",
+                    (unsigned long)reply.seq, reply.ledOn ? "ON" : "OFF",
+                    reply.tempC, millis() - sentAt);
+    }
+  }
+  if (waiting &amp;&amp; millis() - sentAt &gt; 500) {   // نیم ثانیه مهلت
+    waiting = false;
+    Serial.println("!! no reply from B within 500 ms");
+  }
+}
+</pre></div>
+<ol class="walk" data-for="twoA">
+  <li data-lines="4-6"><b class="what">MAC برد B و دو پین.</b> دکمه روی GPIO4 و LED وضعیت روی GPIO2.
+    <span class="why">LED روی GPIO2 در بیشتر بردهای بازار ایران داخلی است (درس ۲.۳)، پس برای «رسید گرفتم» سیم‌کشی اضافه لازم نیست. اگر برد تو ندارد، فقط Serial را نگاه کن.</span></li>
+  <li data-lines="8-17"><b class="what">دو قالب پیام.</b> <code>CommandMsg</code> (۸ بایت) از A به B و <code>ReplyMsg</code> (۱۲ بایت) از B به A.
+    <span class="why">چون دو قالب اندازه متفاوت دارند، گیرنده از روی <code>len</code> می‌فهمد کدام است. در پروژه‌های بزرگ‌تر یک بایت اول «نوع پیام» می‌گذارند.</span></li>
+  <li data-lines="19-25"><b class="what">وضعیت برنامه.</b> <code>waiting</code> یعنی «منتظر جوابم»، <code>sentAt</code> زمان ارسال برای محاسبه مهلت و تاخیر.
+    <span class="why">این متغیرها یک «ماشین حالت» کوچک می‌سازند: یا منتظریم یا نه. بدون آن نمی‌شود فهمید جوابی که رسید مال کدام فرمان است یا مهلت کی تمام شد.</span></li>
+  <li data-lines="27-29"><b class="what">Callback ارسال (هسته ۳.۳+).</b> فقط شکست رادیویی را گزارش می‌کند.
+    <span class="why">اینجا تایید اصلی ما جواب برنامه B است، نه تایید رادیو؛ برای همین موفقیت را چاپ نمی‌کنیم تا Serial شلوغ نشود.</span></li>
+  <li data-lines="31-36"><b class="what">Callback دریافت با فیلتر فرستنده.</b> <code>memcmp</code> شش بایت MAC فرستنده را با MAC برد B مقایسه می‌کند (۰ یعنی یکی‌اند).
+    <span class="why">هر ESP32 دیگری در اطراف که روی همین کانال ESP-NOW بفرستد، پیامش به این تابع می‌رسد. فقط به پیام‌های B اعتماد کن.</span></li>
+  <li data-lines="48-54"><b class="what">ثبت هر دو Callback و Peer.</b> A هم می‌فرستد و هم می‌گیرد.
+    <span class="why">یک برد می‌تواند هم‌زمان فرستنده و گیرنده باشد؛ رادیو بین این دو کار به طور خودکار جابه‌جا می‌شود.</span></li>
+  <li data-lines="57-65"><b class="what">sendCommand.</b> فرمان جدید می‌سازد، LED وضعیت را خاموش می‌کند، می‌فرستد و ساعت انتظار را روشن می‌کند.
+    <span class="why">جدا کردن این کار در یک تابع، loop را خوانا نگه می‌دارد و بعدا می‌توانی از جای دیگری (مثلا یک تایمر) هم صدایش بزنی.</span></li>
+  <li data-lines="68-73"><b class="what">Debounce فشرده.</b> همان منطق پروژه ۱، این بار چند دستور در یک خط.
+    <span class="why">منطق یکسان است؛ فقط برای کوتاهی فشرده نوشته شده.</span></li>
+  <li data-lines="75-84"><b class="what">پردازش جواب.</b> اگر منتظر بودیم و <code>seq</code> جواب با آخرین فرمان یکی بود، تایید را قبول می‌کنیم، LED وضعیت را روشن می‌کنیم و دما و زمان رفت‌وبرگشت را چاپ می‌کنیم.
+    <span class="why">مقایسه seq جلوی قبول کردن جواب دیرهنگام یک فرمان قدیمی را می‌گیرد. زمان رفت‌وبرگشت معمولا چند تا چند ده میلی‌ثانیه است (بیشترش زمان خواندن DHT22 روی B است) و نشان می‌دهد ESP-NOW چقدر سریع است.</span></li>
+  <li data-lines="85-88"><b class="what">مهلت (Timeout).</b> اگر ۵۰۰ میلی‌ثانیه گذشت و جوابی نیامد، انتظار را تمام و خطا را اعلام می‌کنیم.
+    <span class="why">در دنیای بی‌سیم «جواب نیامد» یک حالت عادی است (B خاموش است، دور است، پیام گم شد). برنامه خوب برای آن نقشه دارد؛ مثلا در تمرین ۲ خودت ارسال دوباره (Retry) را اضافه می‌کنی.</span></li>
+</ol>
+
+<div class="code" data-file="BoardB_TwoWay.ino — برد B" id="twoB"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+#include &lt;DHT.h&gt;
+
+const int LED_PIN = 4;
+DHT dht(27, DHT22);
+
+typedef struct {
+  uint32_t seq;
+  bool ledOn;
+} CommandMsg;
+
+typedef struct {
+  uint32_t seq;
+  bool ledOn;
+  float tempC;
+} ReplyMsg;
+
+CommandMsg incoming;
+uint8_t senderMac[6];
+volatile bool gotMsg = false;
+
+void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len != sizeof(CommandMsg)) return;
+  memcpy(&amp;incoming, data, sizeof(incoming));
+  memcpy(senderMac, info-&gt;src_addr, 6);   // جواب را به همین آدرس می‌فرستیم
+  gotMsg = true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  dht.begin();
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  Serial.println(WiFi.macAddress());
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_recv_cb(onRecv);
+}
+
+void loop() {
+  if (!gotMsg) return;
+  gotMsg = false;
+  digitalWrite(LED_PIN, incoming.ledOn ? HIGH : LOW);
+
+  if (!esp_now_is_peer_exist(senderMac)) {   // بار اول؟ A را به دفترچه اضافه کن
+    esp_now_peer_info_t peer = {};
+    memcpy(peer.peer_addr, senderMac, 6);
+    peer.channel = 0;
+    peer.encrypt = false;
+    esp_now_add_peer(&amp;peer);
+  }
+
+  ReplyMsg reply;
+  reply.seq = incoming.seq;
+  reply.ledOn = incoming.ledOn;
+  reply.tempC = dht.readTemperature();       // اگر خطا: NAN
+  esp_now_send(senderMac, (uint8_t *)&amp;reply, sizeof(reply));
+  Serial.printf("#%lu LED %s, replied temp=%.1f\n", (unsigned long)reply.seq,
+                reply.ledOn ? "ON" : "OFF", reply.tempC);
+}
+</pre></div>
+<ol class="walk" data-for="twoB">
+  <li data-lines="3,6"><b class="what">سنسور DHT22 روی GPIO27.</b> همان کتابخانه Adafruit درس ۳.۳.
+    <span class="why">GPIO27 پایه امنی است و چون DHT22 دیجیتال است، هم‌زمانی با رادیو (که ADC2 را درگیر می‌کند) مشکلی ندارد.</span></li>
+  <li data-lines="8-17"><b class="what">دو قالب، کپی دقیق برد A.</b> ترتیب و نوع خانه‌ها باید با A یکی باشد.
+    <span class="why">اگر در B به جای <code>float</code> بنویسی <code>double</code>، اندازه ۱۶ بایت می‌شود و A (که ۱۲ بایت انتظار دارد) پیام را به خاطر چک طول دور می‌ریزد؛ خوشبختانه به جای خواندن عدد غلط!</span></li>
+  <li data-lines="23-28"><b class="what">ذخیره MAC فرستنده.</b> علاوه بر پیام، آدرس فرستنده را از <code>info-&gt;src_addr</code> کپی می‌کنیم.
+    <span class="why">این‌طوری B لازم نیست MAC برد A را از قبل بداند؛ به هر کس که فرمان داد جواب می‌دهد. (برای امنیت بیشتر، مثل A یک فیلتر MAC اضافه کن.)</span></li>
+  <li data-lines="45-47"><b class="what">اجرای فرمان.</b> اگر پیامی نیامده، از loop برمی‌گردیم؛ وگرنه LED را تنظیم می‌کنیم.
+    <span class="why"><code>return</code> زودهنگام از تو در تو شدن ifها جلوگیری می‌کند و کد را خواناتر می‌کند.</span></li>
+  <li data-lines="49-55"><b class="what">اضافه کردن A به دفترچه، فقط بار اول.</b> <code>esp_now_is_peer_exist</code> بررسی می‌کند آیا این MAC قبلا اضافه شده.
+    <span class="why">برای <b>فرستادن</b> جواب، A باید Peer باشد. اضافه کردن تکراری خطای <code>ESP_ERR_ESPNOW_EXIST</code> می‌دهد؛ این چک جلویش را می‌گیرد. این کار را در loop انجام می‌دهیم نه در Callback، تا Callback کوتاه بماند.</span></li>
+  <li data-lines="57-63"><b class="what">ساختن و فرستادن جواب.</b> seq همان فرمان، وضعیت LED و دما را در ReplyMsg می‌گذاریم و به A می‌فرستیم.
+    <span class="why">برگرداندن seq همان فرمان به A اجازه می‌دهد جواب را به فرمان درست وصل کند. اگر سنسور جواب ندهد، <code>NAN</code> فرستاده می‌شود و A عبارت <code>nan</code> چاپ می‌کند؛ یعنی خطا پنهان نمی‌شود.</span></li>
+</ol>
+<div class="serial">[A] -&gt; #1 ledOn=1
+[B] #1 LED ON, replied temp=24.6
+[A] &lt;- ack #1, LED on B is ON, temp 24.6 C (9 ms)
+[A] -&gt; #2 ledOn=0
+[A]   radio: not delivered
+[A] !! no reply from B within 500 ms</div>
+<p>(خط‌های آخر وقتی است که برد B را از برق کشیده‌ای. عدد میلی‌ثانیه روی برد تو فرق دارد.)</p>
+
+<h2 id="broadcast">ارسال همگانی (Broadcast)</h2>
+<p>اگر بخواهی یک پیام به <b>همه</b> ESP32های اطراف برسد (مثلا «همه چراغ‌ها خاموش»)، به آدرس ویژه <code>FF:FF:FF:FF:FF:FF</code> بفرست. این آدرس هم باید مثل هر Peer دیگر با <code>esp_now_add_peer</code> اضافه شود. دو تفاوت مهم با پیام تکی:</p>
+<ul>
+  <li>پیام همگانی <b>تایید رادیویی ندارد</b>. Callback ارسال معمولا موفقیت نشان می‌دهد، حتی اگر هیچ گیرنده‌ای روشن نباشد. پس اگر تایید مهم است، گیرنده‌ها باید جواب بدهند (مثل پروژه ۲).</li>
+  <li>پیام همگانی رمزنگاری نمی‌شود. هر ESP32 در اطراف آن را می‌گیرد.</li>
+</ul>
+<div class="callout tip"><div class="ct">کتابخانه جدید C++ در هسته ۳: ESP32_NOW.h</div>
+<p>هسته ۳ آردوینو علاوه بر API کلاسیک <code>esp_now.h</code> (که در این درس یاد گرفتی) یک کتابخانه شیءگرا به اسم <b>ESP_NOW</b> (فایل <code>ESP32_NOW.h</code>) دارد. در آن یک شیء سراسری <code>ESP_NOW</code> هست (<code>ESP_NOW.begin()</code>، <code>ESP_NOW.getMaxDataLen()</code> و...) و برای هر همتا از کلاس <code>ESP_NOW_Peer</code> ارث‌بری می‌کنی و توابع <code>onReceive</code> و <code>onSent</code> آن را بازنویسی می‌کنی. مثال‌های آماده‌اش در <code>File › Examples › ESP_NOW</code> هستند (مثل <code>ESP_NOW_Broadcast_Master</code> و <code>ESP_NOW_Serial</code>). ما API کلاسیک را یاد دادیم چون ۹۰٪ کدهای اینترنت و مستندات ESP-IDF با آن است؛ وقتی آن را فهمیدی، کتابخانه جدید را در یک ساعت یاد می‌گیری.</p></div>
+
+<h2 id="wifi">ESP-NOW و Wi-Fi با هم: قانون کانال مشترک</h2>
+<p>رادیوی ESP32 فقط یکی است و در هر لحظه روی <b>یک کانال</b> (۱ تا ۱۳ در ایران) کار می‌کند. وقتی برد B به مودم وصل می‌شود (مثلا برای فرستادن داده به MQTT)، رادیوی آن مجبور است روی <b>کانال مودم</b> برود، مثلا کانال ۶. حالا اگر برد A هنوز روی کانال ۱ باشد، پیام‌هایش هرگز به B نمی‌رسد.</p>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره: فرکانس رادیو</div>
+<p>دو نفر با بی‌سیم حرف می‌زنند. اگر یکی بی‌سیمش را روی کانال ۶ بگذارد تا با پایگاه (مودم) هم در تماس باشد، دیگری هم باید روی کانال ۶ برود، وگرنه صدای همدیگر را نمی‌شنوند.</p></div>
+
+<div class="code" data-file="BoardB — با Wi-Fi (تکه تغییرات setup)" id="chanB"><pre>
+WiFi.mode(WIFI_STA);
+WiFi.begin("YourWiFi", "YourPassword");
+while (WiFi.status() != WL_CONNECTED) delay(500);
+Serial.printf("Router channel: %d\n", WiFi.channel());
+esp_now_init();                    // بعد از اتصال Wi-Fi
+esp_now_register_recv_cb(onRecv);
+</pre></div>
+<ol class="walk" data-for="chanB">
+  <li data-lines="1-3"><b class="what">B اول به مودم وصل می‌شود.</b> مثل درس ۴.۱.
+    <span class="why">کانال را مودم تعیین می‌کند، نه ما. پس اول وصل شو، بعد ببین روی کدام کانال هستی.</span></li>
+  <li data-lines="4"><b class="what">چاپ کانال.</b> <code>WiFi.channel()</code> کانال فعلی رادیو را برمی‌گرداند؛ مثلا ۶.
+    <span class="why">این عدد را برای برد A لازم داری.</span></li>
+  <li data-lines="5-6"><b class="what">ESP-NOW روی همان کانال.</b> حالا ESP-NOW هم‌زمان با Wi-Fi روی کانال مودم کار می‌کند.
+    <span class="why">Wi-Fi و ESP-NOW رادیو را به اشتراک می‌گذارند؛ هر دو روی یک کانال بدون مشکل با هم کار می‌کنند.</span></li>
+</ol>
+<div class="code" data-file="BoardA — تنظیم کانال (تکه تغییرات setup)" id="chanA"><pre>
+const uint8_t ROUTER_CHANNEL = 6;   // عددی که برد B چاپ کرد
+
+WiFi.mode(WIFI_STA);
+while (!WiFi.STA.started()) delay(10);
+WiFi.setChannel(ROUTER_CHANNEL);    // A را روی کانال مودم ببر
+esp_now_init();
+// ... ثبت Callback و Peer مثل قبل (peer.channel = 0)
+</pre></div>
+<ol class="walk" data-for="chanA">
+  <li data-lines="1"><b class="what">کانال مودم.</b> همان عددی که B چاپ کرد.
+    <span class="why">A به مودم وصل نیست، پس خودش نمی‌تواند کانال را بفهمد؛ ما به او می‌گوییم.</span></li>
+  <li data-lines="3-5"><b class="what">روشن کردن رادیو و عوض کردن کانال.</b> <code>WiFi.setChannel</code> (در هسته ۳ موجود است) رادیو را روی کانال دلخواه می‌برد.
+    <span class="why">عوض کردن کانال فقط بعد از روشن شدن کامل رادیو کار می‌کند؛ برای همین بعد از حلقه انتظار است.</span></li>
+  <li data-lines="6-7"><b class="what">بقیه مثل قبل.</b> چون <code>peer.channel = 0</code> است، همان کانال فعلی (۶) استفاده می‌شود.
+    <span class="why">اگر در Peer عددی غیر از صفر بنویسی، باید دقیقا با کانال فعلی رادیو یکی باشد؛ وگرنه ارسال با خطا مواجه می‌شود.</span></li>
+</ol>
+<div class="callout warn"><div class="ct">تله: مودم کانالش را عوض می‌کند</div>
+<p>بسیاری از مودم‌ها در حالت «Auto Channel» هستند و بعد از ریست یا در شلوغی، کانال را عوض می‌کنند. آن وقت ارتباط ESP-NOW ناگهان قطع می‌شود. دو راه: ۱) در تنظیمات مودم کانال را ثابت کن (مثلا ۶). ۲) راه حرفه‌ای‌تر: برد A در setup با <code>WiFi.scanNetworks()</code> شبکه مودم را پیدا کند و کانال آن را با <code>WiFi.channel(i)</code> بخواند؛ این کار را در تمرین ۳ انجام می‌دهی.</p></div>
+
+<h2 id="video">ویدیوی کمکی</h2>
+<div class="video" data-yt="bEKjCDDUPaU" data-title="ESP-NOW - Peer to Peer ESP32 Network" data-channel="DroneBot Workshop" data-lang="انگلیسی">
+  <div class="sum"><ul>
+    <li>این ویدیوی حدود ۴۳ دقیقه‌ای توضیح خوبی از MAC، Peer، ارسال یک‌طرفه، دوطرفه و Broadcast دارد.</li>
+    <li><b>هشدار:</b> ویدیو در سال ۲۰۲۲ و با هسته ۲.x ساخته شده. هر جا امضای <code>OnDataRecv(const uint8_t *mac, ...)</code> یا <code>OnDataSent(const uint8_t *mac_addr, ...)</code> دیدی، آن را با امضای هسته ۳ همین درس جایگزین کن (کادر زرد بالا).</li>
+    <li>دقت کن مدرس struct را چطور در دو طرف یکسان تعریف می‌کند و این را با بخش «قالب پیام» همین درس مقایسه کن.</li>
+    <li>ببین برای شبکه چند سنسور به یک گیرنده، گیرنده چطور فرستنده‌ها را از هم تشخیص می‌دهد.</li>
+  </ul></div>
+</div>
+
+<h2 id="debug">وقتی کار نمی‌کند: عیب‌یابی قدم به قدم</h2>
+<div class="table-wrap"><table>
+<tr><th>علامت</th><th>علت محتمل</th><th>راه حل</th></tr>
+<tr><td>همیشه <code>delivery FAILED</code></td><td>MAC اشتباه (یک رقم، یا MAC برد A به جای B، یا صفرهای قبل از روشن شدن Wi-Fi)</td><td>MAC را از Serial خود برد B دوباره کپی کن و روی برد برچسب بزن</td></tr>
+<tr><td>تا B به Wi-Fi وصل شد، پیام‌ها نرسید</td><td>کانال‌ها فرق دارند</td><td>کانال مودم را روی A تنظیم کن (<a href="#wifi">بخش کانال مشترک</a>)</td></tr>
+<tr><td>پیام می‌رسد ولی عددها بی‌معنی است</td><td>struct دو طرف یکی نیست (ترتیب، نوع یا تعداد خانه‌ها)</td><td>struct را در هر دو فایل خط به خط مقایسه کن؛ بهتر است در یک فایل <code>.h</code> مشترک بگذاری</td></tr>
+<tr><td>Callback دریافت هیچ‌وقت صدا زده نمی‌شود، ولی فرستنده delivered می‌گوید</td><td>چک طول (<code>len != sizeof</code>) پیام را رد می‌کند</td><td>موقتا <code>len</code> را در Callback چاپ کن و با <code>sizeof</code> هر دو طرف مقایسه کن</td></tr>
+<tr><td>خطای کامپایل <code>invalid conversion ... esp_now_recv_cb_t</code> یا <code>esp_now_send_cb_t</code></td><td>امضای Callback مال نسخه دیگری از هسته است</td><td>امضای هسته خودت را طبق کادر زرد استفاده کن</td></tr>
+<tr><td><code>esp_now_send</code> خطای <code>ESP_ERR_ESPNOW_NOT_FOUND</code></td><td>Peer اضافه نشده یا MAC ارسال با MAC Peer فرق دارد</td><td>از یک آرایه برای هر دو استفاده کن</td></tr>
+<tr><td><code>ESP-NOW init failed</code></td><td><code>esp_now_init</code> قبل از روشن شدن Wi-Fi صدا زده شده</td><td><code>WiFi.mode(WIFI_STA)</code> و حلقه <code>WiFi.STA.started()</code> را قبلش بگذار</td></tr>
+<tr><td>یک فشار، دو فرمان</td><td>Debounce نیست یا خیلی کوتاه است</td><td>منطق وضعیت پایدار با ۳۰ تا ۵۰ میلی‌ثانیه</td></tr>
+<tr><td>از چند متر دورتر قطع و وصل می‌شود</td><td>دیوار بتنی، فلز، یا آنتن برد به سمت بدنه فلزی</td><td>بردها را بالاتر و دور از فلز بگذار؛ برای برد زیاد، ماژول‌هایی با آنتن خارجی (مثل WROOM-32U) هست</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>در ESP-NOW دو برنامه روی دو برد داری و وقتی کار نکند، وسوسه می‌شوی هر دو را هم‌زمان عوض کنی. این کار را نکن. همیشه اول مطمئن شو <b>MAC درست است</b> (از Serial خود گیرنده، نه از حافظه‌ات)، بعد با ساده‌ترین برنامه ممکن (پروژه ۱) ثابت کن ارتباط برقرار است، و فقط بعد پیچیده‌اش کن. روی هر برد برچسب A و B بزن و در Serial Monitor هر پنجره را مشخص کن کدام برد است. و یادت باشد: «delivered» یعنی رادیو گرفت، نه این که برنامه اجرا کرد. هر جا اجرای فرمان مهم است (قفل، پمپ، موتور)، جواب برنامه‌ای با seq بخواه. این تفاوت یک اسباب‌بازی با یک سیستم قابل اعتماد است.</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">در هسته ۳، کدام امضا برای Callback دریافت ESP-NOW درست است؟</p>
+  <ol><li data-why="این امضای هسته ۲.x است و روی هسته ۳ کامپایل نمی‌شود.">void onRecv(const uint8_t *mac, const uint8_t *data, int len)</li><li>void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len)</li><li data-why="این امضای Callback ارسال در هسته ۳.۳ به بعد است، نه دریافت.">void onRecv(const wifi_tx_info_t *info, esp_now_send_status_t status)</li><li data-why="ESP-NOW داده را به صورت بایت می‌دهد، نه String.">void onRecv(String msg)</li></ol>
+  <div class="fb">در هسته ۳ اطلاعات فرستنده در ساختار <code>esp_now_recv_info_t</code> است و MAC آن در <code>info-&gt;src_addr</code>.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">برنامه‌ای که MAC را قبل از <code>WiFi.mode(WIFI_STA)</code> چاپ می‌کند، <code>00:00:00:00:00:00</code> نشان می‌دهد. چرا؟</p>
+  <ol><li data-why="MAC در کارخانه نوشته شده و خراب نمی‌شود.">MAC برد خراب است</li><li data-why="ESP-NOW ربطی به خواندن MAC ندارد.">چون ESP-NOW هنوز init نشده</li><li data-why="سرعت سریال فقط روی خوانایی حروف اثر دارد، نه روی مقدار.">سرعت Serial اشتباه است</li><li>چون رابط شبکه STA هنوز ساخته نشده و <code>WiFi.macAddress()</code> آدرس را از آن می‌خواند</li></ol>
+  <div class="fb">اول Wi-Fi را روشن کن و صبر کن <code>WiFi.STA.started()</code> درست شود، بعد MAC را بخوان.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q"><code>typedef struct { uint32_t seq; bool ledOn; float tempC; } ReplyMsg;</code> روی ESP32 چند بایت است؟</p>
+  <ol><li>۱۲</li><li data-why="۴+۱+۴=۹ درست است اگر Padding نباشد؛ ولی کامپایلر float را روی آدرس مضرب ۴ می‌گذارد.">۹</li><li data-why="bool یک بایت است، نه ۴؛ ولی بعدش ۳ بایت خالی می‌آید.">۱۶</li><li data-why="این اندازه با double به دست می‌آمد، نه float.">۲۰</li></ol>
+  <div class="fb">۴ (seq) + ۱ (ledOn) + ۳ بایت Padding + ۴ (tempC) = ۱۲. برای همین همیشه <code>sizeof</code> بنویس، نه عدد دستی.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">برد B به مودم خانه (کانال ۱۱) وصل شد و از آن لحظه پیام‌های برد A (که به مودم وصل نیست) نمی‌رسد. بهترین راه حل؟</p>
+  <ol><li data-why="رمزنگاری ربطی به کانال ندارد.">رمزنگاری را خاموش کنی</li><li data-why="اندازه پیام مشکل نیست؛ رادیوها روی دو فرکانس متفاوت‌اند.">پیام را کوتاه‌تر کنی</li><li>رادیوی برد A را با <code>WiFi.setChannel(11)</code> روی کانال مودم ببری</li><li data-why="Broadcast هم روی همان کانال فرستنده پخش می‌شود و به کانال ۱۱ نمی‌رسد.">به جای MAC به FF:FF:FF:FF:FF:FF بفرستی</li></ol>
+  <div class="fb">یک رادیو، یک کانال. وقتی یک طرف به مودم وصل است، طرف دیگر باید روی کانال همان مودم باشد.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">Callback ارسال می‌گوید <code>ESP_NOW_SEND_SUCCESS</code>. دقیقا چه چیزی تضمین شده؟</p>
+  <ol><li data-why="اجرای برنامه گیرنده تضمین نمی‌شود؛ برای آن جواب برنامه‌ای لازم است.">برنامه برد B فرمان را اجرا کرد</li><li>رادیوی گیرنده بسته را در لایه MAC دریافت و تایید کرد</li><li data-why="فقط رادیو تایید کرده؛ اگر چک طول در Callback رد کند، LED تغییر نمی‌کند.">LED روی B حتما روشن شد</li><li data-why="ESP-NOW ربطی به اینترنت ندارد.">پیام به اینترنت رسید</li></ol>
+  <div class="fb">مستندات Espressif صریحا می‌گوید دریافت در لایه برنامه تضمین نمی‌شود؛ اگر لازم است، گیرنده باید جواب بفرستد (مثل پروژه ۲).</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+<div class="exercise"><div class="ct">تمرین ۱: قدرت سیگنال</div>
+<p>در برد B، قدرت سیگنال (RSSI) هر پیام را چاپ کن و در خانه راه برو: چند متر و چند دیوار طول می‌کشد تا RSSI به حدود <code>-85</code> dBm برسد و پیام‌ها گم شوند؟</p>
+<details><summary>راهنمایی</summary><p>در Callback دریافت، <code>info-&gt;rx_ctrl-&gt;rssi</code> یک عدد منفی (مثلا <code>-52</code>) است. آن را در یک متغیر <code>volatile int</code> سراسری بریز و در loop چاپ کن. هر چه به صفر نزدیک‌تر، سیگنال قوی‌تر.</p></details>
+<details><summary>جواب</summary>
+<div class="code" data-file="RSSI.ino (تکه)"><pre>
+volatile int lastRssi = 0;
+
+void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len != sizeof(CommandMsg)) return;
+  memcpy(&amp;incoming, data, sizeof(incoming));
+  lastRssi = info-&gt;rx_ctrl-&gt;rssi;
+  gotMsg = true;
+}
+// در loop:  Serial.printf("RSSI: %d dBm\n", lastRssi);
+</pre></div></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۲: ارسال دوباره (Retry)</div>
+<p>در برد A پروژه ۲، اگر در ۵۰۰ میلی‌ثانیه جواب نیامد، <b>همان</b> فرمان (با همان seq) را حداکثر ۳ بار دوباره بفرست و فقط بعد از شکست سوم اعلام خطا کن. چرا باید seq ثابت بماند؟</p>
+<details><summary>راهنمایی</summary><p>یک شمارنده <code>int tries</code> اضافه کن. در بخش Timeout اگر <code>tries &lt; 3</code> بود، <code>esp_now_send</code> را با همان <code>cmd</code> صدا بزن، <code>tries++</code> و <code>sentAt = millis()</code>. در <code>sendCommand</code>، <code>tries = 0</code>.</p></details>
+<details><summary>جواب</summary><p>seq ثابت می‌ماند تا اگر پیام اول رسیده بود ولی فقط جوابش گم شده بود، B بفهمد این همان فرمان قبلی است (با نگه داشتن آخرین seq اجراشده) و LED را دوباره برعکس نکند. به این ویژگی «Idempotent» (تکرار بی‌ضرر) می‌گویند؛ همان مشکلی که QoS 2 در MQTT حل می‌کند.</p></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۳: پیدا کردن خودکار کانال</div>
+<p>برد A را طوری بنویس که در setup شبکه مودم را با <code>WiFi.scanNetworks()</code> پیدا کند، کانالش را بخواند و خودش روی آن برود. دیگر لازم نیست عدد کانال را دستی بنویسی.</p>
+<details><summary>راهنمایی</summary><p><code>int n = WiFi.scanNetworks();</code> سپس در یک حلقه <code>for</code> اگر <code>WiFi.SSID(i) == "YourWiFi"</code> بود، <code>WiFi.channel(i)</code> کانال آن شبکه است. بعد <code>WiFi.setChannel(ch)</code> و سپس <code>esp_now_init()</code>.</p></details>
+</div>
+
+<div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
+<p>ESP-NOW پیام‌های کوتاه (تا ۲۵۰ بایت در نسخه ۱) را با آدرس MAC و بدون مودم در چند میلی‌ثانیه بین ESP32ها جابه‌جا می‌کند؛ MAC را بعد از روشن شدن Wi-Fi بخوان و Peer را قبل از ارسال اضافه کن. قالب پیام یک <code>struct</code> یکسان در دو طرف است که با <code>sizeof</code> و <code>memcpy</code> فرستاده و خوانده می‌شود؛ Callbackها را کوتاه نگه دار و امضای هسته ۳ (<code>esp_now_recv_info_t</code> و از ۳.۳ به بعد <code>wifi_tx_info_t</code>) را به کار ببر. «delivered» فقط تایید رادیوست؛ برای اطمینان، جواب با seq و Timeout بساز، و اگر یک طرف به مودم وصل است، همه روی کانال مودم باشند.</p></div>
+
+</article>
+</body>
+</html>
