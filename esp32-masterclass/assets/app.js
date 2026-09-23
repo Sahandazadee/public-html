@@ -124,9 +124,16 @@
     }
     if (e.target.closest(".sidebar a")) document.body.classList.remove("nav-open");
     var img = e.target.closest("figure .frame img, .gallery img");
-    if (img) {
-      var lb = el("div", { "class": "lightbox" }, '<img src="' + img.getAttribute("src") + '" alt="">');
-      lb.addEventListener("click", function () { lb.remove(); });
+    var svg = !img && e.target.closest(".wiring .frame svg, figure .frame > svg");
+    if (img || svg) {
+      /* بزرگ‌نمایی: عکس یا نقشه سیم‌کشی تمام‌صفحه باز می‌شود؛ با کلیک یا Esc بسته می‌شود */
+      var lb = el("div", { "class": "lightbox" });
+      if (img) lb.innerHTML = '<img src="' + img.getAttribute("src") + '" alt="">';
+      else { var c = svg.cloneNode(true); c.removeAttribute("width"); c.removeAttribute("height"); c.setAttribute("class", "lb-svg"); lb.appendChild(c); }
+      var close = function () { lb.remove(); document.removeEventListener("keydown", onKey); };
+      var onKey = function (ev) { if (ev.key === "Escape") close(); };
+      lb.addEventListener("click", close);
+      document.addEventListener("keydown", onKey);
       document.body.appendChild(lb);
     }
   });
