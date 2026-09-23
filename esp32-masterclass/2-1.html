@@ -1,0 +1,690 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>نصب Arduino IDE و PlatformIO · مستر کلاس ESP32</title>
+<meta name="description" content="نصب قدم به قدم Arduino IDE 2 و افزودن ESP32 (هسته 3.x)، نصب درایور CP2102 و CH340، اولین آپلود، و راه‌اندازی VS Code با PlatformIO برای مبتدی مطلق؛ با نکته‌های مخصوص کاربران ایران.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="2-1">
+
+<p class="lede">تا حالا ESP32 را فقط از بیرون شناختیم. از این درس به بعد با آن حرف می‌زنیم. برای این کار یک «مترجم» لازم داریم: نرم‌افزاری که کد نوشته‌شده به زبان انسان را به زبان صفر و یکی ESP32 تبدیل کند و از طریق کابل USB داخل آن بریزد. در این درس دو ابزار را از صفر نصب می‌کنی: <b>Arduino IDE</b> (ساده و مناسب شروع) و <b>VS Code + PlatformIO</b> (حرفه‌ای‌تر، برای پروژه‌های بزرگ). آخر درس، ESP32 خودش را در Serial Monitor به تو معرفی می‌کند.</p>
+
+<div class="goals">
+  <div><h4>🎯 بعد از این درس می‌توانی</h4><ul>
+    <li>Arduino IDE 2 را روی ویندوز، مک یا لینوکس نصب کنی و بخش‌های پنجره‌اش را بشناسی</li>
+    <li>پشتیبانی ESP32 (هسته 3.x از Espressif) را به آن اضافه کنی</li>
+    <li>بفهمی برد تو تراشه CP2102 دارد یا CH340 و درایور درست را نصب کنی</li>
+    <li>اولین برنامه را آپلود کنی و خروجی را در Serial Monitor ببینی</li>
+    <li>یک پروژه PlatformIO بسازی و تک‌تک خط‌های <code>platformio.ini</code> را توضیح بدهی</li>
+    <li>رایج‌ترین خطاهای نصب و آپلود را خودت رفع کنی</li>
+  </ul></div>
+  <div><h4>🧰 پیش‌نیاز و وسایل</h4><ul>
+    <li>درس <a href="1-2.html">۱.۲</a> (انواع برد) و <a href="1-3.html">۱.۳</a> (دکمه‌های BOOT و EN)</li>
+    <li>کامپیوتر با ویندوز ۱۰/۱۱، macOS یا لینوکس ۶۴ بیتی</li>
+    <li>برد ESP32 DevKitC (یا DOIT DevKit V1) و کابل USB <b>دیتا</b></li>
+    <li>اینترنت (برای دانلود حدود چند صد مگابایت ابزار؛ بخش <a href="#iran">نکته‌های ایران</a> را ببین)</li>
+    <li>سخت‌افزار نداری؟ درس <a href="2-2.html">۲.۲</a> (Wokwi) را هم‌زمان بخوان</li>
+  </ul></div>
+</div>
+
+<h2 id="big-picture">تصویر بزرگ: از کد تا چشمک LED چه اتفاقی می‌افتد؟</h2>
+<p>قبل از نصب هر چیزی، بدان قرار است چه کاری انجام بدهیم. ESP32 زبان C++ را نمی‌فهمد؛ فقط دستورهای ماشین (عددهای باینری) را می‌فهمد. پس زنجیره کار این است:</p>
+
+<pre class="mermaid">flowchart LR
+  A["۱. نوشتن کد (.ino یا .cpp)"] --> B["۲. کامپایل: ترجمه به زبان ماشین"]
+  B --> C["۳. فایل باینری (.bin)"]
+  C --> D["۴. آپلود با esptool از راه USB"]
+  D --> E["۵. ذخیره در حافظه Flash و اجرا"]</pre>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>فرض کن یک دستور پخت غذا به فارسی نوشته‌ای ولی آشپز فقط ژاپنی بلد است. یک مترجم (کامپایلر) متن را ترجمه می‌کند، یک پیک (esptool و کابل USB) برگه ترجمه‌شده را به آشپزخانه می‌برد، و آشپز (ESP32) آن را در دفترچه‌اش (حافظه Flash) می‌چسباند و هر بار که روشن می‌شود از رویش آشپزی می‌کند. Arduino IDE و PlatformIO هر دو «دفتر کاری» هستند که مترجم و پیک را برایت صدا می‌زنند.</p></div>
+
+<p>دو بسته نرم‌افزاری در این زنجیره نقش اصلی دارند:</p>
+<ul>
+  <li><b>برنامه ویرایشگر (IDE)</b>: جایی که کد را می‌نویسی و دکمه‌ها را می‌زنی. مثل Arduino IDE یا VS Code.</li>
+  <li><b>هسته (Core) ESP32</b>: بسته‌ای که Espressif (سازنده ESP32) منتشر می‌کند و شامل کامپایلر مخصوص ESP32، ابزار آپلود <code>esptool</code> و کتابخانه‌هایی مثل <code>WiFi.h</code> است. اسم رسمی‌اش <b>Arduino-ESP32</b> است و نسخه فعلی آن <b>3.x</b> است.</li>
+</ul>
+
+<div class="callout why"><div class="ct">چرا این تفکیک مهم است؟</div>
+<p>وقتی خطایی می‌بینی، اول باید بفهمی مال کدام مرحله است. خطای <code>was not declared in this scope</code> مال مرحله ۲ (کامپایل) است: کد تو مشکل دارد. خطای <code>Failed to connect</code> مال مرحله ۴ (آپلود) است: کد سالم است ولی کابل، درایور یا پورت مشکل دارد. این تشخیص ساده نصف عیب‌یابی است.</p></div>
+
+<!-- ============================ PART A ============================ -->
+<h2 id="arduino-ide">بخش الف: نصب Arduino IDE 2</h2>
+<p><b>Arduino IDE</b> برنامه رسمی و رایگان شرکت Arduino است. نسخه ۲ (مثلا 2.3.x) ظاهری مدرن، تکمیل خودکار کد و Serial Monitor داخلی دارد. نسخه قدیمی 1.8.x هنوز در اینترنت هست ولی <b>برای این دوره از نسخه 2.x استفاده کن</b> تا تصویرها و منوها با توضیح‌های ما یکی باشد.</p>
+
+<h3 id="install-win">ویندوز (۱۰ و ۱۱)</h3>
+<ol class="steps">
+  <li><b>برو به صفحه دانلود رسمی.</b> آدرس <a href="https://www.arduino.cc/en/software" target="_blank" rel="noopener">arduino.cc/en/software</a> را باز کن. زیر عنوان Arduino IDE 2.x، گزینه <b>Windows Win 10 and newer, 64 bits</b> را بزن.</li>
+  <li><b>دانلود رایگان است.</b> صفحه‌ای باز می‌شود که درخواست کمک مالی (Contribute) دارد. اگر نمی‌خواهی پرداخت کنی، روی <b>Just Download</b> بزن. ممکن است یک صفحه دیگر برای عضویت در خبرنامه هم بیاید؛ دوباره <b>Just Download</b>.</li>
+  <li><b>فایل نصب را اجرا کن.</b> فایلی با اسمی شبیه <code>arduino-ide_2.3.x_Windows_64bit.exe</code> دانلود می‌شود. اجرایش کن، شرایط (License) را بپذیر و گزینه‌های پیش‌فرض را نگه دار.</li>
+  <li><b>به سؤال‌های درایور «بله» بگو.</b> در حین نصب، ویندوز ممکن است بپرسد «آیا این درایور را نصب می‌کنی؟» (مثلا از Arduino یا Adafruit). همه را <b>Install</b> بزن. این‌ها درایورهای عمومی USB هستند و ضرری ندارند.</li>
+  <li><b>اولین اجرا.</b> بار اول ممکن است فایروال ویندوز درباره دسترسی شبکه سؤال کند؛ اجازه بده (IDE برای دانلود بسته‌ها به اینترنت نیاز دارد). همچنین بار اول چند ثانیه تا یک دقیقه طول می‌کشد تا فهرست بردها و کتابخانه‌ها را به‌روز کند؛ صبور باش.</li>
+</ol>
+<div class="callout tip"><div class="ct">نسخه بدون نصب (ZIP)</div>
+<p>اگر روی کامپیوتر دسترسی مدیر (Administrator) نداری، مثلا کامپیوتر دانشگاه، نسخه <b>ZIP</b> را بگیر، در یک پوشه باز کن و <code>Arduino IDE.exe</code> را اجرا کن. فقط دقت کن در این حالت درایورها خودکار نصب نمی‌شوند.</p></div>
+
+<h3 id="install-mac">macOS</h3>
+<ol class="steps">
+  <li><b>نسخه درست را انتخاب کن.</b> در همان صفحه دانلود دو گزینه هست: <b>macOS Apple Silicon</b> (برای مک‌های M1، M2، M3 و جدیدتر) و <b>macOS Intel</b>. اگر نمی‌دانی مک تو کدام است: منوی سیب (Apple) › About This Mac. اگر جلوی Chip نوشته Apple M…، نسخه Apple Silicon را بگیر.</li>
+  <li><b>فایل <code>.dmg</code> را باز کن</b> و آیکون Arduino IDE را داخل پوشه <b>Applications</b> بکش.</li>
+  <li><b>اولین اجرا.</b> اگر macOS گفت «این برنامه از اینترنت دانلود شده، مطمئنی؟»، روی <b>Open</b> بزن.</li>
+</ol>
+
+<h3 id="install-linux">لینوکس (اوبونتو و مشابه)</h3>
+<ol class="steps">
+  <li><b>فایل AppImage را بگیر.</b> گزینه <b>Linux AppImage 64 bits (X86-64)</b> را دانلود کن. AppImage یعنی «یک فایل که خودش کل برنامه است»؛ نصب لازم ندارد.</li>
+  <li><b>اجازه اجرا بده.</b> روی فایل راست‌کلیک › Properties › Permissions › تیک <b>Allow executing file as program</b>. یا در ترمینال: <code>chmod +x arduino-ide_*.AppImage</code>.</li>
+  <li><b>اجرا کن.</b> دوبار کلیک یا در ترمینال <code>./arduino-ide_*.AppImage</code>. اگر در اوبونتو ۲۲.۰۴ یا جدیدتر خطایی درباره <code>libfuse.so.2</code> دیدی، بسته آن را نصب کن: <code>sudo apt install libfuse2</code> (در اوبونتو ۲۴.۰۴ اسم بسته <code>libfuse2t64</code> است).</li>
+  <li><b>دسترسی به پورت سریال را فراموش نکن.</b> در لینوکس کاربر معمولی اجازه ندارد به پورت USB سریال بنویسد. این را در بخش <a href="#driver">درایورها</a> درست می‌کنیم.</li>
+</ol>
+
+<h3 id="tour">گشتی در پنجره Arduino IDE 2</h3>
+<p>وقتی برنامه باز شد، این صفحه را می‌بینی. شماره‌ها را با جدول زیر تصویر تطبیق بده. این شکل یک <b>نقشه ساده‌شده</b> است که ما کشیده‌ایم تا بخش‌ها واضح باشند؛ رنگ‌ها و آیکون‌های واقعی کمی فرق دارند ولی جای بخش‌ها همین است.</p>
+
+<figure><div class="frame"><svg viewBox="0 0 900 545" style="direction:ltr" xmlns="http://www.w3.org/2000/svg" font-family="Tahoma, Segoe UI, sans-serif">
+  <rect x="10" y="10" width="880" height="525" rx="10" fill="#ffffff" stroke="#8d9aab" stroke-width="2"/>
+  <!-- title bar -->
+  <path d="M10 20 a10 10 0 0 1 10 -10 h860 a10 10 0 0 1 10 10 v20 h-880z" fill="#e9edf2"/>
+  <circle cx="30" cy="25" r="5" fill="#ff5f57"/><circle cx="46" cy="25" r="5" fill="#febc2e"/><circle cx="62" cy="25" r="5" fill="#28c840"/>
+  <text x="450" y="30" font-size="13" text-anchor="middle" fill="#3a4658">sketch_hello | Arduino IDE 2.3.x</text>
+  <!-- menu -->
+  <rect x="10" y="40" width="880" height="24" fill="#f7f8fa"/>
+  <text x="24" y="57" font-size="13" fill="#27313f">File     Edit     Sketch     Tools     Help</text>
+  <!-- toolbar -->
+  <rect x="10" y="64" width="880" height="50" fill="#f0f3f6" stroke="#dbe2ec"/>
+  <circle cx="42" cy="89" r="15" fill="#00878f"/><path d="M34 89 l6 6 l11 -12" stroke="#fff" stroke-width="3" fill="none"/>
+  <circle cx="82" cy="89" r="15" fill="#00878f"/><path d="M73 89 h16 m-6 -6 l6 6 l-6 6" stroke="#fff" stroke-width="3" fill="none"/>
+  <circle cx="122" cy="89" r="15" fill="#c9d3dc"/><path d="M117 81 l11 8 l-11 8z" fill="#6b7888"/>
+  <rect x="152" y="76" width="270" height="27" rx="5" fill="#fff" stroke="#9fb0c2"/>
+  <rect x="160" y="84" width="14" height="11" rx="2" fill="none" stroke="#00878f" stroke-width="2"/>
+  <text x="182" y="94" font-size="13" fill="#152033">ESP32 Dev Module  ·  COM5</text>
+  <text x="405" y="94" font-size="11" fill="#5b6778">▼</text>
+  <circle cx="815" cy="89" r="14" fill="#fff" stroke="#9fb0c2"/><path d="M805 93 q5 -12 10 0 t10 0" stroke="#00878f" stroke-width="2" fill="none"/>
+  <circle cx="855" cy="89" r="14" fill="#fff" stroke="#9fb0c2"/><circle cx="852" cy="86" r="6" fill="none" stroke="#00878f" stroke-width="2.5"/><path d="M856 90 l6 6" stroke="#00878f" stroke-width="2.5"/>
+  <!-- sidebar -->
+  <rect x="10" y="114" width="46" height="386" fill="#eef1f4" stroke="#dbe2ec"/>
+  <path d="M22 136 h9 l3 3 h10 v12 h-22z" fill="none" stroke="#5b6778" stroke-width="2"/>
+  <rect x="22" y="180" width="22" height="16" rx="2" fill="none" stroke="#00878f" stroke-width="2.4"/><path d="M26 176 v4 M31 176 v4 M36 176 v4 M40 176 v4 M26 196 v4 M31 196 v4 M36 196 v4 M40 196 v4" stroke="#00878f" stroke-width="2"/>
+  <rect x="22" y="228" width="5" height="20" fill="#00878f"/><rect x="30" y="228" width="5" height="20" fill="#00878f"/><rect x="38" y="230" width="5" height="18" fill="#00878f" transform="rotate(12 40 239)"/>
+  <circle cx="33" cy="287" r="8" fill="none" stroke="#5b6778" stroke-width="2"/><path d="M25 283 l-4 -3 M41 283 l4 -3 M25 291 l-4 3 M41 291 l4 3" stroke="#5b6778" stroke-width="2"/>
+  <circle cx="31" cy="334" r="7" fill="none" stroke="#5b6778" stroke-width="2"/><path d="M36 339 l6 6" stroke="#5b6778" stroke-width="2"/>
+  <!-- editor -->
+  <rect x="56" y="114" width="834" height="26" fill="#f7f8fa" stroke="#dbe2ec"/>
+  <rect x="58" y="116" width="150" height="24" fill="#fff"/><text x="70" y="133" font-size="12.5" fill="#152033">sketch_hello.ino</text>
+  <g font-family="Consolas, monospace" font-size="13">
+    <text x="70" y="166" fill="#9aa5b4">1</text><text x="100" y="166" fill="#7a8699">// my first ESP32 sketch</text>
+    <text x="70" y="188" fill="#9aa5b4">2</text><text x="100" y="188" fill="#0e6f9e">void</text><text x="138" y="188" fill="#152033">setup() {</text>
+    <text x="70" y="210" fill="#9aa5b4">3</text><text x="120" y="210" fill="#152033">Serial.begin(115200);</text>
+    <text x="70" y="232" fill="#9aa5b4">4</text><text x="120" y="232" fill="#152033">Serial.println(</text><text x="245" y="232" fill="#1d8a4a">"Salam!"</text><text x="306" y="232" fill="#152033">);</text>
+    <text x="70" y="254" fill="#9aa5b4">5</text><text x="100" y="254" fill="#152033">}</text>
+    <text x="70" y="276" fill="#9aa5b4">6</text><text x="100" y="276" fill="#0e6f9e">void</text><text x="138" y="276" fill="#152033">loop() { }</text>
+  </g>
+  <!-- output panel -->
+  <rect x="56" y="372" width="834" height="128" fill="#fafbfc" stroke="#dbe2ec"/>
+  <text x="70" y="392" font-size="12.5" fill="#152033" font-weight="bold">Output</text>
+  <text x="135" y="392" font-size="12.5" fill="#6b7888">Serial Monitor</text>
+  <line x1="66" y1="398" x2="120" y2="398" stroke="#00878f" stroke-width="2"/>
+  <g font-family="Consolas, monospace" font-size="12.5" fill="#3a4658">
+    <text x="70" y="420">Sketch uses 289,512 bytes (22%) of program storage space...</text>
+    <text x="70" y="440">Connecting....</text>
+    <text x="70" y="460">Writing at 0x00047a31 [==============================] 100.0%</text>
+    <text x="70" y="480">Hard resetting via RTS pin...</text>
+  </g>
+  <!-- status bar -->
+  <rect x="10" y="500" width="880" height="35" fill="#00878f"/>
+  <text x="560" y="522" font-size="12.5" fill="#ffffff">Ln 4, Col 30   UTF-8   ESP32 Dev Module on COM5</text>
+  <!-- badges -->
+  <g font-size="13" font-weight="bold" text-anchor="middle" fill="#fff">
+    <circle cx="42" cy="128" r="12" fill="#e0781f" stroke="#fff" stroke-width="2"/><text x="42" y="133">1</text>
+    <circle cx="96" cy="128" r="12" fill="#e0781f" stroke="#fff" stroke-width="2"/><text x="96" y="133">2</text>
+    <circle cx="438" cy="89" r="12" fill="#e0781f" stroke="#fff" stroke-width="2"/><text x="438" y="94">3</text>
+    <circle cx="855" cy="126" r="12" fill="#e0781f" stroke="#fff" stroke-width="2"/><text x="855" y="131">4</text>
+    <circle cx="815" cy="126" r="12" fill="#2f7af0" stroke="#fff" stroke-width="2"/><text x="815" y="131">5</text>
+    <circle cx="70" cy="178" r="12" fill="#e0781f" stroke="#fff" stroke-width="2"/><text x="70" y="183">6</text>
+    <circle cx="70" cy="228" r="12" fill="#e0781f" stroke="#fff" stroke-width="2"/><text x="70" y="233">7</text>
+    <circle cx="520" cy="200" r="12" fill="#2f7af0" stroke="#fff" stroke-width="2"/><text x="520" y="205">8</text>
+    <circle cx="860" cy="420" r="12" fill="#2f7af0" stroke="#fff" stroke-width="2"/><text x="860" y="425">9</text>
+    <circle cx="530" cy="517" r="12" fill="#2f7af0" stroke="#fff" stroke-width="2"/><text x="530" y="522">10</text>
+  </g>
+</svg></div>
+<figcaption>نقشه ساده‌شده پنجره Arduino IDE 2. دایره‌های نارنجی بخش‌هایی هستند که در همین درس از آن‌ها استفاده می‌کنی.<span class="src">تصویر: طرح برداری از خود دوره (کشیده‌شده بر اساس چیدمان Arduino IDE 2)، آزاد برای استفاده آموزشی</span></figcaption></figure>
+
+<div class="table-wrap"><table>
+<tr><th>#</th><th>بخش</th><th>چه کار می‌کند</th><th>میانبر</th></tr>
+<tr><td>۱</td><td><b>Verify</b> (تیک ✓)</td><td>فقط کامپایل می‌کند و خطاها را نشان می‌دهد. چیزی به برد نمی‌فرستد. برای وقتی که برد وصل نیست ولی می‌خواهی ببینی کدت درست است.</td><td><kbd>Ctrl</kbd>+<kbd>R</kbd></td></tr>
+<tr><td>۲</td><td><b>Upload</b> (فلش →)</td><td>کامپایل + آپلود به برد. مهم‌ترین دکمه تو.</td><td><kbd>Ctrl</kbd>+<kbd>U</kbd></td></tr>
+<tr><td>۳</td><td><b>انتخاب برد و پورت</b></td><td>مشخص می‌کند برای کدام برد کامپایل شود و از کدام پورت USB آپلود شود. اگر اینجا اشتباه باشد، هیچ چیز کار نمی‌کند.</td><td>منوی <code>Tools</code></td></tr>
+<tr><td>۴</td><td><b>Serial Monitor</b> (ذره‌بین)</td><td>پنجره‌ای برای دیدن پیام‌هایی که ESP32 با <code>Serial.print</code> می‌فرستد.</td><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd></td></tr>
+<tr><td>۵</td><td>Serial Plotter</td><td>عددهایی که چاپ می‌کنی را به شکل نمودار می‌کشد (در درس ۳.۱ استفاده می‌کنیم).</td><td>—</td></tr>
+<tr><td>۶</td><td><b>Boards Manager</b></td><td>نصب و به‌روزرسانی «هسته» بردها، مثلا هسته ESP32.</td><td>نوار چپ</td></tr>
+<tr><td>۷</td><td><b>Library Manager</b></td><td>نصب کتابخانه‌ها (کدهای آماده دیگران برای سنسورها و نمایشگرها).</td><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd></td></tr>
+<tr><td>۸</td><td>ویرایشگر</td><td>جای نوشتن کد. هر برنامه آردوینو یک «Sketch» است با پسوند <code>.ino</code>.</td><td>—</td></tr>
+<tr><td>۹</td><td>پنل Output</td><td>گزارش کامپایل و آپلود. <b>پیام‌های خطا اینجا هستند</b>؛ همیشه بالاترین خطای قرمز را اول بخوان.</td><td>—</td></tr>
+<tr><td>۱۰</td><td>نوار وضعیت</td><td>برد و پورت انتخاب‌شده را یادآوری می‌کند. قبل از هر آپلود یک نگاه به آن بینداز.</td><td>—</td></tr>
+</table></div>
+<p>در مک، به جای <kbd>Ctrl</kbd> از <kbd>⌘</kbd> استفاده کن.</p>
+
+<div class="callout tip"><div class="ct">یک تنظیم مفید قبل از شروع</div>
+<p>از <code>File › Preferences</code> (در مک: <code>Arduino IDE › Settings</code>) تیک <b>Show verbose output during: upload</b> را بزن. این کار باعث می‌شود هنگام آپلود جزئیات بیشتری در پنل Output ببینی؛ وقتی چیزی خراب شد، همین جزئیات سرنخ اصلی است. همان‌جا اندازه فونت ویرایشگر را هم می‌توانی بزرگ‌تر کنی.</p></div>
+
+<h2 id="esp32-core">افزودن ESP32 به Arduino IDE</h2>
+<p>Arduino IDE بعد از نصب فقط بردهای خود آردوینو (مثل Uno) را می‌شناسد. ESP32 را شرکت دیگری (Espressif) ساخته، پس باید «بسته ESP32» را جداگانه اضافه کنیم. این کار دو مرحله دارد: اول به IDE می‌گوییم فهرست بسته‌های Espressif کجاست، بعد بسته را نصب می‌کنیم.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>Boards Manager مثل یک فروشگاه اپلیکیشن است که فقط اپ‌های یک شرکت را نشان می‌دهد. آدرسی که در Preferences وارد می‌کنی مثل این است که «کاتالوگ فروشگاه Espressif» را هم به آن اضافه کنی. تا کاتالوگ را اضافه نکنی، ESP32 در فهرست نیست.</p></div>
+
+<h3>مرحله ۱: اضافه کردن آدرس فهرست بسته‌ها</h3>
+<ol class="steps">
+  <li><b>Preferences را باز کن.</b> ویندوز و لینوکس: <code>File › Preferences</code>. مک: <code>Arduino IDE › Settings</code>.</li>
+  <li><b>کادر Additional boards manager URLs را پیدا کن</b> (پایین پنجره) و این آدرس را دقیقا در آن بچسبان:</li>
+</ol>
+<div class="code" data-lang="text" data-file="Additional boards manager URLs" id="urlcode"><pre>
+https://espressif.github.io/arduino-esp32/package_esp32_index.json
+</pre></div>
+<ol class="walk" data-for="urlcode">
+  <li data-lines="1"><b class="what">آدرس رسمی نسخه‌های پایدار.</b> این یک فایل JSON روی سایت Espressif در GitHub است که فهرست همه نسخه‌های هسته ESP32 و لینک دانلود ابزارها را دارد. این آدرس دقیقا همان است که در <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/installing.html" target="_blank" rel="noopener">مستندات رسمی نصب Espressif</a> آمده.
+    <span class="why">آموزش‌های قدیمی اینترنت آدرس دیگری دارند (مثلا <code>dl.espressif.com/dl/package_esp32_index.json</code> یا لینک <code>raw.githubusercontent.com/...</code>). آن‌ها منسوخ‌اند و ممکن است نسخه‌های جدید را نشان ندهند. همیشه آدرس را از مستندات رسمی بردار، نه از یک ویدیوی چند سال پیش.</span></li>
+</ol>
+<div class="callout tip"><div class="ct">اگر قبلا آدرس دیگری آنجا بود</div>
+<p>اگر در آن کادر آدرس برد دیگری (مثلا ESP8266) هست، پاکش نکن. روی آیکون کنار کادر بزن تا پنجره بزرگ‌تری باز شود و هر آدرس را در <b>یک خط جدا</b> بنویس. سپس <b>OK</b>.</p></div>
+
+<h3>مرحله ۲: نصب بسته از Boards Manager</h3>
+<ol class="steps">
+  <li><b>Boards Manager را باز کن:</b> آیکون دوم نوار چپ (شماره ۶ در نقشه) یا <code>Tools › Board › Boards Manager…</code>.</li>
+  <li><b>جستجو کن:</b> <code>esp32</code>.</li>
+  <li><b>بسته درست را انتخاب کن:</b> <b>esp32 by Espressif Systems</b>. آخرین نسخه 3.x را انتخاب کن و <b>Install</b> بزن.</li>
+  <li><b>صبر کن.</b> این بسته برای همه خانواده ESP32 (ESP32، S2، S3، C3، C6، H2 و …) کامپایلر دارد، پس دانلودش چند صد مگابایت است. با اینترنت کند ممکن است نیم ساعت یا بیشتر طول بکشد. در پایین پنجره پیشرفت را می‌بینی.</li>
+  <li><b>تأیید.</b> وقتی کنار اسم بسته نوشت <b>INSTALLED</b>، کار تمام است.</li>
+</ol>
+
+<div class="callout warn"><div class="ct">دام رایج: دو بسته با اسم شبیه</div>
+<p>در نتایج جستجو ممکن است بسته‌ای به اسم <b>Arduino ESP32 Boards</b> (ساخت خود Arduino) هم ببینی. آن بسته فقط برای بردهای ESP32 با برند آردوینو (مثل Arduino Nano ESP32) است. برای بردهای معمولی ESP32 حتما <b>esp32 by Espressif Systems</b> را نصب کن.</p></div>
+
+<div class="callout warn"><div class="ct">نسخه 3.x در برابر 2.x: چرا مهم است؟</div>
+<p>در سال ۲۰۲۴ هسته ESP32 از نسخه 2.x به 3.x رفت و بعضی دستورها عوض شد. مهم‌ترین نمونه PWM است: در 3.x می‌نویسی <code>ledcAttach(pin, freq, resolution)</code> و <code>ledcWrite(pin, duty)</code>، ولی آموزش‌های قدیمی از <code>ledcSetup</code> و <code>ledcAttachPin</code> استفاده می‌کنند که در 3.x دیگر وجود ندارند و خطای کامپایل می‌دهند. <b>همه کدهای این دوره برای 3.x نوشته شده‌اند.</b> اگر کدی از اینترنت کپی کردی و خطای «not declared» گرفتی، اول به تفاوت نسخه شک کن.</p></div>
+
+<h3>مرحله ۳: انتخاب برد</h3>
+<p>از منوی <code>Tools › Board › esp32</code> گزینه <b>ESP32 Dev Module</b> را انتخاب کن. (یا در کادر انتخاب برد، شماره ۳ در نقشه، بنویس <code>ESP32 Dev Module</code>.)</p>
+<div class="callout why"><div class="ct">چرا ESP32 Dev Module و نه اسم دقیق برد من؟</div>
+<p>فهرست بردها صدها گزینه دارد (DOIT ESP32 DEVKIT V1، NodeMCU-32S، …). بیشتر این‌ها از نظر نرم‌افزار تقریبا یکی هستند: همه یک ماژول ESP32-WROOM با ۴ مگابایت Flash دارند. «ESP32 Dev Module» تنظیمات عمومی و امن برای همه این بردهاست. فقط اگر بردت چیز خاصی دارد (مثل PSRAM یا تراشه S3)، باید گزینه دقیق‌تر را انتخاب کنی.</p></div>
+<p>بعد از انتخاب برد، در منوی <code>Tools</code> گزینه‌های جدیدی ظاهر می‌شود. فعلا به آن‌ها دست نزن؛ پیش‌فرض‌ها درست هستند. فقط دو تا را بشناس:</p>
+<ul>
+  <li><b>Upload Speed</b> (پیش‌فرض 921600): سرعت ارسال برنامه. اگر آپلود وسط کار خطا داد، آن را روی <code>115200</code> بگذار؛ کندتر ولی مطمئن‌تر است، مخصوصا با کابل‌های بلند یا ارزان.</li>
+  <li><b>Port</b>: پورت USB برد. در بخش بعد درباره‌اش حرف می‌زنیم.</li>
+</ul>
+
+<h2 id="driver">درایور USB: چرا پورت ظاهر نمی‌شود؟</h2>
+<p>این بخش مهم‌ترین قسمت درس است، چون بیشتر مبتدی‌ها همین‌جا گیر می‌کنند. تراشه ESP32 روی بردهای کلاسیک مستقیم USB بلد نیست؛ فقط یک درگاه سریال ساده (<span class="term" data-t="UART">UART</span>) دارد. پس روی برد یک تراشه کوچک «مبدل USB به سریال» هست که بین کامپیوتر و ESP32 ترجمه می‌کند.</p>
+
+<figure><div class="frame"><svg viewBox="0 0 900 250" style="direction:ltr" xmlns="http://www.w3.org/2000/svg" font-family="Vazirmatn, Tahoma, sans-serif">
+  <defs><marker id="ar1" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="#4d5b70"/></marker></defs>
+  <rect x="20" y="40" width="180" height="90" rx="12" fill="#e3edff" stroke="#2f7af0" stroke-width="2"/>
+  <text x="110" y="75" font-size="15" text-anchor="middle" fill="#152033" font-weight="bold">Computer</text>
+  <text x="110" y="97" font-size="12.5" text-anchor="middle" fill="#4d5b70">Arduino IDE + esptool</text>
+  <text x="110" y="117" font-size="12.5" text-anchor="middle" fill="#4d5b70">+ Driver → COM5</text>
+  <rect x="250" y="62" width="120" height="46" rx="10" fill="#f3f5f8" stroke="#8d9aab" stroke-width="2"/>
+  <text x="310" y="84" font-size="13" text-anchor="middle" fill="#152033">USB cable</text>
+  <text x="310" y="100" font-size="12" text-anchor="middle" fill="#4d5b70">D+ / D− (data!)</text>
+  <rect x="420" y="40" width="200" height="90" rx="12" fill="#fdeedd" stroke="#e0781f" stroke-width="2"/>
+  <text x="520" y="72" font-size="15" text-anchor="middle" fill="#152033" font-weight="bold">USB-to-UART chip</text>
+  <text x="520" y="95" font-size="13" text-anchor="middle" fill="#4d5b70">CP2102 (Silicon Labs)</text>
+  <text x="520" y="115" font-size="13" text-anchor="middle" fill="#4d5b70">or CH340 / CH9102 (WCH)</text>
+  <rect x="680" y="40" width="200" height="90" rx="12" fill="#dff5ee" stroke="#12a37f" stroke-width="2"/>
+  <text x="780" y="75" font-size="15" text-anchor="middle" fill="#152033" font-weight="bold">ESP32</text>
+  <text x="780" y="98" font-size="13" text-anchor="middle" fill="#4d5b70">UART0: TX0 (GPIO1)</text>
+  <text x="780" y="117" font-size="13" text-anchor="middle" fill="#4d5b70">RX0 (GPIO3)</text>
+  <line x1="200" y1="85" x2="248" y2="85" stroke="#4d5b70" stroke-width="2.5" marker-end="url(#ar1)"/>
+  <line x1="370" y1="85" x2="418" y2="85" stroke="#4d5b70" stroke-width="2.5" marker-end="url(#ar1)"/>
+  <line x1="620" y1="85" x2="678" y2="85" stroke="#4d5b70" stroke-width="2.5" marker-end="url(#ar1)"/>
+  <path d="M520 130 v55 h260 v-53" fill="none" stroke="#d6453d" stroke-width="2.2" stroke-dasharray="6 4" marker-end="url(#ar1)"/>
+  <text x="650" y="178" font-size="12.5" text-anchor="middle" fill="#d6453d">DTR / RTS → auto-reset → EN + GPIO0 (BOOT)</text>
+  <text x="450" y="228" font-size="14" text-anchor="middle" fill="#152033" direction="rtl">درایور، تراشه مبدل را برای سیستم‌عامل به یک «پورت سریال» (COM یا /dev/ttyUSB0) تبدیل می‌کند.</text>
+</svg></div>
+<figcaption>مسیر داده از کامپیوتر تا ESP32. خط‌چین قرمز همان مداری است که ESP32 را خودکار به حالت دریافت برنامه می‌برد؛ وقتی این مدار ضعیف باشد، باید دکمه BOOT را دستی نگه داری.<span class="src">تصویر: طرح برداری از خود دوره</span></figcaption></figure>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>تراشه مبدل مثل یک مترجم در سفارت است. کامپیوتر فقط «زبان USB» حرف می‌زند و ESP32 فقط «زبان سریال». ولی برای این که کامپیوتر بفهمد این مترجم کیست و چطور با او حرف بزند، باید «کارت شناسایی» او را داشته باشد. آن کارت همان <b>درایور</b> است. بدون درایور، کامپیوتر مترجم را می‌بیند ولی نمی‌داند با او چه کند؛ نتیجه: پورتی در Arduino IDE ظاهر نمی‌شود.</p></div>
+
+<h3>برد من کدام تراشه را دارد؟</h3>
+<p>دو تراشه مبدل در بردهای بازار ایران رایج‌اند. کنار پورت USB برد را نگاه کن (شاید ذره‌بین لازم شود):</p>
+<div class="table-wrap"><table>
+<tr><th></th><th>CP2102 / CP2104</th><th>CH340 (C یا G) / CH9102</th></tr>
+<tr><td>سازنده</td><td>Silicon Labs (آمریکا)</td><td>WCH (چین)</td></tr>
+<tr><td>ظاهر روی برد</td><td>مربع کوچک حدود ۵×۵ میلی‌متر، بدون پایه بیرون‌زده، نوشته <code>SILABS CP2102</code></td><td>مستطیل با پایه‌های بیرون‌زده دو طرف (CH340C/G)، یا مربع کوچک (CH9102)، نوشته <code>CH340</code> یا <code>CH9102</code></td></tr>
+<tr><td>روی چه بردهایی</td><td>DevKitC رسمی Espressif، بیشتر بردهای DOIT</td><td>بیشتر بردهای خیلی ارزان، برخی NodeMCU-32S</td></tr>
+<tr><td>شناسه USB (VID:PID)</td><td><code>10C4:EA60</code></td><td><code>1A86:7523</code> (CH340)، <code>1A86:55D4</code> (CH9102)</td></tr>
+<tr><td>درایور رسمی</td><td><a href="https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers" target="_blank" rel="noopener">silabs.com › VCP Drivers</a></td><td><a href="https://www.wch-ic.com/downloads/CH341SER_EXE.html" target="_blank" rel="noopener">wch-ic.com › CH341SER</a> (درایور CH340 و CH341 مشترک است)</td></tr>
+</table></div>
+<p>در عکس رسمی برد DevKitC در <a href="2-3.html">درس ۲.۳</a> هم تراشه CP2102 با برچسب مشخص شده است.</p>
+
+<div class="callout info"><div class="ct">بردهای جدیدتر ممکن است اصلا درایور نخواهند</div>
+<p>بردهای ESP32-S3 و ESP32-C3 که پورت USB را مستقیم به خود تراشه وصل کرده‌اند (USB بومی) معمولا بدون هیچ درایوری در ویندوز ۱۰/۱۱، مک و لینوکس شناخته می‌شوند. این درس روی ESP32 کلاسیک با تراشه مبدل تمرکز دارد، چون رایج‌ترین برد بازار است.</p></div>
+
+<h3 id="driver-windows">ویندوز: بررسی در Device Manager</h3>
+<ol class="steps">
+  <li><b>Device Manager را باز کن:</b> کلید <kbd>Win</kbd>+<kbd>X</kbd> › <b>Device Manager</b>.</li>
+  <li><b>برد را با کابل دیتا وصل کن</b> و به بخش <b>Ports (COM &amp; LPT)</b> نگاه کن. اگر چیزی مثل <code>Silicon Labs CP210x USB to UART Bridge (COM5)</code> یا <code>USB-SERIAL CH340 (COM6)</code> دیدی، درایور نصب است. عدد داخل پرانتز همان پورتی است که در Arduino IDE انتخاب می‌کنی.</li>
+  <li><b>اگر در Ports چیزی نیست،</b> بخش <b>Other devices</b> را نگاه کن. دستگاهی با مثلث زرد و اسمی مثل <code>CP2102 USB to UART Bridge Controller</code> یا <code>USB2.0-Serial</code> یعنی سخت‌افزار دیده شده ولی درایور نیست. درایور مناسب را از لینک‌های جدول بالا نصب کن، برد را جدا و دوباره وصل کن.</li>
+  <li><b>اگر هیچ چیز در هیچ بخشی تغییر نکرد،</b> مشکل از درایور نیست؛ کابل تو فقط شارژی است (پایین‌تر توضیح داده‌ایم).</li>
+  <li><b>ترفند شناسایی:</b> اگر مطمئن نیستی کدام دستگاه مال برد توست، برد را جدا کن و ببین کدام ردیف ناپدید می‌شود. برای دیدن شناسه دقیق: راست‌کلیک روی دستگاه › Properties › Details › <b>Hardware Ids</b>. اگر <code>VID_10C4&amp;PID_EA60</code> دیدی، CP2102 است؛ اگر <code>VID_1A86</code> بود، تراشه WCH است.</li>
+</ol>
+<div class="callout tip"><div class="ct">ویندوز ۱۰ و ۱۱ اغلب خودش درایور را پیدا می‌کند</div>
+<p>اگر کامپیوتر به اینترنت وصل باشد، Windows Update معمولا درایور CP210x و CH340 را خودکار نصب می‌کند. پس اول یک دقیقه صبر کن و Device Manager را دوباره نگاه کن، بعد سراغ نصب دستی برو.</p></div>
+
+<h3 id="driver-linux">لینوکس: پورت و گروه dialout</h3>
+<p>در لینوکس درایور هر دو تراشه (<code>cp210x</code> و <code>ch341</code>) داخل خود هسته لینوکس هست و نصب لازم ندارد. ولی دو مشکل رایج هست: اجازه دسترسی، و یک برنامه مزاحم در اوبونتو. این دستورها را یکی‌یکی در ترمینال بزن:</p>
+<div class="code" data-lang="bash" data-file="terminal" id="linuxcode"><pre>
+ls /dev/ttyUSB* /dev/ttyACM*
+sudo dmesg | tail -n 15
+groups
+sudo usermod -a -G dialout $USER
+sudo apt remove brltty
+</pre></div>
+<ol class="walk" data-for="linuxcode">
+  <li data-lines="1"><b class="what">فهرست پورت‌های سریال.</b> بردهایی با CP2102 یا CH340 معمولا به اسم <code>/dev/ttyUSB0</code> ظاهر می‌شوند؛ بردهای USB بومی (S3، C3) به اسم <code>/dev/ttyACM0</code>. اگر پیام <code>No such file or directory</code> دیدی، یعنی هیچ پورتی نیست.
+    <span class="why">این سریع‌ترین آزمون است: قبل و بعد از وصل کردن برد اجرایش کن. اگر اسم جدیدی اضافه شد، سخت‌افزار و درایور سالم‌اند.</span></li>
+  <li data-lines="2"><b class="what">پیام‌های هسته لینوکس.</b> ۱۵ خط آخر گزارش سیستم را نشان می‌دهد. بلافاصله بعد از وصل کردن برد باید چیزی شبیه <code>cp210x converter now attached to ttyUSB0</code> یا <code>ch341-uart converter now attached to ttyUSB0</code> ببینی.
+    <span class="why">اگر اینجا هیچ خبری از USB نبود، کابل شارژی است. اگر دیدی وصل شد و بلافاصله <code>disconnected</code> شد، دستور ۵ را ببین.</span></li>
+  <li data-lines="3"><b class="what">گروه‌های کاربر تو.</b> فهرست گروه‌هایی که عضوشان هستی. باید کلمه <code>dialout</code> در آن باشد.
+    <span class="why">در لینوکس فایل <code>/dev/ttyUSB0</code> مال گروه dialout است. اگر عضو نباشی، آپلود با خطای <code>Permission denied</code> شکست می‌خورد.</span></li>
+  <li data-lines="4"><b class="what">اضافه کردن خودت به dialout.</b> <code>-a -G</code> یعنی «به گروه‌های فعلی اضافه کن» و <code>$USER</code> اسم کاربری توست. بعد از این دستور <b>یک بار Log out و دوباره Log in کن</b> (یا کامپیوتر را ری‌استارت کن).
+    <span class="why">عضویت گروه فقط هنگام ورود به سیستم خوانده می‌شود. خیلی‌ها دستور را می‌زنند، بلافاصله امتحان می‌کنند و فکر می‌کنند کار نکرده. در آرچ‌لینوکس اسم این گروه <code>uucp</code> است. هرگز برای حل این مشکل Arduino IDE را با <code>sudo</code> اجرا نکن؛ فایل‌های تنظیماتت مال root می‌شوند و مشکل‌های بدتری می‌سازد.</span></li>
+  <li data-lines="5"><b class="what">حذف brltty (فقط اگر لازم شد).</b> brltty برنامه‌ای برای نمایشگرهای بریل است. در بعضی نسخه‌های اوبونتو (مثل ۲۲.۰۴) به اشتباه دستگاه CH340 را «تصاحب» می‌کند و پورت بلافاصله ناپدید می‌شود.
+    <span class="why">فقط وقتی این دستور را بزن که در <code>dmesg</code> دیدی پورت وصل و فورا جدا می‌شود و به brltty اشاره شده. اگر از نمایشگر بریل استفاده می‌کنی، این کار را نکن.</span></li>
+</ol>
+
+<h3 id="driver-mac">macOS</h3>
+<p>در ترمینال مک بزن <code>ls /dev/cu.*</code>. برد تو معمولا با اسمی شبیه <code>/dev/cu.usbserial-0001</code>، <code>/dev/cu.SLAB_USBtoUART</code> (اگر درایور Silicon Labs نصب باشد) یا <code>/dev/cu.wchusbserial…</code> ظاهر می‌شود. در Arduino IDE همیشه گزینه‌ای را انتخاب کن که با <code>cu.</code> شروع می‌شود، نه <code>tty.</code>. در نسخه‌های جدید macOS بسیاری از این تراشه‌ها بدون درایور جداگانه شناخته می‌شوند. اگر پورتی ظاهر نشد، درایور را از سایت سازنده (جدول بالا) نصب کن و بعد در <code>System Settings › Privacy &amp; Security</code> اجازه اجرای آن را بده (macOS معمولا یک دکمه <b>Allow</b> آنجا نشان می‌دهد).</p>
+
+<h3 id="cable">دام بزرگ: کابل فقط شارژی</h3>
+<div class="callout warn"><div class="ct">اول کابل را عوض کن، بعد درایور</div>
+<p>بسیاری از کابل‌های micro-USB و USB-C ارزان (مثلا کابلی که همراه پاوربانک یا اسپیکر بلوتوثی آمده) فقط دو سیم برق دارند و سیم‌های داده (D+ و D−) را ندارند. با این کابل‌ها LED برق روی برد روشن می‌شود و فکر می‌کنی همه چیز درست است، ولی کامپیوتر هیچ دستگاهی نمی‌بیند؛ نه در Ports و نه در Other devices. آزمون ساده: با همان کابل گوشی‌ات را به کامپیوتر وصل کن. اگر نتوانستی فایل منتقل کنی، کابل فقط شارژی است. یک کابل مطمئن را برچسب بزن و فقط برای برنامه‌ریزی استفاده کن.</p></div>
+
+<h2 id="first-upload">اولین آپلود: ESP32 خودش را معرفی می‌کند</h2>
+<p>شاید انتظار داشته باشی اولین برنامه Blink باشد. Arduino IDE یک مثال آماده Blink دارد (<code>File › Examples › 01.Basics › Blink</code>) ولی با برد ESP32 Dev Module این خطا را می‌دهد:</p>
+<div class="serial">error: 'LED_BUILTIN' was not declared in this scope</div>
+<p><b>چرا؟</b> <code>LED_BUILTIN</code> اسمی است که هر برد برای «پین LED داخلی‌اش» تعریف می‌کند. برد رسمی DevKitC اصلا LED قابل برنامه‌ریزی ندارد، پس Espressif این اسم را برای ESP32 Dev Module تعریف نکرده است (ما فایل تعریف پین‌های این برد را در هسته 3.x بررسی کردیم). اگر برد تو یک LED آبی روی GPIO2 دارد، کافی است این خط را بالای مثال Blink اضافه کنی:</p>
+<div class="code" data-file="Blink (افزودنی)" id="ledfix"><pre>
+#define LED_BUILTIN 2   // فقط اگر برد تو LED آبی روی GPIO2 دارد
+</pre></div>
+<ol class="walk" data-for="ledfix">
+  <li data-lines="1"><b class="what">تعریف یک اسم.</b> <code>#define</code> به کامپایلر می‌گوید «هر جا <code>LED_BUILTIN</code> دیدی، به جایش عدد ۲ بگذار». این جایگزینی قبل از کامپایل اصلی انجام می‌شود.
+    <span class="why">به جای دست بردن در کد مثال یا فایل‌های هسته، کمبود را همین‌جا جبران کردیم. ولی بهتر است همان روش درس ۲.۳ را عادت کنی: <code>const int LED_PIN = 2;</code> که نوع‌دار و امن‌تر است.</span></li>
+</ol>
+<p>ولی ما اولین آزمون را با برنامه‌ای شروع می‌کنیم که روی <b>هر</b> برد ESP32 کار می‌کند، حتی بدون LED: برنامه‌ای که از طریق Serial Monitor مشخصات تراشه را چاپ می‌کند. این طوری هم آپلود را آزمایش کرده‌ای و هم ارتباط سریال را.</p>
+
+<ol class="steps">
+  <li><b>یک Sketch جدید بساز:</b> <code>File › New Sketch</code>. هر چه در آن هست را پاک کن و کد زیر را بچسبان.</li>
+  <li><b>ذخیره کن:</b> <kbd>Ctrl</kbd>+<kbd>S</kbd>، اسم را <code>hello_esp32</code> بگذار. Arduino IDE خودش یک پوشه هم‌نام می‌سازد (هر Sketch باید در پوشه‌ای با اسم خودش باشد).</li>
+</ol>
+
+<div class="code" data-file="hello_esp32.ino" id="hello"><pre>
+// اولین تست: ESP32 خودش را معرفی می‌کند
+void setup() {
+  Serial.begin(115200);
+  delay(1000);                          // صبر تا Serial Monitor آماده شود
+  Serial.println();
+  Serial.println("Salam! ESP32 is alive :)");
+  Serial.print("Chip model: ");
+  Serial.println(ESP.getChipModel());
+  Serial.print("Chip revision: ");
+  Serial.println(ESP.getChipRevision());
+  Serial.print("CPU MHz: ");
+  Serial.println(ESP.getCpuFreqMHz());
+  Serial.print("Flash MB: ");
+  Serial.println(ESP.getFlashChipSize() / (1024 * 1024));
+}
+
+void loop() {
+  Serial.print("Uptime (s): ");
+  Serial.println(millis() / 1000);      // چند ثانیه از روشن شدن گذشته
+  delay(2000);
+}
+</pre></div>
+<ol class="walk" data-for="hello">
+  <li data-lines="1"><b class="what">توضیح.</b> یادداشتی برای انسان؛ کامپایلر نادیده‌اش می‌گیرد.
+    <span class="why">عادت کن بالای هر برنامه یک خط بنویسی که «این برنامه چه کار می‌کند».</span></li>
+  <li data-lines="2,15"><b class="what">تابع setup.</b> یک بار، بعد از روشن شدن یا ریست، اجرا می‌شود. همه معرفی‌نامه را اینجا چاپ می‌کنیم.
+    <span class="why">مشخصات تراشه عوض نمی‌شود؛ لازم نیست هر دو ثانیه دوباره چاپش کنیم.</span></li>
+  <li data-lines="3"><b class="what">Serial.begin(115200).</b> ارتباط سریال را با سرعت ۱۱۵۲۰۰ بیت بر ثانیه روشن می‌کند.
+    <span class="why">این عدد باید با عدد پایین پنجره Serial Monitor یکی باشد؛ وگرنه حروف درهم می‌بینی. ۱۱۵۲۰۰ استاندارد دنیای ESP32 است.</span></li>
+  <li data-lines="4"><b class="what">delay(1000).</b> یک ثانیه صبر.
+    <span class="why">بعد از آپلود، برد ریست می‌شود و چند لحظه طول می‌کشد تا Serial Monitor دوباره به پورت وصل شود. بدون این مکث، ممکن است پیام‌های اول را از دست بدهی و فکر کنی برنامه کار نمی‌کند.</span></li>
+  <li data-lines="5-6"><b class="what">یک خط خالی و سلام.</b> <code>println()</code> بدون ورودی فقط به خط بعد می‌رود.
+    <span class="why">موقع روشن شدن، ESP32 چند خط پیام بوت (گاهی با حروف عجیب) می‌فرستد. خط خالی پیام ما را از آن‌ها جدا می‌کند. متن را انگلیسی نوشتیم چون ترکیب فارسی و انگلیسی در Serial Monitor گاهی به‌هم‌ریخته نمایش داده می‌شود.</span></li>
+  <li data-lines="7-8"><b class="what">مدل تراشه.</b> <code>ESP.getChipModel()</code> اسم دقیق تراشه را برمی‌گرداند، مثلا <code>ESP32-D0WD-V3</code> که داخل ماژول WROOM-32E است.
+    <span class="why"><code>ESP</code> یک شیء آماده در هسته ESP32 است که اطلاعات سخت‌افزار را می‌دهد. اگر بردی خریدی و شک داری واقعا ESP32 است، همین خط جواب می‌دهد.</span></li>
+  <li data-lines="9-10"><b class="what">نسخه ساخت تراشه (Revision).</b> در هسته 3.x عددی مثل <code>301</code> برمی‌گرداند که یعنی نسخه v3.1 (رقم اول نسخه اصلی، دو رقم بعد نسخه فرعی).
+    <span class="why">تراشه‌های v3 باگ‌های سخت‌افزاری نسخه‌های قدیمی را ندارند. آموزش‌های قدیمی (هسته 2.x) عددی مثل ۱ یا ۳ نشان می‌دادند؛ تعجب نکن.</span></li>
+  <li data-lines="11-12"><b class="what">فرکانس پردازنده.</b> معمولا <code>240</code> مگاهرتز.
+    <span class="why">در درس ۶.۱ یاد می‌گیری برای صرفه‌جویی در باتری این عدد را کم کنی. الان فقط ببین پیش‌فرض چیست.</span></li>
+  <li data-lines="13-14"><b class="what">اندازه حافظه Flash.</b> <code>getFlashChipSize()</code> اندازه را به بایت می‌دهد؛ تقسیم بر <code>1024 * 1024</code> آن را به مگابایت تبدیل می‌کند. برای WROOM معمولی: <code>4</code>.
+    <span class="why">Flash جایی است که برنامه تو ذخیره می‌شود. اگر روزی برنامه‌ات جا نشد، این عدد سقف توست.</span></li>
+  <li data-lines="17-21"><b class="what">loop: گزارش زنده بودن.</b> هر دو ثانیه، تعداد ثانیه‌های گذشته از روشن شدن را چاپ می‌کند. <code>millis()</code> تعداد میلی‌ثانیه‌های گذشته را می‌دهد و تقسیم بر ۱۰۰۰ آن را ثانیه می‌کند.
+    <span class="why">یک عدد در حال افزایش ثابت می‌کند برد گیر نکرده و مدام ریست نمی‌شود. اگر عدد مدام به ۰ یا ۱ برگشت، برد ریست می‌شود (مثلا به خاطر Brownout؛ جدول عیب‌یابی را ببین).</span></li>
+</ol>
+
+<h3>آپلود و دیدن نتیجه</h3>
+<ol class="steps">
+  <li><b>برد و پورت را در کادر بالا (شماره ۳) چک کن:</b> <b>ESP32 Dev Module</b> و پورتی که در بخش درایور پیدا کردی (مثلا COM5 یا /dev/ttyUSB0).</li>
+  <li><b>Upload (→) را بزن.</b> بار اول کامپایل کل هسته ESP32 یک تا چند دقیقه طول می‌کشد؛ دفعه‌های بعد خیلی سریع‌تر است چون نتیجه ذخیره می‌شود.</li>
+  <li><b>پنل Output را تماشا کن.</b> ترتیب طبیعی: <code>Sketch uses … bytes</code> ← <code>Connecting....</code> ← <code>Writing at 0x… (100%)</code> ← <code>Hard resetting via RTS pin...</code>.</li>
+  <li><b>اگر <code>Connecting....___....</code> طولانی شد،</b> دکمه <kbd>BOOT</kbd> روی برد را نگه دار تا نوشتن شروع شود، بعد رها کن.</li>
+  <li><b>Serial Monitor را باز کن</b> (شماره ۴) و پایین پنجره سرعت را روی <b>115200 baud</b> بگذار. اگر پیام معرفی را ندیدی، یک بار دکمه <kbd>EN</kbd> (ریست) برد را بزن.</li>
+</ol>
+<p>خروجی باید چیزی شبیه این باشد (مدل و عددها ممکن است برای برد تو کمی فرق کند):</p>
+<div class="serial">Salam! ESP32 is alive :)
+Chip model: ESP32-D0WD-V3
+Chip revision: 301
+CPU MHz: 240
+Flash MB: 4
+Uptime (s): 1
+Uptime (s): 3
+Uptime (s): 5</div>
+<div class="callout example"><div class="ct">یک آزمایش کوچک</div>
+<p>دکمه EN را بزن. عدد Uptime دوباره از ۱ شروع می‌شود و پیام معرفی دوباره چاپ می‌شود. حالا با چشم خودت دیدی که «ریست» یعنی اجرای دوباره setup از اول. قبل از پیام ما چند خط مثل <code>rst:0x1 (POWERON_RESET)</code> هم می‌بینی؛ این‌ها پیام‌های بوت خود ESP32 هستند و علت ریست را می‌گویند. بعدا برای عیب‌یابی خیلی به کارت می‌آیند.</p></div>
+
+<h2 id="iran">نکته‌های مخصوص کاربران ایران</h2>
+<p>فایل‌های هسته ESP32 (کامپایلرها و ابزارها) از سرورهای GitHub دانلود می‌شوند. از ایران این دانلود گاهی خیلی کند است، وسط کار قطع می‌شود، یا با خطاهایی مثل <code>Error downloading …</code>، <code>context deadline exceeded</code> یا <code>connection reset</code> متوقف می‌شود. صادقانه بگوییم: راه جادویی وجود ندارد، ولی این روش‌ها به ترتیب امتحان‌کردن کمک می‌کنند:</p>
+<ol class="steps">
+  <li><b>دوباره تلاش کن.</b> بسیاری از خطاها موقتی‌اند. Boards Manager را ببند، دوباره باز کن و Install را بزن. فایل‌هایی که کامل دانلود شده‌اند در پوشه <code>staging</code> (پایین‌تر) می‌مانند و معمولا دوباره دانلود نمی‌شوند.</li>
+  <li><b>ساعت خلوت را امتحان کن.</b> دانلود در نیمه‌شب یا صبح زود اغلب سریع‌تر است.</li>
+  <li><b>فیلترشکن و تنظیم Proxy در خود IDE.</b> اگر از فیلترشکنی استفاده می‌کنی که فقط «پراکسی سیستم» می‌سازد (نه کل ترافیک را)، ممکن است Arduino IDE از آن عبور نکند. در <code>File › Preferences</code> تب <b>Network</b> را باز کن، <b>Manual proxy configuration</b> را بزن و نشانی و پورت پراکسی محلی فیلترشکن را (مثلا <code>127.0.0.1</code> و پورتی که برنامه‌ات نشان می‌دهد) وارد کن. نوع (HTTP یا SOCKS) را طبق تنظیمات برنامه خودت انتخاب کن.</li>
+  <li><b>آینه رسمی برای کاربران چین.</b> مستندات رسمی Espressif یک آدرس جایگزین برای کسانی که به GitHub دسترسی کند دارند معرفی کرده: <code>https://jihulab.com/esp-mirror/espressif/arduino-esp32/-/raw/gh-pages/package_esp32_index_cn.json</code>. این آینه برای چین ساخته شده و ما تضمین نمی‌کنیم از ایران سریع‌تر باشد، ولی امتحانش ضرری ندارد. برای استفاده، آن را <b>به جای</b> آدرس اصلی در Preferences بگذار.</li>
+  <li><b>کپی از یک کامپیوتر دیگر (روش آفلاین).</b> اگر دوستی هسته ESP32 را روی کامپیوتری با <b>همان سیستم‌عامل</b> نصب کرده، پوشه <code>packages/esp32</code> را از پوشه Arduino15 او (جدول زیر) در همان مسیر کامپیوتر خودت کپی کن، و فایل <code>package_esp32_index.json</code> را هم از ریشه Arduino15 او بردار. بعد Arduino IDE را باز کن. روش جایگزین: پوشه <code>staging/packages</code> او را کپی کن؛ آن‌جا فایل‌های فشرده دانلودشده هستند و IDE موقع Install معمولا از همان‌ها استفاده می‌کند به جای دانلود دوباره.</li>
+</ol>
+<div class="table-wrap"><table>
+<tr><th>سیستم‌عامل</th><th>مسیر پوشه Arduino15</th></tr>
+<tr><td>ویندوز</td><td><code>C:\Users\نام‌کاربری\AppData\Local\Arduino15</code> (پوشه AppData مخفی است؛ در File Explorer گزینه Hidden items را روشن کن)</td></tr>
+<tr><td>macOS</td><td><code>~/Library/Arduino15</code></td></tr>
+<tr><td>لینوکس</td><td><code>~/.arduino15</code></td></tr>
+</table></div>
+<div class="callout warn"><div class="ct">از منبع ناشناس دانلود نکن</div>
+<p>در شبکه‌های اجتماعی فایل‌های فشرده «هسته ESP32 آفلاین» زیاد دست‌به‌دست می‌شود. این فایل‌ها اجرایی هستند (کامپایلر و ابزار آپلود) و روی کامپیوترت اجرا می‌شوند. فقط از کسی که به او اعتماد داری کپی کن. همچنین نسخه قدیمی 2.x را نگیر، چون کدهای این دوره برای 3.x است.</p></div>
+<div class="callout tip"><div class="ct">راه فرار موقت: Wokwi</div>
+<p>تا وقتی نصب تمام نشده، وقتت را هدر نده. درس <a href="2-2.html">۲.۲</a> را بخوان و کدها را در شبیه‌ساز مرورگر اجرا کن. شبیه‌ساز چیزی دانلود نمی‌کند.</p></div>
+
+<!-- ============================ PART B ============================ -->
+<h2 id="platformio">بخش ب: VS Code + PlatformIO</h2>
+<p><b>PlatformIO</b> یک افزونه (Extension) برای ویرایشگر رایگان <b>VS Code</b> مایکروسافت است. همان کامپایلر و همان هسته Arduino را استفاده می‌کند، پس کدهای تو تقریبا بدون تغییر در آن اجرا می‌شوند. فرقش در «مدیریت پروژه» است.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>Arduino IDE مثل یک آشپزخانه کوچک و مرتب خانه است: برای درست کردن یک غذای ساده عالی است. PlatformIO مثل آشپزخانه یک رستوران است: هر غذا (پروژه) دستور پخت مکتوب خودش را دارد که دقیقا می‌گوید کدام مواد با کدام برند و کدام نسخه. اگر فردا آشپز دیگری بیاید، همان غذا را دقیقا همان‌طور درست می‌کند.</p></div>
+
+<h3>چرا و کی سراغ PlatformIO برویم؟</h3>
+<ul>
+  <li><b>نسخه کتابخانه‌ها در خود پروژه ثبت می‌شود.</b> در Arduino IDE کتابخانه‌ها بین همه پروژه‌ها مشترک‌اند؛ اگر برای پروژه جدید یک کتابخانه را به‌روز کنی، ممکن است پروژه قدیمی خراب شود. در PlatformIO هر پروژه کتابخانه‌های خودش را با نسخه مشخص دارد.</li>
+  <li><b>IntelliSense قوی.</b> VS Code هنگام تایپ، نام توابع، پارامترها و خطاها را زیر کد نشان می‌دهد؛ روی هر تابع <kbd>Ctrl</kbd>+کلیک کنی، به تعریفش می‌روی.</li>
+  <li><b>پروژه چندفایلی و Git.</b> تقسیم کد به چند فایل و نگه داشتن تاریخچه با Git در VS Code طبیعی است.</li>
+  <li><b>عیب:</b> شروعش سخت‌تر است، نصب اول سنگین‌تر است و چند مفهوم جدید دارد.</li>
+</ul>
+<div class="callout coach"><div class="ct">حرف مربی: کی سوییچ کنم؟</div>
+<p>فصل‌های ۲ و ۳ را با Arduino IDE برو تا تمرکزت روی خود ESP32 باشد، نه ابزار. وقتی پروژه‌ات بیش از یک فایل یا بیش از دو کتابخانه داشت (از فصل ۴ به بعد)، PlatformIO را جدی بگیر. ولی همین حالا یک بار نصبش کن تا بدانی چیست.</p></div>
+
+<h3 id="pio-install">نصب</h3>
+<ol class="steps">
+  <li><b>VS Code را نصب کن</b> از <a href="https://code.visualstudio.com/" target="_blank" rel="noopener">code.visualstudio.com</a>. در ویندوز هنگام نصب تیک <b>Add to PATH</b> را نگه دار.</li>
+  <li><b>افزونه را نصب کن.</b> در VS Code آیکون Extensions (چهار مربع، نوار چپ) یا <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>. جستجو کن <code>PlatformIO IDE</code> و Install بزن.</li>
+  <li><b>صبر کن.</b> PlatformIO بار اول یک محیط Python مخصوص خودش و ابزارهای پایه را دانلود می‌کند. پایین-راست پنجره پیشرفت را می‌بینی. در پایان می‌خواهد VS Code را دوباره باز کنی (Reload).</li>
+  <li><b>در لینوکس</b> علاوه بر گروه dialout، PlatformIO توصیه می‌کند فایل قوانین udev خودش را نصب کنی؛ دستور دقیقش در <a href="https://docs.platformio.org/en/latest/core/installation/udev-rules.html" target="_blank" rel="noopener">مستندات udev rules</a> هست.</li>
+</ol>
+
+<h3 id="pio-project">ساخت اولین پروژه</h3>
+<ol class="steps">
+  <li><b>PlatformIO Home را باز کن:</b> آیکون PlatformIO در نوار چپ (شبیه سر یک مورچه) › <b>Open</b> › دکمه <b>+ New Project</b>.</li>
+  <li><b>فرم را پر کن:</b> Name: <code>hello_pio</code>. Board: تایپ کن <code>ESP32 Dev</code> و <b>Espressif ESP32 Dev Module</b> را انتخاب کن (شناسه داخلی آن <code>esp32dev</code> است). Framework: <b>Arduino</b>.</li>
+  <li><b>Finish.</b> بار اول چند دقیقه طول می‌کشد چون پلتفرم ESP32 را دانلود می‌کند.</li>
+</ol>
+
+<h3>ساختار پوشه پروژه</h3>
+<div class="code" data-lang="text" data-file="hello_pio/" id="tree"><pre>
+hello_pio/
+├── .pio/            خروجی کامپایل (دست نزن)
+├── .vscode/         تنظیمات VS Code (خودکار)
+├── include/         فایل‌های سرآیند .h خودت
+├── lib/             کتابخانه‌های خصوصی این پروژه
+├── src/
+│   └── main.cpp     کد اصلی برنامه
+├── test/            تست‌های خودکار (فعلا نه)
+└── platformio.ini   شناسنامه پروژه
+</pre></div>
+<ol class="walk" data-for="tree">
+  <li data-lines="2-3"><b class="what">پوشه‌های خودکار.</b> <code>.pio</code> فایل‌های کامپایل‌شده و کتابخانه‌های دانلودشده را نگه می‌دارد؛ <code>.vscode</code> تنظیمات ویرایشگر است.
+    <span class="why">نقطه اول اسم یعنی «پوشه فنی». اگر پروژه را برای کسی فرستادی یا در Git گذاشتی، این دو را نفرست؛ با اولین Build دوباره ساخته می‌شوند.</span></li>
+  <li data-lines="4-5"><b class="what">include و lib.</b> <code>include</code> برای فایل‌های <code>.h</code> خودت است؛ <code>lib</code> برای کتابخانه‌ای که خودت نوشتی یا دستی دانلود کردی و فقط این پروژه از آن استفاده می‌کند (هر کتابخانه در یک زیرپوشه).
+    <span class="why">جدا کردن کد اصلی از کدهای کمکی باعث می‌شود پروژه بزرگ هم مرتب بماند.</span></li>
+  <li data-lines="6-7"><b class="what">src/main.cpp.</b> معادل فایل <code>.ino</code> در Arduino IDE. برنامه تو اینجاست.
+    <span class="why">پسوند <code>.cpp</code> یعنی C++ استاندارد. PlatformIO برخلاف Arduino IDE کد را «جادویی» پیش‌پردازش نمی‌کند (توضیح پایین‌تر).</span></li>
+  <li data-lines="8"><b class="what">test.</b> برای تست‌های خودکار واحد (Unit Test).
+    <span class="why">در این دوره لازمش نداریم؛ ولی بدان برای چیست که پاکش نکنی و نترسی.</span></li>
+  <li data-lines="9"><b class="what">platformio.ini.</b> مهم‌ترین فایل: برد، پلتفرم، سرعت‌ها و کتابخانه‌ها اینجا تعریف می‌شوند.
+    <span class="why">این همان «دستور پخت مکتوب» است. هر کس این فایل و پوشه src را داشته باشد، دقیقا همان برنامه را می‌سازد.</span></li>
+</ol>
+
+<h3 id="ini">تک‌تک خط‌های platformio.ini</h3>
+<p>فایلی که PlatformIO برای تو ساخته را با این نسخه کامل‌تر عوض کن:</p>
+<div class="code" data-lang="ini" data-file="platformio.ini" id="ini1"><pre>
+; hello_pio - PlatformIO project configuration
+[env:esp32dev]
+platform = https://github.com/pioarduino/platform-espressif32/releases/download/stable/platform-espressif32.zip
+board = esp32dev
+framework = arduino
+
+monitor_speed = 115200
+monitor_filters = esp32_exception_decoder
+upload_speed = 921600
+; upload_port = COM5
+
+lib_deps =
+    adafruit/Adafruit SSD1306 @ ^2.5.7
+    adafruit/DHT sensor library @ ^1.4.6
+</pre></div>
+<ol class="walk" data-for="ini1">
+  <li data-lines="1"><b class="what">توضیح.</b> در فایل ini هر خطی که با <code>;</code> (یا <code>#</code>) شروع شود توضیح است.
+    <span class="why">همان کاربرد <code>//</code> در C++.</span></li>
+  <li data-lines="2"><b class="what">یک «محیط» (environment).</b> <code>[env:esp32dev]</code> یعنی مجموعه تنظیماتی به اسم esp32dev. اسم بعد از دونقطه را خودت انتخاب می‌کنی.
+    <span class="why">یک پروژه می‌تواند چند محیط داشته باشد، مثلا یکی برای ESP32 و یکی برای ESP32-S3، و با یک کلیک برای هر دو بسازی. کاری که در Arduino IDE ممکن نیست.</span></li>
+  <li data-lines="3"><b class="what">platform: کدام بسته ESP32.</b> اینجا پلتفرم جامعه‌محور <b>pioarduino</b> را انتخاب کرده‌ایم که هسته Arduino-ESP32 نسخه 3.x را دارد. در حالت پیش‌فرض PlatformIO می‌نویسد <code>platform = espressif32</code> (بخش بعد را بخوان).
+    <span class="why">همه کدهای این دوره برای هسته 3.x است. با پلتفرم رسمی فعلی PlatformIO هسته 2.x نصب می‌شود و کدهای PWM، ESP-NOW و خواب عمیق ما کامپایل نمی‌شوند.</span></li>
+  <li data-lines="4"><b class="what">board.</b> شناسه برد؛ <code>esp32dev</code> معادل «ESP32 Dev Module» در Arduino IDE است.
+    <span class="why">این شناسه به PlatformIO می‌گوید اندازه Flash، نوع تراشه و تنظیمات آپلود چیست.</span></li>
+  <li data-lines="5"><b class="what">framework.</b> <code>arduino</code> یعنی از توابع آشنای آردوینو (<code>pinMode</code>، <code>Serial</code>، …) استفاده می‌کنیم.
+    <span class="why">گزینه دیگر <code>espidf</code> است: فریم‌ورک بومی Espressif که قدرتمندتر ولی بسیار سخت‌تر است. برای این دوره Arduino کافی است.</span></li>
+  <li data-lines="7"><b class="what">monitor_speed.</b> سرعت Serial Monitor داخلی PlatformIO.
+    <span class="why">پیش‌فرض PlatformIO <code>9600</code> است ولی کد ما <code>Serial.begin(115200)</code> دارد. اگر این خط را ننویسی، حروف درهم می‌بینی. <b>رایج‌ترین اشتباه تازه‌واردهای PlatformIO همین است.</b></span></li>
+  <li data-lines="8"><b class="what">monitor_filters.</b> فیلتر <code>esp32_exception_decoder</code> وقتی برنامه کرش کرد، آدرس‌های نامفهوم (Backtrace) را به اسم تابع و شماره خط کد تو ترجمه می‌کند.
+    <span class="why">بدون این فیلتر پیام کرش فقط یک مشت عدد هگز است. با آن، مستقیم می‌فهمی کدام خط مقصر است.</span></li>
+  <li data-lines="9"><b class="what">upload_speed.</b> سرعت آپلود؛ ۹۲۱۶۰۰ سریع است.
+    <span class="why">اگر آپلود با خطا قطع شد، این عدد را ۴۶۰۸۰۰ یا ۱۱۵۲۰۰ کن. کابل بلند یا بی‌کیفیت سرعت‌های بالا را تحمل نمی‌کند.</span></li>
+  <li data-lines="10"><b class="what">upload_port (غیرفعال).</b> چون با <code>;</code> شروع شده، اجرا نمی‌شود. PlatformIO معمولا پورت را خودکار پیدا می‌کند.
+    <span class="why">اگر چند برد هم‌زمان وصل داری یا خودکار پیدا نکرد، <code>;</code> را بردار و پورت خودت را بنویس (در لینوکس مثلا <code>/dev/ttyUSB0</code>).</span></li>
+  <li data-lines="12-14"><b class="what">lib_deps: کتابخانه‌ها با نسخه.</b> قالب هر خط: <code>سازنده/اسم @ نسخه</code>. علامت <code>^2.5.7</code> یعنی «نسخه 2.5.7 یا هر نسخه جدیدتر 2.x، ولی نه 3.0». PlatformIO موقع اولین Build این‌ها و وابستگی‌هایشان (مثلا Adafruit GFX) را خودکار دانلود می‌کند. این دو خط فقط مثال‌اند (برای نمایشگر OLED و سنسور DHT22 در درس ۳.۳)؛ برای پروژه سلام لازم نیستند و می‌توانی پاکشان کنی.
+    <span class="why">نسخه اصلی (عدد اول) معمولا وقتی عوض می‌شود که سازنده تغییرات ناسازگار داده. <code>^</code> رفع باگ‌ها را می‌گیرد ولی جلوی شکستن ناگهانی کد را می‌گیرد. خط‌های ادامه باید با فاصله (تورفتگی) شروع شوند.</span></li>
+</ol>
+
+<h3 id="pio-core3">نکته مهم: PlatformIO رسمی و هسته 3.x</h3>
+<p>این قسمت کمی فنی است ولی اگر نخوانی، بعدا گیج می‌شوی. تیم PlatformIO اعلام کرده که پشتیبانی رسمی از هسته Arduino-ESP32 نسخه 3.x را اضافه نمی‌کند. در زمان نوشتن این درس (۲۰۲۶) پلتفرم رسمی <code>platform = espressif32</code> هنوز هسته <b>2.0.17</b> را نصب می‌کند (این را در فایل تعریف پلتفرم رسمی بررسی کردیم). به همین دلیل جامعه کاربران یک نسخه مستقل به اسم <b>pioarduino</b> ساخته که هسته 3.x را می‌آورد و به‌روز نگه داشته می‌شود.</p>
+<ul>
+  <li><b>راه ۱ (پیشنهاد ما):</b> همان خط <code>platform = https://github.com/pioarduino/…/platform-espressif32.zip</code> بالا را در افزونه معمولی PlatformIO بنویس. این آدرس از <a href="https://github.com/pioarduino/platform-espressif32" target="_blank" rel="noopener">README رسمی pioarduino</a> است و همیشه به آخرین نسخه پایدار اشاره می‌کند.</li>
+  <li><b>راه ۲:</b> تیم pioarduino یک افزونه VS Code جداگانه به اسم <b>pioarduino IDE</b> هم دارد که همین کار را پیش‌فرض می‌کند. نصب هم‌زمان هر دو افزونه توصیه نمی‌شود؛ یکی را انتخاب کن.</li>
+</ul>
+<div class="callout warn"><div class="ct">صادقانه: pioarduino رسمی نیست</div>
+<p>pioarduino توسط تیم کوچکی از داوطلبان نگهداری می‌شود، نه خود PlatformIO یا Espressif. تا امروز فعال و پرکاربرد بوده، ولی اگر روزی چیزی عوض شد، صفحه GitHub آن را برای آخرین دستورالعمل ببین. اگر فقط Arduino IDE استفاده می‌کنی، این موضوع هیچ ربطی به تو ندارد.</p></div>
+<p>برای مقایسه، شکل ساده پیش‌فرض این است (هسته 2.x، فقط برای شناختن آن در آموزش‌های دیگر):</p>
+<div class="code" data-lang="ini" data-file="platformio.ini (official, core 2.x)" id="ini2"><pre>
+[env:esp32dev]
+platform = espressif32
+board = esp32dev
+framework = arduino
+</pre></div>
+<ol class="walk" data-for="ini2">
+  <li data-lines="2"><b class="what">پلتفرم رسمی.</b> فقط یک کلمه: <code>espressif32</code>. بقیه خط‌ها مثل قبل.
+    <span class="why">اگر در آموزشی این خط را دیدی و کدش از <code>ledcSetup</code> استفاده می‌کرد، حالا می‌دانی چرا با تنظیمات ما کامپایل نمی‌شود: آن آموزش برای هسته 2.x است.</span></li>
+</ol>
+
+<h3 id="maincpp">main.cpp: یک خط که نباید فراموش شود</h3>
+<p>محتوای <code>src/main.cpp</code> را با این کد عوض کن:</p>
+<div class="code" data-file="src/main.cpp" id="maincpp1"><pre>
+#include &lt;Arduino.h&gt;          // در PlatformIO این خط اجباری است
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  Serial.println("Hello from PlatformIO!");
+}
+
+void loop() {
+  Serial.printf("Uptime: %lu s\n", millis() / 1000);
+  delay(2000);
+}
+</pre></div>
+<ol class="walk" data-for="maincpp1">
+  <li data-lines="1"><b class="what">#include &lt;Arduino.h&gt;.</b> فایل تعریف همه توابع آردوینو (<code>Serial</code>، <code>pinMode</code>، <code>delay</code>، …) را به برنامه اضافه می‌کند.
+    <span class="why">Arduino IDE این خط را پنهانی به فایل <code>.ino</code> اضافه می‌کند، ولی در فایل <code>.cpp</code> باید خودت بنویسی. بدون آن، خطای <code>'Serial' was not declared in this scope</code> می‌گیری.</span></li>
+  <li data-lines="3-7"><b class="what">setup.</b> مثل قبل: شروع سریال، یک ثانیه صبر، یک پیام.
+    <span class="why">سرعت ۱۱۵۲۰۰ با <code>monitor_speed</code> در platformio.ini هماهنگ است. اگر یکی را عوض کنی، دیگری را هم باید عوض کنی.</span></li>
+  <li data-lines="10"><b class="what">Serial.printf.</b> چاپ با قالب: <code>%lu</code> جای یک عدد بزرگ بدون علامت (نوع <code>unsigned long</code> که <code>millis()</code> برمی‌گرداند) می‌نشیند و <code>\n</code> یعنی برو خط بعد.
+    <span class="why">printf یک خط را با یک دستور می‌سازد، به جای چند <code>print</code> پشت هم. این تابع در هسته ESP32 هست ولی در آردوینو Uno نیست.</span></li>
+  <li data-lines="11"><b class="what">delay(2000).</b> دو ثانیه مکث.
+    <span class="why">بدون مکث، هزاران خط در ثانیه چاپ می‌شود و Serial Monitor غیرقابل خواندن می‌شود.</span></li>
+</ol>
+<div class="callout warn"><div class="ct">تفاوت پنهان دوم: ترتیب توابع</div>
+<p>در <code>.ino</code> می‌توانی تابعی را پایین فایل تعریف کنی و بالاتر صدایش بزنی؛ Arduino IDE خودش «اعلان» (Prototype) آن را بالای فایل می‌سازد. در <code>.cpp</code> این جادو نیست. اگر تابعی مثل <code>void blinkTwice();</code> را بعد از <code>loop</code> نوشتی و در <code>loop</code> صدایش زدی، باید یک خط اعلان <code>void blinkTwice();</code> بالای فایل بنویسی، یا کل تابع را بالای <code>loop</code> ببری.</p></div>
+
+<h3>دکمه‌های Build، Upload و Monitor</h3>
+<p>پایین پنجره VS Code (نوار آبی یا بنفش وضعیت) چند آیکون کوچک PlatformIO هست:</p>
+<div class="table-wrap"><table>
+<tr><th>آیکون</th><th>اسم</th><th>معادل در Arduino IDE</th></tr>
+<tr><td>✓</td><td><b>Build</b></td><td>Verify</td></tr>
+<tr><td>→</td><td><b>Upload</b></td><td>Upload</td></tr>
+<tr><td>🔌</td><td><b>Serial Monitor</b></td><td>Serial Monitor (در پنجره Terminal پایین باز می‌شود؛ برای خروج <kbd>Ctrl</kbd>+<kbd>C</kbd>)</td></tr>
+<tr><td>🗑</td><td>Clean</td><td>پاک کردن خروجی‌های کامپایل؛ وقتی رفتار عجیب دیدی</td></tr>
+</table></div>
+<p>Upload را بزن، بعد Monitor را. باید ببینی:</p>
+<div class="serial">Hello from PlatformIO!
+Uptime: 1 s
+Uptime: 3 s
+Uptime: 5 s</div>
+
+<h2 id="compare">مقایسه: Arduino IDE یا PlatformIO؟</h2>
+<div class="table-wrap"><table>
+<tr><th>ویژگی</th><th>Arduino IDE 2</th><th>VS Code + PlatformIO</th></tr>
+<tr><td>سختی شروع</td><td>خیلی ساده</td><td>متوسط</td></tr>
+<tr><td>هسته ESP32 3.x</td><td>رسمی، از Boards Manager</td><td>از طریق pioarduino (غیررسمی ولی فعال)</td></tr>
+<tr><td>مدیریت کتابخانه</td><td>سراسری، بین همه پروژه‌ها مشترک</td><td>جدا برای هر پروژه، با نسخه ثبت‌شده در <code>lib_deps</code></td></tr>
+<tr><td>تکمیل خودکار کد</td><td>دارد (ساده)</td><td>قوی (IntelliSense، پرش به تعریف)</td></tr>
+<tr><td>پروژه چندفایلی</td><td>ممکن ولی محدود (تب‌ها)</td><td>طبیعی (پوشه‌های src، lib، include)</td></tr>
+<tr><td>چند برد در یک پروژه</td><td>باید هر بار از منو عوض کنی</td><td>چند <code>[env]</code> در یک فایل</td></tr>
+<tr><td>سرعت کامپایل دفعه دوم</td><td>خوب</td><td>خوب (فقط فایل‌های تغییرکرده)</td></tr>
+<tr><td>حجم نصب</td><td>کمتر</td><td>بیشتر (VS Code + Python + ابزارها)</td></tr>
+<tr><td>مناسب برای</td><td>یادگیری، آزمایش سریع، این فصل‌ها</td><td>پروژه واقعی، کار تیمی، پروژه نهایی دوره</td></tr>
+</table></div>
+
+<h2 id="video">ویدیوی کمکی</h2>
+<div class="video" data-yt="JmvMvIphMnY" data-title="Getting Started with PlatformIO" data-channel="DroneBot Workshop" data-lang="انگلیسی">
+  <div class="sum"><ul>
+    <li>این ویدیو پیش از آمدن هسته 3.x ساخته شده؛ پس در آن <code>platform = espressif32</code> می‌بینی. برای کدهای این دوره خط platform را طبق <a href="#pio-core3">بخش هسته 3.x</a> بنویس.</li>
+    <li>روی بخش نصب افزونه PlatformIO در VS Code و ساخت پروژه جدید دقت کن؛ ببین در فرم New Project کدام برد و فریم‌ورک انتخاب می‌شود.</li>
+    <li>ببین مدرس چطور کتابخانه اضافه می‌کند و بعد به فایل <code>platformio.ini</code> نگاه کن: خط <code>lib_deps</code> چطور تغییر کرد؟</li>
+    <li>مثال‌های Arduino Uno و XIAO را می‌توانی سریع رد کنی؛ بخش ESP32 برای ما مهم‌تر است.</li>
+  </ul></div>
+</div>
+
+<h2 id="debug">وقتی کار نمی‌کند: عیب‌یابی نصب و آپلود</h2>
+<p>متن دقیق پیام‌ها در نسخه‌های مختلف ابزار ممکن است کمی فرق کند؛ دنبال کلمه‌های کلیدی بگرد.</p>
+<div class="table-wrap"><table>
+<tr><th>علامت یا پیام</th><th>علت محتمل</th><th>راه حل</th></tr>
+<tr><td>منوی Port خاکستری است یا هیچ پورتی ندارد</td><td>کابل فقط شارژی، یا درایور CP2102/CH340 نصب نیست</td><td>اول کابل را عوض کن. بعد <a href="#driver-windows">Device Manager</a> را نگاه کن و درایور را نصب کن.</td></tr>
+<tr><td><code>A fatal error occurred: Failed to connect to ESP32: No serial data received</code> یا <code>Timed out waiting for packet header</code></td><td>برد به حالت دریافت برنامه (Download mode) نرفته</td><td>هنگام <code>Connecting....</code> دکمه BOOT را نگه دار تا درصد نوشتن ظاهر شود. اگر همیشه لازم است، مدار ریست خودکار بردت ضعیف است؛ یک خازن ۱۰ میکروفاراد بین EN و GND معمولا کمک می‌کند (بعدا با آن آشنا می‌شوی).</td></tr>
+<tr><td><code>could not open port 'COM5'</code> … <code>Access is denied</code> یا <code>port is busy</code></td><td>برنامه دیگری پورت را گرفته: Serial Monitor در پنجره دوم Arduino IDE، مانیتور PlatformIO، یا Cura/PuTTY</td><td>همه Serial Monitorهای دیگر را ببند. یک پورت در هر لحظه فقط دست یک برنامه است.</td></tr>
+<tr><td><code>Permission denied: '/dev/ttyUSB0'</code> (لینوکس)</td><td>عضو گروه dialout نیستی</td><td><code>sudo usermod -a -G dialout $USER</code> و بعد Log out/Log in.</td></tr>
+<tr><td>پورت در لینوکس ظاهر و بلافاصله ناپدید می‌شود</td><td>برنامه brltty دستگاه CH340 را تصاحب می‌کند</td><td><code>sudo apt remove brltty</code> (فقط اگر نمایشگر بریل نداری).</td></tr>
+<tr><td>در Serial Monitor: <code>Brownout detector was triggered</code> و برد مدام ریست می‌شود</td><td>ولتاژ تغذیه موقتا افت کرده: کابل نازک و بلند، هاب USB بی‌برق، یا پورت ضعیف لپ‌تاپ؛ مخصوصا هنگام روشن شدن Wi-Fi</td><td>کابل کوتاه‌تر و بهتر، پورت USB پشت کیس (نه جلو یا هاب). اگر قطعه‌ای پرمصرف وصل است، جدا کن و دوباره امتحان کن.</td></tr>
+<tr><td><code>This chip is ESP32, not ESP32-S3. Wrong --chip argument?</code></td><td>برد اشتباه در منوی Board انتخاب شده</td><td>برای ESP32 کلاسیک، <b>ESP32 Dev Module</b> را انتخاب کن. برای S3، گزینه S3 را.</td></tr>
+<tr><td><code>'LED_BUILTIN' was not declared in this scope</code></td><td>برد ESP32 Dev Module این اسم را تعریف نکرده</td><td><code>#define LED_BUILTIN 2</code> یا بهتر <code>const int LED_PIN = 2;</code></td></tr>
+<tr><td><code>ledcSetup was not declared in this scope</code></td><td>کد برای هسته 2.x است و تو 3.x داری (یا برعکس)</td><td>کد را با API نسخه 3.x بازنویسی کن (درس ۳.۲).</td></tr>
+<tr><td>Boards Manager: <code>Error downloading …</code> یا توقف دانلود</td><td>دسترسی کند یا قطع به GitHub</td><td><a href="#iran">نکته‌های ایران</a>: تلاش دوباره، تنظیم Proxy، یا کپی آفلاین.</td></tr>
+<tr><td>Serial Monitor حروف درهم نشان می‌دهد</td><td>سرعت مانیتور با <code>Serial.begin</code> یکی نیست (در PlatformIO: <code>monitor_speed</code> ننوشته‌ای)</td><td>هر دو را ۱۱۵۲۰۰ کن.</td></tr>
+<tr><td>آپلود موفق بود ولی Serial Monitor خالی است</td><td>پیام‌ها قبل از باز شدن مانیتور چاپ شده‌اند</td><td>دکمه EN را بزن تا setup دوباره اجرا شود.</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>وقتی آپلود شکست خورد، سه کار ممنوع است: نصب دوباره Arduino IDE، خریدن برد جدید، و کپی کردن کورکورانه راه‌حل از فروم‌ها. اول <b>پیام خطا را کامل بخوان</b> و تشخیص بده مال کدام مرحله است: کامپایل (کد تو) یا آپلود (کابل، درایور، پورت، BOOT). بعد از ساده به سخت برو: کابل ← پورت ← درایور ← BOOT ← سرعت آپلود. نود درصد مشکلات در دو قدم اول حل می‌شوند. و یک قانون آهنین: هر بار فقط <b>یک چیز</b> را تغییر بده، وگرنه هرگز نمی‌فهمی کدام کار مشکل را حل کرد.</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">برد را وصل کرده‌ای، LED قرمز برق روشن است، ولی در Device Manager هیچ تغییری (نه در Ports و نه در Other devices) دیده نمی‌شود. محتمل‌ترین علت چیست؟</p>
+  <ol><li data-why="اگر درایور نبود، دستگاه ناشناس با مثلث زرد در Other devices ظاهر می‌شد.">درایور CH340 نصب نیست</li><li>کابل فقط شارژی است و سیم داده ندارد</li><li data-why="برد اشتباه در Arduino IDE ربطی به دیده شدن سخت‌افزار در ویندوز ندارد.">برد اشتباه در منوی Tools انتخاب شده</li><li data-why="LED برق روشن است، پس برد برق دارد؛ خرابی ESP32 باعث ندیدن تراشه مبدل USB نمی‌شود.">تراشه ESP32 سوخته است</li></ol>
+  <div class="fb">«هیچ تغییری» یعنی ویندوز اصلا دستگاه USB ندیده. کابل شارژی برق را می‌رساند ولی داده را نه. اگر مشکل فقط درایور بود، دستگاه ناشناس ظاهر می‌شد.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">در Boards Manager برای یک برد ESP32 DevKitC معمولی کدام بسته را نصب می‌کنی؟</p>
+  <ol><li data-why="این بسته فقط برای بردهای ESP32 با برند آردوینو (مثل Nano ESP32) است.">Arduino ESP32 Boards by Arduino</li><li data-why="این بسته برای بردهای کلاسیک آردوینو مثل Uno است.">Arduino AVR Boards</li><li data-why="ESP8266 تراشه دیگری است؛ ESP32 را پشتیبانی نمی‌کند.">esp8266 by ESP8266 Community</li><li>esp32 by Espressif Systems (نسخه 3.x)</li></ol>
+  <div class="fb">بسته رسمی Espressif همه بردهای عمومی ESP32 را پوشش می‌دهد و نسخه 3.x آن با کدهای این دوره هماهنگ است.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">پروژه PlatformIO را آپلود کردی و در مانیتور حروف درهم مثل <code>⸮⸮x⸮⸮</code> می‌بینی. کد <code>Serial.begin(115200)</code> دارد. چه چیزی را فراموش کرده‌ای؟</p>
+  <ol><li>خط <code>monitor_speed = 115200</code> در platformio.ini</li><li data-why="بدون این خط اصلا کامپایل نمی‌شد و چیزی آپلود نمی‌شد.">خط <code>#include &lt;Arduino.h&gt;</code></li><li data-why="upload_speed فقط سرعت آپلود است، نه سرعت مانیتور.">خط <code>upload_speed = 921600</code></li><li data-why="lib_deps مربوط به کتابخانه‌هاست، نه سرعت سریال.">خط <code>lib_deps</code></li></ol>
+  <div class="fb">مانیتور PlatformIO پیش‌فرض ۹۶۰۰ است. وقتی دو طرف با سرعت متفاوت حرف بزنند، حروف درهم می‌شوند.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">کدی را از یک آموزش قدیمی در Arduino IDE (با هسته 3.x) کامپایل کردی و خطای <code>'ledcSetup' was not declared in this scope</code> گرفتی. بهترین کار چیست؟</p>
+  <ol><li data-why="درایور مربوط به آپلود است؛ این خطا در مرحله کامپایل رخ داده.">درایور CP2102 را دوباره نصب کنی</li><li data-why="برگشت به 2.x یعنی بقیه کدهای این دوره کار نمی‌کنند؛ مشکل را پاک می‌کنی نه حل.">هسته را به 2.x برگردانی و ادامه دهی</li><li>بفهمی کد برای هسته 2.x بوده و آن را با <code>ledcAttach</code> و <code>ledcWrite</code> نسخه 3.x بازنویسی کنی</li><li data-why="برد انتخاب‌شده ربطی به وجود نداشتن یک تابع در نسخه جدید ندارد.">برد را روی ESP32-S3 Dev Module بگذاری</li></ol>
+  <div class="fb">خطای «not declared» مال مرحله کامپایل است. <code>ledcSetup</code> در 3.x حذف شده. کد را به API جدید بازنویسی کن.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">در لینوکس دستور <code>sudo usermod -a -G dialout $USER</code> را زدی و بلافاصله آپلود کردی، ولی باز <code>Permission denied</code> گرفتی. چرا؟</p>
+  <ol><li data-why="دستور درست است؛ مشکل در زمان اعمال آن است.">دستور اشتباه است</li><li>عضویت گروه فقط بعد از Log out و Log in دوباره اعمال می‌شود</li><li data-why="اجرای IDE با sudo مشکل را پنهان می‌کند و فایل‌های تنظیمات را خراب می‌کند؛ راه‌حل درست نیست.">باید Arduino IDE را با sudo اجرا کنی</li><li data-why="درایور cp210x و ch341 داخل هسته لینوکس هست.">درایور CP2102 در لینوکس نصب نیست</li></ol>
+  <div class="fb">گروه‌ها هنگام ورود به سیستم خوانده می‌شوند. یک بار خارج و دوباره وارد شو (یا ری‌استارت کن).</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">چرا در <code>src/main.cpp</code> پروژه PlatformIO باید <code>#include &lt;Arduino.h&gt;</code> بنویسی ولی در فایل <code>.ino</code> لازم نیست؟</p>
+  <ol><li data-why="هر دو از همان هسته Arduino-ESP32 استفاده می‌کنند.">چون PlatformIO هسته دیگری دارد</li><li data-why="این خط هیچ ربطی به سرعت کامپایل ندارد.">چون کامپایل را سریع‌تر می‌کند</li><li data-why="در .ino هم این فایل استفاده می‌شود؛ فقط تو آن را نمی‌بینی.">چون فایل .ino از Arduino.h استفاده نمی‌کند</li><li>چون Arduino IDE این خط را پنهانی به فایل .ino اضافه می‌کند ولی در .cpp کسی این کار را نمی‌کند</li></ol>
+  <div class="fb">Arduino IDE قبل از کامپایل فایل .ino را پیش‌پردازش می‌کند: include را اضافه می‌کند و اعلان توابع را می‌سازد. در .cpp استاندارد، این‌ها کار خود توست.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+<div class="exercise"><div class="ct">تمرین ۱: کارآگاه تراشه</div>
+<p>بدون نگاه به برد، فقط با نرم‌افزار بفهم تراشه مبدل USB برد تو CP2102 است یا CH340. روش را برای سیستم‌عامل خودت بنویس. بعد با ذره‌بین روی برد را نگاه کن و جوابت را تأیید کن.</p>
+<details><summary>راهنمایی</summary><p>ویندوز: Device Manager › Properties › Details › Hardware Ids. لینوکس: <code>lsusb</code> یا <code>dmesg</code>. دنبال VID بگرد: <code>10C4</code> یا <code>1A86</code>.</p></details>
+<details><summary>جواب</summary><p>اگر شناسه <code>10C4:EA60</code> بود، CP2102 (Silicon Labs) است؛ اگر <code>1A86:7523</code> بود، CH340؛ اگر <code>1A86:55D4</code>، CH9102. در لینوکس <code>dmesg</code> هم مستقیم اسم درایور (<code>cp210x</code> یا <code>ch341-uart</code>) را می‌گوید.</p></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۲: شناسنامه کامل‌تر</div>
+<p>برنامه <code>hello_esp32</code> را طوری تغییر بده که تعداد هسته‌های پردازنده و آدرس MAC را هم چاپ کند. اول در Arduino IDE اجرا کن، بعد همان کد را به یک پروژه PlatformIO منتقل کن (یادت باشد چه چیزی باید اضافه شود).</p>
+<details><summary>راهنمایی</summary><p>تابع <code>ESP.getChipCores()</code> تعداد هسته را می‌دهد. برای MAC می‌توانی <code>ESP.getEfuseMac()</code> را با <code>Serial.printf("%012llX\n", …)</code> چاپ کنی (<code>llX</code> یعنی عدد ۶۴ بیتی به هگز).</p></details>
+<details><summary>جواب</summary>
+<div class="code" data-file="hello_esp32 (افزودنی)" id="ex2"><pre>
+  Serial.print("Cores: ");
+  Serial.println(ESP.getChipCores());          // برای ESP32 کلاسیک: 2
+  Serial.printf("eFuse MAC: %012llX\n", ESP.getEfuseMac());
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="1-2"><b class="what">تعداد هسته.</b> ESP32 کلاسیک دو هسته دارد (در درس ۱.۱ دیدی).
+    <span class="why">نسخه‌های تک‌هسته هم وجود دارد (مثل ESP32-C3)؛ این خط فوری تفاوت را نشان می‌دهد.</span></li>
+  <li data-lines="3"><b class="what">شناسه یکتا از eFuse.</b> عدد ۴۸ بیتی که کارخانه در تراشه «سوزانده». <code>%012llX</code> یعنی عدد ۶۴ بیتی را ۱۲ رقم هگز با صفرهای پیشرو چاپ کن.
+    <span class="why">ترتیب بایت‌ها در این عدد برعکس ترتیب معمول نمایش MAC است؛ نگران نباش. در درس ۵.۲ (ESP-NOW) روش استاندارد خواندن MAC با کتابخانه WiFi را یاد می‌گیری.</span></li>
+</ol>
+<p>در PlatformIO این خط‌ها را داخل setup در <code>main.cpp</code> بگذار و مطمئن شو <code>#include &lt;Arduino.h&gt;</code> و <code>monitor_speed = 115200</code> را داری.</p></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۳: خطای عمدی (مهم‌ترین تمرین)</div>
+<p>عمدا این سه خرابکاری را یکی‌یکی انجام بده و متن دقیق خطا یا رفتار را در یک دفترچه بنویس: (الف) یک <code>;</code> را از کد پاک کن و Verify بزن. (ب) پورت را روی یک پورت اشتباه یا خالی بگذار و Upload بزن. (ج) سرعت Serial Monitor را روی ۹۶۰۰ بگذار. کنار هر خطا بنویس مال کدام مرحله است: کامپایل، آپلود یا مانیتور.</p>
+<details><summary>راهنمایی</summary><p>برای (الف) دقت کن کامپایلر شماره خط را کجا نشان می‌دهد؛ گاهی خطا در خط <b>بعد</b> از جای واقعی اعلام می‌شود. چرا؟</p></details>
+<details><summary>جواب</summary><p>(الف) کامپایل: پیامی مثل <code>expected ';' before …</code>؛ چون کامپایلر وقتی به خط بعد می‌رسد تازه می‌فهمد <code>;</code> کم است. (ب) آپلود: پیامی درباره باز نشدن پورت یا <code>Failed to connect</code>. (ج) مانیتور: هیچ خطایی نیست، فقط حروف درهم. این دفترچه «فرهنگ لغت خطاهای» شخصی توست؛ نگهش دار.</p></details>
+</div>
+
+<div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
+<p>Arduino IDE 2 را نصب کن، آدرس <code>package_esp32_index.json</code> را در Preferences بگذار و «esp32 by Espressif Systems» نسخه 3.x را نصب کن و ESP32 Dev Module را انتخاب کن. اگر پورتی نیست: اول کابل دیتا، بعد درایور CP2102 یا CH340، و در لینوکس گروه dialout. PlatformIO برای پروژه‌های بزرگ است: <code>platformio.ini</code> با پلتفرم pioarduino (هسته 3.x)، <code>monitor_speed = 115200</code> و <code>#include &lt;Arduino.h&gt;</code> در main.cpp.</p></div>
+
+</article>
+</body>
+</html>

@@ -1,0 +1,711 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wi-Fi: اتصال پایدار و اتصال دوباره خودکار · مستر کلاس ESP32</title>
+<meta name="description" content="شبکه از صفر برای مبتدی: IP، DHCP، SSID و ۲٫۴ گیگاهرتز؛ اسکن Wi-Fi، اتصال با سقف زمان، اتصال دوباره خودکار با رویدادها و millis، جدا کردن رمز از کد، و گرفتن ساعت ایران با NTP روی ESP32 (core 3.x).">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="4-1">
+
+<p class="lede">تا اینجا ESP32 تو یک جزیره تنها بود: فقط با سیم با دنیا حرف می‌زد. از این درس به بعد، برد تو به شبکه خانه وصل می‌شود. ولی «وصل شدن» کار سختی نیست؛ کار سخت این است که <b>وصل بماند</b>: وقتی مودم ریست شد، برق رفت و آمد، یا سیگنال ضعیف شد، برنامه‌ات نباید گیر کند. این درس از «شبکه چیست؟» شروع می‌کند و به یک اتصال حرفه‌ای و خودترمیم می‌رسد.</p>
+
+<div class="goals">
+  <div><h4>🎯 بعد از این درس می‌توانی</h4><ul>
+    <li>بگویی IP، DHCP، SSID، MAC و RSSI چه هستند و چرا مهم‌اند</li>
+    <li>شبکه‌های Wi-Fi اطراف را با ESP32 اسکن کنی</li>
+    <li>با سقف زمان وصل شوی و علت شکست را از روی کد وضعیت بفهمی</li>
+    <li>اتصالی بسازی که بعد از قطعی، خودش و بدون گیر کردن برنامه برگردد</li>
+    <li>رمز Wi-Fi را از کد جدا کنی و ساعت دقیق ایران را از اینترنت بگیری</li>
+  </ul></div>
+  <div><h4>🧰 پیش‌نیاز و وسایل</h4><ul>
+    <li>درس <a href="2-3.html">۲.۳</a> (Blink و Serial Monitor) و درس <a href="3-1.html">۳.۱</a> (<code>millis()</code>)</li>
+    <li>برد ESP32 DevKitC و کابل USB دیتا</li>
+    <li>یک LED و مقاومت ۲۲۰ اهم (برای چراغ وضعیت شبکه)</li>
+    <li>یک مودم یا هات‌اسپات گوشی با باند <b>۲٫۴ گیگاهرتز</b> (یا فقط Wokwi)</li>
+  </ul></div>
+</div>
+
+<h2 id="network">شبکه از صفر: مودم، IP و DHCP</h2>
+<p>قبل از هر کدی باید بدانی وقتی می‌گوییم «ESP32 به Wi-Fi وصل شد» دقیقا چه اتفاقی می‌افتد. نگران نباش؛ فقط چند مفهوم ساده است.</p>
+
+<h3>شبکه یعنی چه؟</h3>
+<p><b>شبکه</b> یعنی چند دستگاه که می‌توانند به هم پیام بفرستند. در خانه تو احتمالا گوشی، لپ‌تاپ و تلویزیون همه در یک شبکه هستند. وسط این شبکه یک جعبه هست که معمولا به آن «مودم» می‌گوییم. در واقع این جعبه دو کار انجام می‌دهد:</p>
+<ul>
+  <li><b>مودم (Modem):</b> خط تلفن، فیبر یا سیم‌کارت را به اینترنت وصل می‌کند. در ارتباط با شرکت اینترنت (ISP) است.</li>
+  <li><b>روتر (Router):</b> شبکه داخل خانه را می‌سازد، به هر دستگاه یک آدرس می‌دهد و پیام‌ها را بین دستگاه‌ها و اینترنت جابه‌جا می‌کند. همان آنتن‌های Wi-Fi روی این بخش است.</li>
+</ul>
+<p>در بیشتر خانه‌های ایران هر دو کار در یک جعبه انجام می‌شود (مثلا مودم ADSL/VDSL یا مودم ۴G). در این دوره هر جا «مودم» یا «روتر» گفتیم، منظور همان جعبه است.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره: یک مجتمع آپارتمانی</div>
+<p>شبکه خانه را مثل یک مجتمع مسکونی تصور کن. روتر، <b>نگهبان ساختمان</b> است. هر واحد (هر دستگاه) یک <b>شماره واحد</b> دارد (آدرس IP داخلی). کل مجتمع برای دنیای بیرون فقط یک <b>آدرس پستی</b> دارد (IP عمومی). وقتی نامه‌ای از بیرون می‌آید، به نگهبان می‌رسد و نگهبان می‌داند مال کدام واحد است. <b>شماره سریال ثابت در</b> هر واحد هم آدرس MAC است: هرگز عوض نمی‌شود، حتی اگر ساکن به واحد دیگری برود.</p></div>
+
+<h3>آدرس IP: شماره واحد هر دستگاه</h3>
+<p>هر دستگاه در شبکه یک <b>آدرس IP</b> دارد: چهار عدد بین ۰ تا ۲۵۵ که با نقطه جدا شده‌اند، مثل <code>192.168.1.37</code>. هر پیامی که در شبکه می‌رود، آدرس فرستنده و گیرنده را با خودش دارد، درست مثل پاکت نامه.</p>
+<div class="table-wrap"><table>
+<tr><th>نوع</th><th>مثال</th><th>کجا معنی دارد</th><th>چه کسی می‌دهد</th></tr>
+<tr><td><b>IP داخلی (Local / Private)</b></td><td><code>192.168.1.37</code> یا <code>10.0.0.5</code></td><td>فقط داخل خانه تو. هزاران خانه دیگر هم دقیقا همین عدد را دارند.</td><td>روتر خانه</td></tr>
+<tr><td><b>IP عمومی (Public)</b></td><td>مثلا <code>5.120.44.9</code></td><td>در کل اینترنت. همه دستگاه‌های خانه با همین یک آدرس به اینترنت می‌روند.</td><td>شرکت اینترنت (ISP)</td></tr>
+<tr><td><b>Gateway (دروازه)</b></td><td><code>192.168.1.1</code></td><td>IP خود روتر در شبکه داخلی: درِ خروج به اینترنت</td><td>تنظیم روتر</td></tr>
+</table></div>
+<p>آدرس‌هایی که با <code>192.168.</code> یا <code>10.</code> یا <code>172.16.</code> تا <code>172.31.</code> شروع می‌شوند همیشه <b>داخلی</b> هستند. این نکته در درس بعد مهم می‌شود: وقتی ESP32 وب سرور بسازد، آدرسش داخلی است و از بیرون خانه مستقیم دیده نمی‌شود.</p>
+
+<h3>DHCP: چه کسی شماره واحد را می‌دهد؟</h3>
+<p>تو هیچ‌وقت به گوشی‌ات نگفتی IP تو <code>192.168.1.23</code> باشد. روتر یک سرویس به اسم <b>DHCP</b> دارد که به هر دستگاه تازه‌وارد به طور خودکار یک IP آزاد «قرض» می‌دهد. این قرض مدت دارد (مثلا ۲۴ ساعت)؛ برای همین ممکن است IP برد تو فردا کمی فرق کند.</p>
+<div class="callout example"><div class="ct">مثال با عدد: چهار قدم DHCP</div>
+<p>ESP32 روشن می‌شود و فریاد می‌زند: «کسی به من IP می‌دهد؟» (Discover). روتر جواب می‌دهد: «<code>192.168.1.37</code> آزاد است» (Offer). ESP32 می‌گوید: «همان را می‌خواهم» (Request). روتر تأیید می‌کند: «مال تو، برای ۸۶۴۰۰ ثانیه» (Ack). همه این‌ها معمولا زیر یک ثانیه طول می‌کشد. در کد ما، لحظه تمام شدن همین مرحله همان رویداد <code>GOT_IP</code> است.</p></div>
+
+<h3>SSID، رمز و MAC</h3>
+<ul>
+  <li><b>SSID</b> اسم شبکه Wi-Fi است؛ همان چیزی که در لیست Wi-Fi گوشی می‌بینی (مثلا <code>Irancell-TD-5G</code> یا <code>Home</code>). به بزرگی و کوچکی حروف حساس است: <code>Home</code> و <code>home</code> دو شبکه متفاوت‌اند.</li>
+  <li><b>رمز (Password)</b> در شبکه‌های WPA2 باید بین ۸ تا ۶۳ حرف باشد. ESP32 هم دقیقا حرف به حرف مقایسه می‌کند.</li>
+  <li><b>آدرس MAC</b> یک شناسه ۶ بایتی است که در کارخانه روی چیپ نوشته شده، مثل <code>24:0A:C4:12:34:56</code>. روتر با آن دستگاه‌ها را از هم تشخیص می‌دهد. بعضی روترها فقط به MACهای «مجاز» اجازه ورود می‌دهند (MAC Filtering).</li>
+</ul>
+
+<h3>۲٫۴ گیگاهرتز: مهم‌ترین دام مبتدی‌ها</h3>
+<p>Wi-Fi روی دو «باند» فرکانسی کار می‌کند: <b>۲٫۴ گیگاهرتز</b> (برد بیشتر، سرعت کمتر، از دیوار بهتر رد می‌شود) و <b>۵ گیگاهرتز</b> (سرعت بیشتر، برد کمتر). <b>ESP32 فقط ۲٫۴ گیگاهرتز را پشتیبانی می‌کند</b> (استاندارد 802.11 b/g/n). یعنی شبکه ۵ گیگاهرتزی را اصلا نمی‌بیند؛ نه این که ببیند و وصل نشود.</p>
+<div class="callout warn"><div class="ct">دقت کن: شبکه ۵ گیگاهرتزی در اسکن ESP32 ظاهر نمی‌شود</div>
+<p>بسیاری از مودم‌های جدید دو شبکه می‌سازند، مثلا <code>Home</code> و <code>Home_5G</code>. ESP32 را همیشه به همان که ۵G ندارد وصل کن. اگر مودم تو هر دو باند را با <b>یک اسم</b> پخش می‌کند (Band Steering)، معمولا مشکلی نیست و ESP32 به بخش ۲٫۴ وصل می‌شود؛ ولی اگر باند ۲٫۴ در تنظیمات مودم خاموش باشد، ESP32 هرگز وصل نمی‌شود. هات‌اسپات آیفون هم گاهی روی ۵ گیگاهرتز می‌رود؛ گزینه <b>Maximize Compatibility</b> را روشن کن. (استثنای نادر: تراشه جدید ESP32-C5 دوباندی است، ولی برد این دوره ESP32 معمولی است.)</p></div>
+
+<h3>RSSI: قدرت سیگنال به زبان عدد</h3>
+<p>RSSI قدرت سیگنال دریافتی است و واحدش <b>dBm</b> است. عددها <b>منفی</b> هستند و <b>هر چه به صفر نزدیک‌تر، قوی‌تر</b>. یعنی ‎−45 از ‎−80 خیلی بهتر است. هر ۳ dB یعنی نصف یا دو برابر شدن توان؛ پس فرق ‎−60 با ‎−70 خیلی بیشتر از «کمی» است: توان حدود ۱۰ برابر کمتر شده.</p>
+<div class="table-wrap"><table>
+<tr><th>RSSI</th><th>کیفیت</th><th>در عمل</th></tr>
+<tr><td><code>-30</code> تا <code>-50</code></td><td>عالی</td><td>برد کنار مودم است. هیچ مشکلی ندارد.</td></tr>
+<tr><td><code>-50</code> تا <code>-60</code></td><td>خوب</td><td>برای هر پروژه‌ای کافی است.</td></tr>
+<tr><td><code>-60</code> تا <code>-70</code></td><td>متوسط</td><td>کار می‌کند؛ گاهی کند یا با تأخیر.</td></tr>
+<tr><td><code>-70</code> تا <code>-80</code></td><td>ضعیف</td><td>قطع و وصل‌های گاه‌به‌گاه. برد را جابه‌جا کن.</td></tr>
+<tr><td>کمتر از <code>-80</code></td><td>تقریبا غیرقابل استفاده</td><td>اتصال مدام قطع می‌شود یا اصلا برقرار نمی‌شود.</td></tr>
+</table></div>
+
+<h2 id="modes">سه نقش ESP32 در Wi-Fi: STA، AP و AP+STA</h2>
+<p>ESP32 می‌تواند در Wi-Fi سه نقش بازی کند:</p>
+<ul>
+  <li><b>Station یا STA (ایستگاه):</b> مثل گوشی تو به مودم خانه وصل می‌شود. از مودم IP می‌گیرد و به اینترنت دسترسی دارد. <b>۹۰٪ پروژه‌ها این حالت‌اند.</b></li>
+  <li><b>Access Point یا AP (نقطه دسترسی):</b> خود ESP32 یک شبکه Wi-Fi می‌سازد. گوشی تو مستقیم به ESP32 وصل می‌شود. اینترنت ندارد، ولی برای جاهایی که مودم نیست (باغ، کارگاه) یا برای صفحه تنظیمات اولیه عالی است. IP پیش‌فرض خود ESP32 در این حالت <code>192.168.4.1</code> است.</li>
+  <li><b>AP+STA:</b> هر دو با هم. به مودم وصل است و هم‌زمان شبکه خودش را هم دارد. کتابخانه WiFiManager (پایین‌تر) از همین استفاده می‌کند.</li>
+</ul>
+<pre class="mermaid">flowchart TB
+  subgraph S1["۱) حالت STA: ایستگاه"]
+    direction LR
+    I1(("اینترنت")) --- R1["مودم خانه&lt;br/&gt;192.168.1.1"]
+    R1 --- E1["ESP32&lt;br/&gt;192.168.1.37"]
+    R1 --- P1["گوشی&lt;br/&gt;192.168.1.23"]
+  end
+  subgraph S2["۲) حالت AP: نقطه دسترسی"]
+    direction LR
+    E2["ESP32&lt;br/&gt;192.168.4.1"] --- P2["گوشی&lt;br/&gt;192.168.4.2"]
+  end
+  subgraph S3["۳) حالت AP+STA"]
+    direction LR
+    R3["مودم خانه"] --- E3["ESP32&lt;br/&gt;هر دو نقش"] --- P3["گوشی"]
+  end
+  S1 ~~~ S2 ~~~ S3</pre>
+<div class="callout why"><div class="ct">چرا بیشتر وقت‌ها STA؟</div>
+<p>در حالت STA، ESP32 به اینترنت دسترسی دارد (ساعت، MQTT، ابر) و همه دستگاه‌های خانه می‌توانند آن را پیدا کنند. در حالت AP، هر کس بخواهد با برد حرف بزند باید از Wi-Fi خودش جدا شود و به ESP32 وصل شود؛ یعنی گوشی‌اش اینترنت ندارد. برای همین AP بیشتر برای «راه‌اندازی اولیه» و جاهای بدون مودم است.</p></div>
+
+<p>این برنامه کوتاه ESP32 را در حالت AP می‌برد تا ببینی چقدر ساده است:</p>
+<div class="code" data-file="SoftAP.ino" id="codeAP"><pre>
+#include &lt;WiFi.h&gt;
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.mode(WIFI_AP);                              // فقط Access Point
+  bool ok = WiFi.softAP("ESP32-Setup", "12345678"); // اسم و رمز (حداقل ۸ حرف)
+  Serial.println(ok ? "AP started" : "AP failed");
+  Serial.print("AP IP: ");
+  Serial.println(WiFi.softAPIP());                 // معمولا 192.168.4.1
+}
+
+void loop() {
+  Serial.printf("Clients connected: %d\n", WiFi.softAPgetStationNum());
+  delay(3000);
+}
+</pre></div>
+<ol class="walk" data-for="codeAP">
+  <li data-lines="1"><b class="what">کتابخانه WiFi.</b> <code>WiFi.h</code> همراه پکیج ESP32 نصب شده؛ لازم نیست از Library Manager چیزی نصب کنی.
+    <span class="why">همه کارهای Wi-Fi (STA، AP، اسکن، رویدادها) از همین یک کتابخانه و از شیء آماده‌ای به اسم <code>WiFi</code> انجام می‌شود.</span></li>
+  <li data-lines="5"><b class="what">WiFi.mode(WIFI_AP).</b> نقش برد را «فقط نقطه دسترسی» می‌کند. گزینه‌های دیگر <code>WIFI_STA</code> و <code>WIFI_AP_STA</code> هستند.
+    <span class="why">صریح گفتن نقش، رفتار را قابل پیش‌بینی می‌کند. ESP32 تنظیمات قبلی Wi-Fi را در حافظه نگه می‌دارد؛ اگر نقش را نگویی، ممکن است با نقشی که از برنامه قبلی مانده شروع کند.</span></li>
+  <li data-lines="6-7"><b class="what">WiFi.softAP(اسم، رمز).</b> شبکه‌ای به اسم <code>ESP32-Setup</code> با رمز <code>12345678</code> می‌سازد و اگر موفق شود <code>true</code> برمی‌گرداند.
+    <span class="why">رمز WPA2 باید حداقل ۸ حرف باشد. اگر کوتاه‌تر بدهی، softAP شکست می‌خورد. همیشه نتیجه را چاپ کن تا اگر شکست خورد، بدانی.</span></li>
+  <li data-lines="8-9"><b class="what">WiFi.softAPIP().</b> آدرس خود ESP32 در شبکه‌ای که ساخته، معمولا <code>192.168.4.1</code>.
+    <span class="why">در این حالت ESP32 خودش نقش روتر را دارد و DHCP هم اجرا می‌کند؛ گوشی تو IPهایی مثل <code>192.168.4.2</code> می‌گیرد.</span></li>
+  <li data-lines="12-15"><b class="what">شمارش مهمان‌ها.</b> <code>softAPgetStationNum()</code> تعداد دستگاه‌های وصل را می‌دهد. با گوشی به <code>ESP32-Setup</code> وصل شو و ببین عدد زیاد می‌شود.
+    <span class="why">یک آزمایش ساده که ثابت می‌کند شبکه واقعا کار می‌کند. پیش‌فرض ESP32 حداکثر ۴ مهمان هم‌زمان است.</span></li>
+</ol>
+<p>از این به بعد در این درس فقط حالت STA را کار می‌کنیم.</p>
+
+<h2 id="scan">قدم اول: ببین ESP32 چه شبکه‌هایی می‌بیند (اسکنر Wi-Fi)</h2>
+<p>قبل از وصل شدن، بهتر است مطمئن شوی ESP32 اصلا شبکه تو را <b>می‌بیند</b>. این برنامه هر ۱۰ ثانیه شبکه‌های اطراف را فهرست می‌کند. مثل وقتی که لیست Wi-Fi گوشی را باز می‌کنی.</p>
+<div class="code" data-file="WiFiScan.ino" id="codeScan"><pre>
+#include &lt;WiFi.h&gt;                 // کتابخانه داخلی Wi-Fi (نصب لازم ندارد)
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.mode(WIFI_STA);            // حالت ایستگاه (مثل گوشی)
+  WiFi.disconnect();              // اگر از قبل به جایی وصل بود، قطع کن
+  delay(100);
+  Serial.print("My MAC address: ");
+  Serial.println(WiFi.macAddress());
+}
+
+void loop() {
+  Serial.println("Scanning...");
+  int n = WiFi.scanNetworks();    // حدود ۲ تا ۴ ثانیه طول می‌کشد
+
+  if (n &lt;= 0) {
+    Serial.println("No networks found");
+  } else {
+    Serial.printf("%d networks found:\n", n);
+    for (int i = 0; i &lt; n; i++) {
+      Serial.printf("%2d | %-24s | %4d dBm | ch %2d | %s\n",
+                    i + 1,
+                    WiFi.SSID(i).c_str(),
+                    WiFi.RSSI(i),
+                    WiFi.channel(i),
+                    WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "open" : "locked");
+    }
+  }
+  WiFi.scanDelete();              // حافظه نتیجه اسکن را آزاد کن
+  Serial.println();
+  delay(10000);                   // ۱۰ ثانیه بعد دوباره اسکن
+}
+</pre></div>
+<ol class="walk" data-for="codeScan">
+  <li data-lines="5-7"><b class="what">حالت STA و قطع اتصال قبلی.</b> برای اسکن باید برد در حالت ایستگاه باشد. <code>WiFi.disconnect()</code> اتصال احتمالی قبلی را قطع می‌کند و <code>delay(100)</code> فرصت کوتاهی برای آماده شدن رادیو می‌دهد.
+    <span class="why">اگر برد وسط تلاش برای وصل شدن باشد، اسکن ممکن است شکست بخورد یا نتیجه ناقص بدهد. «اول آرام، بعد اسکن».</span></li>
+  <li data-lines="8-9"><b class="what">چاپ آدرس MAC.</b> <code>WiFi.macAddress()</code> آدرس MAC برد را به صورت متن برمی‌گرداند.
+    <span class="why">اگر روتر تو MAC Filtering دارد، باید همین عدد را در تنظیمات روتر اضافه کنی. بهتر است همین اول کار آن را یادداشت کنی.</span></li>
+  <li data-lines="14"><b class="what">WiFi.scanNetworks().</b> رادیو را روی همه کانال‌های ۲٫۴ گیگاهرتز می‌چرخاند و تعداد شبکه‌های پیدا شده را برمی‌گرداند. در این مدت (حدود ۲ تا ۴ ثانیه) برنامه منتظر می‌ماند.
+    <span class="why">برای یک ابزار عیب‌یابی، منتظر ماندن اشکالی ندارد. اگر عدد منفی برگردد (−۱ یعنی هنوز در حال اسکن، −۲ یعنی شکست) آن را «چیزی پیدا نشد» حساب می‌کنیم؛ برای همین شرط <code>n &lt;= 0</code> است، نه <code>n == 0</code>.</span></li>
+  <li data-lines="20-26"><b class="what">چاپ هر شبکه در یک خط.</b> <code>Serial.printf</code> مثل <code>print</code> است ولی با الگو: <code>%d</code> جای عدد صحیح، <code>%s</code> جای متن، <code>%-24s</code> یعنی متن را در ۲۴ خانه چپ‌چین کن. برای هر شبکه اسم (<code>SSID(i)</code>)، قدرت سیگنال (<code>RSSI(i)</code>)، کانال و قفل بودن را چاپ می‌کنیم.
+    <span class="why">جدول مرتب خیلی راحت‌تر از خط‌های درهم خوانده می‌شود. <code>.c_str()</code> لازم است چون <code>%s</code> متن سبک C می‌خواهد نه شیء <code>String</code>. عبارت <code>شرط ? الف : ب</code> یک if کوتاه است: اگر شبکه باز بود «open» وگرنه «locked».</span></li>
+  <li data-lines="29"><b class="what">WiFi.scanDelete().</b> حافظه‌ای را که نتیجه اسکن گرفته بود آزاد می‌کند.
+    <span class="why">اگر در یک حلقه بی‌پایان اسکن کنی و حافظه را آزاد نکنی، به مرور حافظه پر می‌شود. عادت خوب: هر چه گرفتی، پس بده.</span></li>
+</ol>
+<p>خروجی روی برد واقعی چیزی شبیه این است (در Wokwi فقط <code>Wokwi-GUEST</code> را می‌بینی):</p>
+<div class="serial">My MAC address: 24:0A:C4:12:34:56
+Scanning...
+4 networks found:
+ 1 | Home                     |  -48 dBm | ch  6 | locked
+ 2 | Neighbor-WiFi            |  -71 dBm | ch 11 | locked
+ 3 | MobinNet-2G              |  -79 dBm | ch  1 | locked
+ 4 | Cafe-Free                |  -86 dBm | ch  6 | open</div>
+<div class="callout tip"><div class="ct">اولین آزمایش عیب‌یابی</div>
+<p>اگر شبکه خانه‌ات در این فهرست نیست، هیچ کدی آن را وصل نمی‌کند. علت تقریبا همیشه یکی از این‌هاست: شبکه ۵ گیگاهرتز است، SSID مخفی (Hidden) است، یا برد خیلی دور است. اول این را حل کن.</p></div>
+
+<h2 id="connect">قدم دوم: وصل شدن با سقف زمان</h2>
+<p>ساده‌ترین کد اتصال که در اینترنت می‌بینی این است: <code>while (WiFi.status() != WL_CONNECTED) delay(500);</code>. مشکلش؟ اگر رمز اشتباه باشد، برد <b>تا ابد</b> در این حلقه می‌ماند و هیچ پیامی هم نمی‌دهد. ما نسخه بهتری می‌نویسیم که حداکثر ۱۵ ثانیه صبر کند و علت شکست را بگوید.</p>
+<div class="code" data-file="WiFiConnect.ino" id="codeConnect"><pre>
+#include &lt;WiFi.h&gt;
+
+const char* WIFI_SSID = "Wokwi-GUEST";    // نام شبکه خودت را اینجا بنویس
+const char* WIFI_PASS = "";               // رمز شبکه (برای Wokwi خالی)
+const unsigned long TIMEOUT_MS = 15000;   // حداکثر ۱۵ ثانیه صبر
+
+// عدد وضعیت را به یک اسم قابل فهم تبدیل می‌کند
+const char* statusName(wl_status_t s) {
+  switch (s) {
+    case WL_IDLE_STATUS:     return "IDLE (0)";
+    case WL_NO_SSID_AVAIL:   return "NO_SSID_AVAIL (1)";
+    case WL_CONNECTED:       return "CONNECTED (3)";
+    case WL_CONNECT_FAILED:  return "CONNECT_FAILED (4)";
+    case WL_CONNECTION_LOST: return "CONNECTION_LOST (5)";
+    case WL_DISCONNECTED:    return "DISCONNECTED (6)";
+    default:                 return "OTHER";
+  }
+}
+
+bool connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.printf("Connecting to %s", WIFI_SSID);
+
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    if (millis() - start &gt; TIMEOUT_MS) {            // سقف زمان
+      Serial.printf("\nFailed! status = %s\n", statusName(WiFi.status()));
+      return false;
+    }
+    Serial.print(".");
+    delay(500);
+  }
+  Serial.println("\nConnected!");
+  return true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  if (connectWiFi()) {
+    Serial.print("IP address : "); Serial.println(WiFi.localIP());
+    Serial.print("Gateway    : "); Serial.println(WiFi.gatewayIP());
+    Serial.print("MAC address: "); Serial.println(WiFi.macAddress());
+    Serial.printf("RSSI       : %d dBm\n", WiFi.RSSI());
+  } else {
+    Serial.println("Check SSID, password, and that the network is 2.4 GHz");
+  }
+}
+
+void loop() {
+  static unsigned long last = 0;
+  if (millis() - last &gt;= 5000) {                    // هر ۵ ثانیه
+    last = millis();
+    Serial.printf("status=%s  RSSI=%d dBm\n", statusName(WiFi.status()), WiFi.RSSI());
+  }
+}
+</pre></div>
+<ol class="walk" data-for="codeConnect">
+  <li data-lines="3-5"><b class="what">اسم شبکه، رمز و سقف زمان.</b> <code>const char*</code> یعنی «یک متن ثابت». برای Wokwi اسم <code>Wokwi-GUEST</code> و رمز خالی است؛ روی برد واقعی اسم و رمز شبکه خودت را بنویس. <code>unsigned long</code> نوع مناسب برای میلی‌ثانیه است.
+    <span class="why">گذاشتن این‌ها بالای برنامه یعنی برای تغییر شبکه لازم نیست در کد بگردی. (کمی بعد یاد می‌گیری چرا بهتر است رمز اصلا در این فایل نباشد.)</span></li>
+  <li data-lines="7-18"><b class="what">تبدیل کد وضعیت به اسم.</b> <code>WiFi.status()</code> یک عدد برمی‌گرداند. این تابع با <code>switch</code> آن عدد را به یک اسم قابل فهم تبدیل می‌کند.
+    <span class="why">«status = 1» چیزی به تو نمی‌گوید؛ «NO_SSID_AVAIL» یعنی «شبکه‌ای با این اسم پیدا نشد». لاگ خوانا یعنی عیب‌یابی سریع.</span></li>
+  <li data-lines="21-23"><b class="what">شروع اتصال.</b> <code>WiFi.mode(WIFI_STA)</code> نقش ایستگاه را انتخاب می‌کند و <code>WiFi.begin(اسم، رمز)</code> تلاش برای اتصال را <b>شروع</b> می‌کند و فورا برمی‌گردد.
+    <span class="why">نکته کلیدی: <code>begin</code> منتظر نمی‌ماند تا اتصال تمام شود. اتصال در پس‌زمینه ادامه دارد و ما باید وضعیت را بپرسیم. همین ویژگی است که بعدا اجازه می‌دهد برنامه‌ای بنویسیم که هیچ‌وقت گیر نکند.</span></li>
+  <li data-lines="25-33"><b class="what">حلقه انتظار با سقف.</b> زمان شروع را در <code>start</code> نگه می‌داریم. تا وقتی وصل نشده‌ایم، هر ۵۰۰ میلی‌ثانیه یک نقطه چاپ می‌کنیم؛ ولی اگر <code>millis() - start</code> از ۱۵۰۰۰ بیشتر شد، با پیام خطا و مقدار <code>false</code> بیرون می‌آییم.
+    <span class="why">این همان الگوی <code>millis()</code> درس ۳.۱ است. نقطه‌ها نشان می‌دهند برنامه زنده است. سقف زمان تضمین می‌کند برد هرگز بی‌صدا گیر نکند. ۱۵ ثانیه کافی است: اتصال عادی معمولا ۲ تا ۵ ثانیه طول می‌کشد.</span></li>
+  <li data-lines="40-47"><b class="what">چاپ اطلاعات شبکه.</b> اگر وصل شد: IP خود برد (<code>localIP</code>)، IP روتر (<code>gatewayIP</code>)، MAC و قدرت سیگنال (<code>RSSI</code>). اگر نشد، یک راهنمای کوتاه چاپ می‌کنیم.
+    <span class="why">IP را در درس بعد لازم داری تا از مرورگر به برد وصل شوی. RSSI اولین عددی است که وقتی اتصال ناپایدار است باید نگاهش کنی.</span></li>
+  <li data-lines="50-56"><b class="what">loop غیرمسدود.</b> هر ۵ ثانیه وضعیت و RSSI را چاپ می‌کند. کلمه <code>static</code> یعنی متغیر <code>last</code> فقط یک بار صفر می‌شود و بین دورهای loop مقدارش حفظ می‌شود.
+    <span class="why">با این لاگ می‌توانی برد را در خانه جابه‌جا کنی و ببینی سیگنال کجا ضعیف می‌شود؛ یک «سیگنال‌سنج» مجانی.</span></li>
+</ol>
+<div class="serial">Connecting to Home.....
+Connected!
+IP address : 192.168.1.37
+Gateway    : 192.168.1.1
+MAC address: 24:0A:C4:12:34:56
+RSSI       : -52 dBm
+status=CONNECTED (3)  RSSI=-53 dBm</div>
+
+<h3>جدول کدهای WiFi.status()</h3>
+<div class="table-wrap"><table>
+<tr><th>عدد</th><th>اسم</th><th>معنی به زبان ساده</th></tr>
+<tr><td>0</td><td><code>WL_IDLE_STATUS</code></td><td>در حال تلاش است؛ هنوز نتیجه‌ای ندارد.</td></tr>
+<tr><td>1</td><td><code>WL_NO_SSID_AVAIL</code></td><td>شبکه‌ای با این اسم پیدا نشد (اسم اشتباه، ۵ گیگاهرتز، یا خیلی دور).</td></tr>
+<tr><td>2</td><td><code>WL_SCAN_COMPLETED</code></td><td>اسکن تمام شد (مربوط به اسکن است، نه اتصال).</td></tr>
+<tr><td>3</td><td><code>WL_CONNECTED</code></td><td>وصل است و IP گرفته. 🎉</td></tr>
+<tr><td>4</td><td><code>WL_CONNECT_FAILED</code></td><td>اتصال شکست خورد (اغلب رمز اشتباه).</td></tr>
+<tr><td>5</td><td><code>WL_CONNECTION_LOST</code></td><td>وصل بود ولی ارتباط از دست رفت.</td></tr>
+<tr><td>6</td><td><code>WL_DISCONNECTED</code></td><td>وصل نیست (حالت عمومی قطع؛ گاهی با رمز اشتباه هم همین را می‌بینی).</td></tr>
+<tr><td>254</td><td><code>WL_STOPPED</code></td><td>رادیوی Wi-Fi خاموش است (core 3.x).</td></tr>
+<tr><td>255</td><td><code>WL_NO_SHIELD</code></td><td>Wi-Fi هنوز راه‌اندازی نشده؛ مثلا <code>WiFi.mode</code> صدا زده نشده.</td></tr>
+</table></div>
+<div class="callout warn"><div class="ct">کد وضعیت همیشه دقیق نیست</div>
+<p>با رمز اشتباه، گاهی <code>WL_CONNECT_FAILED</code> و گاهی فقط <code>WL_DISCONNECTED</code> می‌بینی. کد وضعیت خلاصه است. برای علت دقیق، در <a href="#robust">بخش اتصال پایدار</a> «کد دلیل قطع» (reason) را از رویدادها می‌خوانیم که خیلی گویاتر است.</p></div>
+
+<div class="wokwi" data-board="esp32" data-code-from="codeConnect">
+<p>در Wokwi یک پروژه ESP32 خالی باز کن، کد بالا را بچسبان و ▶ را بزن. Wokwi یک Wi-Fi مجازی به اسم <b><code>Wokwi-GUEST</code></b> بدون رمز دارد که به اینترنت واقعی وصل است. برد در Wokwi معمولا IP <code>10.10.0.2</code> می‌گیرد. نکته سرعت: اگر به جای <code>WiFi.begin(WIFI_SSID, WIFI_PASS)</code> بنویسی <code>WiFi.begin(WIFI_SSID, WIFI_PASS, 6)</code>، چون Wokwi-GUEST روی کانال ۶ است، مرحله اسکن حذف می‌شود و حدود ۴ ثانیه زودتر وصل می‌شوی. این برنامه قطعه بیرونی ندارد، پس diagram.json فقط خود برد است.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="secrets">رمز Wi-Fi را از کد بیرون بکش (الگوی secrets.h)</h2>
+<p>تا الان رمز را مستقیم در کد نوشتیم. حالا تصور کن کد را در GitHub می‌گذاری یا برای دوستت در تلگرام می‌فرستی تا کمکت کند: رمز Wi-Fi خانه‌ات هم با آن رفته است! راه حل حرفه‌ای این است که رمزها در یک فایل جدا باشند که هیچ‌وقت منتشر نمی‌شود.</p>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>دستور پخت یک کیک را می‌توانی به همه بدهی، ولی کلید خانه‌ات را لای کتاب آشپزی نمی‌گذاری. کد برنامه همان دستور پخت است و <code>secrets.h</code> همان کلید که جدا در جیبت نگه می‌داری.</p></div>
+<ol class="steps">
+  <li><b>فایل جدید بساز.</b> در Arduino IDE روی فلش کوچک ⋯ کنار اسم تب‌ها (بالا سمت راست ویرایشگر) بزن و <b>New Tab</b> را انتخاب کن. اسمش را دقیقا <code>secrets.h</code> بگذار. این فایل کنار فایل <code>.ino</code> در همان پوشه ذخیره می‌شود.</li>
+  <li><b>رمزها را در آن بنویس:</b></li>
+</ol>
+<div class="code" data-file="secrets.h" id="codeSecrets"><pre>
+#pragma once
+// رمزها فقط اینجا. این فایل را هرگز در GitHub یا گروه تلگرام نگذار.
+#define WIFI_SSID "MyHomeWiFi"
+#define WIFI_PASS "my-strong-password"
+</pre></div>
+<ol class="walk" data-for="codeSecrets">
+  <li data-lines="1"><b class="what">#pragma once.</b> به کامپایلر می‌گوید این فایل را حتی اگر چند بار include شد، فقط یک بار بخوان.
+    <span class="why">بدون آن، اگر دو فایل مختلف <code>secrets.h</code> را include کنند، خطای «تعریف تکراری» می‌گیری.</span></li>
+  <li data-lines="3-4"><b class="what">#define.</b> یک «جایگزین متنی» می‌سازد: هر جا کامپایلر <code>WIFI_SSID</code> دید، آن را با <code>"MyHomeWiFi"</code> عوض می‌کند.
+    <span class="why">ساده‌ترین روش برای ثابت‌هایی که فقط یک بار تعریف می‌شوند. اگر رمزت علامت <code>"</code> یا <code>\</code> دارد، باید قبلش یک <code>\</code> بگذاری: مثلا رمز <code>ab"c</code> را <code>"ab\"c"</code> بنویس.</span></li>
+</ol>
+<ol class="steps" start="3">
+  <li><b>در برنامه اصلی</b> بنویس <code>#include "secrets.h"</code> (با گیومه، نه <code>&lt;&gt;</code>؛ گیومه یعنی «در پوشه خود پروژه دنبالش بگرد»).</li>
+  <li><b>اگر از Git استفاده می‌کنی،</b> یک فایل <code>.gitignore</code> در پوشه پروژه بساز و این خط را در آن بنویس تا Git هیچ‌وقت <code>secrets.h</code> را برندارد:</li>
+</ol>
+<div class="code" data-file=".gitignore" data-lang="text" id="codeIgnore"><pre>
+secrets.h
+</pre></div>
+<ol class="walk" data-for="codeIgnore">
+  <li data-lines="1"><b class="what">اسم فایلی که نباید منتشر شود.</b> Git هر فایلی را که اسمش در <code>.gitignore</code> است نادیده می‌گیرد.
+    <span class="why">برای این که دیگران بدانند چه فایلی بسازند، معمولا یک نسخه نمونه با اسم <code>secrets_example.h</code> و مقادیر ساختگی منتشر می‌کنند (پایین).</span></li>
+</ol>
+<div class="code" data-file="secrets_example.h" id="codeSecEx"><pre>
+#pragma once
+// این نسخه نمونه است و در GitHub می‌رود؛ مقادیر واقعی در secrets.h
+#define WIFI_SSID "YOUR_WIFI_NAME"
+#define WIFI_PASS "YOUR_WIFI_PASSWORD"
+</pre></div>
+<ol class="walk" data-for="codeSecEx">
+  <li data-lines="3-4"><b class="what">مقادیر ساختگی.</b> هر کس پروژه را دانلود کند، این فایل را کپی می‌کند، اسمش را <code>secrets.h</code> می‌گذارد و رمز خودش را می‌نویسد.
+    <span class="why">پروژه برای همه قابل ساخت می‌ماند و رمز هیچ‌کس لو نمی‌رود.</span></li>
+</ol>
+<div class="callout warn"><div class="ct">رمز روی خود برد مخفی نیست</div>
+<p><code>secrets.h</code> فقط جلوی لو رفتن رمز از طریق <b>کد منبع</b> را می‌گیرد. رمز هنوز داخل برنامه کامپایل‌شده روی فلش برد است و کسی که برد را در دست داشته باشد می‌تواند آن را بخواند (مگر با Flash Encryption که موضوع پیشرفته‌ای است). پس برد را در جای عمومی رها نکن.</p></div>
+
+<h3>WiFiManager: تنظیم Wi-Fi از روی گوشی (معرفی کوتاه)</h3>
+<p>اگر دستگاهی بسازی و به کس دیگری بدهی، او نمی‌تواند رمز Wi-Fi خانه‌اش را در کد بنویسد و دوباره آپلود کند. کتابخانه <a href="https://github.com/tzapu/WiFiManager" target="_blank" rel="noopener">WiFiManager</a> (از Library Manager با اسم WiFiManager نوشته tzapu نصب می‌شود) این مشکل را حل می‌کند: اگر برد نتواند وصل شود، در حالت AP یک شبکه باز می‌کند؛ کاربر با گوشی به آن وصل می‌شود، یک صفحه تنظیمات خودکار باز می‌شود (Captive Portal، مثل Wi-Fi هتل‌ها)، شبکه و رمز را انتخاب می‌کند و برد آن‌ها را در حافظه خودش ذخیره می‌کند.</p>
+<div class="code" data-file="WiFiManager_Basic.ino" id="codeWM"><pre>
+#include &lt;WiFiManager.h&gt;              // کتابخانه tzapu/WiFiManager
+
+void setup() {
+  Serial.begin(115200);
+  WiFiManager wm;
+  wm.setConfigPortalTimeout(180);     // حداکثر ۳ دقیقه منتظر تنظیم بمان
+  // اگر رمز ذخیره‌شده کار کند، مستقیم وصل می‌شود؛
+  // وگرنه یک Wi-Fi به اسم ESP32-Setup می‌سازد و منتظر تنظیم از گوشی می‌ماند
+  bool ok = wm.autoConnect("ESP32-Setup", "setup1234");
+  Serial.println(ok ? "Connected!" : "Config portal timed out");
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="codeWM">
+  <li data-lines="1,5"><b class="what">کتابخانه و شیء مدیر.</b> <code>WiFiManager wm;</code> یک مدیر Wi-Fi می‌سازد.
+    <span class="why">همه کار پیچیده (AP، صفحه وب، ذخیره رمز) داخل این کتابخانه است؛ تو فقط چند خط می‌نویسی.</span></li>
+  <li data-lines="6"><b class="what">سقف زمان پورتال.</b> اگر در ۱۸۰ ثانیه کسی تنظیم نکرد، <code>autoConnect</code> با <code>false</code> برمی‌گردد.
+    <span class="why">بدون این خط، برد تا ابد منتظر تنظیم می‌ماند؛ همان «گیر کردن» که در این درس با آن می‌جنگیم.</span></li>
+  <li data-lines="7-10"><b class="what">autoConnect.</b> اول با رمز ذخیره‌شده امتحان می‌کند؛ اگر نشد شبکه <code>ESP32-Setup</code> با رمز <code>setup1234</code> را می‌سازد. با گوشی به آن وصل شو؛ اگر صفحه خودش باز نشد، در مرورگر <code>192.168.4.1</code> را بزن.
+    <span class="why">این همان حالت AP+STA است که بالاتر دیدی، در عمل.</span></li>
+</ol>
+
+<h2 id="robust">قدم سوم: اتصال پایدار و اتصال دوباره خودکار</h2>
+<p>حالا مهم‌ترین بخش درس. در دنیای واقعی Wi-Fi <b>قطع می‌شود</b>: مودم شب‌ها ریست می‌شود، برق می‌رود و می‌آید، کسی مایکروویو را روشن می‌کند (مایکروویو هم روی ۲٫۴ گیگاهرتز کار می‌کند!). برنامه خوب سه ویژگی دارد:</p>
+<ol>
+  <li><b>هیچ‌وقت منتظر Wi-Fi نمی‌ماند.</b> اگر برد علاوه بر Wi-Fi دکمه، سنسور یا موتور هم دارد، آن‌ها باید حتی وقتی شبکه قطع است کار کنند.</li>
+  <li><b>خودش برمی‌گردد.</b> بدون نیاز به ریست دستی.</li>
+  <li><b>می‌گوید چه شده.</b> علت قطعی را چاپ می‌کند.</li>
+</ol>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره: زنگ در به جای سر زدن مدام به در</div>
+<p>فرض کن منتظر پستچی هستی. روش بد: هر ۱۰ ثانیه بروی در را باز کنی ببینی آمده یا نه، و در این مدت هیچ کار دیگری نکنی. روش خوب: کارهایت را بکنی و وقتی <b>زنگ در</b> به صدا درآمد، واکنش نشان بدهی. «رویدادهای Wi-Fi» (Events) همان زنگ در هستند: کتابخانه Wi-Fi هر وقت اتفاقی افتاد (وصل شد، IP گرفت، قطع شد) تابعی را که تو معرفی کرده‌ای صدا می‌زند.</p></div>
+
+<h3>سه ابزار ما</h3>
+<ul>
+  <li><b><code>WiFi.setAutoReconnect(true)</code>:</b> به خود کتابخانه می‌گوید اگر اتصال قطع شد، خودش دوباره تلاش کند. (در core 3.x پیش‌فرض روشن است؛ ما صریح می‌نویسیم تا مطمئن باشیم.)</li>
+  <li><b><code>WiFi.onEvent(تابع)</code>:</b> تابع ما را به عنوان «زنگ در» ثبت می‌کند.</li>
+  <li><b>نگهبان با <code>millis()</code>:</b> اگر با وجود همه این‌ها مدتی آفلاین ماندیم، هر ۱۰ ثانیه یک بار خودمان تلاش مجدد را هل می‌دهیم؛ بدون این که loop را متوقف کنیم.</li>
+</ul>
+
+<h3>نقشه سیم‌کشی: LED وضعیت شبکه</h3>
+<p>یک LED روی GPIO4 می‌گذاریم تا بدون Serial Monitor هم وضعیت را ببینی: <b>ثابت روشن = وصل</b>، <b>چشمک سریع = قطع</b>. سیم‌کشی دقیقا همان درس ۲.۳ است.</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"R1","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","طرف اول (جهت ندارد)"],["2","طرف دوم"]]},
+    {"id":"LED1","name":"LED سبز یا قرمز","img":"led.svg","pins":[["A","آند (+) پایه بلند"],["K","کاتد (−) پایه کوتاه"]]}
+  ],
+  "wires":[["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>چراغ وضعیت شبکه: GPIO4 ← مقاومت ۲۲۰ اهم ← LED ← GND. جریان حدود ۶ میلی‌آمپر.</figcaption></div>
+
+<p>برنامه زیر به فایل <code>secrets.h</code> که بالاتر ساختی نیاز دارد:</p>
+<div class="code" data-file="RobustWiFi.ino" id="codeRobust"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;time.h&gt;
+#include "secrets.h"                          // WIFI_SSID و WIFI_PASS اینجا هستند
+
+const int LED_PIN = 4;                        // LED وضعیت شبکه
+const unsigned long RETRY_MS = 10000;         // هر ۱۰ ثانیه یک بار تلاش دستی
+const char* TZ_IRAN = "&lt;+0330&gt;-3:30";         // ساعت ایران، بدون ساعت تابستانی
+
+volatile bool wifiUp = false;                 // آیا الان IP داریم؟
+unsigned long lastRetry = 0, lastBlink = 0, lastPrint = 0;
+bool ledState = false;
+
+// این تابع را خود کتابخانه Wi-Fi صدا می‌زند، هر وقت اتفاقی بیفتد
+void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+  switch (event) {
+    case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+      Serial.println("[WiFi] Linked to router, waiting for IP...");
+      break;
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      wifiUp = true;
+      Serial.print("[WiFi] Got IP: ");
+      Serial.println(IPAddress(info.got_ip.ip_info.ip.addr));
+      break;
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      wifiUp = false;
+      Serial.printf("[WiFi] Disconnected, reason %d (%s)\n",
+                    info.wifi_sta_disconnected.reason,
+                    WiFi.disconnectReasonName((wifi_err_reason_t)info.wifi_sta_disconnected.reason));
+      break;
+    default:
+      break;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+
+  WiFi.onEvent(onWiFiEvent);                  // قبل از begin ثبت کن
+  WiFi.setHostname("esp32-lab");              // اسم برد در لیست مودم
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);                // بعد از قطعی، خودش دوباره وصل شود
+  WiFi.begin(WIFI_SSID, WIFI_PASS);           // منتظر نمی‌مانیم!
+  Serial.println("[WiFi] Connecting in background...");
+
+  configTzTime(TZ_IRAN, "pool.ntp.org", "time.google.com");
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  // ۱) نگهبان: اگر هنوز آفلاینیم، هر ۱۰ ثانیه یک هل کوچک بده
+  if (!wifiUp &amp;&amp; now - lastRetry &gt;= RETRY_MS) {
+    lastRetry = now;
+    Serial.println("[WiFi] Still offline -&gt; reconnect()");
+    WiFi.disconnect();
+    WiFi.reconnect();
+  }
+
+  // ۲) LED: وصل = ثابت روشن، قطع = چشمک سریع
+  if (wifiUp) {
+    ledState = true;
+  } else if (now - lastBlink &gt;= 200) {
+    lastBlink = now;
+    ledState = !ledState;
+  }
+  digitalWrite(LED_PIN, ledState ? HIGH : LOW);
+
+  // ۳) هر ۵ ثانیه ساعت و قدرت سیگنال را چاپ کن
+  if (now - lastPrint &gt;= 5000) {
+    lastPrint = now;
+    struct tm t;
+    if (getLocalTime(&amp;t, 10)) {               // حداکثر ۱۰ میلی‌ثانیه صبر
+      char buf[24];
+      strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &amp;t);
+      Serial.printf("[Time] %s  RSSI %d dBm\n", buf, WiFi.RSSI());
+    } else {
+      Serial.println("[Time] not synced yet");
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="codeRobust">
+  <li data-lines="1-3"><b class="what">سه include.</b> <code>WiFi.h</code> برای شبکه، <code>time.h</code> برای کار با ساعت و تاریخ (کتابخانه استاندارد C)، و <code>secrets.h</code> خودمان برای اسم و رمز.
+    <span class="why">چون <code>WIFI_SSID</code> و <code>WIFI_PASS</code> حالا در <code>secrets.h</code> تعریف شده‌اند، دیگر در این فایل هیچ رمزی نیست. این فایل را می‌توانی با خیال راحت منتشر کنی.</span></li>
+  <li data-lines="5-7"><b class="what">ثابت‌ها.</b> پین LED، فاصله تلاش مجدد (۱۰ ثانیه) و رشته منطقه زمانی ایران که پایین‌تر مفصل توضیح می‌دهیم.
+    <span class="why">۱۰ ثانیه تعادل خوبی است: آن‌قدر کوتاه که بعد از برگشتن مودم زود وصل شویم، آن‌قدر بلند که با تلاش‌های پشت سر هم مودم و خودمان را خسته نکنیم.</span></li>
+  <li data-lines="9-11"><b class="what">متغیرهای وضعیت.</b> <code>wifiUp</code> می‌گوید الان IP داریم یا نه. کلمه <code>volatile</code> به کامپایلر می‌گوید «این متغیر ممکن است از جای دیگری عوض شود، هر بار واقعا از حافظه بخوانش».
+    <span class="why">تابع رویداد در یک <b>Task</b> (رشته اجرایی) جدا از loop اجرا می‌شود. <code>volatile</code> جلوی این را می‌گیرد که loop یک نسخه قدیمی از مقدار را در ثبات‌های پردازنده نگه دارد و تغییر را نبیند.</span></li>
+  <li data-lines="14-15,30-33"><b class="what">تابع رویداد.</b> امضای آن در core 3.x دقیقا <code>(WiFiEvent_t event, WiFiEventInfo_t info)</code> است. <code>event</code> می‌گوید چه اتفاقی افتاده و <code>info</code> جزئیات آن را دارد. با <code>switch</code> فقط به سه رویداد مهم واکنش می‌دهیم و بقیه را (<code>default</code>) نادیده می‌گیریم.
+    <span class="why">کتابخانه ده‌ها رویداد دارد (شروع اسکن، شروع AP و…). لازم نیست همه را بشناسی؛ این سه برای یک ایستگاه کافی است.</span></li>
+  <li data-lines="16-18"><b class="what">STA_CONNECTED.</b> ESP32 با روتر «دست داد» و رمز پذیرفته شد، ولی هنوز IP ندارد.
+    <span class="why">فرق CONNECTED و GOT_IP مهم است: بدون IP هنوز نمی‌توانی هیچ پیامی بفرستی. اگر این خط را دیدی ولی GOT_IP نیامد، مشکل از DHCP روتر است، نه رمز.</span></li>
+  <li data-lines="19-23"><b class="what">STA_GOT_IP: حالا واقعا آنلاینیم.</b> <code>wifiUp</code> را true می‌کنیم و IP را از داخل <code>info</code> چاپ می‌کنیم. <code>IPAddress(...)</code> عدد خام را به شکل آشنای <code>192.168.1.37</code> درمی‌آورد.
+    <span class="why">«آنلاین بودن» را به GOT_IP گره می‌زنیم نه به CONNECTED، چون فقط از این لحظه ارسال داده ممکن است.</span></li>
+  <li data-lines="24-29"><b class="what">STA_DISCONNECTED: قطع شد.</b> <code>wifiUp</code> را false می‌کنیم و کد دلیل (<code>reason</code>) و اسم آن (<code>disconnectReasonName</code>) را چاپ می‌کنیم.
+    <span class="why">کد دلیل ارزشمندترین اطلاعات عیب‌یابی است (جدول پایین). عمدا اینجا <code>WiFi.begin</code> یا <code>delay</code> صدا نمی‌زنیم: تابع رویداد باید سریع تمام شود، و صدا زدن توابع Wi-Fi از داخل آن در گزارش‌های Espressif باعث رفتار عجیب شده. کار سنگین را به loop می‌سپاریم.</span></li>
+  <li data-lines="39"><b class="what">ثبت زنگ در.</b> <code>WiFi.onEvent(onWiFiEvent)</code> تابع ما را معرفی می‌کند. این کار <b>قبل از</b> <code>begin</code> انجام می‌شود.
+    <span class="why">اگر بعد از begin ثبت کنی، ممکن است اتصال آن‌قدر سریع برقرار شود که رویداد GOT_IP را از دست بدهی و <code>wifiUp</code> تا ابد false بماند.</span></li>
+  <li data-lines="40-43"><b class="what">اسم میزبان، حالت، اتصال خودکار و شروع.</b> <code>setHostname</code> اسمی است که در لیست دستگاه‌های مودم می‌بینی. <code>setAutoReconnect(true)</code> تلاش مجدد خودکار را روشن می‌کند. <code>begin</code> اتصال را <b>شروع</b> می‌کند و برنامه بدون صبر ادامه می‌دهد.
+    <span class="why">به جای «esp32-A1B2C3» در لیست مودم، «esp32-lab» می‌بینی و دستگاهت را راحت پیدا می‌کنی. اسم میزبان باید قبل از <code>mode</code> و <code>begin</code> تنظیم شود، وگرنه اعمال نمی‌شود. و مهم‌تر: هیچ حلقه انتظاری در setup نیست؛ برد در همان ثانیه اول وارد loop می‌شود.</span></li>
+  <li data-lines="46"><b class="what">راه‌اندازی NTP.</b> <code>configTzTime</code> منطقه زمانی و دو سرور ساعت را تنظیم می‌کند. از این به بعد ESP32 خودش، در پس‌زمینه، ساعت را از اینترنت می‌گیرد (همین که اتصال برقرار شد) و هر یک ساعت یک بار دوباره تنظیم می‌کند.
+    <span class="why">آن را بعد از <code>WiFi.mode</code> صدا می‌زنیم تا پشته شبکه (TCP/IP) راه افتاده باشد. دو سرور می‌دهیم که اگر یکی جواب نداد، دیگری جواب بدهد. توضیح کامل در <a href="#ntp">بخش NTP</a>.</span></li>
+  <li data-lines="52-58"><b class="what">نگهبان.</b> اگر آفلاینیم و ۱۰ ثانیه از آخرین تلاش گذشته، <code>disconnect()</code> و بعد <code>reconnect()</code> را صدا می‌زنیم. این دو تابع فوری برمی‌گردند.
+    <span class="why">auto-reconnect در بیشتر موارد کافی است، ولی در بعضی حالت‌ها (مثلا مودمی که مدت طولانی خاموش بوده) کتابخانه از تلاش دست می‌کشد. این نگهبان تضمین می‌کند برد هرگز «برای همیشه» آفلاین نماند. چون فقط هر ۱۰ ثانیه یک بار اجرا می‌شود، loop هزاران بار در ثانیه آزادانه می‌چرخد.</span></li>
+  <li data-lines="60-67"><b class="what">LED وضعیت بدون delay.</b> وصل: LED ثابت روشن. قطع: هر ۲۰۰ میلی‌ثانیه وضعیت LED برعکس می‌شود (چشمک ۲٫۵ بار در ثانیه).
+    <span class="why">این بخش ثابت می‌کند loop هرگز گیر نمی‌کند: حتی وقتی شبکه قطع است، چشمک زدن منظم ادامه دارد. اگر جایی از برنامه delay طولانی یا حلقه انتظار بود، چشمک‌ها می‌ایستادند. متغیر <code>ledState</code> را خودمان نگه می‌داریم به جای این که وضعیت پین را بخوانیم؛ ساده‌تر و مطمئن‌تر است.</span></li>
+  <li data-lines="69-80"><b class="what">چاپ ساعت هر ۵ ثانیه.</b> <code>getLocalTime(&amp;t, 10)</code> ساعت فعلی را در ساختار <code>t</code> می‌ریزد. عدد ۱۰ یعنی حداکثر ۱۰ میلی‌ثانیه صبر کن. <code>strftime</code> ساعت را با الگوی <code>%Y-%m-%d %H:%M:%S</code> به متن تبدیل می‌کند.
+    <span class="why">پیش‌فرض <code>getLocalTime</code> تا ۵۰۰۰ میلی‌ثانیه صبر است؛ یعنی وقتی اینترنت نیست، loop هر بار ۵ ثانیه گیر می‌کند و LED از چشمک زدن می‌ایستد! با عدد ۱۰ این دام را برداشتیم. اگر ساعت هنوز همگام نشده، <code>false</code> برمی‌گرداند و ما «not synced yet» چاپ می‌کنیم.</span></li>
+</ol>
+<p>خروجی روی برد واقعی، وقتی وسط کار مودم را خاموش و بعد روشن می‌کنی:</p>
+<div class="serial">[WiFi] Connecting in background...
+[WiFi] Linked to router, waiting for IP...
+[WiFi] Got IP: 192.168.1.37
+[Time] 2026-09-23 14:05:12  RSSI -54 dBm
+[WiFi] Disconnected, reason 200 (BEACON_TIMEOUT)
+[WiFi] Disconnected, reason 201 (NO_AP_FOUND)
+[WiFi] Still offline -> reconnect()
+[WiFi] Disconnected, reason 201 (NO_AP_FOUND)
+[Time] 2026-09-23 14:05:32  RSSI 0 dBm
+[WiFi] Linked to router, waiting for IP...
+[WiFi] Got IP: 192.168.1.37</div>
+<p>دقت کن: حتی وقتی اینترنت قطع است، ساعت ادامه دارد. ESP32 بعد از اولین همگام‌سازی، ساعت را با تایمر داخلی خودش جلو می‌برد. (RSSI صفر یعنی «وصل نیستیم، عددی نداریم».)</p>
+
+<h3>کدهای دلیل قطع (reason) که بیشتر می‌بینی</h3>
+<div class="table-wrap"><table>
+<tr><th>کد</th><th>اسم</th><th>معمولا یعنی</th></tr>
+<tr><td>2</td><td><code>AUTH_EXPIRE</code></td><td>احراز هویت منقضی شد؛ اغلب سیگنال ضعیف یا مودم شلوغ.</td></tr>
+<tr><td>8</td><td><code>ASSOC_LEAVE</code></td><td>خود ESP32 جدا شد (مثلا چون ما <code>disconnect()</code> زدیم). نگران نباش.</td></tr>
+<tr><td>15</td><td><code>4WAY_HANDSHAKE_TIMEOUT</code></td><td>تقریبا همیشه <b>رمز اشتباه</b>.</td></tr>
+<tr><td>200</td><td><code>BEACON_TIMEOUT</code></td><td>صدای مودم دیگر شنیده نمی‌شود: مودم خاموش شد یا سیگنال خیلی ضعیف است.</td></tr>
+<tr><td>201</td><td><code>NO_AP_FOUND</code></td><td>شبکه‌ای با این اسم پیدا نشد (اسم اشتباه، ۵ گیگاهرتز، مودم خاموش).</td></tr>
+<tr><td>202</td><td><code>AUTH_FAIL</code></td><td>احراز هویت رد شد؛ رمز اشتباه یا MAC Filtering.</td></tr>
+<tr><td>204</td><td><code>HANDSHAKE_TIMEOUT</code></td><td>مثل ۱۵؛ اغلب رمز اشتباه.</td></tr>
+<tr><td>210</td><td><code>NO_AP_FOUND_W_COMPATIBLE_SECURITY</code></td><td>شبکه هست ولی نوع امنیتش با تنظیم ESP32 جور نیست (مثلا مودم قدیمی WEP یا WPA).</td></tr>
+</table></div>
+<p>فهرست کامل در <a href="https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/wifi.html" target="_blank" rel="noopener">راهنمای Wi-Fi مستندات ESP-IDF</a> است.</p>
+
+<div class="callout warn"><div class="ct">دقت کن: آموزش‌های قدیمی اسم‌های دیگری دارند</div>
+<p>در آموزش‌های خیلی قدیمی (core نسخه 1.x) رویدادها اسم‌هایی مثل <code>SYSTEM_EVENT_STA_DISCONNECTED</code> و <code>SYSTEM_EVENT_STA_GOT_IP</code> داشتند و دلیل قطع با <code>info.disconnected.reason</code> خوانده می‌شد. از core 2.x اسم‌ها به <code>ARDUINO_EVENT_WIFI_STA_...</code> و <code>info.wifi_sta_disconnected.reason</code> تغییر کرد و در core 3.x (نسخه فعلی) هم همین‌هاست. اگر کد قدیمی کامپایل نشد، اول این اسم‌ها را عوض کن.</p></div>
+
+<div class="wokwi" data-board="esp32" data-code-from="codeRobust">
+<p>این برنامه را هم می‌توانی در Wokwi اجرا کنی. دو کار اضافه لازم است: (۱) در ویرایشگر Wokwi روی فلش کنار تب‌ها بزن، <b>New file…</b> را انتخاب کن و اسمش را <code>secrets.h</code> بگذار؛ محتوایش را همان نمونه بالا بنویس ولی با <code>"Wokwi-GUEST"</code> برای اسم و <code>""</code> برای رمز. (۲) diagram.json زیر را جایگزین کن که LED روی GPIO4 دارد. بعد از چند ثانیه LED ثابت می‌شود و ساعت تهران در Serial Monitor چاپ می‌شود. قطع کردن Wi-Fi را در Wokwi نمی‌توانی آزمایش کنی؛ آن را روی برد واقعی با خاموش کردن مودم امتحان کن.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "green" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="ntp">ساعت دقیق از اینترنت: NTP و منطقه زمانی ایران</h2>
+<p>ESP32 ساعت باتری‌دار ندارد. هر بار که روشن می‌شود، فکر می‌کند سال ۱۹۷۰ است! ولی وقتی به اینترنت وصل است، می‌تواند از <b>سرورهای NTP</b> (Network Time Protocol) ساعت دقیق جهانی را بپرسد. <code>pool.ntp.org</code> یک مجموعه جهانی و رایگان از هزاران سرور ساعت است.</p>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>مثل وقتی که ساعت مچی‌ات را با اعلام ساعت رادیو تنظیم می‌کنی. رادیو ساعت <b>گرینویچ</b> (UTC) را اعلام می‌کند و تو باید بدانی تهران چقدر جلوتر است. NTP همان رادیو است و «منطقه زمانی» همان دانستن اختلاف.</p></div>
+<p>ایران <b>۳ ساعت و ۳۰ دقیقه جلوتر از UTC</b> است. نکته مهم: ایران از <b>شهریور ۱۴۰۱ (سپتامبر ۲۰۲۲)</b> ساعت تابستانی را برای همیشه کنار گذاشته و از آن زمان تمام سال روی ‎UTC+3:30 می‌ماند. پس رشته منطقه زمانی ما هیچ قانون تابستانی ندارد:</p>
+<div class="table-wrap"><table>
+<tr><th>بخش رشته <code>&lt;+0330&gt;-3:30</code></th><th>معنی</th></tr>
+<tr><td><code>&lt;+0330&gt;</code></td><td>اسم کوتاه منطقه (فقط برای نمایش). در قالب POSIX، اسمی که عدد یا علامت دارد باید داخل <code>&lt; &gt;</code> باشد.</td></tr>
+<tr><td><code>-3:30</code></td><td>اختلاف با UTC. <b>علامت برعکس است!</b> در قالب POSIX یعنی «چقدر باید به ساعت محلی <b>اضافه</b> کنی تا UTC شود». تهران ۳:۳۰ جلوتر است، پس باید ۳:۳۰ <b>کم</b> کنی: <code>-3:30</code>.</td></tr>
+<tr><td>(هیچ بخش دیگری)</td><td>چون ساعت تابستانی نداریم، بخش دوم (مثل <code>,M3.4.2/0,...</code> در کدهای قدیمی) وجود ندارد.</td></tr>
+</table></div>
+<div class="callout warn"><div class="ct">دقت کن: رشته‌های قدیمی ساعت ایران اشتباه‌اند</div>
+<p>در آموزش‌های قبل از ۲۰۲۲ رشته‌هایی مثل <code>IRST-3:30IRDT,...</code> می‌بینی که ساعت تابستانی دارند. اگر آن‌ها را استفاده کنی، ساعت برد تو در نیمه اول سال یک ساعت جلو است. یک روش دیگر هم این است: <code>configTime(12600, 0, "pool.ntp.org");</code> که ۱۲۶۰۰ ثانیه همان ۳٫۵ × ۳۶۰۰ است و صفر یعنی بدون تابستانی. نتیجه یکی است، ولی نسخه <code>configTzTime</code> خواناتر است.</p></div>
+<div class="callout why"><div class="ct">چرا ساعت دقیق مهم است؟</div>
+<p>برای ثبت زمان خواندن سنسور (لاگ دما در کارت SD)، روشن کردن چراغ حیاط سر ساعت ۷ شب، و مهم‌تر از همه: اتصال‌های امن HTTPS و MQTT با TLS بدون ساعت درست کار نمی‌کنند، چون تاریخ اعتبار گواهی‌ها را نمی‌توان بررسی کرد. در فصل ۵ این را لازم داری.</p></div>
+
+<h2 id="power">برق کافی: چرا با روشن شدن Wi-Fi برد ریست می‌شود؟</h2>
+<p>رادیوی Wi-Fi در لحظه ارسال جریان زیادی می‌کشد: تا حدود <b>۲۵۰ میلی‌آمپر</b> در پالس‌های کوتاه، در حالی که بدون Wi-Fi حدود ۴۰ تا ۵۰ میلی‌آمپر کافی است. اگر منبع تغذیه ضعیف باشد (کابل USB نازک و بلند، پورت USB هاب بدون برق، پاوربانک ارزان)، ولتاژ ۳٫۳ ولت برای یک لحظه پایین می‌افتد و مدار محافظ داخلی (<span class="term" data-t="Brownout">Brownout Detector</span>) برای جلوگیری از رفتار خراب، برد را ریست می‌کند.</p>
+<div class="serial">Brownout detector was triggered
+
+ets Jun  8 2016 00:22:57
+rst:0xc (SW_CPU_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)</div>
+<div class="callout example"><div class="ct">مثال با عدد</div>
+<p>کابل USB ارزان ۱٫۵ متری ممکن است حدود ۱ اهم مقاومت کل داشته باشد (رفت و برگشت). با جریان ۰٫۲۵ آمپر: <code>V = I × R = 0.25 × 1 = 0.25V</code> افت. یعنی ۵ ولت پورت به ۴٫۷۵ ولت می‌رسد، به‌علاوه افت رگولاتور؛ و اگر پورت کامپیوتر خودش ضعیف باشد، کافی است تا ولتاژ برای لحظه‌ای زیر حد ایمن برود.</p></div>
+<ul>
+  <li><b>کابل کوتاه و ضخیم</b> و پورت USB مستقیم کامپیوتر یا شارژر ۵ ولت ۱ آمپر یا بیشتر استفاده کن.</li>
+  <li>یک <b>خازن الکترولیتی ۱۰۰ تا ۴۷۰ میکروفاراد</b> بین 3V3 و GND نزدیک برد، مثل یک مخزن کوچک، افت‌های لحظه‌ای را جبران می‌کند (پایه منفی خازن به GND).</li>
+  <li>در حالت اضطرار می‌توانی توان ارسال را کم کنی: <code>WiFi.setTxPower(WIFI_POWER_8_5dBm);</code> بعد از <code>WiFi.begin</code>. برد Wi-Fi کمتر می‌شود ولی جریان هم کمتر.</li>
+  <li><b>هرگز</b> Brownout Detector را با کد خاموش نکن (کدی که در بعضی انجمن‌ها می‌بینی). این مثل در آوردن فیوز خانه است: مشکل را پنهان می‌کند و برد در ولتاژ پایین رفتار عجیب و خراب‌کننده پیدا می‌کند.</li>
+</ul>
+
+<h2 id="video">ویدیوی کمکی</h2>
+<div class="video" data-yt="VnfX9YJbaU8" data-title="WiFiManager with ESP32 - Stop Hard-coding WiFi Credentials!" data-channel="DroneBot Workshop" data-lang="انگلیسی">
+  <div class="sum"><ul>
+    <li>این ویدیو درباره همان کتابخانه WiFiManager است که در بخش <a href="#secrets">secrets.h</a> معرفی کردیم. دقت کن «پورتال تنظیمات» چطور در گوشی باز می‌شود و ESP32 در آن لحظه در کدام حالت (AP یا STA) است.</li>
+    <li>ببین مدرس چطور رمز ذخیره‌شده را پاک می‌کند تا دوباره پورتال را آزمایش کند؛ این کار را در تمرین خودت لازم خواهی داشت.</li>
+    <li>ویدیو ممکن است با نسخه قدیمی‌تر core ضبط شده باشد؛ اگر اسم تابع یا رویدادی با این درس فرق داشت، ملاک همین درس و core 3.x است.</li>
+  </ul></div>
+</div>
+
+<h2 id="debug">وقتی وصل نمی‌شود: عیب‌یابی قدم به قدم</h2>
+<div class="table-wrap"><table>
+<tr><th>علامت</th><th>علت محتمل</th><th>راه حل</th></tr>
+<tr><td>شبکه در اسکن نیست، <code>NO_SSID_AVAIL</code> یا reason 201</td><td>شبکه ۵ گیگاهرتز است</td><td>به شبکه ۲٫۴ گیگاهرتز مودم وصل شو (معمولا اسمی بدون ‎5G). در تنظیمات مودم مطمئن شو باند ۲٫۴ روشن است. هات‌اسپات آیفون: Maximize Compatibility را روشن کن.</td></tr>
+<tr><td>شبکه در اسکن نیست ولی گوشی به آن وصل است</td><td>SSID مخفی (Hidden) است</td><td>اسکن شبکه مخفی را نشان نمی‌دهد، ولی <code>WiFi.begin</code> با اسم <b>دقیق</b> (با حروف بزرگ و کوچک درست) معمولا وصل می‌شود. اگر نشد، موقتا مخفی بودن را خاموش کن.</td></tr>
+<tr><td>reason 15، 202 یا 204؛ status شماره 4 یا 6</td><td>رمز اشتباه</td><td>رمز را حرف به حرف چک کن. فاصله اضافه آخر رمز، حروف بزرگ و کوچک، و علامت‌های <code>"</code> یا <code>\</code> (باید با <code>\</code> نوشته شوند) رایج‌ترین اشتباه‌ها هستند.</td></tr>
+<tr><td>اسم شبکه فارسی یا با ایموجی است و وصل نمی‌شود</td><td>حروف خاص در SSID یا رمز</td><td>ESP32 بایت به بایت مقایسه می‌کند و فایل کد تو ممکن است حروف را با کدگذاری دیگری ذخیره کرده باشد. مطمئن‌ترین راه: SSID و رمز فقط با حروف و اعداد انگلیسی.</td></tr>
+<tr><td>RSSI کمتر از ‎−75 و قطع و وصل مدام (reason 200 یا 2)</td><td>سیگنال ضعیف</td><td>برد را به مودم نزدیک‌تر کن، آن را داخل جعبه فلزی نگذار، آنتن مدار چاپی برد (سر برد) را از سیم‌ها و فلز دور نگه دار. برای فاصله زیاد، بردی با آنتن خارجی (IPEX) یا تقویت‌کننده Wi-Fi.</td></tr>
+<tr><td>رمز درست است ولی AUTH_FAIL (202)</td><td>MAC Filtering روی مودم</td><td>MAC برد را با اسکنر بالا بخوان و در صفحه تنظیمات مودم (معمولا <code>192.168.1.1</code>) به فهرست مجاز اضافه کن.</td></tr>
+<tr><td>reason 210 با مودم قدیمی</td><td>مودم WEP یا WPA قدیمی دارد؛ core 3.x به طور پیش‌فرض حداقل WPA2 می‌خواهد</td><td>بهترین کار: امنیت مودم را روی WPA2 بگذار. اگر نمی‌شود، قبل از <code>begin</code> بنویس <code>WiFi.setMinSecurity(WIFI_AUTH_WEP);</code>.</td></tr>
+<tr><td>وصل می‌شود ولی GOT_IP نمی‌آید</td><td>DHCP مودم پر است یا خاموش است</td><td>مودم را ریست کن؛ در تنظیمات مودم تعداد دستگاه‌های مجاز DHCP را بیشتر کن.</td></tr>
+<tr><td>Wi-Fi دانشگاه یا هتل که صفحه ورود دارد</td><td>Captive Portal</td><td>ESP32 نمی‌تواند در آن صفحه نام کاربری وارد کند. از هات‌اسپات گوشی استفاده کن.</td></tr>
+<tr><td><code>Brownout detector was triggered</code> و ریست مداوم</td><td>تغذیه ضعیف هنگام روشن شدن رادیو</td><td>بخش <a href="#power">برق کافی</a> را ببین: کابل بهتر، خازن، یا توان ارسال کمتر.</td></tr>
+<tr><td>ساعت یک ساعت اشتباه است</td><td>رشته منطقه زمانی قدیمی با ساعت تابستانی</td><td>از <code>"&lt;+0330&gt;-3:30"</code> استفاده کن.</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>از این درس به بعد، هر برنامه‌ای که Wi-Fi دارد باید یک امتحان را پاس کند: <b>«مودم را وسط کار خاموش کن.»</b> اگر برنامه‌ات گیر کرد، دکمه‌هایش جواب نداد، یا بعد از روشن شدن دوباره مودم خودش برنگشت، آن برنامه ناتمام است؛ حتی اگر روی میز تو ماه‌ها درست کار کرده باشد. در خانه واقعی، مودم ریست می‌شود؛ این «اگر» نیست، «کی» است. و یک قانون دیگر: هیچ‌وقت <code>while</code> بدون سقف زمان برای Wi-Fi ننویس. هر حلقه انتظاری که ننوشتی، باگی است که هرگز نخواهی داشت.</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">مودم تو دو شبکه دارد: <code>Home</code> و <code>Home_5G</code>. اسکنر ESP32 فقط <code>Home</code> را نشان می‌دهد. چرا؟</p>
+  <ol><li data-why="اسکنر شبکه‌های رمزدار را هم نشان می‌دهد (با برچسب locked).">شبکه Home_5G رمز دارد</li><li>ESP32 فقط باند ۲٫۴ گیگاهرتز را پشتیبانی می‌کند و شبکه ۵ گیگاهرتز را اصلا نمی‌بیند</li><li data-why="برد ۵ گیگاهرتز کمتر است، ولی مشکل اینجا فاصله نیست؛ ESP32 کلا آن باند را ندارد.">Home_5G خیلی دور است</li><li data-why="scanNetworks همه شبکه‌های قابل دیدن را برمی‌گرداند، محدودیت یک شبکه ندارد.">اسکنر فقط یک شبکه را نشان می‌دهد</li></ol>
+  <div class="fb">رادیوی ESP32 فقط 802.11 b/g/n روی ۲٫۴ گیگاهرتز است. همیشه به شبکه ۲٫۴ مودم وصلش کن.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">IP برد تو <code>192.168.1.37</code> است. دوستت در شهر دیگری این آدرس را در مرورگرش می‌زند. چه می‌شود؟</p>
+  <ol><li data-why="این آدرس داخلی است و در اینترنت به خانه تو اشاره نمی‌کند.">صفحه برد تو برای او باز می‌شود</li><li data-why="IP داخلی ربطی به شرکت اینترنت ندارد؛ روتر خانه آن را داده.">به شرکت اینترنت تو وصل می‌شود</li><li data-why="روتر خانه تو پیام‌های او را اصلا دریافت نمی‌کند؛ او به شبکه تو وصل نیست.">روتر خانه تو از او رمز می‌خواهد</li><li>به برد تو نمی‌رسد؛ آدرس‌های <code>192.168.x.x</code> داخلی‌اند و فقط در شبکه خود هر خانه معنی دارند</li></ol>
+  <div class="fb">IP داخلی مثل شماره واحد آپارتمان است: «واحد ۳۷» در هر ساختمانی وجود دارد. از بیرون فقط IP عمومی دیده می‌شود.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">چرا در تابع رویداد <code>STA_DISCONNECTED</code> فقط یک متغیر را false کردیم و <code>WiFi.begin</code> را آنجا صدا نزدیم؟</p>
+  <ol><li data-why="begin در تابع‌های دیگر هم صدا زده می‌شود؛ مشکل از جای صدا زدن است.">چون WiFi.begin فقط یک بار در کل برنامه مجاز است</li><li data-why="کامپایلر خطایی نمی‌دهد؛ مشکل در زمان اجراست.">چون کامپایل نمی‌شود</li><li>چون تابع رویداد در یک Task جدا اجرا می‌شود و باید سریع تمام شود؛ کار سنگین را به loop و نگهبان millis می‌سپاریم</li><li data-why="setAutoReconnect کمک می‌کند، ولی دلیل اصلی این است که تابع رویداد جای کار سنگین نیست.">چون setAutoReconnect همه کار را می‌کند و نگهبان لازم نیست</li></ol>
+  <div class="fb">تابع رویداد مثل زنگ در است: فقط خبر بده. تصمیم و کار را برنامه اصلی انجام می‌دهد.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">رشته منطقه زمانی درست ایران در core 3.x برای <code>configTzTime</code> کدام است؟</p>
+  <ol><li><code>"&lt;+0330&gt;-3:30"</code></li><li data-why="علامت در قالب POSIX برعکس است؛ +3:30 یعنی ۳:۳۰ عقب‌تر از UTC.">‏<code>"&lt;+0330&gt;+3:30"</code></li><li data-why="ایران از ۲۰۲۲ ساعت تابستانی ندارد؛ این رشته قانون تابستانی دارد.">‏<code>"IRST-3:30IRDT,J79/24,J263/24"</code></li><li data-why="این ساعت گرینویچ است، نه تهران.">‏<code>"UTC0"</code></li></ol>
+  <div class="fb">اختلاف ۳:۳۰ جلوتر از UTC، با علامت برعکس POSIX، و بدون بخش تابستانی.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">RSSI برد تو <code>-83 dBm</code> است و اتصال مدام قطع می‌شود. بهترین اقدام اول چیست؟</p>
+  <ol><li data-why="رمز ربطی به قدرت سیگنال ندارد؛ اگر رمز اشتباه بود اصلا وصل نمی‌شد.">رمز Wi-Fi را عوض کنی</li><li>برد را به مودم نزدیک‌تر کنی یا موانع فلزی را برداری</li><li data-why="RETRY_MS فقط تعداد تلاش‌ها را عوض می‌کند؛ سیگنال ضعیف با تلاش بیشتر قوی نمی‌شود.">RETRY_MS را ۱ ثانیه کنی</li><li data-why="کمتر کردن توان ارسال سیگنال را ضعیف‌تر می‌کند، نه قوی‌تر.">WiFi.setTxPower را کم کنی</li></ol>
+  <div class="fb">زیر ‎−80 تقریبا غیرقابل استفاده است. اول مشکل فیزیکی (فاصله، مانع، آنتن) را حل کن.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+<div class="exercise"><div class="ct">تمرین ۱: سیگنال‌سنج با LED</div>
+<p>برنامه <code>WiFiConnect</code> را طوری تغییر بده که بعد از اتصال، LED روی GPIO4 سرعت چشمکش به قدرت سیگنال بستگی داشته باشد: RSSI بهتر از ‎−60 → ثابت روشن؛ بین ‎−60 و ‎−75 → چشمک آهسته (هر ۵۰۰ میلی‌ثانیه)؛ بدتر از ‎−75 → چشمک سریع (هر ۱۰۰ میلی‌ثانیه). بدون delay.</p>
+<details><summary>راهنمایی</summary><p>در loop، RSSI را بخوان و با if یک متغیر <code>interval</code> تعیین کن. بعد همان الگوی <code>now - lastBlink &gt;= interval</code> درس ۳.۱. یادت باشد RSSI منفی است: «بهتر از ‎−60» یعنی <code>rssi &gt; -60</code>.</p></details>
+<details><summary>جواب</summary>
+<div class="code" data-file="SignalMeter_loop.ino" id="codeEx1"><pre>
+// بالای برنامه:  const int LED_PIN = 4;   و در setup:  pinMode(LED_PIN, OUTPUT);
+void loop() {
+  static unsigned long lastBlink = 0;
+  static bool ledState = false;
+  int rssi = WiFi.RSSI();                 // وقتی وصل نیست، 0 برمی‌گرداند
+
+  if (WiFi.status() == WL_CONNECTED &amp;&amp; rssi &gt; -60) {
+    ledState = true;                      // سیگنال خوب: ثابت روشن
+  } else {
+    unsigned long interval = (rssi &gt; -75 &amp;&amp; rssi != 0) ? 500 : 100;
+    if (millis() - lastBlink &gt;= interval) {
+      lastBlink = millis();
+      ledState = !ledState;
+    }
+  }
+  digitalWrite(LED_PIN, ledState ? HIGH : LOW);
+}
+</pre></div></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۲: دفتر قطعی‌ها</div>
+<p>به برنامه <code>RobustWiFi</code> دو چیز اضافه کن: (الف) یک شمارنده که هر بار Wi-Fi قطع شد یکی زیاد شود، (ب) هر بار که دوباره IP گرفت، چاپ کند «بعد از X ثانیه برگشت». بعد مودم را دو بار خاموش و روشن کن و خروجی را ببین.</p>
+<details><summary>راهنمایی</summary><p>در رویداد DISCONNECTED فقط وقتی <code>wifiUp</code> هنوز true است شمارنده را زیاد کن و زمان را در <code>downSince = millis()</code> نگه دار؛ چون وقتی مودم خاموش است، رویداد DISCONNECTED پشت سر هم تکرار می‌شود. در GOT_IP اختلاف <code>millis() - downSince</code> را چاپ کن. این متغیرها را هم volatile تعریف کن.</p></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۳: دو نقش هم‌زمان (AP+STA)</div>
+<p>برنامه‌ای بنویس که هم به مودم خانه وصل شود و هم شبکه خودش را به اسم <code>ESP32-Lab</code> بسازد. هر دو IP را چاپ کن. با گوشی به <code>ESP32-Lab</code> وصل شو و ببین چه IPای می‌گیری.</p>
+<details><summary>راهنمایی</summary><p><code>WiFi.mode(WIFI_AP_STA)</code>، بعد <code>WiFi.softAP(...)</code> و <code>WiFi.begin(...)</code>. IP ایستگاه از <code>WiFi.localIP()</code> و IP نقطه دسترسی از <code>WiFi.softAPIP()</code>. توجه: در این حالت کانال AP مجبور است با کانال مودم یکی باشد، چون ESP32 فقط یک رادیو دارد.</p></details>
+</div>
+
+<div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
+<p>ESP32 فقط Wi-Fi ۲٫۴ گیگاهرتز را می‌بیند، از روتر با DHCP یک IP داخلی می‌گیرد و RSSI بهتر از ‎−70 برای کار پایدار لازم دارد. <code>WiFi.begin</code> فقط شروع می‌کند؛ با <code>onEvent</code> (GOT_IP و DISCONNECTED)، <code>setAutoReconnect</code> و یک نگهبان <code>millis()</code> اتصالی می‌سازی که هرگز loop را قفل نمی‌کند. رمز را در <code>secrets.h</code> نگه دار و ساعت ایران را با <code>configTzTime("&lt;+0330&gt;-3:30", ...)</code> بگیر.</p></div>
+
+</article>
+</body>
+</html>

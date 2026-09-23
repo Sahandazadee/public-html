@@ -1,0 +1,1030 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ورودی و خروجی دیجیتال و آنالوگ: دکمه، پتانسیومتر، LDR · مستر کلاس ESP32</title>
+<meta name="description" content="خواندن دکمه با Pull-up و Debounce، زمان‌بندی با millis، وقفه، خواندن آنالوگ با ADC دوازده بیتی ESP32، پتانسیومتر و ساخت چراغ خواب خودکار با LDR؛ خط به خط برای مبتدی مطلق.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="3-1">
+
+<p class="lede">تا اینجا ESP32 فقط «حرف می‌زد»: LED را روشن و خاموش می‌کرد. در این درس یاد می‌گیری «گوش بدهد»: بفهمد دکمه فشرده شده یا نه، پیچ پتانسیومتر کجاست و اتاق چقدر روشن است. در مسیر، سه مفهوم کلیدی را که در همه پروژه‌های بعدی لازم داری کامل یاد می‌گیری: مقاومت Pull-up، زمان‌بندی بدون توقف با <code>millis()</code> و خواندن ولتاژ با ADC.</p>
+
+<div class="goals">
+  <div><h4>🎯 بعد از این درس می‌توانی</h4><ul>
+    <li>دکمه را درست وصل کنی و بدانی چرا بدون Pull-up عددهای دیوانه می‌بینی</li>
+    <li>لرزش دکمه (Bounce) را با <code>millis()</code> حذف کنی و با هر فشار LED را روشن یا خاموش کنی</li>
+    <li>چند کار را هم‌زمان و بدون <code>delay</code> انجام بدهی</li>
+    <li>ولتاژ را با <code>analogRead</code> و <code>analogReadMilliVolts</code> بخوانی و محدودیت‌های ADC را بدانی</li>
+    <li>یک چراغ خواب خودکار با LDR و Hysteresis بسازی</li>
+  </ul></div>
+  <div><h4>🧰 پیش‌نیاز و وسایل</h4><ul>
+    <li>درس <a href="2-3.html">۲.۳</a> (چشمک زدن LED و Serial Monitor)</li>
+    <li>برد ESP32 DevKitC، برد بورد و سیم جامپر</li>
+    <li>یک دکمه فشاری ۴ پایه (Tactile) ۶ یا ۱۲ میلی‌متری</li>
+    <li>یک LED + مقاومت ۲۲۰ اهم، یک مقاومت ۱۰ کیلو اهم (قهوه‌ای مشکی نارنجی)</li>
+    <li>یک پتانسیومتر ۱۰ کیلو اهم و یک مقاومت نوری LDR (مثلا GL5528)</li>
+  </ul></div>
+</div>
+
+<div class="gallery">
+  <figure><div class="frame"><img src="assets/img/button.svg" alt="دکمه فشاری چهار پایه"></div><figcaption>دکمه فشاری ۴ پایه (Tactile)<span class="src">تصویر: Fritzing، مجوز CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="assets/img/pot.svg" alt="پتانسیومتر سه پایه"></div><figcaption>پتانسیومتر ۱۰ کیلو اهم<span class="src">تصویر: Fritzing، مجوز CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="assets/img/ldr.svg" alt="مقاومت نوری LDR"></div><figcaption>مقاومت نوری (LDR)<span class="src">تصویر: Fritzing، مجوز CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="assets/img/resistor.svg" alt="مقاومت"></div><figcaption>مقاومت ۱۰ کیلو و ۲۲۰ اهم<span class="src">تصویر: Fritzing، مجوز CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="assets/img/led.svg" alt="LED"></div><figcaption>LED (پایه بلند = آند)<span class="src">تصویر: Fritzing، مجوز CC BY-SA 3.0</span></figcaption></figure>
+</div>
+
+<h2 id="digital-vs-analog">دیجیتال و آنالوگ: دو جور «گوش دادن»</h2>
+<p>پین GPIO وقتی ورودی باشد، ولتاژ روی خودش را «می‌خواند». دو جور خواندن داریم:</p>
+<ul>
+  <li><b>دیجیتال:</b> فقط دو جواب ممکن است: <code>HIGH</code> (ولتاژ بالا، نزدیک ۳٫۳ ولت) یا <code>LOW</code> (نزدیک صفر). مثل سؤال بله/خیر: «دکمه فشرده است؟»</li>
+  <li><b>آنالوگ:</b> جواب یک عدد در یک بازه است، مثلا ۰ تا ۴۰۹۵. مثل سؤال «چقدر؟»: «پیچ چقدر چرخیده؟ نور چقدر است؟»</li>
+</ul>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>کلید برق اتاق دیجیتال است: یا روشن یا خاموش. پیچ ولوم رادیو آنالوگ است: می‌تواند هر جایی بین صفر و حداکثر باشد. نیمه اول این درس درباره «کلید» است و نیمه دوم درباره «پیچ ولوم».</p></div>
+
+<div class="callout why"><div class="ct">چرا ESP32 می‌فهمد HIGH است یا LOW؟</div>
+<p>داخل پین یک مدار مقایسه‌گر هست. اگر ولتاژ بالاتر از حدود ۷۵٪ ولتاژ تغذیه باشد (تقریبا بالای ۲٫۵ ولت) آن را HIGH و اگر پایین‌تر از حدود ۲۵٪ (تقریبا زیر ۰٫۸ ولت) باشد LOW می‌خواند. بین این دو یک «منطقه خاکستری» است که جواب قابل اعتماد نیست. هدف همه چیزهایی که در ادامه یاد می‌گیری این است که پین <b>هیچ‌وقت</b> در منطقه خاکستری نماند.</p></div>
+
+<h2 id="button">دکمه فشاری ۴ پایه: داخلش چه خبر است؟</h2>
+<p>دکمه‌های کوچک Tactile چهار پایه دارند ولی فقط <b>دو</b> اتصال الکتریکی. هر دو پایه‌ای که روبه‌روی هم در یک طرف بلند بدنه هستند، همیشه به هم وصل‌اند. فشار دادن دکمه، این دو جفت را به هم وصل می‌کند.</p>
+
+<figure><div class="frame"><svg viewBox="0 0 640 300" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="ساختار داخلی دکمه چهار پایه">
+  <rect x="170" y="60" width="180" height="180" rx="14" fill="#e9edf3" stroke="#6b7280" stroke-width="2"/>
+  <circle cx="260" cy="150" r="46" fill="#cfd6e2" stroke="#6b7280" stroke-width="2"/>
+  <!-- legs -->
+  <rect x="130" y="80" width="40" height="14" fill="#b8bec9"/><rect x="350" y="80" width="40" height="14" fill="#b8bec9"/>
+  <rect x="130" y="206" width="40" height="14" fill="#b8bec9"/><rect x="350" y="206" width="40" height="14" fill="#b8bec9"/>
+  <text x="112" y="92" font-size="14" font-weight="700" text-anchor="end" fill="#152033">1</text>
+  <text x="408" y="92" font-size="14" font-weight="700" fill="#152033">2</text>
+  <text x="112" y="218" font-size="14" font-weight="700" text-anchor="end" fill="#152033">3</text>
+  <text x="408" y="218" font-size="14" font-weight="700" fill="#152033">4</text>
+  <!-- internal fixed connections -->
+  <line x1="150" y1="87" x2="370" y2="87" stroke="#d6453d" stroke-width="4"/>
+  <line x1="150" y1="213" x2="370" y2="213" stroke="#2563eb" stroke-width="4"/>
+  <!-- switch -->
+  <line x1="260" y1="87" x2="260" y2="128" stroke="#152033" stroke-width="3"/>
+  <line x1="260" y1="172" x2="260" y2="213" stroke="#152033" stroke-width="3"/>
+  <line x1="260" y1="172" x2="290" y2="132" stroke="#152033" stroke-width="3"/>
+  <circle cx="260" cy="128" r="4" fill="#152033"/><circle cx="260" cy="172" r="4" fill="#152033"/>
+  <text x="440" y="120" font-size="14" fill="#d6453d" direction="rtl" text-anchor="end">۱ و ۲ همیشه به هم وصل‌اند</text>
+  <text x="440" y="236" font-size="14" fill="#2563eb" direction="rtl" text-anchor="end">۳ و ۴ همیشه به هم وصل‌اند</text>
+  <text x="440" y="178" font-size="14" fill="#152033" direction="rtl" text-anchor="end">فشار = وصل شدن بالا به پایین</text>
+  <text x="260" y="40" font-size="14" font-weight="700" text-anchor="middle" fill="#152033" direction="rtl">نمای از بالا</text>
+  <text x="260" y="280" font-size="13" text-anchor="middle" fill="#4d5b70" direction="rtl">مطمئن‌ترین راه: همیشه دو پایه «ضربدری» (مثلا ۱ و ۴) را استفاده کن</text>
+</svg></div>
+<figcaption>ساختار داخلی دکمه ۴ پایه. پایه‌هایی که روی بدنه از هم دورترند (۱ و ۲) در واقع یک نقطه‌اند. اگر پایه‌های ضربدری (۱ و ۴ یا ۲ و ۳) را بگیری، مهم نیست دکمه را چطور چرخانده‌ای؛ همیشه درست کار می‌کند.</figcaption></figure>
+
+<div class="callout tip"><div class="ct">آزمایش با مولتی‌متر</div>
+<p>اگر مطمئن نیستی کدام پایه‌ها به هم وصل‌اند، مولتی‌متر را روی حالت بوق (Continuity) بگذار. بین دو پایه‌ای که بدون فشار بوق می‌زند، اتصال دائمی است. دو پایه‌ای که فقط با فشار بوق می‌زند، همان کلید است.</p></div>
+
+<h2 id="floating">مشکل پین شناور (Floating): اولین آزمایش عمدا خراب</h2>
+<p>ساده‌ترین فکری که به ذهن می‌رسد این است: یک طرف دکمه را به 3V3 و طرف دیگر را به GPIO27 وصل کنیم. دکمه فشرده شود، ۳٫۳ ولت به پین می‌رسد و HIGH می‌خوانیم. رها شود، ... چه؟ پین به <b>هیچ‌جا</b> وصل نیست! این حالت را «شناور» می‌گویند و این آزمایش را عمدا انجام می‌دهیم تا با چشم خودت ببینی چرا نباید این کار را کرد.</p>
+
+<div class="code" data-file="Floating_Demo.ino" id="c1"><pre>
+// آزمایش پین شناور: دکمه بدون مقاومت Pull (عمدا اشتباه!)
+const int BUTTON_PIN = 27;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT);          // ورودی ساده، بدون مقاومت داخلی
+}
+
+void loop() {
+  int state = digitalRead(BUTTON_PIN); // جواب: 0 یا 1
+  Serial.println(state);
+  delay(100);
+}
+</pre></div>
+<ol class="walk" data-for="c1">
+  <li data-lines="2"><b class="what">شماره پین دکمه.</b> GPIO27 را انتخاب کردیم.
+    <span class="why">GPIO27 از پایه‌های امن است (Strapping نیست و به فلش وصل نیست) و هم ورودی و هم خروجی می‌شود.</span></li>
+  <li data-lines="6"><b class="what">pinMode(پین، INPUT).</b> پین را ورودی ساده می‌کند؛ یعنی ESP32 فقط ولتاژ را «نگاه می‌کند» و هیچ مقاومت داخلی‌ای وصل نمی‌کند.
+    <span class="why">عمدا حالت ساده را گذاشتیم تا مشکل شناور بودن را ببینی. در ادامه با یک کلمه آن را درست می‌کنیم.</span></li>
+  <li data-lines="10"><b class="what">digitalRead(پین).</b> ولتاژ پین را می‌خواند و <code>1</code> (HIGH) یا <code>0</code> (LOW) برمی‌گرداند.
+    <span class="why">جواب را در یک متغیر <code>int</code> می‌ریزیم تا بتوانیم چاپش کنیم یا با آن تصمیم بگیریم.</span></li>
+  <li data-lines="11-12"><b class="what">چاپ و مکث کوتاه.</b> هر ۱۰۰ میلی‌ثانیه یک عدد چاپ می‌شود.
+    <span class="why">۱۰۰ میلی‌ثانیه آن‌قدر سریع است که تغییرات را ببینی و آن‌قدر کند که Serial Monitor غرق نشود.</span></li>
+</ol>
+<p>دکمه را بین 3V3 و GPIO27 بگذار، کد را آپلود کن و Serial Monitor را باز کن. بدون فشار دادن دکمه، <b>انگشتت را نزدیک سیم GPIO27 ببر یا آن را لمس کن</b>. احتمالا چیزی شبیه این می‌بینی:</p>
+<div class="serial">0
+0
+1
+1
+0
+1
+0
+0
+1</div>
+<p>دکمه را فشار نداده‌ای ولی عدد مدام عوض می‌شود! پین شناور مثل یک آنتن کوچک است: بار الکتریکی بدن تو، برق ۵۰ هرتز دیوار و حتی سیم‌های کناری روی آن اثر می‌گذارند. ورودی ESP32 مقاومت بسیار بالایی دارد، پس کوچک‌ترین بار الکتریکی کافی است تا ولتاژ آن بالا و پایین برود.</p>
+
+<div class="callout analogy"><div class="ct">مثال: پرچم روی دکل</div>
+<p>پین شناور مثل پرچمی است که به دکل بسته نشده: با هر نسیمی به یک طرف می‌رود. مقاومت Pull مثل یک فنر است که پرچم را همیشه به یک طرف پیش‌فرض می‌کشد؛ فقط وقتی دست تو (دکمه) آن را بکشد، به طرف دیگر می‌رود.</p></div>
+
+<div class="callout warn"><div class="ct">در Wokwi این آزمایش را نمی‌بینی</div>
+<p>شبیه‌ساز دنیای کامل و بی‌نویز است و ممکن است پین شناور را همیشه ثابت نشان بدهد. این دقیقا یکی از جاهایی است که سخت‌افزار واقعی چیزی یاد می‌دهد که شبیه‌ساز نمی‌دهد. اگر برد واقعی داری، حتما این آزمایش را انجام بده.</p></div>
+
+<h2 id="pull">راه حل: مقاومت Pull-up و Pull-down</h2>
+<p>راه حل این است که پین را با یک مقاومت نسبتا بزرگ (معمولا ۱۰ کیلو اهم) به یک ولتاژ مشخص «ببندیم»:</p>
+<ul>
+  <li><b>Pull-down:</b> مقاومت از پین به <b>GND</b>. حالت عادی (رها) = LOW. دکمه بین پین و 3V3 است؛ فشار = HIGH.</li>
+  <li><b>Pull-up:</b> مقاومت از پین به <b>3V3</b>. حالت عادی (رها) = HIGH. دکمه بین پین و GND است؛ فشار = LOW.</li>
+</ul>
+
+<figure><div class="frame"><svg viewBox="0 0 700 330" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="مقایسه مدار Pull-down و Pull-up">
+  <text x="170" y="28" font-size="16" font-weight="800" text-anchor="middle" fill="#152033">Pull-down</text>
+  <text x="530" y="28" font-size="16" font-weight="800" text-anchor="middle" fill="#152033">Pull-up</text>
+  <line x1="350" y1="40" x2="350" y2="310" stroke="#dbe2ec" stroke-width="2"/>
+  <!-- pull-down -->
+  <text x="170" y="58" font-size="13" text-anchor="middle" fill="#d6453d" font-weight="700">3V3</text>
+  <line x1="170" y1="64" x2="170" y2="100" stroke="#d6453d" stroke-width="3"/>
+  <line x1="170" y1="100" x2="195" y2="130" stroke="#152033" stroke-width="3"/>
+  <line x1="170" y1="140" x2="170" y2="160" stroke="#152033" stroke-width="3"/>
+  <text text-anchor="end" x="205" y="124" font-size="13" fill="#152033" direction="rtl">دکمه</text>
+  <line x1="170" y1="160" x2="60" y2="160" stroke="#2563eb" stroke-width="3"/>
+  <circle cx="170" cy="160" r="5" fill="#152033"/>
+  <text x="55" y="165" font-size="13" text-anchor="end" fill="#2563eb" font-weight="700">GPIO27</text>
+  <line x1="170" y1="160" x2="170" y2="190" stroke="#152033" stroke-width="3"/>
+  <rect x="160" y="190" width="20" height="60" rx="3" fill="#f5deb3" stroke="#8b5a2b" stroke-width="2"/>
+  <text x="190" y="225" font-size="13" fill="#152033">10kΩ</text>
+  <line x1="170" y1="250" x2="170" y2="275" stroke="#222" stroke-width="3"/>
+  <line x1="150" y1="275" x2="190" y2="275" stroke="#222" stroke-width="3"/><line x1="158" y1="282" x2="182" y2="282" stroke="#222" stroke-width="3"/><line x1="166" y1="289" x2="174" y2="289" stroke="#222" stroke-width="3"/>
+  <text x="200" y="290" font-size="13" fill="#222">GND</text>
+  <text x="170" y="318" font-size="13" text-anchor="middle" fill="#4d5b70" direction="rtl">رها = LOW · فشار = HIGH</text>
+  <!-- pull-up -->
+  <text x="530" y="58" font-size="13" text-anchor="middle" fill="#d6453d" font-weight="700">3V3</text>
+  <line x1="530" y1="64" x2="530" y2="90" stroke="#d6453d" stroke-width="3"/>
+  <rect x="520" y="90" width="20" height="60" rx="3" fill="#f5deb3" stroke="#8b5a2b" stroke-width="2"/>
+  <text x="550" y="125" font-size="13" fill="#152033">10kΩ</text>
+  <line x1="530" y1="150" x2="530" y2="175" stroke="#152033" stroke-width="3"/>
+  <circle cx="530" cy="175" r="5" fill="#152033"/>
+  <line x1="530" y1="175" x2="420" y2="175" stroke="#2563eb" stroke-width="3"/>
+  <text x="415" y="180" font-size="13" text-anchor="end" fill="#2563eb" font-weight="700">GPIO27</text>
+  <line x1="530" y1="175" x2="530" y2="205" stroke="#152033" stroke-width="3"/>
+  <line x1="530" y1="205" x2="555" y2="235" stroke="#152033" stroke-width="3"/>
+  <line x1="530" y1="245" x2="530" y2="275" stroke="#222" stroke-width="3"/>
+  <text text-anchor="end" x="565" y="230" font-size="13" fill="#152033" direction="rtl">دکمه</text>
+  <line x1="510" y1="275" x2="550" y2="275" stroke="#222" stroke-width="3"/><line x1="518" y1="282" x2="542" y2="282" stroke="#222" stroke-width="3"/><line x1="526" y1="289" x2="534" y2="289" stroke="#222" stroke-width="3"/>
+  <text x="560" y="290" font-size="13" fill="#222">GND</text>
+  <text x="530" y="318" font-size="13" text-anchor="middle" fill="#4d5b70" direction="rtl">رها = HIGH · فشار = LOW</text>
+</svg></div>
+<figcaption>دو روش برای «بستن» پین به یک حالت پیش‌فرض. در هر دو، مقاومت ۱۰ کیلو جلوی اتصال کوتاه را می‌گیرد.</figcaption></figure>
+
+<div class="callout example"><div class="ct">حساب کن: چرا ۱۰ کیلو و نه صفر اهم؟</div>
+<p>در مدار Pull-up وقتی دکمه فشرده است، جریانی از 3V3 از مقاومت به GND می‌رود: <code>I = 3.3V ÷ 10000Ω = 0.00033A = 0.33mA</code>. خیلی کم و بی‌خطر.</p>
+<p>اگر به جای مقاومت یک سیم (صفر اهم) می‌گذاشتی، فشار دکمه 3V3 را مستقیم به GND وصل می‌کرد: اتصال کوتاه! رگولاتور برد داغ می‌شود و ESP32 ریست می‌شود. اگر هم مقاومت خیلی بزرگ (مثلا ۱۰ مگا) بگذاری، «فنر» آن‌قدر ضعیف می‌شود که نویز دوباره بر آن غلبه می‌کند. ۱۰ کیلو تعادل خوبی بین مصرف کم و مقاومت در برابر نویز است (هر چیزی بین ۴٫۷ تا ۴۷ کیلو هم کار می‌کند).</p></div>
+
+<h3>روش ۱: مقاومت Pull-down بیرونی ۱۰ کیلو</h3>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"BTN","name":"دکمه فشاری","img":"button.svg","pins":[["1","یک طرف دکمه"],["4","طرف دیگر (ضربدری)"]]},
+    {"id":"R1","name":"مقاومت ۱۰ کیلو (Pull-down)","img":"resistor.svg","pins":[["1","سمت پین"],["2","سمت زمین"]]}
+  ],
+  "wires":[["3V3","BTN.1","red"],["GPIO27","BTN.4","blue"],["GPIO27","R1.1","blue"],["R1.2","GND","black"]]
+}</script><figcaption>دکمه بین 3V3 و GPIO27، و مقاومت ۱۰ کیلو بین GPIO27 و GND. رها: مقاومت پین را به صفر می‌کشد (LOW). فشار: ۳٫۳ ولت مستقیم به پین می‌رسد (HIGH).</figcaption></div>
+<p>با همین سیم‌کشی، کد <code>Floating_Demo</code> را بدون تغییر دوباره اجرا کن. حالا تا دکمه را فشار ندهی فقط <code>0</code> می‌بینی، هر قدر هم سیم را لمس کنی. مشکل حل شد.</p>
+
+<h3>روش ۲: مقاومت داخلی ESP32 (بدون قطعه اضافه)</h3>
+<p>داخل تقریبا هر GPIO، مقاومت Pull-up و Pull-down (هر کدام حدود ۴۵ کیلو اهم) آماده است که با یک کلمه در <code>pinMode</code> روشن می‌شود:</p>
+<div class="table-wrap"><table>
+<tr><th>حالت در pinMode</th><th>چه چیزی وصل می‌شود</th><th>دکمه کجا وصل شود</th><th>رها / فشرده</th></tr>
+<tr><td><code>INPUT</code></td><td>هیچ (شناور)</td><td>فقط با مقاومت بیرونی</td><td>نامعلوم!</td></tr>
+<tr><td><code>INPUT_PULLUP</code></td><td>مقاومت داخلی به 3V3</td><td>بین پین و GND</td><td>HIGH / LOW</td></tr>
+<tr><td><code>INPUT_PULLDOWN</code></td><td>مقاومت داخلی به GND</td><td>بین پین و 3V3</td><td>LOW / HIGH</td></tr>
+</table></div>
+
+<div class="callout warn"><div class="ct">GPIO34 تا GPIO39 مقاومت داخلی ندارند</div>
+<p>پایه‌های فقط‌ورودی GPIO34، 35، 36 و 39 هیچ Pull-up یا Pull-down داخلی ندارند. اگر روی این پایه‌ها <code>INPUT_PULLUP</code> بنویسی، کامپایلر خطا نمی‌دهد ولی پین همچنان شناور است. برای دکمه روی این پایه‌ها حتما مقاومت ۱۰ کیلو بیرونی بگذار. (این پایه‌ها برای خواندن آنالوگ عالی‌اند؛ در ادامه می‌بینی.)</p></div>
+
+<div class="callout why"><div class="ct">چرا حرفه‌ای‌ها Pull-up را ترجیح می‌دهند؟</div>
+<p>در روش Pull-up سیم دکمه به GND می‌رود، نه به 3V3. سیم GND اگر تصادفا به بدنه فلزی یا جای دیگری بخورد، خطری ندارد؛ ولی سیم 3V3 که بیرون مدار کشیده شده، اگر به GND بخورد اتصال کوتاه می‌سازد. به علاوه این سنت از زمان تراشه‌های قدیمی مانده که Pull-up داخلی داشتند ولی Pull-down نداشتند. پس در ادامه دوره همیشه از <code>INPUT_PULLUP</code> استفاده می‌کنیم.</p></div>
+
+<h2 id="pullup-code">دکمه با INPUT_PULLUP و منطق برعکس</h2>
+<p>مدار اصلی بقیه این بخش: دکمه بین GPIO27 و GND (بدون مقاومت، چون Pull-up داخلی داریم) و یک LED با مقاومت ۲۲۰ اهم روی GPIO4، همان مدار درس ۲.۳.</p>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"BTN","name":"دکمه فشاری","img":"button.svg","pins":[["1","به GPIO27"],["4","به GND (پایه ضربدری)"]]},
+    {"id":"R1","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","سمت GPIO4"],["2","سمت LED"]]},
+    {"id":"LED1","name":"LED قرمز","img":"led.svg","pins":[["A","آند (+) پایه بلند"],["K","کاتد (−) پایه کوتاه"]]}
+  ],
+  "wires":[["GPIO27","BTN.1","blue"],["BTN.4","GND","black"],["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>مدار اصلی بخش دیجیتال: دکمه روی GPIO27 با Pull-up داخلی، LED روی GPIO4.</figcaption></div>
+
+<div class="code" data-file="Button_Pullup.ino" id="c2"><pre>
+// دکمه با Pull-up داخلی: فشار = LOW
+const int BUTTON_PIN = 27;
+const int LED_PIN = 4;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);   // مقاومت داخلی ~45k به 3.3V
+  pinMode(LED_PIN, OUTPUT);
+}
+
+void loop() {
+  bool pressed = (digitalRead(BUTTON_PIN) == LOW);   // منطق برعکس!
+  digitalWrite(LED_PIN, pressed ? HIGH : LOW);
+  Serial.println(pressed ? "pressed" : "released");
+  delay(50);
+}
+</pre></div>
+<ol class="walk" data-for="c2">
+  <li data-lines="2-3"><b class="what">دو ثابت برای دو پین.</b> دکمه روی ۲۷ و LED روی ۴.
+    <span class="why">همان عادت درس قبل: اسم معنادار به جای عدد خالی، تا اگر سیم را جابه‌جا کردی فقط یک خط عوض شود.</span></li>
+  <li data-lines="7"><b class="what">INPUT_PULLUP.</b> پین ورودی می‌شود و مقاومت داخلی به ۳٫۳ ولت هم وصل می‌شود. حالا در حالت رها پین همیشه HIGH است.
+    <span class="why">یک کلمه، جای یک مقاومت بیرونی و دو سیم را می‌گیرد. کمتر سیم = کمتر احتمال اشتباه.</span></li>
+  <li data-lines="12"><b class="what">تبدیل به منطق «انسانی».</b> <code>digitalRead(...) == LOW</code> یعنی «آیا پین LOW است؟». جواب (<code>true</code> یا <code>false</code>) در متغیر <code>bool</code> به اسم <code>pressed</code> می‌رود.
+    <span class="why">با Pull-up، فشار دادن = LOW. این «منطق برعکس» (Active Low) منبع اشتباه رایج است. با تبدیل آن در همان خط اول به یک اسم واضح (<code>pressed</code>)، بقیه برنامه را دیگر لازم نیست برعکس فکر کنی.</span></li>
+  <li data-lines="13"><b class="what">عملگر سه‌تایی <code>? :</code>.</b> <code>pressed ? HIGH : LOW</code> یعنی «اگر pressed درست است HIGH، وگرنه LOW».
+    <span class="why">یک if/else کوتاه در یک خط. وقتی فقط بین دو مقدار انتخاب می‌کنی، خواناتر است.</span></li>
+  <li data-lines="14-15"><b class="what">گزارش و مکث.</b> حالت دکمه را متنی چاپ می‌کند.
+    <span class="why">متن <code>pressed/released</code> از عدد ۰/۱ خواناتر است و دیگر لازم نیست یادت باشد کدام عدد یعنی فشرده.</span></li>
+</ol>
+<p>نتیجه: تا وقتی دکمه را نگه داشته‌ای LED روشن است و با رها کردن خاموش می‌شود؛ مثل زنگ در.</p>
+
+<h2 id="millis">millis(): ساعتی که هرگز نمی‌ایستد</h2>
+<p>قبل از این که سراغ مشکل بعدی دکمه برویم، یک ابزار حیاتی لازم داریم. در درس ۲.۳ دیدی که <code>delay(1000)</code> کل برنامه را یک ثانیه <b>منجمد</b> می‌کند. اگر در آن یک ثانیه دکمه را فشار بدهی و رها کنی، برنامه اصلا نمی‌فهمد. برای ساختن دستگاهی که هم‌زمان چند کار انجام بدهد، باید delay را کنار بگذاریم.</p>
+<p><code>millis()</code> یک تابع ساده است: تعداد میلی‌ثانیه‌هایی را برمی‌گرداند که از روشن شدن برد گذشته است. همین و بس. برنامه را متوقف نمی‌کند؛ فقط ساعت را نشان می‌دهد.</p>
+
+<div class="callout analogy"><div class="ct">مثال: پختن تخم‌مرغ</div>
+<p>روش <code>delay</code>: تخم‌مرغ را در آب می‌گذاری و ۱۰ دقیقه <b>بی‌حرکت</b> کنار اجاق می‌ایستی. تلفن زنگ بزند، جواب نمی‌دهی.</p>
+<p>روش <code>millis</code>: ساعت را نگاه می‌کنی (۸:۰۰) و می‌روی کارهای دیگر را انجام می‌دهی. هر چند ثانیه یک نگاه به ساعت می‌اندازی و می‌پرسی: «از ۸:۰۰ ده دقیقه گذشته؟» تا وقتی نه، به بقیه کارها می‌رسی. وقتی بله، زیر گاز را خاموش می‌کنی.</p></div>
+
+<div class="callout example"><div class="ct">با عدد</div>
+<p>فرض کن برد ۵ ثانیه پیش روشن شده: <code>millis()</code> عدد <code>5000</code> را می‌دهد. LED را در لحظه <code>5000</code> روشن کردیم و این عدد را در متغیر <code>lastToggle</code> نگه داشتیم. در دورهای بعدی loop، مدام حساب می‌کنیم <code>millis() − lastToggle</code>. وقتی <code>millis()</code> به <code>5500</code> رسید، نتیجه <code>500</code> می‌شود؛ یعنی ۵۰۰ میلی‌ثانیه گذشته و وقت عوض کردن LED است. در این ۵۰۰ میلی‌ثانیه loop شاید صدها هزار بار اجرا شده و هر بار فرصت داشته کار دیگری هم انجام بدهد.</p></div>
+
+<div class="code" data-file="Blink_NoDelay.ino" id="c3"><pre>
+// چشمک بدون delay: با نگاه کردن به ساعت
+const int LED_PIN = 4;
+const unsigned long INTERVAL = 500;   // هر ۵۰۰ میلی‌ثانیه
+unsigned long lastToggle = 0;         // آخرین باری که LED را عوض کردیم
+bool ledOn = false;
+
+void setup() {
+  pinMode(LED_PIN, OUTPUT);
+}
+
+void loop() {
+  unsigned long now = millis();
+  if (now - lastToggle &gt;= INTERVAL) {   // وقتش رسیده؟
+    lastToggle = now;
+    ledOn = !ledOn;
+    digitalWrite(LED_PIN, ledOn);
+  }
+  // اینجا loop آزاد است؛ هر کار دیگری بخواهی انجام بده
+}
+</pre></div>
+<ol class="walk" data-for="c3">
+  <li data-lines="3"><b class="what">نوع unsigned long.</b> یک عدد صحیح ۳۲ بیتی بدون علامت (فقط مثبت) که تا حدود ۴٫۳ میلیارد جا دارد.
+    <span class="why"><code>millis()</code> دقیقا همین نوع را برمی‌گرداند. اگر زمان را در <code>int</code> معمولی بریزی، بعد از حدود ۲۴ روز عدد منفی می‌شود و برنامه عجیب رفتار می‌کند. قانون: هر متغیری که با زمان سر و کار دارد، <code>unsigned long</code>.</span></li>
+  <li data-lines="4-5"><b class="what">حافظه برنامه.</b> <code>lastToggle</code> زمان آخرین تغییر را نگه می‌دارد و <code>ledOn</code> وضعیت فعلی LED را.
+    <span class="why">چون دیگر delay نداریم، برنامه باید خودش «یادش بماند» کجای کار است. این متغیرها سراسری‌اند تا بین دورهای loop پاک نشوند.</span></li>
+  <li data-lines="12"><b class="what">یک بار ساعت را بخوان.</b> زمان فعلی را در <code>now</code> می‌ریزیم.
+    <span class="why">اگر در یک دور loop چند جا millis را صدا بزنی، ممکن است جواب‌ها کمی فرق کنند. یک بار خواندن و استفاده از همان عدد، منطق را تمیز نگه می‌دارد.</span></li>
+  <li data-lines="13"><b class="what">سؤال اصلی: «به اندازه کافی گذشته؟»</b> <code>now - lastToggle</code> یعنی از آخرین تغییر چند میلی‌ثانیه گذشته. اگر ۵۰۰ یا بیشتر بود، وارد if می‌شویم.
+    <span class="why">همیشه به شکل «تفریق و مقایسه» بنویس، نه <code>now &gt;= lastToggle + INTERVAL</code>. شمارنده millis بعد از حدود ۴۹٫۷ روز به صفر برمی‌گردد (سرریز)؛ شکل تفریقی به لطف ریاضی اعداد بدون علامت حتی در آن لحظه هم درست کار می‌کند ولی شکل جمعی خراب می‌شود.</span></li>
+  <li data-lines="14-16"><b class="what">ثبت زمان و برعکس کردن LED.</b> زمان را به‌روز می‌کنیم، <code>!ledOn</code> مقدار را برعکس می‌کند (true↔false) و روی پین می‌نویسیم.
+    <span class="why"><code>digitalWrite</code> مقدار <code>true</code> را مثل HIGH و <code>false</code> را مثل LOW می‌فهمد. پس لازم نیست if جدا بنویسی.</span></li>
+  <li data-lines="18"><b class="what">loop آزاد است.</b> هیچ خطی برنامه را متوقف نمی‌کند.
+    <span class="why">این همان جایی است که در بخش بعد، خواندن دکمه را اضافه می‌کنیم؛ بدون این که چشمک زدن خراب شود.</span></li>
+</ol>
+
+<h2 id="bounce">لرزش دکمه (Bounce): وقتی یک فشار، سه فشار دیده می‌شود</h2>
+<p>کنتاکت‌های فلزی داخل دکمه وقتی به هم می‌خورند، مثل توپی که روی زمین می‌افتد، چند بار «بالا و پایین می‌پرند» تا ثابت شوند. این اتفاق معمولا زیر ۱۰ میلی‌ثانیه طول می‌کشد؛ برای تو یک لحظه است، ولی ESP32 در این مدت هزاران بار پین را می‌خواند و چند بار صفر و یک می‌بیند.</p>
+
+<figure><div class="frame"><svg viewBox="0 0 700 250" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="شکل موج لرزش دکمه">
+  <line x1="60" y1="200" x2="680" y2="200" stroke="#9aa4b5" stroke-width="1.5"/>
+  <line x1="60" y1="40" x2="60" y2="200" stroke="#9aa4b5" stroke-width="1.5"/>
+  <text x="52" y="64" font-size="13" text-anchor="end" fill="#152033">3.3V</text>
+  <text x="52" y="184" font-size="13" text-anchor="end" fill="#152033">0V</text>
+  <path d="M60 60 H250 V180 H262 V60 H270 V180 H285 V60 H290 V180 H305 V90 H310 V180 H680" fill="none" stroke="#2563eb" stroke-width="3" stroke-linejoin="round"/>
+  <rect x="250" y="30" width="62" height="165" fill="#e0781f" opacity=".12"/>
+  <text x="281" y="24" font-size="13" text-anchor="middle" fill="#e0781f" font-weight="700" direction="rtl">لرزش: حدود ۱ تا ۱۰ میلی‌ثانیه</text>
+  <text x="150" y="50" font-size="13" text-anchor="middle" fill="#152033" direction="rtl">رها (HIGH با Pull-up)</text>
+  <text x="500" y="170" font-size="13" text-anchor="middle" fill="#152033" direction="rtl">فشرده و ثابت (LOW)</text>
+  <text x="250" y="222" font-size="13" text-anchor="middle" fill="#152033" direction="rtl">لحظه فشار</text>
+  <text x="470" y="236" font-size="13" text-anchor="middle" fill="#4d5b70" direction="rtl">ESP32 در این فاصله چند بار «HIGH به LOW» می‌بیند</text>
+</svg></div>
+<figcaption>شکل موج واقعی یک دکمه ارزان هنگام فشردن (با Pull-up). اگر برنامه هر لبه پایین‌رونده را یک فشار حساب کند، به جای ۱ فشار چند فشار می‌شمارد.</figcaption></figure>
+
+<p>بیا اول مشکل را ببینیم. این برنامه هر بار که دکمه از رها به فشرده برود یک عدد می‌شمارد، ولی عمدا Debounce ندارد:</p>
+<div class="code" data-file="Count_NoDebounce.ino" id="c4"><pre>
+// شمارش فشار بدون Debounce (عمدا ناقص!)
+const int BUTTON_PIN = 27;
+int lastState = HIGH;     // حالت قبلی (رها = HIGH)
+int count = 0;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+}
+
+void loop() {
+  int state = digitalRead(BUTTON_PIN);
+  if (lastState == HIGH &amp;&amp; state == LOW) {   // لبه: همین الان فشرده شد
+    count++;
+    Serial.print("Press #");
+    Serial.println(count);
+  }
+  lastState = state;
+}
+</pre></div>
+<ol class="walk" data-for="c4">
+  <li data-lines="3-4"><b class="what">یادآوری حالت قبلی.</b> <code>lastState</code> حالت دکمه در دور قبلی loop را نگه می‌دارد؛ <code>count</code> تعداد فشارها را.
+    <span class="why">برای فهمیدن «لحظه فشار» باید حالت فعلی را با حالت قبلی مقایسه کنیم. یک عکس تنها نمی‌گوید چیزی تغییر کرده؛ دو عکس پشت سر هم می‌گویند.</span></li>
+  <li data-lines="13"><b class="what">تشخیص لبه (State Change Detection).</b> فقط وقتی شرط درست است که قبلا HIGH (رها) بوده و الان LOW (فشرده) است. <code>&amp;&amp;</code> یعنی «و».
+    <span class="why">اگر فقط می‌پرسیدیم «LOW است؟»، تا وقتی انگشتت روی دکمه است شمارنده در هر دور loop زیاد می‌شد؛ یعنی هزاران بار در ثانیه! ما «رویداد فشار» را می‌خواهیم، نه «وضعیت فشرده بودن».</span></li>
+  <li data-lines="14-16"><b class="what">شمارش و چاپ.</b> <code>count++</code> یکی اضافه می‌کند و عدد چاپ می‌شود.
+    <span class="why">چاپ عدد به تو اجازه می‌دهد لرزش را با چشم ببینی: یک فشار، چند شماره.</span></li>
+  <li data-lines="18"><b class="what">به‌روز کردن حافظه.</b> حالت فعلی، «حالت قبلی» دور بعد می‌شود.
+    <span class="why">اگر این خط را فراموش کنی، <code>lastState</code> همیشه HIGH می‌ماند و تشخیص لبه خراب می‌شود.</span></li>
+</ol>
+<p>دکمه را ده بار با دقت فشار بده. با دکمه‌های ارزان معمولا چیزی شبیه این می‌بینی (شماره‌ها گاهی دوتا دوتا یا سه‌تا سه‌تا جلو می‌روند):</p>
+<div class="serial">Press #1
+Press #2
+Press #3
+Press #4
+Press #5
+Press #6</div>
+<p>با فقط سه فشار واقعی! (در Wokwi هم دکمه به طور پیش‌فرض لرزش را شبیه‌سازی می‌کند، پس آنجا هم می‌توانی این را ببینی.)</p>
+
+<h3 id="debounce">Debounce با millis: «فقط تغییری را باور کن که ثابت بماند»</h3>
+<p>ایده ساده است: هر بار که خواندن خام پین تغییر کرد، یک زمان‌سنج را از صفر شروع کن. فقط اگر خواندن ۳۰ میلی‌ثانیه <b>بدون تغییر</b> ماند، آن را به عنوان وضعیت واقعی دکمه قبول کن. لرزش‌ها همیشه قبل از ۳۰ میلی‌ثانیه تمام می‌شوند، پس هیچ‌وقت «باور» نمی‌شوند. در همین برنامه، با هر فشار LED را روشن یا خاموش (Toggle) می‌کنیم.</p>
+
+<div class="code" data-file="Toggle_Debounce.ino" id="c5"><pre>
+// تغییر وضعیت LED با هر فشار + Debounce با millis
+const int BUTTON_PIN = 27;
+const int LED_PIN = 4;
+const unsigned long DEBOUNCE_MS = 30;   // لرزش معمولا زیر ۱۰ms است
+
+int stableState = HIGH;           // وضعیت «تأییدشده» دکمه
+int lastReading = HIGH;           // آخرین خواندن خام
+unsigned long lastChangeTime = 0; // زمان آخرین تغییر خواندن خام
+bool ledOn = false;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LED_PIN, OUTPUT);
+}
+
+void loop() {
+  int reading = digitalRead(BUTTON_PIN);
+
+  if (reading != lastReading) {        // خواندن خام عوض شد (شاید لرزش)
+    lastChangeTime = millis();         // زمان‌سنج را از نو شروع کن
+    lastReading = reading;
+  }
+
+  if (millis() - lastChangeTime &gt; DEBOUNCE_MS &amp;&amp; reading != stableState) {
+    stableState = reading;             // ۳۰ms ثابت ماند: تغییر واقعی است
+    if (stableState == LOW) {          // فقط لحظه فشردن (نه رها کردن)
+      ledOn = !ledOn;
+      digitalWrite(LED_PIN, ledOn);
+      Serial.println(ledOn ? "LED ON" : "LED OFF");
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="c5">
+  <li data-lines="4"><b class="what">زمان صبر: ۳۰ میلی‌ثانیه.</b>
+    <span class="why">لرزش بیشتر دکمه‌ها زیر ۱۰ میلی‌ثانیه است؛ ۳۰ حاشیه اطمینان خوبی است. از طرف دیگر انسان تأخیر زیر حدود ۵۰ میلی‌ثانیه را حس نمی‌کند، پس دکمه «کند» به نظر نمی‌رسد. اگر دکمه خیلی بی‌کیفیت بود، تا ۵۰ بالا ببر.</span></li>
+  <li data-lines="6-9"><b class="what">چهار متغیر حافظه.</b> <code>stableState</code>: آخرین وضعیتی که «باور» کرده‌ایم. <code>lastReading</code>: آخرین چیزی که پین گفته (شاید لرزش). <code>lastChangeTime</code>: کی خواندن خام آخرین بار عوض شد. <code>ledOn</code>: وضعیت LED.
+    <span class="why">جدا کردن «خواندن خام» از «وضعیت باورشده» قلب Debounce است. خام را همیشه دنبال می‌کنیم، ولی فقط به باورشده عمل می‌کنیم.</span></li>
+  <li data-lines="18"><b class="what">خواندن خام.</b> در هر دور loop پین را می‌خوانیم.
+    <span class="why">loop هزاران بار در ثانیه اجرا می‌شود، پس هیچ تغییری از چشم برنامه پنهان نمی‌ماند؛ حتی لرزش‌های یک میلی‌ثانیه‌ای.</span></li>
+  <li data-lines="20-23"><b class="what">هر تغییر خام، زمان‌سنج را صفر می‌کند.</b> اگر خواندن با دفعه قبل فرق داشت، زمان را ثبت می‌کنیم.
+    <span class="why">در طول لرزش، این شرط مدام درست می‌شود و زمان‌سنج مدام از نو شروع می‌شود. پس تا لرزش تمام نشده، هرگز ۳۰ میلی‌ثانیه سکون پیش نمی‌آید.</span></li>
+  <li data-lines="25-26"><b class="what">شرط تأیید.</b> دو چیز با هم لازم است: بیش از ۳۰ms از آخرین تغییر خام گذشته باشد، <b>و</b> خواندن با وضعیت باورشده فرق داشته باشد. آن وقت وضعیت جدید را باور می‌کنیم.
+    <span class="why">شرط دوم باعث می‌شود فقط یک بار به هر تغییر واقعی واکنش نشان بدهیم، نه در هر دور loop که دکمه ثابت مانده.</span></li>
+  <li data-lines="27-31"><b class="what">فقط لحظه فشار، Toggle.</b> وقتی وضعیت باورشده LOW (فشرده) شد، LED را برعکس می‌کنیم و گزارش می‌دهیم.
+    <span class="why">رها کردن دکمه هم یک «تغییر واقعی» است (LOW به HIGH). اگر این if نبود، LED با فشار روشن و با رها کردن خاموش می‌شد؛ یعنی دوباره همان زنگ در!</span></li>
+</ol>
+
+<div class="callout tip"><div class="ct">Debounce سخت‌افزاری هم هست</div>
+<p>یک خازن ۱۰۰ نانوفاراد موازی با دکمه، لرزش را تا حد زیادی صاف می‌کند. ولی Debounce نرم‌افزاری مجانی است، قطعه اضافه نمی‌خواهد و قابل تنظیم است. در پروژه‌های مبتدی همان نرم‌افزاری کافی است.</p></div>
+
+<h2 id="multitask">چند کار هم‌زمان: چشمک + دکمه، بدون delay</h2>
+<p>حالا دو مهارت را ترکیب می‌کنیم: LED با millis چشمک می‌زند و هم‌زمان دکمه (با Debounce) چشمک زدن را متوقف یا دوباره شروع می‌کند. اگر این برنامه را با <code>delay(500)</code> می‌نوشتی، فشارهای کوتاه دکمه وسط delay گم می‌شدند.</p>
+
+<div class="code" data-file="Blink_And_Button.ino" id="c6"><pre>
+// چشمک زدن + خواندن دکمه، هم‌زمان و بدون delay
+const int BUTTON_PIN = 27;
+const int LED_PIN = 4;
+const unsigned long BLINK_MS = 500;
+const unsigned long DEBOUNCE_MS = 30;
+
+bool blinking = true;             // دکمه این را روشن/خاموش می‌کند
+bool ledOn = false;
+unsigned long lastBlink = 0;
+
+int stableState = HIGH, lastReading = HIGH;
+unsigned long lastChangeTime = 0;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LED_PIN, OUTPUT);
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  // کار ۱: دکمه (با Debounce)
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChangeTime = now; lastReading = reading; }
+  if (now - lastChangeTime &gt; DEBOUNCE_MS &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) {
+      blinking = !blinking;
+      Serial.println(blinking ? "Blinking ON" : "Blinking paused");
+    }
+  }
+
+  // کار ۲: چشمک (فقط اگر فعال است)
+  if (blinking &amp;&amp; now - lastBlink &gt;= BLINK_MS) {
+    lastBlink = now;
+    ledOn = !ledOn;
+    digitalWrite(LED_PIN, ledOn);
+  }
+  if (!blinking &amp;&amp; ledOn) {         // وقتی متوقف شد، LED خاموش بماند
+    ledOn = false;
+    digitalWrite(LED_PIN, LOW);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="c6">
+  <li data-lines="7-9"><b class="what">حافظه چشمک.</b> <code>blinking</code> می‌گوید چشمک فعال است یا نه؛ <code>ledOn</code> و <code>lastBlink</code> مثل برنامه Blink_NoDelay.
+    <span class="why">هر «کار» متغیرهای خودش را دارد. این جداسازی باعث می‌شود بعدا کار سوم و چهارم را هم بدون قاطی شدن اضافه کنی.</span></li>
+  <li data-lines="11-12"><b class="what">حافظه دکمه.</b> همان متغیرهای Debounce؛ این بار دو متغیر هم‌نوع را در یک خط تعریف کرده‌ایم.
+    <span class="why"><code>int a = 1, b = 2;</code> یعنی دو متغیر int در یک خط. فقط برای کوتاه‌تر شدن است.</span></li>
+  <li data-lines="21"><b class="what">یک ساعت برای همه.</b> زمان فعلی یک بار خوانده می‌شود و هر دو کار از آن استفاده می‌کنند.
+    <span class="why">هر دو کار با یک «عکس» از ساعت تصمیم می‌گیرند؛ منطق ساده‌تر و قابل پیش‌بینی‌تر می‌شود.</span></li>
+  <li data-lines="24-31"><b class="what">کار ۱: دکمه.</b> دقیقا منطق Debounce قبلی، فقط به جای LED متغیر <code>blinking</code> را برعکس می‌کند. خط ۲۵ همان سه خط قبلی است که در یک خط فشرده شده.
+    <span class="why">این بخش در هر دور loop فقط چند میکروثانیه طول می‌کشد و هرگز صبر نمی‌کند؛ برای همین هیچ فشاری گم نمی‌شود.</span></li>
+  <li data-lines="35-39"><b class="what">کار ۲: چشمک.</b> اگر چشمک فعال است <b>و</b> ۵۰۰ms گذشته، LED را برعکس کن.
+    <span class="why">دو کار کاملا مستقل پشت سر هم نوشته شده‌اند و هیچ‌کدام دیگری را منتظر نمی‌گذارد. این الگو (بررسی سریع شرط، انجام کار کوتاه، رد شدن) پایه همه برنامه‌های چندکاره میکروکنترلر است.</span></li>
+  <li data-lines="40-43"><b class="what">حالت توقف تمیز.</b> اگر چشمک متوقف شده ولی LED در حالت روشن مانده، خاموشش کن.
+    <span class="why">بدون این بخش، اگر دکمه را درست وقتی LED روشن است بزنی، LED روشن «گیر» می‌کند. جزئیات کوچک، تفاوت محصول حرفه‌ای و آماتور است.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="c6">
+<p>در Wokwi یک پروژه ESP32 جدید باز کن، <code>diagram.json</code> را با متن زیر جایگزین کن و کد بالا را در <code>sketch.ino</code> بچسبان. روی دکمه سبز کلیک کن و ببین چشمک زدن متوقف و دوباره شروع می‌شود. در همین مدار می‌توانی کدهای <code>Button_Pullup</code>، <code>Count_NoDebounce</code> و <code>Toggle_Debounce</code> را هم امتحان کنی.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 150, "left": -150, "attrs": { "color": "green" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:27", "btn1:1.r", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="interrupt">آشنایی کوتاه با وقفه (Interrupt)</h2>
+<p>در روش‌های قبلی، برنامه مدام از پین می‌پرسید «فشار دادی؟» (به این می‌گویند Polling). روش دیگر این است که به سخت‌افزار بگوییم: «هر وقت پین از HIGH به LOW رفت، هر کاری داری ول کن و این تابع کوچک را اجرا کن». به این تابع ISR (روال سرویس وقفه) می‌گویند.</p>
+<div class="callout analogy"><div class="ct">مثال: زنگ در</div>
+<p>Polling یعنی هر یک دقیقه بروی در را باز کنی ببینی کسی آمده یا نه. Interrupt یعنی زنگ در: هر کاری داری، با صدای زنگ متوقف می‌کنی، در را باز می‌کنی و برمی‌گردی سر کارت.</p></div>
+
+<div class="code" data-file="Button_Interrupt.ino" id="c7"><pre>
+// شمارش فشار دکمه با وقفه (Interrupt)
+const int BUTTON_PIN = 27;
+
+volatile uint32_t pressCount = 0;     // بین ISR و loop مشترک است
+volatile uint32_t lastIsrTime = 0;
+
+void IRAM_ATTR onButton() {           // ISR: کوتاه و سریع
+  uint32_t now = millis();
+  if (now - lastIsrTime &gt; 200) {      // Debounce ساده داخل ISR
+    pressCount++;
+    lastIsrTime = now;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), onButton, FALLING);
+}
+
+void loop() {
+  static uint32_t shown = 0;
+  uint32_t count = pressCount;        // یک کپی بگیر
+  if (count != shown) {
+    shown = count;
+    Serial.printf("Presses: %lu\n", (unsigned long)count);
+  }
+  delay(1000);                        // حتی با delay طولانی، هیچ فشاری گم نمی‌شود
+}
+</pre></div>
+<ol class="walk" data-for="c7">
+  <li data-lines="4-5"><b class="what">کلمه volatile.</b> به کامپایلر می‌گوید «این متغیر ممکن است هر لحظه، بیرون از جریان عادی برنامه، عوض شود؛ هر بار از حافظه بخوانش».
+    <span class="why">کامپایلر برای سرعت ممکن است مقدار را در یک ثبات نگه دارد و دیگر از حافظه نخواند. آن وقت loop هرگز تغییری را که ISR داده نمی‌بیند. هر متغیری که ISR و loop هر دو با آن کار می‌کنند باید volatile باشد.</span></li>
+  <li data-lines="7"><b class="what">IRAM_ATTR.</b> تابع ISR را در حافظه RAM داخلی سریع (IRAM) قرار می‌دهد.
+    <span class="why">کد عادی ESP32 از حافظه فلش خوانده می‌شود. اگر وقفه درست وقتی بیاید که فلش مشغول است (مثلا هنگام نوشتن)، ISR داخل فلش قابل اجرا نیست و برد کرش می‌کند. IRAM_ATTR این خطر را برطرف می‌کند.</span></li>
+  <li data-lines="8-12"><b class="what">بدنه ISR: فقط شمارش.</b> اگر از آخرین وقفه بیش از ۲۰۰ms گذشته، یکی به شمارنده اضافه می‌شود.
+    <span class="why">لرزش دکمه وقفه را هم چند بار صدا می‌زند، پس اینجا هم Debounce لازم است. ۲۰۰ms بزرگ‌تر از ۳۰ms قبلی است چون اینجا فقط لبه‌های پایین‌رونده را می‌بینیم و رها کردن دکمه هم ممکن است لرزش پایین‌رونده بسازد.</span></li>
+  <li data-lines="18"><b class="what">attachInterrupt.</b> سه چیز می‌گیرد: شماره وقفه پین (<code>digitalPinToInterrupt</code>)، اسم تابع ISR، و نوع لبه: <code>FALLING</code> یعنی «از HIGH به LOW» که با Pull-up همان لحظه فشار است.
+    <span class="why">گزینه‌های دیگر: <code>RISING</code> (LOW به HIGH، لحظه رها کردن) و <code>CHANGE</code> (هر دو).</span></li>
+  <li data-lines="22-27"><b class="what">loop فقط گزارش می‌دهد.</b> یک کپی از شمارنده می‌گیرد و اگر نسبت به آخرین نمایش تغییر کرده، چاپ می‌کند. <code>static</code> یعنی متغیر <code>shown</code> بین دورهای loop پاک نمی‌شود.
+    <span class="why">کار سنگین (مثل چاپ روی Serial) همیشه در loop انجام می‌شود، نه در ISR. کپی گرفتن باعث می‌شود اگر وسط کار وقفه‌ای آمد، مقایسه و چاپ با یک عدد ثابت انجام شوند.</span></li>
+  <li data-lines="28"><b class="what">delay یک ثانیه‌ای، عمدا.</b>
+    <span class="why">برای نشان دادن قدرت وقفه: حتی وقتی loop یک ثانیه خواب است، فشارها شمرده می‌شوند. نمایش ممکن است تا یک ثانیه دیر باشد ولی چیزی گم نمی‌شود.</span></li>
+</ol>
+
+<div class="callout warn"><div class="ct">قانون‌های سخت ISR (مهم!)</div>
+<p>۱) ISR باید <b>خیلی کوتاه</b> باشد: یک پرچم بگذار یا شمارنده را زیاد کن و برگرد. ۲) داخل ISR هرگز <code>Serial.print</code>، <code>delay</code>، کار با Wi-Fi یا خواندن سنسورهای کند را صدا نزن؛ ممکن است برد با خطای Watchdog یا <code>Guru Meditation Error</code> ریست شود. ۳) متغیرهای مشترک را volatile کن. ۴) اگر متغیر مشترک بزرگ‌تر از ۳۲ بیت است یا چند متغیر را با هم عوض می‌کنی، در loop از بخش بحرانی (<code>portENTER_CRITICAL</code>) استفاده کن؛ این را در پروژه‌های پیشرفته‌تر می‌بینی.</p></div>
+<div class="callout coach"><div class="ct">حرف مربی: وقفه چکش نیست</div>
+<p>مبتدی‌ها وقفه را که یاد می‌گیرند، می‌خواهند همه چیز را با آن حل کنند. برای یک دکمه که انسان فشار می‌دهد، Polling با millis (مثل بخش قبل) ساده‌تر، قابل عیب‌یابی‌تر و کاملا کافی است. وقفه را نگه دار برای رویدادهای خیلی سریع یا کوتاه: شمارش پالس سنسور جریان آب، انکودر موتور، یا بیدار کردن برد از خواب.</p></div>
+
+<h2 id="analog">ورودی آنالوگ: ADC ده‌ها هزار بار در ثانیه «خط‌کش» می‌گیرد</h2>
+<p>خیلی از سنسورها جواب بله/خیر نمی‌دهند؛ یک <b>ولتاژ</b> بیرون می‌دهند که با مقدار اندازه‌گیری‌شده تغییر می‌کند. بخشی از ESP32 به اسم ADC (مبدل آنالوگ به دیجیتال) این ولتاژ را به یک عدد تبدیل می‌کند.</p>
+<p>ADC در ESP32 <b>۱۲ بیتی</b> است: یعنی بازه ولتاژ را به <code>2<sup>12</sup> = 4096</code> پله تقسیم می‌کند و عددی بین <code>0</code> تا <code>4095</code> می‌دهد.</p>
+<div class="callout analogy"><div class="ct">مثال: خط‌کش ۴۰۹۶ خطی</div>
+<p>تصور کن یک خط‌کش داری که به جای سانتی‌متر، ۴۰۹۶ خط ریز دارد. ADC ولتاژ را کنار این خط‌کش می‌گذارد و می‌گوید «به خط شماره ۲۰۴۸ رسید». هر چه خط‌ها بیشتر، اندازه‌گیری ریزتر. آردوینو اونو خط‌کش ۱۰۲۴ خطی (۱۰ بیتی) دارد؛ ESP32 چهار برابر ریزتر.</p></div>
+<div class="callout example"><div class="ct">با عدد</div>
+<p>اگر بازه ۰ تا ۳٫۳ ولت را فرض کنیم، هر پله تقریبا <code>3.3 ÷ 4095 ≈ 0.0008V</code> یعنی ۰٫۸ میلی‌ولت است. پس عدد ۲۰۴۸ یعنی تقریبا <code>2048 × 0.0008 ≈ 1.65V</code>، نصف ۳٫۳ ولت. ولی در عمل ADC ی ESP32 به این تمیزی نیست؛ پایین‌تر می‌بینی چرا.</p></div>
+
+<h3 id="adc-limits">سه حقیقت که باید درباره ADC ی ESP32 بدانی</h3>
+<p><b>۱) تضعیف (Attenuation).</b> ADC در داخل فقط ولتاژهای حدود یک ولت را مستقیم اندازه می‌گیرد. برای خواندن ولتاژهای بیشتر، ESP32 ولتاژ ورودی را قبل از اندازه‌گیری «کوچک» می‌کند. در Arduino-ESP32 پیش‌فرض <code>ADC_11db</code> است که بیشترین بازه را می‌دهد. طبق مستندات رسمی، بازه قابل اندازه‌گیری در ESP32 کلاسیک:</p>
+<div class="table-wrap"><table>
+<tr><th>تضعیف</th><th>بازه قابل اندازه‌گیری (ESP32 کلاسیک)</th><th>کی استفاده کنیم</th></tr>
+<tr><td><code>ADC_0db</code></td><td>۱۰۰ تا ۹۵۰ میلی‌ولت</td><td>سیگنال‌های خیلی کوچک</td></tr>
+<tr><td><code>ADC_2_5db</code></td><td>۱۰۰ تا ۱۲۵۰ میلی‌ولت</td><td>کم‌کاربرد</td></tr>
+<tr><td><code>ADC_6db</code></td><td>۱۵۰ تا ۱۷۵۰ میلی‌ولت</td><td>سنسورهای با خروجی تا ۱٫۷ ولت</td></tr>
+<tr><td><code>ADC_11db</code> (پیش‌فرض)</td><td>۱۵۰ تا ۳۱۰۰ میلی‌ولت</td><td>پتانسیومتر، LDR و بیشتر کارها</td></tr>
+</table></div>
+<p>با تابع <code>analogSetAttenuation(ADC_6db)</code> برای همه پین‌ها یا <code>analogSetPinAttenuation(pin, ADC_6db)</code> برای یک پین می‌توانی آن را عوض کنی. در این درس به پیش‌فرض دست نمی‌زنیم.</p>
+
+<p><b>۲) غیرخطی بودن در دو سر بازه.</b> ADC ی ESP32 کلاسیک در نزدیکی صفر و نزدیکی ۳٫۳ ولت «کور» است: ولتاژهای زیر حدود ۰٫۱ تا ۰٫۱۵ ولت همه <code>0</code> خوانده می‌شوند و ولتاژهای بالای حدود ۳٫۱ ولت همه <code>4095</code>. در وسط بازه هم رابطه کاملا صاف نیست.</p>
+
+<figure><div class="frame"><svg viewBox="0 0 640 330" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="نمودار غیرخطی ADC">
+  <line x1="80" y1="280" x2="600" y2="280" stroke="#152033" stroke-width="1.5"/>
+  <line x1="80" y1="280" x2="80" y2="30" stroke="#152033" stroke-width="1.5"/>
+  <text x="340" y="318" font-size="13" text-anchor="middle" fill="#152033" direction="rtl">ولتاژ ورودی (ولت)</text>
+  <text x="80" y="298" font-size="12" text-anchor="middle" fill="#4d5b70">0</text>
+  <text x="237" y="298" font-size="12" text-anchor="middle" fill="#4d5b70">1.0</text>
+  <text x="395" y="298" font-size="12" text-anchor="middle" fill="#4d5b70">2.0</text>
+  <text x="552" y="298" font-size="12" text-anchor="middle" fill="#4d5b70">3.0</text>
+  <text x="600" y="298" font-size="12" text-anchor="middle" fill="#4d5b70">3.3</text>
+  <text x="72" y="284" font-size="12" text-anchor="end" fill="#4d5b70">0</text>
+  <text x="72" y="54" font-size="12" text-anchor="end" fill="#4d5b70">4095</text>
+  <line x1="80" y1="50" x2="600" y2="50" stroke="#dbe2ec" stroke-dasharray="4 4"/>
+  <line x1="80" y1="280" x2="600" y2="50" stroke="#9aa4b5" stroke-width="2" stroke-dasharray="6 5"/>
+  <text text-anchor="end" x="470" y="165" font-size="12" fill="#7b889b" direction="rtl">خط ایدئال (خط‌چین)</text>
+  <path d="M80 280 L100 280 C140 262 200 225 300 180 S470 100 568 50 L600 50" fill="none" stroke="#2563eb" stroke-width="3.5"/>
+  <rect x="80" y="40" width="22" height="245" fill="#d6453d" opacity=".10"/>
+  <rect x="566" y="40" width="34" height="245" fill="#d6453d" opacity=".10"/>
+  <text text-anchor="end" x="112" y="120" font-size="12" fill="#d6453d" direction="rtl">زیر حدود ۰٫۱۵ ولت: همه صفر</text>
+  <text x="560" y="36" font-size="12" text-anchor="start" fill="#d6453d" direction="rtl">بالای حدود ۳٫۱ ولت: همه ۴۰۹۵</text>
+  <text text-anchor="end" x="330" y="232" font-size="12" fill="#2563eb" direction="rtl">رفتار واقعی (شماتیک)</text>
+</svg></div>
+<figcaption>شکل شماتیک (نه اندازه‌گیری دقیق) رفتار ADC ی ESP32 کلاسیک با تضعیف ۱۱dB. برای اندازه‌گیری مطمئن، سیگنال را در وسط بازه (حدود ۰٫۲ تا ۲٫۹ ولت) نگه دار.</figcaption></figure>
+
+<p>راه حل عملی: به جای <code>analogRead</code> از <code>analogReadMilliVolts</code> استفاده کن. این تابع با داده‌های کالیبراسیونی که Espressif هنگام ساخت هر تراشه در حافظه eFuse آن نوشته، عدد خام را اصلاح می‌کند و مستقیم <b>میلی‌ولت</b> برمی‌گرداند. دقیق‌تر است و لازم نیست خودت حساب کنی.</p>
+
+<p><b>۳) ADC1 و ADC2؛ Wi-Fi دشمن ADC2 است.</b> ESP32 دو مبدل دارد. <b>ADC2 وقتی Wi-Fi روشن است قابل استفاده نیست</b>، چون خود درایور Wi-Fi از آن استفاده می‌کند و <code>analogRead</code> روی پین‌های ADC2 خطا یا عدد بی‌معنی می‌دهد.</p>
+<div class="table-wrap"><table>
+<tr><th>مبدل</th><th>پین‌ها روی DevKitC</th><th>با Wi-Fi</th></tr>
+<tr><td>ADC1</td><td><code>GPIO32, 33, 34, 35, 36, 39</code></td><td>✅ همیشه کار می‌کند</td></tr>
+<tr><td>ADC2</td><td><code>GPIO0, 2, 4, 12, 13, 14, 15, 25, 26, 27</code></td><td>❌ وقتی Wi-Fi روشن است، نه</td></tr>
+</table></div>
+<div class="callout coach"><div class="ct">قانون مربی</div>
+<p>از همین امروز عادت کن: <b>سنسور آنالوگ = پین ADC1</b> (32 تا 39). حتی اگر پروژه فعلی Wi-Fi ندارد. سه ماه دیگر Wi-Fi اضافه می‌کنی و ساعت‌ها دنبال این می‌گردی که چرا سنسور ناگهان خراب شد. برای همین در این درس پتانسیومتر روی GPIO34 و LDR روی GPIO35 است.</p></div>
+
+<h2 id="pot">پتانسیومتر: اولین ورودی آنالوگ</h2>
+<p>پتانسیومتر یک مقاومت با سه پایه است. دو پایه کناری به دو سر یک نوار مقاومتی (مثلا ۱۰ کیلو اهم) وصل‌اند. پایه وسط (Wiper) یک «جاروی» فلزی است که با چرخاندن پیچ روی نوار حرکت می‌کند. اگر یک سر را به 3V3 و سر دیگر را به GND بدهی، پایه وسط هر ولتاژی بین ۰ تا ۳٫۳ ولت را بسته به محل پیچ نشان می‌دهد.</p>
+
+<figure><div class="frame"><svg viewBox="0 0 620 220" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="ساختار داخلی پتانسیومتر">
+  <rect x="120" y="90" width="380" height="30" rx="6" fill="#c9a36a" stroke="#8b5a2b" stroke-width="2"/>
+  <line x1="120" y1="105" x2="60" y2="105" stroke="#d6453d" stroke-width="4"/>
+  <line x1="500" y1="105" x2="560" y2="105" stroke="#222" stroke-width="4"/>
+  <text x="50" y="110" font-size="14" text-anchor="end" fill="#d6453d" font-weight="700">3V3</text>
+  <text x="570" y="110" font-size="14" fill="#222" font-weight="700">GND</text>
+  <path d="M340 60 L340 86 L332 76 M340 86 L348 76" stroke="#2563eb" stroke-width="4" fill="none"/>
+  <line x1="340" y1="60" x2="340" y2="30" stroke="#2563eb" stroke-width="4"/>
+  <text x="352" y="36" font-size="14" fill="#2563eb" font-weight="700">SIG → GPIO34</text>
+  <text x="230" y="150" font-size="13" text-anchor="middle" fill="#152033">R1 ≈ 6k</text>
+  <text x="420" y="150" font-size="13" text-anchor="middle" fill="#152033">R2 ≈ 4k</text>
+  <text x="310" y="195" font-size="13" text-anchor="middle" fill="#4d5b70" direction="rtl">پیچ در ۶۰٪ مسیر: Vout = 3.3 × 4k ÷ 10k = 1.32V</text>
+</svg></div>
+<figcaption>پتانسیومتر در واقع یک تقسیم‌کننده ولتاژ قابل تنظیم است. نوار مقاومتی به دو تکه تقسیم می‌شود و ولتاژ پایه وسط به نسبت این دو تکه است.</figcaption></figure>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"POT","name":"پتانسیومتر ۱۰ کیلو","img":"pot.svg","pins":[["VCC","پایه کناری اول"],["SIG","پایه وسط (Wiper)"],["GND","پایه کناری دوم"]]}
+  ],
+  "wires":[["3V3","POT.VCC","red"],["GPIO34","POT.SIG","blue"],["POT.GND","GND","black"]]
+}</script><figcaption>پایه وسط همیشه به GPIO می‌رود. دو پایه کناری به 3V3 و GND (اگر جایشان را عوض کنی فقط جهت چرخش برعکس می‌شود).</figcaption></div>
+
+<div class="callout warn"><div class="ct">هرگز پتانسیومتر را به 5V وصل نکن</div>
+<p>اگر پایه کناری را به 5V بدهی، در انتهای مسیر ۵ ولت به GPIO34 می‌رسد. پین‌های ESP32 حداکثر ۳٫۶ ولت را تحمل می‌کنند؛ ۵ ولت می‌تواند پین یا کل تراشه را برای همیشه خراب کند. همیشه 3V3.</p></div>
+
+<div class="code" data-file="Pot_Read.ino" id="c8"><pre>
+// خواندن پتانسیومتر روی GPIO34
+const int POT_PIN = 34;       // ADC1_CH6، فقط ورودی
+
+void setup() {
+  Serial.begin(115200);
+  // دقت پیش‌فرض 12 بیت (0 تا 4095) و تضعیف پیش‌فرض 11dB است
+}
+
+void loop() {
+  int raw = analogRead(POT_PIN);                  // 0 تا 4095
+  uint32_t mv = analogReadMilliVolts(POT_PIN);    // میلی‌ولت کالیبره‌شده
+  int percent = map(raw, 0, 4095, 0, 100);        // تبدیل به درصد
+
+  Serial.printf("raw=%4d  mV=%4lu  percent=%3d%%\n", raw, (unsigned long)mv, percent);
+  delay(200);
+}
+</pre></div>
+<ol class="walk" data-for="c8">
+  <li data-lines="2"><b class="what">GPIO34.</b> پینی از گروه ADC1 که فقط ورودی است.
+    <span class="why">پین‌های فقط‌ورودی برای کارهای دیگر به درد نمی‌خورند؛ استفاده از آن‌ها برای آنالوگ، پین‌های همه‌کاره را برای LED و دکمه آزاد نگه می‌دارد.</span></li>
+  <li data-lines="4-7"><b class="what">setup بدون pinMode.</b> فقط Serial را راه می‌اندازیم.
+    <span class="why"><code>analogRead</code> خودش پین را برای ADC آماده می‌کند؛ نوشتن pinMode لازم نیست. تنظیمات پیش‌فرض (۱۲ بیت، ۱۱dB) دقیقا همان چیزی است که برای ۰ تا ۳٫۳ ولت می‌خواهیم.</span></li>
+  <li data-lines="10"><b class="what">analogRead.</b> عدد خام ۰ تا ۴۰۹۵ را برمی‌گرداند (بدون کالیبراسیون).
+    <span class="why">برای «نسبت» (مثلا درصد چرخش پیچ) عدد خام کافی و سریع است.</span></li>
+  <li data-lines="11"><b class="what">analogReadMilliVolts.</b> ولتاژ واقعی را به میلی‌ولت برمی‌گرداند، با کالیبراسیون کارخانه.
+    <span class="why">وقتی خود ولتاژ مهم است (سنسوری که می‌گوید «هر ۱۰ میلی‌ولت یک درجه»، یا ولتاژ باتری)، این تابع دقیق‌تر است. <code>uint32_t</code> یعنی عدد ۳۲ بیتی مثبت، همان نوعی که تابع برمی‌گرداند.</span></li>
+  <li data-lines="12"><b class="what">map(مقدار، ازکم، اززیاد، بهکم، بهزیاد).</b> عدد را از یک بازه به بازه دیگر می‌برد: ۰→۰، ۴۰۹۵→۱۰۰، ۲۰۴۸→۵۰.
+    <span class="why"><code>map</code> با اعداد صحیح کار می‌کند و اعشار را دور می‌ریزد. برای درصد مشکلی نیست. فرمولش همان تناسب ساده است: <code>(raw − 0) × (100 − 0) ÷ (4095 − 0) + 0</code>.</span></li>
+  <li data-lines="14"><b class="what">Serial.printf.</b> چاپ قالب‌دار: <code>%4d</code> یعنی عدد صحیح در ۴ خانه، <code>%lu</code> یعنی unsigned long، <code>%%</code> یعنی خود علامت ٪.
+    <span class="why">printf چند مقدار را در یک خط مرتب چاپ می‌کند و ستون‌ها زیر هم می‌مانند؛ خواندن آن‌ها خیلی راحت‌تر از چند print پشت سر هم است.</span></li>
+</ol>
+<p>پیچ را آرام از یک سر به سر دیگر بچرخان:</p>
+<div class="serial">raw=   0  mV= 142  percent=  0%
+raw= 812  mV= 803  percent= 19%
+raw=2047  mV=1760  percent= 49%
+raw=3350  mV=2780  percent= 81%
+raw=4095  mV=3142  percent=100%</div>
+<p>(عددهای تو کمی فرق می‌کنند؛ این‌ها نمونه‌اند.) دقت کن که در دو انتها، <code>raw</code> در ۰ یا ۴۰۹۵ «گیر» می‌کند در حالی که میلی‌ولت هنوز بالای صفر و زیر ۳۳۰۰ است. این همان غیرخطی بودنی است که بالاتر دیدی.</p>
+
+<div class="wokwi" data-board="esp32" data-code-from="c8">
+<p>در Wokwi پتانسیومتر را با ماوس بچرخان و اعداد را در Serial Monitor ببین. (ADC شبیه‌ساز ایدئال است، پس غیرخطی بودن دو سر بازه را آنجا نمی‌بینی.)</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": 20, "left": -170, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h3 id="smooth">صاف کردن خواندن‌ها (میانگین‌گیری)</h3>
+<p>اگر پیچ را ثابت نگه داری، باز هم عدد چند واحد بالا و پایین می‌رود؛ مثلا ۲۰۴۱، ۲۰۵۳، ۲۰۴۶. این نویز طبیعی ADC است. دو روش ساده برای آرام کردن آن:</p>
+<ul>
+  <li><b>میانگین چند نمونه:</b> ۱۶ بار پشت سر هم بخوان و میانگین بگیر. نویز تصادفی تا حد زیادی همدیگر را خنثی می‌کنند.</li>
+  <li><b>میانگین متحرک نمایی:</b> هر بار فقط ۱۰٪ به سمت مقدار جدید حرکت کن. مثل عقربه سنگینی که آرام حرکت می‌کند.</li>
+</ul>
+<div class="code" data-file="Pot_Smooth.ino" id="c9"><pre>
+// میانگین‌گیری: ۱۶ نمونه، یک عدد آرام
+const int POT_PIN = 34;
+const int SAMPLES = 16;
+
+int readAverage(int pin) {
+  long sum = 0;
+  for (int i = 0; i &lt; SAMPLES; i++) {
+    sum += analogRead(pin);
+    delayMicroseconds(100);      // فاصله کوتاه بین نمونه‌ها
+  }
+  return sum / SAMPLES;
+}
+
+float smoothed = 0;             // برای میانگین متحرک نمایی
+
+void setup() {
+  Serial.begin(115200);
+  smoothed = analogRead(POT_PIN);
+}
+
+void loop() {
+  int avg = readAverage(POT_PIN);
+  smoothed = smoothed + 0.1 * (avg - smoothed);   // ۱۰٪ به سمت مقدار جدید
+  Serial.printf("raw=%d avg=%d smooth=%.0f\n", analogRead(POT_PIN), avg, smoothed);
+  delay(50);
+}
+</pre></div>
+<ol class="walk" data-for="c9">
+  <li data-lines="5"><b class="what">تابع خودمان.</b> <code>int readAverage(int pin)</code> یعنی تابعی که یک شماره پین می‌گیرد و یک عدد صحیح برمی‌گرداند.
+    <span class="why">کدی که چند جا لازم است را در یک تابع می‌گذاریم تا تکرار نشود. همین تابع را می‌توانی در LDR یا هر سنسور آنالوگ دیگری استفاده کنی.</span></li>
+  <li data-lines="6-10"><b class="what">حلقه for: ۱۶ بار جمع کن.</b> <code>for (int i = 0; i &lt; 16; i++)</code> یعنی «i را از صفر شروع کن، تا وقتی کمتر از ۱۶ است تکرار کن، هر بار یکی زیاد کن». در هر دور یک نمونه به <code>sum</code> اضافه می‌شود.
+    <span class="why"><code>sum</code> از نوع <code>long</code> است چون ۱۶ × ۴۰۹۵ = ۶۵۵۲۰ از بازه int کوچک بعضی بردها بیشتر می‌شود؛ عادت خوب این است که برای جمع‌ها نوع بزرگ‌تر بگیری. ۱۰۰ میکروثانیه فاصله باعث می‌شود نمونه‌ها کمی از هم مستقل باشند.</span></li>
+  <li data-lines="11"><b class="what">تقسیم و برگرداندن.</b> مجموع تقسیم بر ۱۶ = میانگین.
+    <span class="why">کل تابع حدود ۲ میلی‌ثانیه طول می‌کشد؛ برای پتانسیومتر یا نور کاملا قابل قبول است.</span></li>
+  <li data-lines="14,18"><b class="what">مقدار اولیه میانگین متحرک.</b> در setup، <code>smoothed</code> را با اولین خواندن پر می‌کنیم.
+    <span class="why">اگر از صفر شروع می‌کرد، چند ثانیه اول آرام آرام از صفر «بالا می‌خزید» و عدد غلط نشان می‌داد.</span></li>
+  <li data-lines="23"><b class="what">فرمول میانگین متحرک نمایی.</b> فاصله مقدار جدید تا مقدار صاف‌شده را حساب کن و ۱۰٪ آن را اضافه کن.
+    <span class="why">عدد ۰٫۱ را بزرگ‌تر کنی (مثلا ۰٫۳) سریع‌تر و پرنویزتر می‌شود؛ کوچک‌تر کنی (۰٫۰۵) آرام‌تر و کندتر. این یک پیچ تنظیم بین «سرعت» و «آرامش» است.</span></li>
+  <li data-lines="24"><b class="what">مقایسه سه عدد.</b> خام، میانگین و صاف‌شده را کنار هم چاپ می‌کند. <code>%.0f</code> یعنی عدد اعشاری بدون رقم اعشار.
+    <span class="why">از منوی <code>Tools › Serial Plotter</code> هم می‌توانی این سه را به صورت نمودار ببینی و تفاوت را با چشم حس کنی.</span></li>
+</ol>
+
+<h2 id="ldr">LDR و تقسیم ولتاژ: اندازه‌گیری نور</h2>
+<p>LDR (مقاومت نوری) قطعه‌ای است که مقاومتش با نور عوض می‌شود: در نور زیاد کم (مثلا ۱ کیلو اهم) و در تاریکی خیلی زیاد (تا حدود یک مگا اهم). ولی ADC <b>ولتاژ</b> می‌خواند، نه مقاومت. پس باید تغییر مقاومت را به تغییر ولتاژ تبدیل کنیم. ابزار این کار «تقسیم ولتاژ» است: LDR را با یک مقاومت ثابت سری می‌کنیم.</p>
+
+<figure><div class="frame"><svg viewBox="0 0 660 330" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="مدار تقسیم ولتاژ با LDR">
+  <text x="160" y="30" font-size="14" text-anchor="middle" fill="#d6453d" font-weight="700">3V3</text>
+  <line x1="160" y1="38" x2="160" y2="60" stroke="#d6453d" stroke-width="3"/>
+  <rect x="148" y="60" width="24" height="70" rx="3" fill="#f5deb3" stroke="#8b5a2b" stroke-width="2"/>
+  <text x="182" y="100" font-size="14" fill="#152033">R_fixed = 10kΩ</text>
+  <line x1="160" y1="130" x2="160" y2="170" stroke="#152033" stroke-width="3"/>
+  <circle cx="160" cy="165" r="5" fill="#152033"/>
+  <line x1="160" y1="165" x2="60" y2="165" stroke="#2563eb" stroke-width="3"/>
+  <text x="55" y="160" font-size="14" text-anchor="end" fill="#2563eb" font-weight="700">GPIO35</text>
+  <text x="55" y="180" font-size="13" text-anchor="end" fill="#2563eb">Vout</text>
+  <rect x="148" y="180" width="24" height="70" rx="12" fill="#fff3c4" stroke="#c99a06" stroke-width="2"/>
+  <path d="M154 196 L166 208 M154 214 L166 226 M154 232 L166 244" stroke="#c99a06" stroke-width="2"/>
+  <text x="182" y="220" font-size="14" fill="#152033">LDR</text>
+  <path d="M230 175 L200 195 M240 190 L210 210" stroke="#e0781f" stroke-width="2.5"/>
+  <text text-anchor="end" x="246" y="186" font-size="12" fill="#e0781f" direction="rtl">نور</text>
+  <line x1="160" y1="250" x2="160" y2="280" stroke="#222" stroke-width="3"/>
+  <line x1="140" y1="280" x2="180" y2="280" stroke="#222" stroke-width="3"/><line x1="148" y1="287" x2="172" y2="287" stroke="#222" stroke-width="3"/><line x1="156" y1="294" x2="164" y2="294" stroke="#222" stroke-width="3"/>
+  <text x="190" y="292" font-size="13" fill="#222">GND</text>
+  <rect x="330" y="40" width="310" height="250" rx="12" fill="#f5f7fb" stroke="#dbe2ec"/>
+  <text x="485" y="70" font-size="15" text-anchor="middle" fill="#152033" font-weight="800">Vout = 3.3 × R_LDR ÷ (10k + R_LDR)</text>
+  <text x="620" y="110" font-size="13" text-anchor="start" fill="#152033" direction="rtl">نور شدید (LDR ≈ ۱k): ۰٫۳۰ ولت</text>
+  <text x="620" y="145" font-size="13" text-anchor="start" fill="#152033" direction="rtl">نور اتاق (LDR ≈ ۱۰k): ۱٫۶۵ ولت</text>
+  <text x="620" y="180" font-size="13" text-anchor="start" fill="#152033" direction="rtl">غروب (LDR ≈ ۵۰k): ۲٫۷۵ ولت</text>
+  <text x="620" y="215" font-size="13" text-anchor="start" fill="#152033" direction="rtl">تاریکی کامل (LDR ≈ ۱M): ۳٫۲۷ ولت</text>
+  <text x="620" y="262" font-size="13" text-anchor="start" fill="#12a37f" font-weight="700" direction="rtl">تاریک‌تر ← ولتاژ بیشتر ← عدد بزرگ‌تر</text>
+</svg></div>
+<figcaption>تقسیم ولتاژ با LDR در پایین و مقاومت ۱۰ کیلو در بالا. مقادیر LDR نمونه‌ای برای GL5528 هستند و از قطعه‌ای به قطعه دیگر فرق می‌کنند.</figcaption></figure>
+
+<div class="callout example"><div class="ct">فرمول تقسیم ولتاژ، قدم به قدم با عدد</div>
+<p>جریان از 3V3 از هر دو مقاومت عبور می‌کند و به GND می‌رود. ولتاژ نقطه وسط، سهمی است که روی LDR می‌افتد: <code>Vout = Vin × R_LDR ÷ (R_fixed + R_LDR)</code>.</p>
+<p>در نور اتاق، LDR حدود ۱۰ کیلو است: <code>3.3 × 10k ÷ (10k + 10k) = 3.3 × 0.5 = 1.65V</code>. درست وسط بازه.</p>
+<p>در تاریکی نسبی، LDR حدود ۵۰ کیلو است: <code>3.3 × 50k ÷ 60k = 2.75V</code>. در نور شدید، ۱ کیلو: <code>3.3 × 1k ÷ 11k = 0.30V</code>.</p></div>
+<div class="callout why"><div class="ct">چرا مقاومت ثابت ۱۰ کیلو؟</div>
+<p>تقسیم ولتاژ وقتی حساس‌ترین است که دو مقاومت نزدیک هم باشند؛ آن‌جا کوچک‌ترین تغییر LDR بیشترین تغییر ولتاژ را می‌سازد. مقاومت GL5528 در نور معمولی اتاق حدود ۱۰ تا ۲۰ کیلو است، پس ۱۰ کیلو بهترین حساسیت را دقیقا در محدوده‌ای می‌دهد که برای چراغ خواب مهم است (گذر از روشنایی اتاق به تاریکی). اگر مقاومت ثابت ۱ مگا بود، در همه نورهای معمولی Vout نزدیک صفر می‌ماند و تفاوت‌ها گم می‌شدند.</p></div>
+<div class="callout tip"><div class="ct">می‌خواهی روشن‌تر = عدد بزرگ‌تر باشد؟</div>
+<p>جای LDR و مقاومت ثابت را عوض کن (LDR بالا به 3V3، مقاومت پایین به GND). آن وقت رابطه برعکس می‌شود. ما این چینش را انتخاب کردیم چون ماژول LDR شبیه‌ساز Wokwi هم دقیقا همین‌طور ساخته شده است (مقاومت ۱۰ کیلو به VCC و LDR به GND) و می‌خواهیم کد در هر دو جا یکسان رفتار کند.</p></div>
+
+<h3 id="hysteresis">مشکل مرز: چرا یک آستانه کافی نیست (Hysteresis)</h3>
+<p>ساده‌ترین چراغ خواب: «اگر ولتاژ بیشتر از ۲۴۰۰ میلی‌ولت بود LED روشن، وگرنه خاموش». مشکل؟ در غروب که نور دقیقا نزدیک مرز است، نویز ADC عدد را بین ۲۳۹۸ و ۲۴۰۳ بالا و پایین می‌برد و LED مثل چراغ خراب چشمک می‌زند.</p>
+<p>راه حل «Hysteresis» (پسماند) است: <b>دو</b> آستانه جدا. روشن شدن در ۲۶۰۰ میلی‌ولت، ولی خاموش شدن فقط وقتی به زیر ۲۲۰۰ برگردد. فاصله بین این دو (۴۰۰ میلی‌ولت) خیلی بزرگ‌تر از نویز است، پس دیگر لرزش نداریم.</p>
+
+<figure><div class="frame"><svg viewBox="0 0 660 260" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="نمودار Hysteresis">
+  <line x1="60" y1="210" x2="640" y2="210" stroke="#152033" stroke-width="1.5"/>
+  <line x1="60" y1="210" x2="60" y2="20" stroke="#152033" stroke-width="1.5"/>
+  <line x1="60" y1="80" x2="640" y2="80" stroke="#d6453d" stroke-dasharray="6 5" stroke-width="2"/>
+  <line x1="60" y1="130" x2="640" y2="130" stroke="#12a37f" stroke-dasharray="6 5" stroke-width="2"/>
+  <text x="636" y="74" font-size="12" text-anchor="start" fill="#d6453d" direction="rtl">۲۶۰۰ mV: روشن کن</text>
+  <text x="636" y="148" font-size="12" text-anchor="start" fill="#12a37f" direction="rtl">۲۲۰۰ mV: خاموش کن</text>
+  <path d="M60 190 C120 180 150 150 190 120 S240 70 260 78 S285 90 300 76 S330 60 360 72 S400 110 420 100 S450 140 470 150 S560 185 640 190" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <rect x="236" y="220" width="226" height="18" fill="#e0781f" opacity=".85"/>
+  <text x="349" y="233" font-size="12" text-anchor="middle" fill="#fff" font-weight="700">LED روشن</text>
+  <text x="30" y="30" font-size="12" fill="#152033">mV</text>
+  <text x="120" y="252" font-size="12" text-anchor="middle" fill="#4d5b70" direction="rtl">روز</text>
+  <text x="350" y="252" font-size="12" text-anchor="middle" fill="#4d5b70" direction="rtl">شب</text>
+  <text x="560" y="252" font-size="12" text-anchor="middle" fill="#4d5b70" direction="rtl">صبح</text>
+</svg></div>
+<figcaption>منحنی آبی ولتاژ LDR در طول یک شب است. با وجود بالا و پایین رفتن‌های کوچک نزدیک خط قرمز، LED فقط یک بار روشن و یک بار خاموش می‌شود.</figcaption></figure>
+
+<div class="callout analogy"><div class="ct">مثال: ترموستات بخاری</div>
+<p>ترموستات خوب بخاری را در ۱۹ درجه روشن و در ۲۲ درجه خاموش می‌کند، نه هر دو در ۲۰ درجه. وگرنه بخاری هر چند ثانیه یک بار روشن و خاموش می‌شد و زود خراب می‌شد. Hysteresis در همه دستگاه‌های کنترلی دور و برت هست.</p></div>
+
+<h2 id="nightlight">پروژه: چراغ خواب خودکار</h2>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"R1","name":"مقاومت ثابت ۱۰ کیلو","img":"resistor.svg","pins":[["1","به 3V3"],["2","نقطه وسط"]]},
+    {"id":"LDR","name":"مقاومت نوری LDR","img":"ldr.svg","pins":[["1","نقطه وسط (جهت ندارد)"],["2","به GND"]]},
+    {"id":"R2","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","سمت GPIO4"],["2","سمت LED"]]},
+    {"id":"LED1","name":"LED سفید یا زرد","img":"led.svg","pins":[["A","آند (+) پایه بلند"],["K","کاتد (−)"]]}
+  ],
+  "wires":[["3V3","R1.1","red"],["GPIO35","R1.2","blue"],["R1.2","LDR.1","blue"],["LDR.2","GND","black"],["GPIO4","R2.1","orange"],["R2.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>بالا: تقسیم ولتاژ (3V3 ← ۱۰ کیلو ← نقطه وسط ← LDR ← GND) و نقطه وسط به GPIO35. پایین: LED همیشگی روی GPIO4.</figcaption></div>
+
+<div class="code" data-file="Night_Light.ino" id="c10"><pre>
+// چراغ خواب خودکار با LDR و Hysteresis
+const int LDR_PIN = 35;               // وسط تقسیم ولتاژ (ADC1_CH7)
+const int LED_PIN = 4;
+const uint32_t DARK_ON_MV   = 2600;   // بالاتر از این: تاریک است، روشن کن
+const uint32_t LIGHT_OFF_MV = 2200;   // پایین‌تر از این: روشن است، خاموش کن
+
+bool lampOn = false;
+
+uint32_t readLdrMv() {
+  uint32_t sum = 0;
+  for (int i = 0; i &lt; 8; i++) sum += analogReadMilliVolts(LDR_PIN);
+  return sum / 8;                     // میانگین ۸ نمونه
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+}
+
+void loop() {
+  uint32_t mv = readLdrMv();
+
+  if (!lampOn &amp;&amp; mv &gt; DARK_ON_MV) {           // تاریک شد
+    lampOn = true;
+    digitalWrite(LED_PIN, HIGH);
+  } else if (lampOn &amp;&amp; mv &lt; LIGHT_OFF_MV) {   // به اندازه کافی روشن شد
+    lampOn = false;
+    digitalWrite(LED_PIN, LOW);
+  }
+
+  Serial.printf("LDR=%lu mV  lamp=%s\n", (unsigned long)mv, lampOn ? "ON" : "OFF");
+  delay(200);
+}
+</pre></div>
+<ol class="walk" data-for="c10">
+  <li data-lines="2"><b class="what">GPIO35 برای LDR.</b> یک پین ADC1 دیگر.
+    <span class="why">ADC1 تا با اضافه کردن Wi-Fi (مثلا برای گزارش نور به گوشی) مشکلی پیش نیاید.</span></li>
+  <li data-lines="4-5"><b class="what">دو آستانه Hysteresis.</b> روشن در ۲۶۰۰ و خاموش در ۲۲۰۰ میلی‌ولت.
+    <span class="why">با مقاومت ۱۰ کیلو، ۲۶۰۰mV یعنی LDR حدود ۳۷ کیلو (هوای گرگ‌ومیش) و ۲۲۰۰mV یعنی حدود ۲۰ کیلو. این اعداد را بعدا با مقادیر واقعی اتاق خودت تنظیم کن؛ اول Serial Monitor را در روشنایی و تاریکی نگاه کن، بعد آستانه بگذار.</span></li>
+  <li data-lines="7"><b class="what">حافظه وضعیت چراغ.</b>
+    <span class="why">Hysteresis بدون حافظه ممکن نیست: تصمیم به این بستگی دارد که الان چراغ روشن است یا خاموش.</span></li>
+  <li data-lines="9-13"><b class="what">تابع خواندن با میانگین.</b> ۸ بار میلی‌ولت را می‌خواند و میانگین می‌گیرد. حلقه for اینجا بدنه یک‌خطی دارد و آکولاد لازم ندارد.
+    <span class="why">میانگین، نویز را کم می‌کند و Hysteresis باقی لرزش را. دو لایه محافظت. از میلی‌ولت استفاده کردیم تا آستانه‌ها معنای فیزیکی داشته باشند و با هر برد یکسان باشند.</span></li>
+  <li data-lines="23-25"><b class="what">شرط روشن شدن.</b> فقط اگر چراغ خاموش است <b>و</b> ولتاژ از ۲۶۰۰ گذشت.
+    <span class="why">شرط <code>!lampOn</code> باعث می‌شود وقتی چراغ روشن است، این شاخه اصلا بررسی نشود. هر شاخه فقط برای یک حالت است.</span></li>
+  <li data-lines="26-29"><b class="what">شرط خاموش شدن.</b> <code>else if</code>: فقط اگر چراغ روشن است <b>و</b> ولتاژ به زیر ۲۲۰۰ رسید.
+    <span class="why">بین ۲۲۰۰ و ۲۶۰۰ هیچ شاخه‌ای اجرا نمی‌شود و چراغ همان حالت قبلی را حفظ می‌کند. این «منطقه مرده» قلب Hysteresis است.</span></li>
+  <li data-lines="31-32"><b class="what">گزارش.</b> ولتاژ و وضعیت چراغ را چاپ می‌کند؛ ۵ بار در ثانیه.
+    <span class="why">نور به کندی عوض می‌شود؛ ۲۰۰ میلی‌ثانیه برای چراغ خواب خیلی هم سریع است. (اینجا delay مشکلی ندارد چون کار دیگری نداریم؛ اگر دکمه اضافه کردی، به millis برو.)</span></li>
+</ol>
+<div class="serial">LDR=1638 mV  lamp=OFF
+LDR=2107 mV  lamp=OFF
+LDR=2615 mV  lamp=ON
+LDR=2580 mV  lamp=ON
+LDR=2390 mV  lamp=ON
+LDR=2150 mV  lamp=OFF</div>
+<p>دقت کن: در خط‌های ۴ و ۵ ولتاژ زیر ۲۶۰۰ آمد ولی چراغ روشن ماند. فقط وقتی به زیر ۲۲۰۰ رسید خاموش شد. این یعنی Hysteresis کار می‌کند.</p>
+
+<div class="wokwi" data-board="esp32" data-code-from="c10">
+<p>Wokwi مقاومت نوری تنها ندارد؛ به جایش «ماژول سنسور نور» دارد که داخلش دقیقا همین تقسیم ولتاژ (LDR + مقاومت ۱۰ کیلو) است و خروجی آن پایه <code>AO</code> است. پایه <code>DO</code> را فعلا لازم نداریم. در شبیه‌سازی روی ماژول کلیک کن و با اسلایدر مقدار نور (lux) را کم و زیاد کن. با تنظیمات پیش‌فرض Wokwi، چراغ حدود زیر ۱۵ لوکس روشن و بالای حدود ۴۰ لوکس خاموش می‌شود.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": 40, "left": -260, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "yellow" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.1", "black", [] ],
+    [ "ldr1:AO", "esp:35", "blue", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<div class="callout info"><div class="ct">ماژول LDR آماده (با پتانسیومتر آبی) در بازار</div>
+<p>ماژول‌های سنسور نور ارزان معمولا چهار پایه دارند (<code>VCC, GND, DO, AO</code>) و یک پتانسیومتر آبی کوچک. <code>AO</code> همان خروجی تقسیم ولتاژ است. <code>DO</code> خروجی دیجیتال یک مقایسه‌گر داخلی است که با پتانسیومتر روی ماژول آستانه‌اش را تنظیم می‌کنی (بدون Hysteresis قابل برنامه‌ریزی). اگر ماژول داری، <code>AO</code> را به GPIO35 بده و VCC را حتما به 3V3 (نه 5V) وصل کن.</p></div>
+
+<h2 id="video">ویدیوی کمکی</h2>
+<div class="video" data-yt="wIcC8-g9Lnw" data-title="Understanding Arduino Interrupts | Hardware, Pin Change &amp; Timer Interrupts" data-channel="DroneBot Workshop" data-lang="انگلیسی">
+  <div class="sum"><ul>
+    <li>این ویدیو با آردوینو اونو است ولی مفهوم وقفه سخت‌افزاری و مشکل لرزش دکمه عینا در ESP32 هم صادق است. روی بخش «Hardware Interrupts» تمرکز کن.</li>
+    <li>بخش‌های Pin Change Interrupt و Timer Interrupt مخصوص تراشه اونو هستند؛ در ESP32 هر GPIO خودش وقفه سخت‌افزاری دارد و این پیچیدگی لازم نیست. پس آن بخش‌ها را سرسری ببین.</li>
+    <li>دقت کن مدرس چرا متغیرها را <code>volatile</code> تعریف می‌کند و چرا ISR را کوتاه نگه می‌دارد. در ESP32 علاوه بر آن <code>IRAM_ATTR</code> را هم لازم داری که در اونو نیست.</li>
+  </ul></div>
+</div>
+<p>برای مطالعه بیشتر: <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/adc.html" target="_blank" rel="noopener">مستندات رسمی ADC در Arduino-ESP32</a>، <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/gpio.html" target="_blank" rel="noopener">مستندات GPIO و وقفه</a> و <a href="https://docs.arduino.cc/language-reference/en/functions/time/millis/" target="_blank" rel="noopener">صفحه millis در مرجع آردوینو</a>.</p>
+
+<h2 id="debug">وقتی کار نمی‌کند: عیب‌یابی</h2>
+<div class="table-wrap"><table>
+<tr><th>علامت</th><th>علت محتمل</th><th>راه حل</th></tr>
+<tr><td>بدون فشار دادن، عدد دکمه تصادفی ۰ و ۱ می‌شود</td><td>پین شناور: <code>INPUT</code> ساده بدون مقاومت، یا پین 34 تا 39 که Pull-up داخلی ندارد</td><td><code>INPUT_PULLUP</code> بنویس و دکمه را به GND ببر؛ روی 34 تا 39 مقاومت ۱۰ کیلو بیرونی بگذار.</td></tr>
+<tr><td>دکمه همیشه «فشرده» خوانده می‌شود</td><td>دکمه ۹۰ درجه چرخیده و دو پایه همیشه‌وصل را استفاده کرده‌ای</td><td>پایه‌های ضربدری (۱ و ۴) را استفاده کن یا دکمه را ۹۰ درجه بچرخان.</td></tr>
+<tr><td>منطق برعکس است (رها = روشن)</td><td>با Pull-up، فشار = LOW است</td><td>مثل کد <code>Button_Pullup</code> مقایسه <code>== LOW</code> بنویس.</td></tr>
+<tr><td>یک فشار، چند بار شمرده می‌شود</td><td>لرزش (Bounce)</td><td>Debounce با millis؛ اگر هنوز بود، DEBOUNCE_MS را به ۵۰ برسان.</td></tr>
+<tr><td>با delay، بعضی فشارها گم می‌شوند</td><td>برنامه وسط delay پین را نمی‌خواند</td><td>delay را حذف کن و الگوی millis را به کار ببر.</td></tr>
+<tr><td>برد با <code>Guru Meditation Error</code> ریست می‌شود وقتی دکمه را می‌زنی</td><td>ISR بدون <code>IRAM_ATTR</code>، یا Serial.print/delay داخل ISR</td><td>ISR را کوتاه کن، فقط پرچم یا شمارنده؛ چاپ را به loop ببر.</td></tr>
+<tr><td>analogRead همیشه 0 یا همیشه 4095 است</td><td>سیم پایه وسط پتانسیومتر وصل نیست، یا پایه‌های کناری هر دو به یک جا رفته‌اند</td><td>با مولتی‌متر ولتاژ پایه وسط را اندازه بگیر؛ باید با چرخاندن بین ۰ و ۳٫۳ تغییر کند.</td></tr>
+<tr><td>عدد آنالوگ بعد از روشن کردن Wi-Fi خراب شد</td><td>پین ADC2 استفاده کرده‌ای (مثلا 4، 25، 26، 27)</td><td>سنسور را به یکی از 32 تا 39 (ADC1) منتقل کن.</td></tr>
+<tr><td>چراغ خواب در غروب مدام روشن و خاموش می‌شود</td><td>یک آستانه بدون Hysteresis، یا فاصله دو آستانه خیلی کم</td><td>دو آستانه با فاصله دست‌کم چند صد میلی‌ولت و میانگین‌گیری.</td></tr>
+<tr><td>LDR در همه نورها عدد تقریبا ثابت می‌دهد</td><td>مقاومت ثابت اشتباه (مثلا ۱۰۰ اهم به جای ۱۰ کیلو)</td><td>رنگ‌ها را چک کن: ۱۰ کیلو = قهوه‌ای، مشکی، نارنجی.</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>در این درس دو ابزار گرفتی که فرق آماتور و حرفه‌ای را می‌سازند: <b>millis به جای delay</b> و <b>عدد واقعی قبل از آستانه</b>. هیچ‌وقت آستانه را حدسی ننویس؛ اول Serial Monitor را باز کن، مقدارها را در شرایط واقعی ببین و یادداشت کن، بعد عدد بگذار. و هر بار که خواستی <code>delay</code> بنویسی، از خودت بپرس: «در این مدت برنامه‌ام باید به چیز دیگری هم گوش بدهد؟» اگر جواب بله است، delay ممنوع. تمرین‌های زیر را بدون نگاه کردن به جواب حل کن؛ اگر گیر کردی، اول راهنمایی را باز کن، نه جواب را.</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">دکمه بین GPIO27 و GND وصل است و در کد <code>pinMode(27, INPUT_PULLUP)</code> نوشته‌ای. وقتی دکمه را فشار می‌دهی، <code>digitalRead(27)</code> چه برمی‌گرداند؟</p>
+  <ol><li data-why="با Pull-up، حالت رها HIGH است؛ فشار پین را به GND وصل می‌کند.">HIGH</li><li>LOW</li><li data-why="با Pull-up پین هرگز شناور نیست؛ یا HIGH است یا LOW.">عدد تصادفی</li><li data-why="digitalRead فقط HIGH یا LOW می‌دهد، نه عدد آنالوگ.">۴۰۹۵</li></ol>
+  <div class="fb">فشار دکمه پین را مستقیم به GND وصل می‌کند و مقاومت Pull-up داخلی جلوی اتصال کوتاه را می‌گیرد. نتیجه: LOW. به این «منطق برعکس» یا Active Low می‌گویند.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">کدام شکل برای بررسی گذشت زمان با millis درست و مقاوم در برابر سرریز است؟</p>
+  <ol><li data-why="این شکل جمعی بعد از سرریز شمارنده (حدود ۴۹٫۷ روز) خراب می‌شود.">if (millis() &gt;= last + 500)</li><li data-why="int در ESP32 علامت‌دار است و بعد از حدود ۲۴ روز منفی می‌شود.">int now = millis(); if (now - last &gt;= 500)</li><li data-why="delay برنامه را متوقف می‌کند؛ این اصلا الگوی millis نیست.">delay(500); last = millis();</li><li>if (millis() - last &gt;= 500) با last از نوع unsigned long</li></ol>
+  <div class="fb">تفریق اعداد <code>unsigned long</code> حتی وقتی شمارنده از صفر دوباره شروع می‌کند جواب درست می‌دهد. قانون: زمان همیشه unsigned long، مقایسه همیشه به شکل تفریق.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">سنسور آنالوگ را به GPIO26 وصل کرده‌ای و تا وقتی Wi-Fi خاموش بود درست کار می‌کرد. بعد از روشن کردن Wi-Fi عددها بی‌معنی شدند. چرا؟</p>
+  <ol><li>GPIO26 روی ADC2 است و ADC2 با Wi-Fi روشن قابل استفاده نیست</li><li data-why="Wi-Fi ولتاژ 3V3 را به این شکل تغییر نمی‌دهد که فقط یک پین خراب شود.">Wi-Fi ولتاژ تغذیه را نصف می‌کند</li><li data-why="تضعیف با Wi-Fi خودکار عوض نمی‌شود.">Wi-Fi تضعیف ADC را به ۰dB تغییر می‌دهد</li><li data-why="GPIO26 خروجی DAC هم هست ولی مشکل این نیست؛ ریشه ADC2 است.">GPIO26 فقط خروجی است</li></ol>
+  <div class="fb">درایور Wi-Fi خودش از ADC2 استفاده می‌کند. برای سنسورهای آنالوگ همیشه ADC1 (GPIO32 تا 39) را انتخاب کن.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">LDR پایین (به GND) و مقاومت ۱۰ کیلو بالا (به 3V3) است. اگر LDR در یک لحظه ۳۰ کیلو اهم باشد، ولتاژ نقطه وسط تقریبا چقدر است؟</p>
+  <ol><li data-why="این نسبت مقاومت ثابت است؛ ولتاژ روی LDR را می‌خواهیم.">۰٫۸۳ ولت</li><li data-why="۱٫۶۵ فقط وقتی است که دو مقاومت برابر باشند.">۱٫۶۵ ولت</li><li>۲٫۴۸ ولت</li><li data-why="۳٫۳ ولت فقط وقتی است که LDR بی‌نهایت باشد (تاریکی مطلق).">۳٫۳ ولت</li></ol>
+  <div class="fb"><code>3.3 × 30k ÷ (10k + 30k) = 3.3 × 0.75 ≈ 2.48V</code>.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">چرا چراغ خواب ما دو آستانه (۲۶۰۰ و ۲۲۰۰ میلی‌ولت) دارد و نه یکی؟</p>
+  <ol><li data-why="ESP32 هیچ محدودیتی برای تعداد شرط‌ها ندارد.">چون ADC فقط دو عدد را مقایسه می‌کند</li><li>تا نزدیک مرز، نویز باعث روشن و خاموش شدن پشت سر هم نشود (Hysteresis)</li><li data-why="مصرف برق با تعداد آستانه تغییری نمی‌کند.">برای کم کردن مصرف برق</li><li data-why="LED ربطی به کالیبراسیون ADC ندارد.">چون LED دو پایه دارد</li></ol>
+  <div class="fb">فاصله بین دو آستانه یک «منطقه مرده» می‌سازد که از نویز بزرگ‌تر است؛ همان کاری که ترموستات بخاری می‌کند.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">کدام کار داخل یک ISR (تابع وقفه) مجاز و درست است؟</p>
+  <ol><li data-why="Serial در ISR می‌تواند باعث قفل شدن یا کرش شود.">Serial.println("pressed")</li><li data-why="delay در ISR ممنوع است؛ ISR باید در چند میکروثانیه تمام شود.">delay(50) برای Debounce</li><li data-why="کار با Wi-Fi خیلی کند و پیچیده است؛ هرگز در ISR.">فرستادن پیام به گوشی با Wi-Fi</li><li>زیاد کردن یک شمارنده volatile</li></ol>
+  <div class="fb">ISR باید مثل زنگ در کوتاه باشد: یک پرچم یا شمارنده را عوض کن و برگرد. کار سنگین را loop انجام می‌دهد.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+<div class="exercise"><div class="ct">تمرین ۱: شمارنده با دو دکمه</div>
+<p>دکمه دوم را به GPIO26 (با <code>INPUT_PULLUP</code>) وصل کن. دکمه اول (GPIO27) یک عدد را زیاد و دکمه دوم آن را کم کند. عدد را در Serial Monitor چاپ کن و نگذار زیر صفر برود. هر دو دکمه باید Debounce داشته باشند.</p>
+<details><summary>راهنمایی</summary><p>برای هر دکمه سه متغیر جدا لازم داری (<code>stableState</code>، <code>lastReading</code>، <code>lastChangeTime</code>). اگر حوصله تکرار نداری، یک <code>struct</code> یا دو آرایه دوتایی بساز. شرط «زیر صفر نرود»: <code>if (count &gt; 0) count--;</code></p></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۲: سرعت چشمک با پتانسیومتر</div>
+<p>با پتانسیومتر روی GPIO34، سرعت چشمک LED روی GPIO4 را از ۵۰ تا ۱۰۰۰ میلی‌ثانیه تنظیم کن. بدون delay (با millis) بنویس تا اگر بعدا دکمه اضافه کردی، کار کند.</p>
+<details><summary>راهنمایی</summary><p><code>unsigned long interval = map(analogRead(34), 0, 4095, 50, 1000);</code> را در هر دور loop حساب کن و در شرط millis به جای عدد ثابت از آن استفاده کن.</p></details>
+<details><summary>جواب</summary>
+<div class="code" data-file="Pot_Blink_Speed.ino"><pre>
+const int POT_PIN = 34;
+const int LED_PIN = 4;
+unsigned long lastToggle = 0;
+bool ledOn = false;
+
+void setup() {
+  pinMode(LED_PIN, OUTPUT);
+}
+
+void loop() {
+  unsigned long interval = map(analogRead(POT_PIN), 0, 4095, 50, 1000);
+  unsigned long now = millis();
+  if (now - lastToggle &gt;= interval) {
+    lastToggle = now;
+    ledOn = !ledOn;
+    digitalWrite(LED_PIN, ledOn);
+  }
+}
+</pre></div>
+<ol class="walk">
+  <li data-lines="11"><b class="what">فاصله متغیر.</b> در هر دور loop، عدد پتانسیومتر به بازه ۵۰ تا ۱۰۰۰ میلی‌ثانیه برده می‌شود.
+    <span class="why">چون در هر دور حساب می‌شود، چرخاندن پیچ فورا اثر دارد؛ حتی وسط یک چشمک طولانی.</span></li>
+  <li data-lines="12-17"><b class="what">همان الگوی millis.</b> فقط به جای ثابت INTERVAL، متغیر interval.
+    <span class="why">الگوی millis را یک بار درست یاد بگیری، در همه جا فقط «چه چیزی» و «هر چند وقت» عوض می‌شود.</span></li>
+</ol>
+</details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۳: چراغ خواب با دکمه دستی</div>
+<p>به پروژه چراغ خواب یک دکمه (GPIO27) اضافه کن که سه حالت را به ترتیب عوض کند: «خودکار» ← «همیشه روشن» ← «همیشه خاموش» ← «خودکار». حالت فعلی را در Serial Monitor چاپ کن. delay نباید در برنامه باشد.</p>
+<details><summary>راهنمایی</summary><p>یک متغیر <code>int mode = 0;</code> بساز. با هر فشار (بعد از Debounce): <code>mode = (mode + 1) % 3;</code>. علامت <code>%</code> باقیمانده تقسیم است و باعث می‌شود بعد از ۲ دوباره ۰ شود. خواندن LDR را هر ۲۰۰ms با millis انجام بده.</p></details>
+</div>
+
+<div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
+<p>ورودی دیجیتال بدون Pull-up شناور است؛ <code>INPUT_PULLUP</code> + دکمه به GND + منطق برعکس، و Debounce با millis، دکمه را قابل اعتماد می‌کند. <code>millis()</code> با الگوی «تفریق و مقایسه» به جای delay اجازه می‌دهد چند کار هم‌زمان پیش برود؛ وقفه فقط برای رویدادهای خیلی سریع. ADC دوازده بیتی (۰ تا ۴۰۹۵) با تضعیف ۱۱dB حدود ۰٫۱۵ تا ۳٫۱ ولت را می‌خواند؛ از ADC1 استفاده کن، <code>analogReadMilliVolts</code> دقیق‌تر است، و با تقسیم ولتاژ و Hysteresis هر سنسور مقاومتی مثل LDR را به یک تصمیم پایدار تبدیل کن.</p></div>
+
+</article>
+</body>
+</html>

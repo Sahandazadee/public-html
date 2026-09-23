@@ -1,0 +1,686 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PWM: کم‌نور کردن LED و کنترل سروو · مستر کلاس ESP32</title>
+<meta name="description" content="PWM در ESP32 به زبان ساده: Duty Cycle، رابطه فرکانس و دقت، بخش LEDC و API هسته ۳، LED نفس‌کشنده، کنترل نور با پتانسیومتر، سروو SG90 با ESP32Servo و محاسبه دستی پالس، و بازر.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="3-2">
+
+<p class="lede">پین دیجیتال فقط دو حالت دارد: ۰ یا ۳٫۳ ولت. پس چطور LED را «نیمه‌روشن» کنیم یا به یک موتور بگوییم «دقیقا به زاویه ۷۳ درجه برو»؟ جواب یک ترفند هوشمندانه است به اسم PWM: روشن و خاموش کردن آن‌قدر سریع که دنیای بیرون فقط «میانگین» را حس کند. در این درس PWM را از پایه می‌فهمی، با سخت‌افزار مخصوص آن در ESP32 (LEDC) کار می‌کنی و یک موتور سروو را دقیق کنترل می‌کنی.</p>
+
+<div class="goals">
+  <div><h4>🎯 بعد از این درس می‌توانی</h4><ul>
+    <li>معنی Duty Cycle، فرکانس و دقت (Resolution) را با عدد توضیح بدهی</li>
+    <li>با <code>ledcAttach</code> و <code>ledcWrite</code> (هسته ۳) نور LED را نرم کم و زیاد کنی</li>
+    <li>کد قدیمی هسته ۲ (<code>ledcSetup</code>) را در آموزش‌های اینترنتی بشناسی و ترجمه کنی</li>
+    <li>سروو SG90 را درست تغذیه کنی و با کتابخانه ESP32Servo و بدون آن کنترل کنی</li>
+    <li>با بازر صدا و ملودی بسازی</li>
+  </ul></div>
+  <div><h4>🧰 پیش‌نیاز و وسایل</h4><ul>
+    <li>درس <a href="3-1.html">۳.۱</a> (پتانسیومتر، millis و ADC)</li>
+    <li>برد ESP32، برد بورد، سیم جامپر</li>
+    <li>LED + مقاومت ۲۲۰ اهم، پتانسیومتر ۱۰ کیلو</li>
+    <li>سروو موتور SG90 (یا MG90S)</li>
+    <li>اختیاری: بازر پسیو، منبع تغذیه ۵ ولت ۲ آمپر، خازن ۴۷۰ تا ۱۰۰۰ میکروفاراد</li>
+  </ul></div>
+</div>
+
+<div class="gallery">
+  <figure><div class="frame"><img src="assets/img/led.svg" alt="LED"></div><figcaption>LED<span class="src">تصویر: Fritzing، مجوز CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="assets/img/pot.svg" alt="پتانسیومتر"></div><figcaption>پتانسیومتر ۱۰ کیلو<span class="src">تصویر: Fritzing، مجوز CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="assets/img/servo.svg" alt="سروو موتور کوچک"></div><figcaption>سروو موتور SG90 (سه سیم)<span class="src">تصویر: Fritzing، مجوز CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="assets/img/buzzer.svg" alt="بازر"></div><figcaption>بازر<span class="src">تصویر: Fritzing، مجوز CC BY-SA 3.0</span></figcaption></figure>
+</div>
+
+<h2 id="what">PWM چیست؟ روشن و خاموش خیلی سریع</h2>
+<p>PWM مخفف Pulse Width Modulation یعنی «مدولاسیون پهنای پالس». اسمش ترسناک است ولی ایده‌اش ساده است: پین را در هر ثانیه هزاران بار روشن و خاموش می‌کنیم و فقط <b>نسبت</b> زمان روشن به کل زمان را تغییر می‌دهیم. به این نسبت <b>Duty Cycle</b> (چرخه کار) می‌گویند.</p>
+
+<figure><div class="frame"><svg viewBox="0 0 700 360" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="شکل موج PWM با Duty Cycle بیست و پنج، پنجاه و هفتاد و پنج درصد">
+  <g font-size="13" fill="#152033">
+    <text x="20" y="62" font-weight="800">25%</text>
+    <text x="20" y="172" font-weight="800">50%</text>
+    <text x="20" y="282" font-weight="800">75%</text>
+  </g>
+  <g stroke="#dbe2ec" stroke-width="1"><line x1="80" y1="90" x2="600" y2="90"/><line x1="80" y1="200" x2="600" y2="200"/><line x1="80" y1="310" x2="600" y2="310"/></g>
+  <path d="M80 90 V40 H110 V90 H200 V40 H230 V90 H320 V40 H350 V90 H440 V40 H470 V90 H560 V40 H590 V90 H600" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <path d="M80 200 V150 H140 V200 H200 V150 H260 V200 H320 V150 H380 V200 H440 V150 H500 V200 H560 V150 H600" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <path d="M80 310 V260 H170 V310 H200 V260 H290 V310 H320 V260 H410 V310 H440 V260 H530 V310 H560 V260 H600" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <g stroke="#e0781f" stroke-width="2.5" stroke-dasharray="7 5"><line x1="80" y1="77.5" x2="600" y2="77.5"/><line x1="80" y1="175" x2="600" y2="175"/><line x1="80" y1="272.5" x2="600" y2="272.5"/></g>
+  <g font-size="12" fill="#e0781f" font-weight="700">
+    <text x="610" y="82">≈0.83V</text><text x="610" y="180">≈1.65V</text><text x="610" y="277">≈2.48V</text>
+  </g>
+  <path d="M200 112 H320" stroke="#152033" stroke-width="1.5" marker-start="url(#a1)" marker-end="url(#a1)"/>
+  <defs><marker id="a1" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="#152033"/></marker></defs>
+  <text x="260" y="128" font-size="12" text-anchor="middle" fill="#152033" direction="rtl">یک دوره (Period)</text>
+  <text x="350" y="345" font-size="13" text-anchor="middle" fill="#4d5b70" direction="rtl">خط‌چین نارنجی = ولتاژ میانگین که بار (مثلا LED یا موتور) «حس» می‌کند</text>
+</svg></div>
+<figcaption>سه موج PWM با فرکانس یکسان و Duty Cycle متفاوت. پین همیشه یا ۰ یا ۳٫۳ ولت است؛ فقط پهنای بخش روشن عوض می‌شود.</figcaption></figure>
+
+<div class="callout analogy"><div class="ct">مثال: شیر آب و لیوان</div>
+<p>فرض کن شیر آب فقط دو حالت دارد: کاملا باز یا کاملا بسته. اگر بخواهی لیوان «آرام» پر شود، شیر را یک ثانیه باز و سه ثانیه بسته می‌کنی و این را تکرار می‌کنی. در کل، لیوان با یک‌چهارم سرعت پر می‌شود. PWM دقیقا همین است، فقط با ولتاژ و هزاران بار در ثانیه.</p></div>
+
+<div class="callout example"><div class="ct">با عدد: ولتاژ میانگین</div>
+<p>ولتاژ میانگین = ولتاژ روشن × Duty Cycle.</p>
+<p>Duty ۲۵٪: <code>3.3 × 0.25 ≈ 0.83V</code> · Duty ۵۰٪: <code>3.3 × 0.50 = 1.65V</code> · Duty ۷۵٪: <code>3.3 × 0.75 ≈ 2.48V</code>.</p>
+<p>اگر مولتی‌متر را روی پین PWM بگذاری، تقریبا همین اعداد را نشان می‌دهد، چون مولتی‌متر هم کند است و میانگین می‌گیرد. ولی یادت باشد: در هر لحظه واقعا یا ۰ است یا ۳٫۳ ولت.</p></div>
+
+<h3 id="eye">چرا LED کم‌نورتر به نظر می‌رسد؟</h3>
+<p>LED برخلاف لامپ رشته‌ای، خیلی سریع (در حد نانوثانیه) روشن و خاموش می‌شود. پس با PWM ۲۵٪، LED واقعا ۲۵٪ زمان با نور کامل روشن است و ۷۵٪ زمان خاموش. کم‌نوری در <b>چشم و مغز تو</b> اتفاق می‌افتد: چشم انسان تغییرات سریع‌تر از حدود ۵۰ تا ۱۰۰ بار در ثانیه را از هم جدا نمی‌کند و نور را میانگین می‌گیرد؛ همان پدیده‌ای که باعث می‌شود ۲۴ عکس ثابت در ثانیه در سینما «فیلم متحرک» دیده شود.</p>
+<div class="callout why"><div class="ct">چرا فرکانس ۵ کیلوهرتز برای LED؟</div>
+<p>زیر حدود ۱۰۰ هرتز، سوسو زدن (Flicker) دیده می‌شود، به خصوص با گوشه چشم یا وقتی سر را تکان می‌دهی. دوربین گوشی حتی در چند صد هرتز هم نوار سیاه ضبط می‌کند. ۵۰۰۰ هرتز آن‌قدر بالاست که نه چشم و نه دوربین چیزی نمی‌بینند و هنوز آن‌قدر پایین است که دقت خوبی داشته باشیم (بخش بعد).</p></div>
+
+<h2 id="freq-res">فرکانس و دقت (Resolution): یک معامله</h2>
+<p>دو عدد، PWM را تعریف می‌کنند:</p>
+<ul>
+  <li><b>فرکانس:</b> در هر ثانیه چند دوره روشن/خاموش داریم (مثلا ۵۰۰۰ هرتز یعنی هر دوره ۰٫۲ میلی‌ثانیه).</li>
+  <li><b>دقت (Resolution):</b> هر دوره به چند پله تقسیم می‌شود. ۸ بیت یعنی <code>2<sup>8</sup> = 256</code> پله (Duty از ۰ تا ۲۵۵)؛ ۱۲ بیت یعنی ۴۰۹۶ پله (۰ تا ۴۰۹۵).</li>
+</ul>
+<p>سخت‌افزار LEDC این پله‌ها را با یک ساعت داخلی می‌شمارد. در ESP32 کلاسیک این ساعت ۸۰ مگاهرتز است. پس برای هر دوره باید <code>2<sup>بیت</sup></code> تیک ساعت وقت داشته باشد. قانون طلایی:</p>
+<div class="callout info"><div class="ct">قانون فرکانس × پله</div>
+<p><code>فرکانس × 2<sup>Resolution</sup> ≤ 80,000,000</code> (برای ESP32 کلاسیک با ساعت ۸۰ مگاهرتز)</p></div>
+<div class="table-wrap"><table>
+<tr><th>فرکانس</th><th>دقت</th><th>حاصل‌ضرب</th><th>نتیجه</th><th>کاربرد</th></tr>
+<tr><td>5,000 Hz</td><td>8 بیت (۲۵۶)</td><td>1.28 MHz</td><td>✅</td><td>LED ساده</td></tr>
+<tr><td>5,000 Hz</td><td>12 بیت (۴۰۹۶)</td><td>20.48 MHz</td><td>✅</td><td>LED با تغییرات خیلی نرم</td></tr>
+<tr><td>5,000 Hz</td><td>14 بیت (۱۶۳۸۴)</td><td>81.92 MHz</td><td>❌ بیشتر از ۸۰</td><td>کار نمی‌کند؛ ledcAttach خطا می‌دهد</td></tr>
+<tr><td>50 Hz</td><td>16 بیت (۶۵۵۳۶)</td><td>3.28 MHz</td><td>✅</td><td>سروو موتور</td></tr>
+<tr><td>20,000 Hz</td><td>10 بیت (۱۰۲۴)</td><td>20.48 MHz</td><td>✅</td><td>موتور DC (بالاتر از شنوایی انسان)</td></tr>
+<tr><td>40 MHz</td><td>1 بیت (۲)</td><td>80 MHz</td><td>✅ سقف مطلق</td><td>فقط موج مربعی ۵۰٪</td></tr>
+</table></div>
+<div class="callout analogy"><div class="ct">مثال: خط‌کش و سرعت</div>
+<p>فرض کن در هر ثانیه فقط ۸۰ میلیون «تیک» وقت داری. اگر هر دوره را به ۲۵۶ قسمت تقسیم کنی، می‌توانی خیلی دوره در ثانیه بسازی (فرکانس بالا). اگر بخواهی هر دوره ۶۵۵۳۶ قسمت ریز داشته باشد، دوره‌های کمتری جا می‌شوند. دقت بیشتر = فرکانس کمتر؛ همیشه.</p></div>
+<div class="callout warn"><div class="ct">حد پایین فرکانس هم وجود دارد</div>
+<p>تقسیم‌کننده ساعت LEDC محدود است، پس برای هر دقت یک حداقل فرکانس هم هست. مثلا فرکانس خیلی پایین با دقت خیلی کم ممکن است قبول نشود. طبق مستندات، اگر فرکانس پایین لازم داری، دقت را <b>بیشتر</b> کن، نه کمتر. برای کارهای این درس (۵ کیلوهرتز و ۵۰ هرتز) نگرانی نیست.</p></div>
+
+<h2 id="ledc">LEDC: کارخانه PWM داخل ESP32</h2>
+<p>ESP32 برای ساختن PWM از CPU استفاده نمی‌کند؛ یک بخش سخت‌افزاری مستقل به اسم LEDC (LED Control) دارد. وقتی Duty را تنظیم کردی، LEDC خودش موج را می‌سازد و CPU آزاد است هر کار دیگری انجام بدهد. با وجود اسمش، LEDC برای موتور، سروو و بازر هم استفاده می‌شود.</p>
+<ul>
+  <li>ESP32 کلاسیک <b>۱۶ کانال</b> دارد (دو گروه ۸تایی، هر گروه ۴ تایمر). یعنی تا ۱۶ پین PWM مستقل هم‌زمان. (ESP32-S2 و S3 هشت کانال و C3 شش کانال دارند.)</li>
+  <li>هر GPIO که بتواند خروجی باشد، می‌تواند PWM داشته باشد. پس GPIO34 تا 39 (فقط ورودی) نه.</li>
+  <li>کانال‌هایی که فرکانس و دقت یکسان دارند، یک تایمر را شریک می‌شوند. پس اگر ۵ LED با ۵ کیلوهرتز ۸ بیت داری، همه یک تایمر مصرف می‌کنند.</li>
+</ul>
+
+<h3 id="api">API هسته ۳: فقط دو تابع اصلی</h3>
+<div class="table-wrap"><table>
+<tr><th>تابع</th><th>کار</th><th>مثال</th></tr>
+<tr><td><code>ledcAttach(pin, freq, res)</code></td><td>پین را به یک کانال LEDC وصل می‌کند (کانال خودکار انتخاب می‌شود). اگر موفق شد <code>true</code> برمی‌گرداند.</td><td><code>ledcAttach(4, 5000, 8);</code></td></tr>
+<tr><td><code>ledcWrite(pin, duty)</code></td><td>Duty را تنظیم می‌کند؛ از ۰ تا <code>2<sup>res</sup> − 1</code>.</td><td><code>ledcWrite(4, 128);</code> ← ۵۰٪</td></tr>
+<tr><td><code>ledcFade(pin, start, end, ms)</code></td><td>سخت‌افزار خودش Duty را در مدت داده‌شده نرم تغییر می‌دهد.</td><td><code>ledcFade(4, 0, 255, 1000);</code></td></tr>
+<tr><td><code>ledcWriteTone(pin, freq)</code></td><td>موج مربعی ۵۰٪ با فرکانس دلخواه (برای بازر). پین باید قبلا attach شده باشد.</td><td><code>ledcWriteTone(25, 440);</code></td></tr>
+<tr><td><code>ledcDetach(pin)</code></td><td>پین را از LEDC جدا می‌کند.</td><td><code>ledcDetach(4);</code></td></tr>
+</table></div>
+
+<div class="callout warn"><div class="ct">هشدار: کدهای قدیمی اینترنت (هسته ۲) در هسته ۳ کامپایل نمی‌شوند</div>
+<p>بیشتر آموزش‌های قبل از سال ۲۰۲۴ از API هسته ۲ استفاده می‌کنند که با <b>شماره کانال</b> کار می‌کرد. اگر این کدها را کپی کنی، خطای <code>'ledcSetup' was not declared in this scope</code> می‌گیری. ترجمه:</p>
+<div class="table-wrap"><table>
+<tr><th>هسته ۲ (قدیمی)</th><th>هسته ۳ (فعلی، این دوره)</th></tr>
+<tr><td><code>ledcSetup(0, 5000, 8);</code><br><code>ledcAttachPin(4, 0);</code></td><td><code>ledcAttach(4, 5000, 8);</code></td></tr>
+<tr><td><code>ledcWrite(0, 128);</code> ← شماره <b>کانال</b></td><td><code>ledcWrite(4, 128);</code> ← شماره <b>پین</b></td></tr>
+<tr><td><code>ledcDetachPin(4);</code></td><td><code>ledcDetach(4);</code></td></tr>
+</table></div>
+<p>مهم‌ترین تله: در هر دو نسخه تابعی به اسم <code>ledcWrite</code> هست، ولی عدد اول در نسخه قدیمی <b>کانال</b> بود و در نسخه جدید <b>پین</b> است. اگر بخواهی خودت کانال را انتخاب کنی، هسته ۳ تابع <code>ledcAttachChannel(pin, freq, res, channel)</code> را دارد. نسخه هسته را در Arduino IDE از <code>Tools › Board › Boards Manager</code> ببین (esp32 by Espressif Systems، نسخه 3.x).</p></div>
+
+<h2 id="breathing">پروژه ۱: LED نفس‌کشنده (Breathing)</h2>
+<p>همان مدار LED درس ۲.۳: GPIO4 ← مقاومت ۲۲۰ اهم ← LED ← GND. هیچ تغییری در سخت‌افزار لازم نیست؛ فقط به جای digitalWrite از PWM استفاده می‌کنیم.</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"R1","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","سمت GPIO4"],["2","سمت LED"]]},
+    {"id":"LED1","name":"LED قرمز","img":"led.svg","pins":[["A","آند (+) پایه بلند"],["K","کاتد (−)"]]}
+  ],
+  "wires":[["GPIO4","R1.1","orange","PWM"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>مدار LED با PWM روی GPIO4؛ عینا مدار درس ۲.۳.</figcaption></div>
+
+<div class="code" data-file="Breathing_LED.ino" id="c1"><pre>
+// LED نفس‌کشنده (Breathing) با LEDC
+const int LED_PIN = 4;
+const int PWM_FREQ = 5000;      // 5kHz: خیلی بالاتر از حد تشخیص چشم
+const int PWM_RES  = 8;         // 8 بیت: duty از 0 تا 255
+
+void setup() {
+  Serial.begin(115200);
+  if (!ledcAttach(LED_PIN, PWM_FREQ, PWM_RES)) {
+    Serial.println("ledcAttach failed!");
+  }
+}
+
+void loop() {
+  for (int duty = 0; duty &lt;= 255; duty++) {   // کم‌کم روشن
+    ledcWrite(LED_PIN, duty);
+    delay(8);
+  }
+  for (int duty = 255; duty &gt;= 0; duty--) {   // کم‌کم خاموش
+    ledcWrite(LED_PIN, duty);
+    delay(8);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="c1">
+  <li data-lines="3-4"><b class="what">دو ثابت PWM.</b> فرکانس ۵۰۰۰ هرتز و دقت ۸ بیت.
+    <span class="why"><code>5000 × 256 = 1.28MHz</code> خیلی زیر سقف ۸۰ مگاهرتز است. ۲۵۶ پله برای چشم کافی است؛ اسم دادن به این اعداد باعث می‌شود بعدا برای آزمایش راحت عوضشان کنی.</span></li>
+  <li data-lines="8-10"><b class="what">ledcAttach با بررسی خطا.</b> پین ۴ را به یک کانال LEDC با تنظیمات بالا وصل می‌کند. اگر نشد (مثلا ترکیب فرکانس و دقت غیرممکن بود)، <code>false</code> برمی‌گرداند و ما پیام چاپ می‌کنیم.
+    <span class="why"><code>!</code> یعنی «نه». بررسی مقدار برگشتی عادت خوبی است: اگر روزی <code>PWM_RES</code> را ۱۴ کنی، به جای LED خاموش و سردرگمی، یک پیام واضح می‌بینی. توجه کن که دیگر <code>pinMode</code> لازم نیست؛ ledcAttach خودش پین را خروجی می‌کند.</span></li>
+  <li data-lines="14-17"><b class="what">حلقه روشن شدن.</b> Duty از ۰ تا ۲۵۵، هر پله ۸ میلی‌ثانیه.
+    <span class="why">۲۵۶ پله × ۸ms ≈ ۲ ثانیه برای روشن شدن کامل؛ سرعتی آرام و شبیه نفس کشیدن. عدد ۸ را کم کنی تندتر نفس می‌کشد.</span></li>
+  <li data-lines="15"><b class="what">ledcWrite(پین، duty).</b> Duty را روی سخت‌افزار تنظیم می‌کند. از این لحظه LEDC خودش موج را می‌سازد تا دستور بعدی.
+    <span class="why">در هسته ۳ عدد اول <b>پین</b> است، نه کانال. این را با کدهای قدیمی اشتباه نگیر.</span></li>
+  <li data-lines="18-21"><b class="what">حلقه خاموش شدن.</b> برعکس: از ۲۵۵ تا ۰. <code>duty--</code> یعنی یکی کم کن.
+    <span class="why">شرط <code>duty &gt;= 0</code> (و نه <code>&gt; 0</code>) باعث می‌شود LED واقعا به صفر برسد و کاملا خاموش شود.</span></li>
+</ol>
+
+<div class="callout tip"><div class="ct">چرا نیمه اول تنفس سریع‌تر به نظر می‌رسد؟</div>
+<p>چشم انسان به نور کم خیلی حساس‌تر از نور زیاد است (پاسخ چشم تقریبا لگاریتمی است). پس تغییر Duty از ۱۰ به ۲۰ خیلی بیشتر از ۲۱۰ به ۲۲۰ دیده می‌شود. برای تنفس «طبیعی‌تر»، به جای خود Duty از مربع آن استفاده کن: <code>ledcWrite(LED_PIN, duty * duty / 255);</code>. به این اصلاح «گاما» می‌گویند.</p></div>
+
+<h3 id="fade">نسخه سخت‌افزاری: ledcFade</h3>
+<p>در کد بالا CPU خودش پله‌پله Duty را عوض می‌کند و در delayها گیر است. LEDC می‌تواند این کار را <b>خودش</b> انجام دهد:</p>
+<div class="code" data-file="Hardware_Fade.ino" id="c2"><pre>
+const int LED_PIN = 4;
+
+void setup() {
+  ledcAttach(LED_PIN, 5000, 8);
+}
+
+void loop() {
+  ledcFade(LED_PIN, 0, 255, 1500);   // سخت‌افزار در ۱٫۵ ثانیه روشن می‌کند
+  delay(2000);                       // CPU اینجا آزاد است؛ delay فقط برای سادگی مثال
+  ledcFade(LED_PIN, 255, 0, 1500);   // و در ۱٫۵ ثانیه خاموش
+  delay(2000);
+}
+</pre></div>
+<ol class="walk" data-for="c2">
+  <li data-lines="8"><b class="what">ledcFade(پین، شروع، پایان، میلی‌ثانیه).</b> به LEDC می‌گوید Duty را از ۰ تا ۲۵۵ در ۱۵۰۰ میلی‌ثانیه نرم بالا ببرد و فورا برمی‌گردد.
+    <span class="why">این تابع منتظر تمام شدن محو شدن نمی‌ماند. پس در یک برنامه واقعی به جای delay می‌توانی دکمه بخوانی یا به Wi-Fi جواب بدهی و LED خودش نرم عوض می‌شود.</span></li>
+  <li data-lines="9"><b class="what">delay بلندتر از زمان fade.</b> ۲۰۰۰ms صبر تا fade (۱۵۰۰ms) تمام شود و نیم ثانیه در نور کامل بماند.
+    <span class="why">اگر fade بعدی را قبل از تمام شدن قبلی شروع کنی، قبلی قطع می‌شود. نسخه‌های پیشرفته‌تر (<code>ledcFadeWithInterrupt</code>) می‌توانند تمام شدن fade را با یک تابع خبر بدهند.</span></li>
+</ol>
+
+<h3 id="analogwrite">analogWrite هم هست؛ رابطه‌اش با LEDC چیست؟</h3>
+<p>در آردوینو اونو برای PWM از <code>analogWrite(pin, 0..255)</code> استفاده می‌شود. هسته ۳ ESP32 هم این تابع را دارد تا کدهای آردوینو راحت اجرا شوند. پشت پرده، <code>analogWrite</code> دفعه اول خودش <code>ledcAttach(pin, 1000, 8)</code> را صدا می‌زند (پیش‌فرض: ۱۰۰۰ هرتز، ۸ بیت) و بعد <code>ledcWrite</code> می‌کند. با <code>analogWriteFrequency(pin, freq)</code> و <code>analogWriteResolution(pin, bits)</code> می‌توانی تنظیماتش را عوض کنی.</p>
+<div class="callout tip"><div class="ct">کدام را استفاده کنم؟</div>
+<p>برای کد سریع و سازگار با آردوینو: <code>analogWrite</code>. برای کنترل کامل روی فرکانس و دقت و بررسی خطا: <code>ledcAttach</code> + <code>ledcWrite</code>. فقط روی یک پین هر دو را قاطی نکن. (توجه: نام <code>analogWrite</code> گمراه‌کننده است؛ خروجی آنالوگ واقعی نیست، همان PWM است. خروجی آنالوگ واقعی DAC روی GPIO25 و 26 است.)</p></div>
+
+<h2 id="pot-led">پروژه ۲: پتانسیومتر، نور LED را تنظیم می‌کند</h2>
+<p>پتانسیومتر روی GPIO34 (مثل درس ۳.۱) و LED روی GPIO4. یک ترفند زیبا: ADC عدد ۱۲ بیتی (۰ تا ۴۰۹۵) می‌دهد؛ اگر PWM را هم ۱۲ بیتی تنظیم کنیم، می‌توانیم عدد را <b>مستقیم</b> و بدون map به LED بدهیم.</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"POT","name":"پتانسیومتر ۱۰ کیلو","img":"pot.svg","pins":[["VCC","پایه کناری"],["SIG","پایه وسط"],["GND","پایه کناری دیگر"]]},
+    {"id":"R1","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","سمت GPIO4"],["2","سمت LED"]]},
+    {"id":"LED1","name":"LED قرمز","img":"led.svg","pins":[["A","آند (+)"],["K","کاتد (−)"]]}
+  ],
+  "wires":[["3V3","POT.VCC","red"],["GPIO34","POT.SIG","blue"],["POT.GND","GND","black"],["GPIO4","R1.1","orange","PWM"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>ورودی آنالوگ (GPIO34) و خروجی PWM (GPIO4) در یک مدار.</figcaption></div>
+
+<div class="code" data-file="Pot_Dimmer.ino" id="c3"><pre>
+// پتانسیومتر، نور LED را تنظیم می‌کند
+const int POT_PIN = 34;
+const int LED_PIN = 4;
+
+void setup() {
+  Serial.begin(115200);
+  ledcAttach(LED_PIN, 5000, 12);      // 12 بیت: 0 تا 4095، هم‌اندازه ADC
+}
+
+void loop() {
+  int raw = analogRead(POT_PIN);      // 0 تا 4095
+  ledcWrite(LED_PIN, raw);            // همان عدد، مستقیم به PWM
+  Serial.printf("raw=%d  duty=%d%%\n", raw, raw * 100 / 4095);
+  delay(20);
+}
+</pre></div>
+<ol class="walk" data-for="c3">
+  <li data-lines="7"><b class="what">PWM دوازده بیتی.</b> ۵ کیلوهرتز با ۴۰۹۶ پله.
+    <span class="why"><code>5000 × 4096 = 20.48MHz</code> زیر سقف ۸۰ است. هم‌اندازه بودن ADC و PWM یعنی هیچ تبدیلی لازم نیست و هیچ دقتی هم دور ریخته نمی‌شود.</span></li>
+  <li data-lines="11-12"><b class="what">خواندن و نوشتن مستقیم.</b> عدد پتانسیومتر همان Duty می‌شود.
+    <span class="why">اگر PWM را ۸ بیتی گذاشته بودی، باید <code>map(raw, 0, 4095, 0, 255)</code> یا <code>raw &gt;&gt; 4</code> (تقسیم بر ۱۶) می‌نوشتی. نوشتن ۴۰۹۵ روی PWM هشت بیتی اشتباه رایجی است: هر عدد بالای ۲۵۵ یعنی «کاملا روشن» و پیچ فقط در ۶٪ اول مسیرش کار می‌کند.</span></li>
+  <li data-lines="13"><b class="what">نمایش درصد.</b> <code>raw * 100 / 4095</code> درصد Duty را حساب می‌کند. <code>%%</code> خود علامت ٪ را چاپ می‌کند.
+    <span class="why">اول ضرب بعد تقسیم: اگر اول تقسیم می‌کردی (<code>raw / 4095 * 100</code>)، تقسیم صحیح همیشه ۰ می‌داد (جز در انتها).</span></li>
+  <li data-lines="14"><b class="what">مکث ۲۰ms.</b>
+    <span class="why">۵۰ به‌روزرسانی در ثانیه برای حس «فوری» کافی است و Serial Monitor را غرق نمی‌کند.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="c3">
+<p>پتانسیومتر را بچرخان و ببین LED نرم کم و زیاد می‌شود. کد <code>Breathing_LED</code> را هم می‌توانی در همین مدار امتحان کنی.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": 20, "left": -170, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="servo">سروو موتور: PWM برای «زاویه»</h2>
+<p>سروو موتور (مثل SG90 آبی کوچک) یک موتور DC کوچک، یک جعبه‌دنده، یک پتانسیومتر داخلی و یک مدار کنترل است که همه در یک جعبه جمع شده‌اند. تو به آن نمی‌گویی «بچرخ»؛ می‌گویی «به زاویه ۹۰ درجه برو و همان‌جا بمان». مدار داخلی با پتانسیومتر خودش زاویه فعلی را می‌خواند و موتور را آن‌قدر می‌چرخاند تا به زاویه خواسته‌شده برسد.</p>
+<div class="callout analogy"><div class="ct">مثال: فرمان ماشین با راننده خودکار</div>
+<p>تو فقط می‌گویی «فرمان ۳۰ درجه به راست». راننده (مدار داخلی) نگاه می‌کند فرمان الان کجاست، می‌چرخاند و وقتی رسید نگه می‌دارد. اگر کسی بخواهد فرمان را به زور بچرخاند، راننده مقاومت می‌کند. این «بازخورد» (Feedback) است.</p></div>
+
+<h3 id="servo-signal">زبان سروو: پهنای پالس، نه Duty</h3>
+<p>سروو هر ۲۰ میلی‌ثانیه (یعنی ۵۰ بار در ثانیه، <b>۵۰ هرتز</b>) یک پالس انتظار دارد. <b>پهنای</b> این پالس زاویه را تعیین می‌کند. برای SG90 در عمل:</p>
+
+<figure><div class="frame"><svg viewBox="0 0 700 330" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="پهنای پالس سروو و زاویه">
+  <defs><marker id="a2" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="#152033"/></marker></defs>
+  <g stroke="#dbe2ec"><line x1="60" y1="90" x2="520" y2="90"/><line x1="60" y1="180" x2="520" y2="180"/><line x1="60" y1="270" x2="520" y2="270"/></g>
+  <!-- scale: 20ms = 440px -> 22px per ms ; start at x=70 -->
+  <path d="M60 90 H70 V45 H81 V90 H510 V45 H521" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <path d="M60 180 H70 V135 H103 V180 H510 V135 H521" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <path d="M60 270 H70 V225 H123 V270 H510 V225 H521" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <text x="130" y="72" font-size="13" fill="#152033">0.5 ms</text>
+  <text x="130" y="162" font-size="13" fill="#152033">1.5 ms</text>
+  <text x="130" y="252" font-size="13" fill="#152033">2.4 ms</text>
+  <path d="M70 305 H510" stroke="#152033" stroke-width="1.5" marker-start="url(#a2)" marker-end="url(#a2)"/>
+  <text x="290" y="322" font-size="12" text-anchor="middle" fill="#152033" direction="rtl">۲۰ میلی‌ثانیه (۵۰ هرتز) — بقیه دوره LOW است</text>
+  <!-- servo dials -->
+  <g transform="translate(610,75)"><circle r="28" fill="#eef2f8" stroke="#6b7280"/><line x1="0" y1="0" x2="-24" y2="0" stroke="#d6453d" stroke-width="5" stroke-linecap="round"/><circle r="4" fill="#152033"/><text x="0" y="46" font-size="13" text-anchor="middle" fill="#152033">0°</text></g>
+  <g transform="translate(610,165)"><circle r="28" fill="#eef2f8" stroke="#6b7280"/><line x1="0" y1="0" x2="0" y2="-24" stroke="#d6453d" stroke-width="5" stroke-linecap="round"/><circle r="4" fill="#152033"/><text x="0" y="46" font-size="13" text-anchor="middle" fill="#152033">90°</text></g>
+  <g transform="translate(610,255)"><circle r="28" fill="#eef2f8" stroke="#6b7280"/><line x1="0" y1="0" x2="24" y2="0" stroke="#d6453d" stroke-width="5" stroke-linecap="round"/><circle r="4" fill="#152033"/><text x="0" y="46" font-size="13" text-anchor="middle" fill="#152033">180°</text></g>
+</svg></div>
+<figcaption>سیگنال سروو: هر ۲۰ms یک پالس. پالس ۰٫۵ms ≈ صفر درجه، ۱٫۵ms ≈ ۹۰ درجه (وسط)، ۲٫۴ms ≈ ۱۸۰ درجه. پالس‌ها در تصویر با مقیاس درست کشیده شده‌اند؛ ببین چقدر باریک‌اند.</figcaption></figure>
+
+<div class="callout warn"><div class="ct">عددهای دیتاشیت با واقعیت فرق دارند</div>
+<p>دیتاشیت‌های SG90 معمولا ۱ تا ۲ میلی‌ثانیه را برای حرکت کامل ذکر می‌کنند، ولی آن بازه در عمل فقط حدود ۹۰ درجه حرکت می‌دهد. بیشتر سازندگان و کتابخانه‌ها ۰٫۵ تا ۲٫۴ میلی‌ثانیه را برای ۰ تا ۱۸۰ درجه استفاده می‌کنند. هر سروو کمی فرق دارد؛ اگر سروو در یکی از دو انتها «وزوز» کرد، یعنی پالس از حد مکانیکی آن فراتر رفته و باید بازه را کمی تنگ‌تر کنی (پایین‌تر در عیب‌یابی).</p></div>
+
+<h3 id="servo-power">تغذیه سروو: مهم‌ترین قسمت این درس</h3>
+<div class="table-wrap"><table>
+<tr><th>مشخصه SG90 (تقریبی)</th><th>مقدار</th></tr>
+<tr><td>ولتاژ کار</td><td>۴٫۸ تا ۶ ولت (۵ ولت ایدئال)</td></tr>
+<tr><td>گشتاور</td><td>حدود ۱٫۸ کیلوگرم·سانتی‌متر در ۴٫۸ ولت</td></tr>
+<tr><td>جریان در سکون</td><td>چند میلی‌آمپر تا ده‌ها میلی‌آمپر</td></tr>
+<tr><td>جریان هنگام حرکت و شروع حرکت</td><td>لحظه‌ای چند صد میلی‌آمپر؛ وقتی گیر کند (Stall) حتی بیشتر</td></tr>
+<tr><td>سیم‌ها</td><td><b>قهوه‌ای</b> = GND · <b>قرمز</b> = +۵V · <b>نارنجی</b> = سیگنال</td></tr>
+</table></div>
+<p>سیگنال ۳٫۳ ولتی ESP32 برای فرمان دادن به SG90 کافی است. ولی <b>برق</b> سروو هرگز نباید از پین 3V3 یا یک GPIO بیاید. دو روش:</p>
+
+<h4>روش ۱ (فقط برای یک سروو کوچک و آزمایش): پین 5V برد</h4>
+<p>پین <code>5V</code> برد DevKitC مستقیما به ۵ ولت USB وصل است. پورت USB کامپیوتر معمولا ۵۰۰ میلی‌آمپر می‌دهد و خود ESP32 هم ۱۰۰ تا ۲۵۰ میلی‌آمپر (با Wi-Fi) مصرف می‌کند. یک SG90 بدون بار معمولا جا می‌شود، ولی جهش جریان لحظه شروع حرکت، ولتاژ را افت می‌دهد.</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"SERVO","name":"سروو SG90","img":"servo.svg","pins":[["GND","سیم قهوه‌ای"],["V+","سیم قرمز (+۵V)"],["SIG","سیم نارنجی (سیگنال)"]]},
+    {"id":"POT","name":"پتانسیومتر ۱۰ کیلو","img":"pot.svg","pins":[["VCC","پایه کناری"],["SIG","پایه وسط"],["GND","پایه کناری دیگر"]]}
+  ],
+  "wires":[["GND","SERVO.GND","black"],["5V","SERVO.V+","red"],["GPIO18","SERVO.SIG","orange","PWM 50Hz"],["3V3","POT.VCC","red"],["GPIO34","POT.SIG","blue"],["POT.GND","GND","black"]]
+}</script><figcaption>سروو از پین 5V برد تغذیه می‌شود و سیگنال را از GPIO18 می‌گیرد. پتانسیومتر (برای پروژه ۳) مثل قبل از 3V3 تغذیه می‌شود، نه 5V.</figcaption></div>
+
+<h4>روش ۲ (درست و مطمئن): منبع جدا + زمین مشترک</h4>
+<p>برای بیش از یک سروو، سروو زیر بار، یا هر پروژه جدی، سروو را از یک منبع ۵ ولت جدا (آداپتور ۵ ولت ۲ آمپر، یا پاوربانک) تغذیه کن. <b>زمین منبع و زمین ESP32 باید به هم وصل شوند.</b></p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"PSU","name":"منبع ۵ ولت جدا (۲ آمپر)","pins":[["+","خروجی +۵V"],["-","منفی (زمین منبع)"]]},
+    {"id":"SERVO","name":"سروو SG90","img":"servo.svg","pins":[["GND","سیم قهوه‌ای"],["V+","سیم قرمز"],["SIG","سیم نارنجی"]]}
+  ],
+  "wires":[["PSU.+","SERVO.V+","red"],["PSU.-","SERVO.GND","black"],["PSU.-","GND","black","زمین مشترک"],["GPIO18","SERVO.SIG","orange"]]
+}</script><figcaption>برق سروو از منبع جدا؛ فقط سیگنال و زمین بین ESP32 و مدار سروو مشترک است. ESP32 خودش از USB تغذیه می‌شود.</figcaption></div>
+<div class="callout why"><div class="ct">چرا زمین مشترک ضروری است؟</div>
+<p>ولتاژ همیشه «نسبت به یک نقطه» سنجیده می‌شود. سیگنال ۳٫۳ ولتی ESP32 یعنی «۳٫۳ ولت بالاتر از GND خود ESP32». اگر GND سروو به GND ضمیمه ESP32 وصل نباشد، سروو نقطه مرجعی ندارد که این ۳٫۳ ولت را با آن بسنجد و سیگنال برایش بی‌معنی است. مثل این است که بگویی «سه طبقه بالاتر» بدون این که بگویی از کدام ساختمان.</p></div>
+<div class="callout warn"><div class="ct">Brownout: وقتی سروو برد را ریست می‌کند</div>
+<p>اگر هر بار که سروو حرکت می‌کند ESP32 ریست می‌شود و در Serial Monitor پیام <code>Brownout detector was triggered</code> می‌بینی، یعنی جهش جریان سروو ولتاژ را آن‌قدر پایین آورده که محافظ داخلی ESP32 برای جلوگیری از رفتار غیرقابل پیش‌بینی آن را ریست کرده. راه حل: روش ۲ (منبع جدا)، و یک خازن الکترولیت ۴۷۰ تا ۱۰۰۰ میکروفاراد (۱۰ ولت یا بیشتر) بین + و − سروو، نزدیک خود سروو (پایه منفی خازن به GND). خازن مثل یک مخزن کوچک جهش‌های لحظه‌ای را تأمین می‌کند.</p></div>
+
+<h3 id="esp32servo">کتابخانه ESP32Servo</h3>
+<p>کتابخانه <code>Servo</code> معروف آردوینو برای ESP32 کار نمی‌کند. به جایش از <a href="https://github.com/madhephaestus/ESP32Servo" target="_blank" rel="noopener">ESP32Servo</a> استفاده می‌کنیم که همان دستورها را دارد و پشت پرده از LEDC استفاده می‌کند.</p>
+<ol class="steps">
+  <li><b>نصب:</b> در Arduino IDE از <code>Sketch › Include Library › Manage Libraries…</code> عبارت <code>ESP32Servo</code> را جست‌وجو کن و کتابخانه Kevin Harrington را نصب کن (نسخه 3.x که با هسته ۳ سازگار است).</li>
+  <li><b>در Wokwi:</b> زبانه <b>Library Manager</b> را باز کن، روی + بزن و <code>ESP32Servo</code> را اضافه کن. (Wokwi این را در فایلی به اسم <code>libraries.txt</code> ذخیره می‌کند.)</li>
+</ol>
+<div class="code" data-file="Servo_Sweep.ino" id="c4"><pre>
+#include &lt;ESP32Servo.h&gt;
+
+Servo myServo;                  // یک شیء سروو
+const int SERVO_PIN = 18;
+
+void setup() {
+  Serial.begin(115200);
+  myServo.setPeriodHertz(50);             // سروو استاندارد: 50Hz
+  myServo.attach(SERVO_PIN, 500, 2400);   // پالس 0.5ms تا 2.4ms
+}
+
+void loop() {
+  for (int angle = 0; angle &lt;= 180; angle++) {
+    myServo.write(angle);
+    delay(15);                  // به سروو فرصت حرکت بده
+  }
+  for (int angle = 180; angle &gt;= 0; angle--) {
+    myServo.write(angle);
+    delay(15);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="c4">
+  <li data-lines="1"><b class="what">include.</b> کد کتابخانه را به برنامه اضافه می‌کند.
+    <span class="why"><code>&lt;...&gt;</code> یعنی «در پوشه کتابخانه‌ها بگرد». اگر خطای <code>No such file or directory</code> دیدی، کتابخانه نصب نشده.</span></li>
+  <li data-lines="3"><b class="what">ساختن یک شیء.</b> <code>Servo myServo;</code> یک «سروو مجازی» به اسم myServo می‌سازد.
+    <span class="why">هر سروو واقعی یک شیء جدا لازم دارد. برای دو سروو: <code>Servo s1, s2;</code>. شیء مثل یک کنترل تلویزیون است که فقط با یک تلویزیون جفت شده.</span></li>
+  <li data-lines="8"><b class="what">setPeriodHertz(50).</b> فرکانس ۵۰ هرتز (دوره ۲۰ms).
+    <span class="why">پیش‌فرض کتابخانه هم ۵۰ است ولی نوشتنش کد را روشن‌تر می‌کند. بعضی سرووهای دیجیتال فرکانس بالاتر (مثلا ۳۳۰ هرتز) را هم می‌پذیرند.</span></li>
+  <li data-lines="9"><b class="what">attach(پین، حداقل، حداکثر).</b> سروو را به GPIO18 وصل می‌کند و می‌گوید زاویه ۰ = ۵۰۰ میکروثانیه و ۱۸۰ = ۲۴۰۰ میکروثانیه.
+    <span class="why">پیش‌فرض کتابخانه ۵۴۴ تا ۲۴۰۰ است. ما بازه SG90 را صریح نوشتیم تا اگر سروو دیگری داشتی بدانی کجا را عوض کنی. GPIO18 یک پایه امن و همه‌کاره است.</span></li>
+  <li data-lines="13-16"><b class="what">چرخش ۰ تا ۱۸۰.</b> <code>write(angle)</code> زاویه را به درجه می‌گیرد و کتابخانه آن را به پهنای پالس تبدیل می‌کند.
+    <span class="why">۱۵ms بین هر درجه به سروو فرصت می‌دهد حرکت کند؛ ۱۸۱ پله × ۱۵ms ≈ ۲٫۷ ثانیه برای نیم دور. سرعت حداکثر SG90 حدود ۰٫۱ ثانیه برای ۶۰ درجه است، پس بی‌دلیل سریع‌ترش نکن.</span></li>
+  <li data-lines="17-20"><b class="what">برگشت ۱۸۰ به ۰.</b> همان حلقه برعکس.
+    <span class="why">حرکت نرم رفت و برگشت، کمترین جهش جریان را دارد. پریدن ناگهانی از ۰ به ۱۸۰ بیشترین جریان را می‌کشد و بیشترین احتمال Brownout را دارد.</span></li>
+</ol>
+
+<h3 id="servo-raw">بدون کتابخانه: سروو فقط PWM است (رازگشایی)</h3>
+<p>کتابخانه جادو نمی‌کند. بیا خودمان حساب کنیم. با ۵۰ هرتز و دقت ۱۶ بیت، یک دوره ۲۰۰۰۰ میکروثانیه است و به ۶۵۵۳۶ پله تقسیم می‌شود:</p>
+<div class="callout example"><div class="ct">حساب Duty برای سروو</div>
+<p><code>duty = پهنای پالس (µs) × 65536 ÷ 20000</code></p>
+<p>۰ درجه: <code>500 × 65536 ÷ 20000 ≈ 1638</code> · ۹۰ درجه: <code>1450 × 65536 ÷ 20000 ≈ 4751</code> · ۱۸۰ درجه: <code>2400 × 65536 ÷ 20000 ≈ 7864</code>.</p>
+<p>(۹۰ درجه وسط ۵۰۰ و ۲۴۰۰ یعنی ۱۴۵۰ میکروثانیه است، نزدیک ۱٫۵ms استاندارد.) یعنی سروو در بدترین حالت فقط حدود ۱۲٪ Duty می‌بیند؛ بقیه دوره LOW است.</p></div>
+<div class="code" data-file="Servo_Raw_LEDC.ino" id="c5"><pre>
+// سروو بدون کتابخانه: فقط LEDC و کمی حساب
+const int SERVO_PIN = 18;
+const int FREQ = 50;            // 50Hz = هر 20ms یک پالس
+const int RES  = 16;            // 16 بیت: 0 تا 65535
+const int MIN_US = 500;         // پالس زاویه 0 درجه
+const int MAX_US = 2400;        // پالس زاویه 180 درجه
+
+uint32_t usToDuty(int us) {
+  return (uint32_t)us * 65536UL / 20000UL;   // سهم پالس از 20000 میکروثانیه
+}
+
+void writeAngle(int angle) {
+  angle = constrain(angle, 0, 180);
+  int us = map(angle, 0, 180, MIN_US, MAX_US);
+  ledcWrite(SERVO_PIN, usToDuty(us));
+  Serial.printf("angle=%3d  pulse=%4dus  duty=%lu\n", angle, us, (unsigned long)usToDuty(us));
+}
+
+void setup() {
+  Serial.begin(115200);
+  ledcAttach(SERVO_PIN, FREQ, RES);
+}
+
+void loop() {
+  const int angles[] = {0, 90, 180, 90};
+  for (int i = 0; i &lt; 4; i++) {
+    writeAngle(angles[i]);
+    delay(1000);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="c5">
+  <li data-lines="3-6"><b class="what">پارامترهای سروو.</b> ۵۰ هرتز، ۱۶ بیت و بازه پالس.
+    <span class="why"><code>50 × 65536 ≈ 3.3MHz</code>، خیلی زیر سقف. دقت ۱۶ بیت یعنی هر پله حدود ۰٫۳ میکروثانیه؛ با ۸ بیت هر پله ۷۸ میکروثانیه می‌شد و بین ۰ تا ۱۸۰ درجه فقط حدود ۲۴ پله داشتیم (حرکت پله‌پله و زمخت).</span></li>
+  <li data-lines="8-10"><b class="what">تبدیل میکروثانیه به Duty.</b> همان فرمول بالا. <code>(uint32_t)</code> عدد را قبل از ضرب ۳۲ بیتی می‌کند و <code>UL</code> یعنی «عدد ثابت unsigned long».
+    <span class="why"><code>2400 × 65536 = 157,286,400</code> از بازه int شانزده بیتی بعضی بردها بیرون است. عادت کن ضرب‌های بزرگ را صریحا در نوع بزرگ انجام دهی. اول ضرب، بعد تقسیم؛ تا دقت از دست نرود.</span></li>
+  <li data-lines="13"><b class="what">constrain(مقدار، کم، زیاد).</b> زاویه را بین ۰ و ۱۸۰ محدود می‌کند.
+    <span class="why">اگر اشتباها ۲۵۰ بدهی، بدون این خط پالس از حد مجاز بیرون می‌رود و سروو به ته مکانیکی فشار می‌آورد، جریان زیاد می‌کشد و ممکن است دنده‌هایش بشکند.</span></li>
+  <li data-lines="14-15"><b class="what">زاویه ← میکروثانیه ← Duty ← سخت‌افزار.</b> map زاویه را به پهنای پالس و usToDuty آن را به Duty تبدیل می‌کند.
+    <span class="why">این دقیقا همان کاری است که <code>myServo.write()</code> پشت پرده انجام می‌دهد.</span></li>
+  <li data-lines="21"><b class="what">ledcAttach با ۵۰ هرتز و ۱۶ بیت.</b>
+    <span class="why">همان تابعی که برای LED استفاده کردیم، فقط با اعداد متفاوت. PWM یک ابزار است؛ LED و سروو فقط دو جور استفاده از آن.</span></li>
+  <li data-lines="25-29"><b class="what">لیست زاویه‌ها.</b> یک آرایه چهارتایی که به ترتیب اجرا می‌شود، هر کدام یک ثانیه.
+    <span class="why">آرایه (Array) یعنی چند مقدار هم‌نوع پشت سر هم؛ <code>angles[0]</code> اولی است. این کار از نوشتن چهار بار writeAngle تمیزتر است.</span></li>
+</ol>
+<div class="serial">angle=  0  pulse= 500us  duty=1638
+angle= 90  pulse=1450us  duty=4751
+angle=180  pulse=2400us  duty=7864
+angle= 90  pulse=1450us  duty=4751</div>
+
+<h2 id="pot-servo">پروژه ۳: پتانسیومتر، زاویه سروو را تعیین می‌کند</h2>
+<p>مدار: همان نقشه «روش ۱» بالا (سروو روی GPIO18، پتانسیومتر روی GPIO34). پیچ را بچرخانی، بازوی سروو هم‌زمان می‌چرخد؛ مثل یک بازوی رباتیک ساده.</p>
+<div class="code" data-file="Pot_Servo.ino" id="c6"><pre>
+#include &lt;ESP32Servo.h&gt;
+
+const int POT_PIN = 34;
+const int SERVO_PIN = 18;
+Servo myServo;
+int lastAngle = -1;             // هنوز زاویه‌ای ننوشته‌ایم
+
+void setup() {
+  Serial.begin(115200);
+  myServo.setPeriodHertz(50);
+  myServo.attach(SERVO_PIN, 500, 2400);
+}
+
+void loop() {
+  long sum = 0;
+  for (int i = 0; i &lt; 16; i++) sum += analogRead(POT_PIN);   // میانگین ۱۶ نمونه
+  int raw = sum / 16;
+  int angle = map(raw, 0, 4095, 0, 180);
+
+  if (abs(angle - lastAngle) &gt;= 2) {    // منطقه مرده: لرزش ۱ درجه‌ای را نادیده بگیر
+    myServo.write(angle);
+    lastAngle = angle;
+    Serial.printf("raw=%d  angle=%d\n", raw, angle);
+  }
+  delay(20);
+}
+</pre></div>
+<ol class="walk" data-for="c6">
+  <li data-lines="6"><b class="what">حافظه آخرین زاویه با مقدار اولیه ۱−.</b>
+    <span class="why">عدد ۱− هرگز زاویه واقعی نیست؛ پس در اولین دور loop شرط حتما درست می‌شود و سروو به محل پیچ می‌رود.</span></li>
+  <li data-lines="15-17"><b class="what">میانگین ۱۶ نمونه.</b> همان تکنیک درس ۳.۱، این بار در سه خط.
+    <span class="why">نویز ADC بدون میانگین، زاویه را مدام ±۱ درجه تغییر می‌دهد و سروو «می‌لرزد» و وزوز می‌کند.</span></li>
+  <li data-lines="18"><b class="what">تبدیل به زاویه.</b> ۰ تا ۴۰۹۵ ← ۰ تا ۱۸۰.</li>
+  <li data-lines="20-24"><b class="what">منطقه مرده (Deadband).</b> فقط وقتی زاویه دست‌کم ۲ درجه تغییر کرده، سروو را حرکت بده. <code>abs</code> قدر مطلق است (منفی را مثبت می‌کند).
+    <span class="why">حتی با میانگین، عدد گاهی بین دو زاویه مجاور نوسان می‌کند. منطقه مرده، برادر Hysteresis درس قبل است: تغییرات ریز و بی‌معنی را نادیده بگیر. مزیت دیگر: Serial Monitor فقط وقتی چاپ می‌کند که واقعا چیزی عوض شده.</span></li>
+  <li data-lines="25"><b class="what">مکث ۲۰ms.</b>
+    <span class="why">سروو فقط هر ۲۰ms یک پالس جدید می‌بیند؛ به‌روزرسانی سریع‌تر فایده‌ای ندارد.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="c6">
+<p>قبل از اجرا، در Wokwi از زبانه <b>Library Manager</b> کتابخانه <code>ESP32Servo</code> را اضافه کن، وگرنه خطای کامپایل می‌گیری. در شبیه‌ساز سروو مستقیما از 5V تغذیه می‌شود و مشکل جریان پیش نمی‌آید؛ این مشکل فقط در دنیای واقعی است، پس بخش تغذیه را جدی بگیر. کدهای <code>Servo_Sweep</code> و <code>Servo_Raw_LEDC</code> را هم در همین مدار امتحان کن.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo1", "top": 40, "left": 200, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": 20, "left": -170, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "servo1:GND", "esp:GND.2", "black", [] ],
+    [ "servo1:V+", "esp:5V", "red", [] ],
+    [ "servo1:PWM", "esp:18", "orange", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="buzzer">اضافه: صدا با بازر و ledcWriteTone</h2>
+<p>بازر دو نوع است: <b>اکتیو</b> (داخلش نوسان‌ساز دارد و با ولتاژ ثابت خودش بوق یک‌نواخت می‌زند) و <b>پسیو</b> (مثل یک بلندگوی کوچک است و صدا فقط با موج مربعی ساخته می‌شود). برای ساختن نت‌های مختلف بازر <b>پسیو</b> لازم داری. فرکانس PWM همان ارتفاع صدا (نت) است: ۴۴۰ هرتز = نت «لا».</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"BZ","name":"بازر پسیو","img":"buzzer.svg","pins":[["1","پایه + (یا بلندتر)"],["2","پایه −"]]}
+  ],
+  "wires":[["GPIO25","BZ.1","orange","PWM"],["BZ.2","GND","black"]]
+}</script><figcaption>بازر پسیو کوچک پیزو را می‌توان مستقیم به GPIO25 وصل کرد. بازرهای مغناطیسی بلندتر جریان بیشتری می‌کشند و بهتر است با یک ترانزیستور راه‌اندازی شوند.</figcaption></div>
+<div class="code" data-file="Buzzer_Melody.ino" id="c7"><pre>
+// گام دو ماژور با بازر پسیو
+const int BUZZER_PIN = 25;
+const int notes[] = {262, 294, 330, 349, 392, 440, 494, 523};  // دو ر می فا سل لا سی دو
+
+void setup() {
+  ledcAttach(BUZZER_PIN, 2000, 10);   // اول پین را به LEDC وصل کن
+}
+
+void loop() {
+  for (int i = 0; i &lt; 8; i++) {
+    ledcWriteTone(BUZZER_PIN, notes[i]);   // موج مربعی 50% با این فرکانس
+    delay(250);
+  }
+  ledcWriteTone(BUZZER_PIN, 0);            // فرکانس صفر = سکوت
+  delay(2000);
+}
+</pre></div>
+<ol class="walk" data-for="c7">
+  <li data-lines="3"><b class="what">آرایه فرکانس نت‌ها.</b> هشت نت گام «دو» بر حسب هرتز (گرد شده).
+    <span class="why">هر نت یک فرکانس مشخص دارد. «دو» ی بالا (۵۲۳) تقریبا دو برابر «دو» ی پایین (۲۶۲) است؛ یک اکتاو یعنی دو برابر شدن فرکانس.</span></li>
+  <li data-lines="6"><b class="what">attach قبل از تون.</b>
+    <span class="why">در هسته ۳، <code>ledcWriteTone</code> روی پینی که attach نشده کاری نمی‌کند و صفر برمی‌گرداند. فرکانس و دقت اولیه مهم نیست؛ ledcWriteTone خودش آن‌ها را برای هر نت عوض می‌کند.</span></li>
+  <li data-lines="11-12"><b class="what">نواختن هر نت ۲۵۰ms.</b> ledcWriteTone یک موج مربعی ۵۰٪ با فرکانس نت می‌سازد.
+    <span class="why">این‌جا Duty ثابت ۵۰٪ است و <b>فرکانس</b> تغییر می‌کند؛ برعکس LED که فرکانس ثابت بود و Duty تغییر می‌کرد.</span></li>
+  <li data-lines="14"><b class="what">فرکانس صفر = سکوت.</b>
+    <span class="why">طبق مستندات، فرکانس صفر Duty را صفر می‌کند. بدون این خط، بازر آخرین نت را تا ابد می‌نوازد.</span></li>
+</ol>
+<div class="callout tip"><div class="ct">راه کوتاه‌تر: tone()</div>
+<p>هسته ۳ تابع آشنای آردوینو <code>tone(pin, freq, duration)</code> و <code>noTone(pin)</code> را هم دارد. برای بوق‌های ساده کافی است. ledcWriteTone را یاد گرفتیم تا ببینی بازر هم فقط یک استفاده دیگر از LEDC است.</p></div>
+<div class="wokwi" data-board="esp32" data-code-from="c7">
+<p>صدای مرورگر را روشن کن؛ Wokwi صدای بازر را پخش می‌کند.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-buzzer", "id": "bz1", "top": 30, "left": -150, "attrs": { "volume": "0.2" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "bz1:1", "esp:25", "orange", [] ],
+    [ "bz1:2", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="video">ویدیوهای کمکی</h2>
+<div class="video" data-yt="IhpYQ0DOL-E" data-title="ESP32 PWM with Arduino IDE" data-channel="Random Nerd Tutorials" data-lang="انگلیسی">
+  <div class="sum"><ul>
+    <li>این ویدیو در سال ۲۰۱۸ ساخته شده و از API <b>قدیمی</b> هسته ۲ (<code>ledcSetup</code> و <code>ledcAttachPin</code>) استفاده می‌کند. مفهوم‌ها (کانال، فرکانس، دقت، Duty) کاملا درست‌اند، ولی کد را کپی نکن؛ با جدول ترجمه بالای همین درس آن را به هسته ۳ برگردان.</li>
+    <li>دقت کن چطور یک سیگنال PWM را هم‌زمان روی چند GPIO می‌فرستد. در هسته ۳ معادلش <code>ledcAttachChannel</code> با یک شماره کانال مشترک است.</li>
+    <li>صفحه متنی به‌روز همین آموزش در <a href="https://randomnerdtutorials.com/esp32-pwm-arduino-ide/" target="_blank" rel="noopener">randomnerdtutorials.com</a> هست.</li>
+  </ul></div>
+</div>
+<div class="video" data-yt="zxBC1ivOVfM" data-title="Using Servo Motors with ESP32" data-channel="DroneBot Workshop" data-lang="انگلیسی">
+  <div class="sum"><ul>
+    <li>به توضیح ساختار داخلی سروو (موتور، دنده، پتانسیومتر بازخورد) و شکل پالس کنترل دقت کن؛ با شکل پالس همین درس مقایسه کن.</li>
+    <li>ببین مدرس برای چند سروو از چه منبع تغذیه‌ای استفاده می‌کند و زمین را چطور مشترک می‌کند.</li>
+    <li>اگر در ویدیو کتابخانه یا نسخه قدیمی‌تری می‌بینی، نسخه ۳ ESP32Servo و هسته ۳ را طبق همین درس نصب کن.</li>
+  </ul></div>
+</div>
+<p>مرجع رسمی: <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/ledc.html" target="_blank" rel="noopener">مستندات LEDC در Arduino-ESP32</a> و <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/migration_guides/2.x_to_3.0.html" target="_blank" rel="noopener">راهنمای مهاجرت از هسته ۲ به ۳</a>.</p>
+
+<h2 id="debug">وقتی کار نمی‌کند: عیب‌یابی</h2>
+<div class="table-wrap"><table>
+<tr><th>علامت</th><th>علت محتمل</th><th>راه حل</th></tr>
+<tr><td><code>'ledcSetup' was not declared in this scope</code></td><td>کد قدیمی هسته ۲ روی هسته ۳</td><td>با جدول ترجمه: <code>ledcAttach(pin, freq, res)</code> و <code>ledcWrite(pin, duty)</code>.</td></tr>
+<tr><td>LED اصلا روشن نمی‌شود و <code>ledcAttach failed</code> چاپ می‌شود</td><td>ترکیب فرکانس و دقت غیرممکن (حاصل‌ضرب بیش از ۸۰ مگاهرتز) یا پین فقط‌ورودی (34 تا 39)</td><td>دقت یا فرکانس را کم کن؛ پین خروجی انتخاب کن.</td></tr>
+<tr><td>LED فقط در ابتدای چرخش پیچ تغییر می‌کند و بعد کاملا روشن است</td><td>عدد ۱۲ بیتی ADC روی PWM هشت بیتی</td><td>PWM را ۱۲ بیتی کن یا <code>map(raw, 0, 4095, 0, 255)</code>.</td></tr>
+<tr><td>سروو می‌لرزد (Jitter) حتی وقتی پیچ ثابت است</td><td>نویز ADC، تغذیه ضعیف، یا نبود زمین مشترک</td><td>میانگین + منطقه مرده؛ منبع جدا با زمین مشترک؛ خازن ۴۷۰µF.</td></tr>
+<tr><td>با حرکت سروو برد ریست می‌شود؛ پیام <code>Brownout detector was triggered</code></td><td>جهش جریان سروو ولتاژ USB را افت می‌دهد</td><td>منبع ۵ ولت جدا با زمین مشترک، خازن بزرگ کنار سروو، کابل USB کوتاه و سالم.</td></tr>
+<tr><td>سروو در ۰ یا ۱۸۰ درجه وزوز می‌کند و داغ می‌شود</td><td>پالس از حد مکانیکی سروو فراتر رفته و موتور به ته فشار می‌آورد</td><td>بازه را تنگ‌تر کن (مثلا <code>attach(pin, 600, 2300)</code>) یا زاویه را ۵ تا ۱۷۵ محدود کن.</td></tr>
+<tr><td>سروو تکان نمی‌خورد</td><td>سیم‌ها جابه‌جا (قهوه‌ای GND، قرمز +، نارنجی سیگنال)، یا زمین مشترک نیست</td><td>رنگ‌ها را چک کن؛ GND منبع جدا را به GND برد وصل کن.</td></tr>
+<tr><td>بازر فقط «تیک» می‌زند یا صدای یکنواخت می‌دهد</td><td>بازر اکتیو به جای پسیو، یا attach فراموش شده</td><td>بازر پسیو (معمولا زیرش برد سبز و بدون پوشش است) و <code>ledcAttach</code> قبل از ledcWriteTone.</td></tr>
+<tr><td>LED در ویدیوی گوشی نوار سیاه دارد</td><td>فرکانس PWM پایین (مثلا ۱ کیلوهرتز پیش‌فرض analogWrite)</td><td>فرکانس را بالاتر ببر (۵ تا ۲۰ کیلوهرتز).</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>بیشتر «سروو خراب» ها که شاگردها برایم می‌آورند، سالم‌اند؛ مشکل تغذیه است. قبل از این که یک خط کد را عوض کنی، سه سؤال بپرس: برق سروو از کجا می‌آید؟ زمین‌ها مشترک است؟ ولتاژ ۵V هنگام حرکت چقدر افت می‌کند (با مولتی‌متر ببین)؟ و یک قانون دیگر: هیچ‌وقت کد PWM را از اینترنت کپی نکن قبل از این که ببینی <code>ledcSetup</code> دارد یا نه. هسته ۳ یعنی <code>ledcAttach</code>. این دو عادت، هفته‌ها وقت تو را نجات می‌دهد.</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="3">
+  <p class="q">PWM با دقت ۸ بیت و Duty برابر ۶۴ روی پین ۳٫۳ ولتی. ولتاژ میانگین تقریبا چقدر است؟</p>
+  <ol><li data-why="۶۴ ولتاژ نیست؛ یک پله از ۲۵۶ پله است.">۶۴ ولت</li><li data-why="این برای Duty پنجاه درصد (۱۲۸) است.">۱٫۶۵ ولت</li><li>۰٫۸۳ ولت</li><li data-why="۳٫۳ یعنی Duty صد درصد.">۳٫۳ ولت</li></ol>
+  <div class="fb"><code>64 ÷ 256 = 25%</code> و <code>3.3 × 0.25 ≈ 0.83V</code>.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">کدام ترکیب فرکانس و دقت روی ESP32 کلاسیک (ساعت ۸۰ مگاهرتز) ممکن <b>نیست</b>؟</p>
+  <ol><li>۱۰ کیلوهرتز با ۱۴ بیت</li><li data-why="5000 × 4096 = 20.48MHz، زیر سقف.">۵ کیلوهرتز با ۱۲ بیت</li><li data-why="50 × 65536 ≈ 3.3MHz، زیر سقف.">۵۰ هرتز با ۱۶ بیت</li><li data-why="20000 × 1024 = 20.48MHz، زیر سقف.">۲۰ کیلوهرتز با ۱۰ بیت</li></ol>
+  <div class="fb"><code>10000 × 16384 = 163.84MHz</code>؛ دو برابر سقف ۸۰ مگاهرتز.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">در هسته ۳ ESP32 کدام خط LED روی GPIO4 را با PWM پنجاه درصد (۸ بیت) روشن می‌کند؟</p>
+  <ol><li data-why="این API هسته ۲ است و در هسته ۳ وجود ندارد.">ledcSetup(0, 5000, 8); ledcAttachPin(4, 0); ledcWrite(0, 128);</li><li data-why="digitalWrite فقط ۰ یا ۱ می‌نویسد؛ ۱۲۸ یعنی HIGH کامل.">digitalWrite(4, 128);</li><li data-why="بدون attach کردن، ledcWrite روی پین کاری نمی‌کند.">ledcWrite(4, 128);</li><li>ledcAttach(4, 5000, 8); ledcWrite(4, 128);</li></ol>
+  <div class="fb">در هسته ۳ اول <code>ledcAttach(pin, freq, res)</code> و بعد <code>ledcWrite(pin, duty)</code>؛ هر دو با شماره <b>پین</b>.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">سروو SG90 با پالس ۰٫۵ تا ۲٫۴ میلی‌ثانیه کالیبره شده. برای ۹۰ درجه، پهنای پالس تقریبا چقدر است؟</p>
+  <ol><li data-why="۰٫۵ms زاویه صفر است.">۰٫۵ میلی‌ثانیه</li><li>حدود ۱٫۴۵ میلی‌ثانیه</li><li data-why="۲٫۴ms زاویه ۱۸۰ است.">۲٫۴ میلی‌ثانیه</li><li data-why="۲۰ms کل دوره است، نه پهنای پالس.">۲۰ میلی‌ثانیه</li></ol>
+  <div class="fb">وسط بازه: <code>(500 + 2400) ÷ 2 = 1450µs</code>، نزدیک ۱٫۵ms استاندارد.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">سروو را از یک آداپتور ۵ ولت جدا تغذیه کرده‌ای و سیم سیگنال به GPIO18 وصل است، ولی سروو هیچ حرکتی نمی‌کند. محتمل‌ترین اشکال؟</p>
+  <ol><li data-why="SG90 معمولا با سیگنال ۳٫۳ ولت کار می‌کند.">سیگنال ۳٫۳ ولت برای سروو کم است</li><li data-why="GPIO18 خروجی عادی است و PWM دارد.">GPIO18 نمی‌تواند PWM بسازد</li><li>زمین آداپتور به GND برد ESP32 وصل نشده</li><li data-why="آداپتور جدا روش درست است، نه اشکال.">نباید از منبع جدا استفاده کرد</li></ol>
+  <div class="fb">بدون زمین مشترک، سیگنال نقطه مرجع ندارد. منفی منبع، سیم قهوه‌ای سروو و GND برد باید همه به هم وصل باشند.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">در LED از PWM با فرکانس ثابت و Duty متغیر استفاده کردیم. در بازر با ledcWriteTone چه چیزی تغییر می‌کند؟</p>
+  <ol><li>فرکانس (ارتفاع نت)؛ Duty روی ۵۰٪ ثابت است</li><li data-why="ledcWriteTone همیشه Duty پنجاه درصد می‌سازد.">Duty؛ فرکانس ثابت است</li><li data-why="ولتاژ پین همیشه ۰ یا ۳٫۳ است.">ولتاژ پین</li><li data-why="تعداد کانال‌ها ثابت و سخت‌افزاری است.">تعداد کانال‌های LEDC</li></ol>
+  <div class="fb">نت‌ها با فرکانس ساخته می‌شوند: ۴۴۰ هرتز = لا. Duty پنجاه درصد بلندترین صدا را برای بازر پسیو می‌دهد.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+<div class="exercise"><div class="ct">تمرین ۱: تنفس بدون delay</div>
+<p>برنامه LED نفس‌کشنده را بدون هیچ delay با millis بازنویسی کن: هر ۸ میلی‌ثانیه Duty یک واحد در جهت فعلی عوض شود و در ۰ و ۲۵۵ جهت برعکس شود. بعد دکمه درس ۳.۱ (GPIO27) را اضافه کن که تنفس را متوقف و شروع کند.</p>
+<details><summary>راهنمایی</summary><p>دو متغیر لازم داری: <code>int duty = 0;</code> و <code>int step = 1;</code>. هر بار که وقتش رسید: <code>duty += step; if (duty &lt;= 0 || duty &gt;= 255) step = -step;</code>. <code>||</code> یعنی «یا».</p></details>
+<details><summary>جواب</summary>
+<div class="code" data-file="Breathing_Millis.ino"><pre>
+const int LED_PIN = 4;
+int duty = 0, step = 1;
+unsigned long lastStep = 0;
+
+void setup() {
+  ledcAttach(LED_PIN, 5000, 8);
+}
+
+void loop() {
+  unsigned long now = millis();
+  if (now - lastStep &gt;= 8) {
+    lastStep = now;
+    duty += step;
+    if (duty &lt;= 0 || duty &gt;= 255) step = -step;
+    ledcWrite(LED_PIN, duty);
+  }
+  // اینجا جا برای خواندن دکمه هست
+}
+</pre></div>
+<ol class="walk">
+  <li data-lines="2"><b class="what">وضعیت تنفس.</b> <code>duty</code> نور فعلی و <code>step</code> جهت (۱+ بالا، ۱− پایین).
+    <span class="why">به جای دو حلقه for، یک «ماشین حالت» کوچک داریم که در هر دور loop فقط یک قدم برمی‌دارد.</span></li>
+  <li data-lines="11-16"><b class="what">یک قدم هر ۸ms.</b> Duty یک واحد جلو می‌رود و در دو انتها جهت برعکس می‌شود.
+    <span class="why">الگوی millis درس ۳.۱ عینا؛ loop هرگز منتظر نمی‌ماند.</span></li>
+</ol>
+</details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۲: عقربه نور</div>
+<p>مدار چراغ خواب درس ۳.۱ (LDR روی GPIO35) و سروو روی GPIO18 را ترکیب کن. سروو مثل عقربه یک نورسنج، مقدار نور را بین ۰ (تاریک) و ۱۸۰ (روشن) نشان بدهد.</p>
+<details><summary>راهنمایی</summary><p>در مدار ما تاریکی = ولتاژ زیاد. پس map را برعکس بنویس: <code>map(mv, 300, 3100, 180, 0)</code> و بعد <code>constrain</code>. منطقه مرده ۲ درجه فراموش نشود.</p></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۳: آژیر</div>
+<p>با بازر یک آژیر بساز که فرکانس آن در ۱ ثانیه نرم از ۶۰۰ به ۱۲۰۰ هرتز برود و برگردد. بعد فکر کن: چرا این کار با تغییر Duty ممکن نبود؟</p>
+<details><summary>راهنمایی</summary><p>یک حلقه for از ۶۰۰ تا ۱۲۰۰ با گام ۱۰ و <code>delay(8)</code>، و یک حلقه برعکس. ارتفاع صدا به فرکانس بستگی دارد؛ Duty فقط شدت و «رنگ» صدا را کمی عوض می‌کند.</p></details>
+</div>
+
+<div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
+<p>PWM یعنی روشن و خاموش سریع با Duty متغیر؛ ولتاژ میانگین = ۳٫۳ × Duty، و قانون ESP32 کلاسیک: <code>فرکانس × 2<sup>بیت</sup> ≤ 80MHz</code>. در هسته ۳ فقط <code>ledcAttach(pin, freq, res)</code> و <code>ledcWrite(pin, duty)</code>؛ کد <code>ledcSetup</code> مال هسته ۲ است. سروو پالس ۵۰ هرتز با پهنای حدود ۰٫۵ تا ۲٫۴ms می‌خواهد (ESP32Servo یا حساب دستی ۱۶ بیتی)، و برقش را از منبع ۵ ولت کافی با زمین مشترک بگیر، نه از 3V3.</p></div>
+
+</article>
+</body>
+</html>

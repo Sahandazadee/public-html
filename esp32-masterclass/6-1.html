@@ -1,0 +1,880 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>خواب عمیق و خواب سبک برای دستگاه‌های باتری‌خور · مستر کلاس ESP32</title>
+<meta name="description" content="مدیریت انرژی ESP32 از صفر: میلی‌آمپر ساعت، حساب عمر باتری، حالت‌های خواب عمیق و سبک، بیدار شدن با تایمر، دکمه و لمس، اندازه‌گیری جریان با مولتی‌متر و ساخت دیتالاگر باتری‌خور با DHT22.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="6-1">
+
+<p class="lede">تا اینجا ESP32 همیشه با کابل USB به کامپیوتر وصل بود و برق بی‌نهایت داشت. ولی یک سنسور در باغچه، یک دماسنج در انبار یا یک زنگ در بی‌سیم، باید ماه‌ها با یک باتری کار کند. در این درس یاد می‌گیری انرژی را با عدد حساب کنی، ESP32 را بخوابانی و بیدار کنی، و جریان واقعی را با مولتی‌متر اندازه بگیری تا به عددهای روی کاغذ دل نبندی.</p>
+
+<div class="goals">
+  <div><h4>🎯 بعد از این درس می‌توانی</h4><ul>
+    <li>معنی میلی‌آمپر، میلی‌آمپر ساعت و جریان میانگین را توضیح بدهی</li>
+    <li>عمر باتری یک پروژه را قبل از ساختن حساب کنی</li>
+    <li>ESP32 را با تایمر، دکمه، چند دکمه و لمس از خواب عمیق بیدار کنی</li>
+    <li>فرق خواب عمیق و خواب سبک را بدانی و هر کدام را درست به کار ببری</li>
+    <li>جریان مصرفی برد را با مولتی‌متر به شکل ایمن اندازه بگیری</li>
+    <li>یک دیتالاگر DHT22 بسازی که هر ۱۰ دقیقه بیدار می‌شود، می‌فرستد و می‌خوابد</li>
+  </ul></div>
+  <div><h4>🧰 پیش‌نیاز و وسایل</h4><ul>
+    <li>درس‌های <a href="3-1.html">۳.۱</a> (دکمه و ورودی)، <a href="3-3.html">۳.۳</a> (DHT22)، <a href="4-1.html">۴.۱</a> (Wi-Fi) و <a href="5-1.html">۵.۱</a> (MQTT)</li>
+    <li>برد ESP32 DevKitC، دو دکمه فشاری، دو مقاومت ۱۰ کیلواهم</li>
+    <li>سنسور DHT22 (یا ماژول آن)</li>
+    <li>مولتی‌متر دیجیتال (برای بخش اندازه‌گیری)</li>
+    <li>اختیاری: باتری لیتیومی، ماژول شارژر TP4056 با محافظ، رگولاتور کم‌مصرف مثل HT7833</li>
+  </ul></div>
+</div>
+
+<h2 id="energy">انرژی از صفر: جریان، میلی‌آمپر و میلی‌آمپر ساعت</h2>
+<p>قبل از هر کدی، باید بفهمیم باتری چطور «تمام می‌شود». دو عدد مهم داریم:</p>
+<ul>
+  <li><b>جریان (Current)</b>: این که مدار در همین لحظه چقدر برق می‌کشد. واحدش آمپر (A) است. چون ESP32 خیلی کمتر از یک آمپر مصرف می‌کند، معمولا از <b>میلی‌آمپر</b> (mA، یک‌هزارم آمپر) و <b>میکروآمپر</b> (µA، یک‌میلیونیم آمپر) استفاده می‌کنیم. پس <code>1 mA = 1000 µA</code>.</li>
+  <li><b>ظرفیت باتری</b>: این که باتری روی هم چقدر «برق ذخیره» دارد. واحدش <b>میلی‌آمپر ساعت</b> (mAh) است. باتری ۲۰۰۰ میلی‌آمپر ساعت یعنی می‌تواند ۲۰۰۰ میلی‌آمپر را یک ساعت بدهد، یا ۱۰۰ میلی‌آمپر را ۲۰ ساعت، یا ۱ میلی‌آمپر را ۲۰۰۰ ساعت.</li>
+</ul>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره: مخزن آب</div>
+<p>باتری را یک مخزن آب ۲۰۰۰ لیتری تصور کن. جریان، مقدار آبی است که در هر ساعت از شیر بیرون می‌رود. اگر شیر را کامل باز کنی (۱۰۰ لیتر در ساعت) مخزن ۲۰ ساعته خالی می‌شود. اگر فقط یک قطره‌چکان باز باشد (۱ لیتر در ساعت) مخزن ۲۰۰۰ ساعت، یعنی نزدیک ۳ ماه، دوام می‌آورد. تمام هنر این درس این است که شیر ESP32 را بیشتر وقت‌ها روی «قطره‌چکان» بگذاریم.</p></div>
+
+<div class="callout example"><div class="ct">حساب کن: ESP32 همیشه روشن</div>
+<p>فرمول ساده: <code>عمر (ساعت) = ظرفیت (mAh) ÷ جریان (mA)</code></p>
+<p>ESP32 وقتی Wi-Fi روشن است و کار می‌کند، بسته به کار، به‌طور میانگین حدود ۸۰ تا ۲۴۰ میلی‌آمپر می‌کشد. اگر میانگین را ۱۲۰ میلی‌آمپر بگیریم و باتری ۲۰۰۰ میلی‌آمپر ساعت داشته باشیم:</p>
+<p><code>2000 ÷ 120 ≈ 16.7 h</code> یعنی کمتر از یک روز! 😬</p>
+<p>در عمل حتی کمتر، چون باتری هیچ‌وقت تا صفر خالی نمی‌شود (مدار قبل از آن خاموش می‌شود) و رگولاتور هم کمی تلف می‌کند. یک قانون سرانگشتی محتاطانه: فقط حدود <b>۷۰ تا ۸۰ درصد</b> ظرفیت روی برچسب را قابل استفاده حساب کن.</p></div>
+
+<h3 id="duty">جریان میانگین و چرخه کار (Duty Cycle)</h3>
+<p>راه حل این است که ESP32 بیشتر وقت‌ها بخوابد و فقط چند ثانیه بیدار شود. آن وقت دیگر یک جریان ثابت نداریم؛ باید <b>میانگین وزنی</b> بگیریم. فرمول:</p>
+<div class="callout info"><div class="ct">فرمول جریان میانگین</div>
+<p><code>I_avg = (I_awake × t_awake + I_sleep × t_sleep) ÷ (t_awake + t_sleep)</code></p>
+<p>یعنی: جریان بیداری ضرب در زمان بیداری، به‌علاوه جریان خواب ضرب در زمان خواب، تقسیم بر طول کل یک دور. به نسبت <code>t_awake ÷ (t_awake + t_sleep)</code> می‌گویند <span class="term" data-t="Duty Cycle">چرخه کار</span>: چند درصد وقت بیداری.</p></div>
+
+<div class="callout example"><div class="ct">سه سناریو با باتری ۲۰۰۰ میلی‌آمپر ساعت (هر ۱۰ دقیقه یک بار بیداری)</div>
+<p>یک دور = ۱۰ دقیقه = ۶۰۰ ثانیه.</p>
+<p><b>سناریو الف: تراشه خالی، ۵ ثانیه بیداری با ۱۲۰ mA، بقیه خواب عمیق با ۰٫۰۱ mA (۱۰ µA):</b><br>
+<code>(120 × 5 + 0.01 × 595) ÷ 600 = (600 + 5.95) ÷ 600 ≈ 1.01 mA</code><br>
+<code>2000 ÷ 1.01 ≈ 1980 h ≈ 82 روز</code></p>
+<p><b>سناریو ب: همان کد، ولی روی یک برد توسعه معمولی که در خواب هم حدود ۸ mA می‌کشد:</b><br>
+<code>(120 × 5 + 8 × 595) ÷ 600 = (600 + 4760) ÷ 600 ≈ 8.9 mA</code><br>
+<code>2000 ÷ 8.9 ≈ 224 h ≈ 9 روز</code> — نه ۸۲ روز!</p>
+<p><b>سناریو ج: تراشه خالی، ولی بیداری را با ترفندهای همین درس به ۱٫۵ ثانیه رسانده‌ایم:</b><br>
+<code>(120 × 1.5 + 0.01 × 598.5) ÷ 600 = (180 + 5.99) ÷ 600 ≈ 0.31 mA</code><br>
+<code>2000 ÷ 0.31 ≈ 6450 h ≈ 269 روز</code></p>
+<p>دو درس بزرگ از همین سه خط: (۱) <b>جریان خواب</b> برد می‌تواند همه چیز را خراب کند؛ (۲) وقتی جریان خواب کم شد، <b>مدت بیداری</b> مهم‌ترین عدد است. (این حساب‌ها خودتخلیه باتری و افت ظرفیت در سرما را حساب نکرده‌اند؛ عدد واقعی کمتر است.)</p></div>
+
+<figure><div class="frame"><svg viewBox="0 0 760 320" style="direction:ltr" role="img" aria-label="نمودار جریان بر حسب زمان برای ESP32 با خواب عمیق">
+  <rect x="0" y="0" width="760" height="320" fill="#fff"/>
+  <line x1="70" y1="260" x2="740" y2="260" stroke="#152033" stroke-width="2"/>
+  <line x1="70" y1="260" x2="70" y2="30" stroke="#152033" stroke-width="2"/>
+  <polygon points="740,260 730,255 730,265" fill="#152033"/>
+  <polygon points="70,30 65,40 75,40" fill="#152033"/>
+  <text x="740" y="290" font-size="13" fill="#152033" text-anchor="end" direction="rtl">زمان ←</text>
+  <text x="20" y="40" font-size="13" fill="#152033" direction="rtl" transform="rotate(-90 20 40)" text-anchor="end">جریان (mA)</text>
+  <text x="62" y="264" font-size="12" fill="#4d5b70" text-anchor="end">0</text>
+  <text x="62" y="124" font-size="12" fill="#4d5b70" text-anchor="end">120</text>
+  <text x="62" y="64" font-size="12" fill="#4d5b70" text-anchor="end">240</text>
+  <line x1="66" y1="120" x2="740" y2="120" stroke="#dbe2ec" stroke-dasharray="4 4"/>
+  <line x1="66" y1="60" x2="740" y2="60" stroke="#dbe2ec" stroke-dasharray="4 4"/>
+  <!-- خط برد توسعه در خواب -->
+  <path d="M70 250 H740" stroke="#e0781f" stroke-width="2" stroke-dasharray="7 5" fill="none"/>
+  <text x="735" y="244" font-size="12" fill="#e0781f" text-anchor="end" direction="rtl">برد توسعه در خواب: چند mA (مثلا ۸)</text>
+  <!-- جریان تراشه -->
+  <path d="M70 259 H110 V120 H118 V60 H124 V120 H132 V70 H137 V120 H150 V259 H350 V120 H358 V60 H364 V120 H372 V70 H377 V120 H390 V259 H590 V120 H598 V60 H604 V120 H612 V70 H617 V120 H630 V259 H740" fill="none" stroke="#2f7af0" stroke-width="3" stroke-linejoin="round"/>
+  <text x="130" y="48" font-size="12" fill="#d6457a" text-anchor="middle" direction="rtl">قله ارسال Wi-Fi</text>
+  <text x="130" y="140" font-size="12" fill="#2f7af0" text-anchor="middle" direction="rtl">بیداری</text>
+  <text x="250" y="280" font-size="12" fill="#2f7af0" text-anchor="middle" direction="rtl">خواب عمیق تراشه: حدود ۰٫۰۱ mA</text>
+  <text x="250" y="302" font-size="12" fill="#4d5b70" text-anchor="middle" direction="rtl">(در این مقیاس روی صفر دیده می‌شود)</text>
+  <line x1="110" y1="200" x2="350" y2="200" stroke="#12a37f" stroke-width="1.5"/>
+  <polygon points="110,200 118,196 118,204" fill="#12a37f"/><polygon points="350,200 342,196 342,204" fill="#12a37f"/>
+  <text x="230" y="194" font-size="12" fill="#12a37f" text-anchor="middle" direction="rtl">یک دور کامل (مثلا ۱۰ دقیقه)</text>
+</svg></div>
+<figcaption>شکل ساده‌شده جریان یک دستگاه خواب‌دار: قله‌های کوتاه بیداری (با جهش‌های لحظه‌ای ارسال Wi-Fi) و فاصله‌های طولانی خواب. مساحت زیر نمودار همان انرژی مصرفی است. خط نارنجی نشان می‌دهد برد توسعه در خواب چقدر هدر می‌دهد. <span class="src">تصویر: طراحی برای این درس</span></figcaption></figure>
+
+<div class="callout why"><div class="ct">چرا «مساحت زیر نمودار»؟</div>
+<p>قله‌ها بلندند ولی خیلی باریک. خواب کوتاه است (از نظر ارتفاع) ولی خیلی پهن. انرژی = ارتفاع × پهنا. برای همین در سناریو ب، خط نارنجی کم‌ارتفاع ولی پهن، بیشتر از همه قله‌ها باتری خورد.</p></div>
+
+<h2 id="modes">حالت‌های مصرف ESP32 (با عدد رسمی)</h2>
+<p>ESP32 چند حالت انرژی دارد. هر چه پایین‌تر بروی، بخش‌های بیشتری خاموش می‌شوند و بیدار شدن محدودتر می‌شود. عددهای جدول از جدول «Power Consumption by Power Modes» و جدول مصرف RF در <a href="https://www.espressif.com/sites/default/files/documentation/esp32_datasheet_en.pdf" target="_blank" rel="noopener">دیتاشیت رسمی ESP32 (Espressif)</a> هستند و مربوط به <b>خود تراشه</b>اند، نه برد توسعه:</p>
+<div class="table-wrap"><table>
+<tr><th>حالت</th><th>چه چیزی روشن است</th><th>جریان تقریبی (تراشه)</th><th>بعد از بیداری</th></tr>
+<tr><td><b>فعال (Active)</b> با ارسال Wi-Fi</td><td>همه چیز، رادیو در حال ارسال</td><td>جهش‌های حدود ۱۶۰ تا ۲۴۰ mA هنگام ارسال (بسته به نوع ارسال و توان)، و حدود ۱۰۰ mA هنگام دریافت</td><td>—</td></tr>
+<tr><td><b>Modem-sleep</b></td><td>CPU روشن، رادیو خاموش (یا بین بسته‌ها خاموش)</td><td>حدود ۲۰ تا ۶۸ mA بسته به فرکانس CPU (۸۰ تا ۲۴۰ مگاهرتز)</td><td>برنامه اصلا متوقف نشده</td></tr>
+<tr><td><b>خواب سبک (Light-sleep)</b></td><td>RAM و وضعیت CPU حفظ می‌شود، ساعت‌ها متوقف</td><td>حدود ۰٫۸ mA</td><td>از <b>همان خط</b> ادامه می‌دهد</td></tr>
+<tr><td><b>خواب عمیق (Deep-sleep)</b></td><td>فقط بخش RTC: تایمر RTC و حافظه RTC</td><td>حدود ۱۰ µA (با پردازنده ULP روشن: حدود ۱۵۰ µA)</td><td>برنامه <b>از اول</b> (setup) اجرا می‌شود</td></tr>
+<tr><td><b>Hibernation</b></td><td>فقط تایمر RTC و چند پین RTC؛ حتی حافظه RTC خاموش</td><td>حدود ۵ µA</td><td>از اول؛ متغیرهای RTC هم پاک</td></tr>
+</table></div>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی: خوابیدن یک کارمند</div>
+<p><b>Modem-sleep</b>: کارمند پشت میز است ولی تلفنش را قطع کرده. <b>خواب سبک</b>: سرش را روی میز گذاشته و چرت می‌زند؛ همه کاغذها جلویش باز است و وقتی بیدار شد دقیقا از همان جمله ادامه می‌دهد. <b>خواب عمیق</b>: رفته خانه و خوابیده؛ میزش را جمع کرده‌اند و فردا باید کار را از اول شروع کند، فقط یک یادداشت کوچک در جیبش (حافظه RTC) مانده. <b>Hibernation</b>: حتی یادداشت جیبش را هم دور ریخته‌اند؛ فقط ساعت زنگ‌دار روشن است.</p></div>
+
+<h2 id="devboard">حقیقت تلخ: برد توسعه در خواب «۱۰ میکروآمپر» نمی‌کشد</h2>
+<p>عدد ۱۰ میکروآمپر برای <b>خود تراشه ESP32</b> است. ولی تو یک برد توسعه داری که روی آن چیزهای دیگری هم هست که هیچ‌وقت نمی‌خوابند:</p>
+<ul>
+  <li><b>رگولاتور ولتاژ</b>: بیشتر بردهای ارزان رگولاتور AMS1117 دارند که فقط برای روشن ماندن خودش (جریان بی‌باری یا Quiescent Current) طبق دیتاشیتش معمولا حدود ۵ mA و تا ۱۰ mA مصرف می‌کند.</li>
+  <li><b>تراشه USB به سریال</b> (CP2102 یا CH340): در بسیاری از بردها حتی وقتی کابل USB وصل نیست، از همان خط تغذیه برق می‌گیرد.</li>
+  <li><b>LED روشن بودن برق</b>: همان LED قرمز کوچک، به تنهایی می‌تواند یک تا چند میلی‌آمپر بکشد.</li>
+</ul>
+<p>نتیجه: یک برد توسعه معمولی در خواب عمیق، بسته به مدل، از حدود یک تا بیش از ده میلی‌آمپر می‌کشد؛ یعنی صدها برابر عدد دیتاشیت. تنها راه دانستن عدد برد <b>تو</b>، اندازه‌گیری است. برای محصول باتری‌خور واقعی یا از بردهایی استفاده کن که مخصوص باتری طراحی شده‌اند (رگولاتور کم‌مصرف، بدون LED همیشه روشن)، یا ماژول ESP32 را روی برد خودت با رگولاتور مناسب بگذار (درس‌های طراحی PCB را در <a href="../kicad-9-tutorial/">آموزش KiCad</a> ببین).</p>
+
+<div class="callout warn"><div class="ct">فقط گول کد را نخور</div>
+<p>کد خواب تو ممکن است کاملا درست باشد و باز هم باتری در یک هفته تمام شود. این یعنی کد مشکل ندارد؛ <b>سخت‌افزار</b> مشکل دارد. تا اندازه نگرفته‌ای، درباره عمر باتری هیچ قولی نده.</p></div>
+
+<h3 id="measure">اندازه‌گیری جریان با مولتی‌متر (به شکل ایمن)</h3>
+<figure><div class="frame"><img src="assets/img/multimeter.jpg" alt="اندازه‌گیری با مولتی‌متر دیجیتال روی یک باتری لیتیومی"></div>
+<figcaption>مولتی‌متر دیجیتال. برای ولتاژ، دو سیم را <b>موازی</b> (دو سر باتری) می‌گذاری؛ ولی برای جریان، مولتی‌متر باید <b>سری</b> در مسیر برق قرار بگیرد. <span class="src">تصویر: Arduino (arduino/docs-content)، مجوز CC BY-SA 4.0</span></figcaption></figure>
+
+<div class="callout analogy"><div class="ct">چرا سری؟ کنتور آب</div>
+<p>کنتور آب را وسط لوله می‌بندند تا همه آب از داخلش بگذرد و شمرده شود. آمپرمتر هم همین است: باید لوله (سیم) را ببری و آمپرمتر را وسطش بگذاری. اگر آمپرمتر را «کنار» باتری بگذاری (موازی)، مثل این است که لوله را مستقیم به فاضلاب وصل کنی: آمپرمتر مقاومت تقریبا صفر دارد و عملا دو سر باتری را اتصال کوتاه می‌کنی. نتیجه: فیوز مولتی‌متر می‌سوزد و باتری لیتیومی ممکن است داغ شود.</p></div>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC (تغذیه از پایه 3V3)",
+  "parts":[
+    {"id":"BAT","name":"باتری لیتیومی ۳٫۷ ولت (با محافظ)","pins":[["+","قطب مثبت (سیم قرمز)"],["-","قطب منفی (سیم مشکی)"]]},
+    {"id":"MM","name":"مولتی‌متر در حالت جریان DC","img":"multimeter.jpg","pins":[["mA","ورودی mA یا 10A"],["COM","ورودی مشترک (مشکی)"]]},
+    {"id":"LDO","name":"رگولاتور کم‌مصرف HT7833","pins":[["VIN","ورودی ۳٫۳ تا ۵٫۵ ولت"],["VOUT","خروجی ۳٫۳ ولت"],["GND","زمین"]]}
+  ],
+  "wires":[["BAT.+","MM.mA","red","سیم قرمز پروب"],["MM.COM","LDO.VIN","red"],["LDO.VOUT","3V3","red"],["LDO.GND","GND","black"],["BAT.-","GND","black"]]
+}</script><figcaption>مولتی‌متر سری با مثبت باتری: همه جریان از داخل آن می‌گذرد. کابل USB در این آزمایش باید جدا باشد، وگرنه برد برق را از USB می‌گیرد و عدد تو بی‌معنی است. (پایه‌های واقعی رگولاتور را از دیتاشیت همان بسته‌بندی چک کن؛ ترتیب پایه‌ها بین بسته‌بندی‌ها فرق دارد.)</figcaption></div>
+
+<ol class="steps">
+  <li><b>برد را از USB جدا کن.</b> فقط باتری یا منبع تغذیه باید برق بدهد.</li>
+  <li><b>سیم قرمز مولتی‌متر را به سوکت جریان ببر.</b> اول سوکت <code>10A</code> (یا بزرگ‌ترین بازه) را انتخاب کن و سلکتور را روی جریان DC (علامت A با خط صاف) بگذار. همیشه از بازه بزرگ شروع کن و بعد کوچک کن.</li>
+  <li><b>مدار را باز کن و مولتی‌متر را وسطش بگذار:</b> مثبت باتری ← پروب قرمز، پروب مشکی (COM) ← ورودی رگولاتور.</li>
+  <li><b>عدد بیداری را ببین</b> (ده‌ها میلی‌آمپر، با پرش‌های لحظه‌ای). بیشتر مولتی‌مترها برای دیدن قله‌های کوتاه Wi-Fi خیلی کندند؛ عدد نمایش داده‌شده یک تقریب است.</li>
+  <li><b>وقتی برد خوابید</b>، بازه را به mA و بعد µA کم کن تا عدد دقیق‌تر شود.</li>
+  <li><b>کارت تمام شد؟</b> سیم قرمز را <b>حتما</b> به سوکت ولتاژ (V) برگردان. اشتباه بعدی تو، اندازه‌گیری ولتاژ باتری با سیمی است که هنوز در سوکت جریان است؛ یعنی اتصال کوتاه.</li>
+</ol>
+
+<div class="callout warn"><div class="ct">دام «ولتاژ بار» روی بازه میکروآمپر</div>
+<p>مولتی‌متر برای اندازه‌گیری جریان، یک مقاومت کوچک در مسیر می‌گذارد. روی بازه µA این مقاومت نسبتا بزرگ است. وقتی ESP32 بیدار می‌شود و ناگهان ده‌ها میلی‌آمپر می‌کشد، ولتاژ روی این مقاومت زیاد می‌شود و برد ممکن است ریست شود (<span class="term" data-t="Brownout">Brownout</span>) و در یک حلقه بی‌پایان بیدار و ریست شود. اگر این را دیدی، مشکل از مولتی‌متر است نه کد: عدد خواب را روی بازه µA بخوان و قبل از بیدار شدن بعدی، به بازه mA برگرد، یا از ابزارهای مخصوص اندازه‌گیری جریان (Power Profiler) استفاده کن.</p></div>
+
+<h2 id="deep">خواب عمیق (Deep Sleep) با بیدارباش تایمری</h2>
+<p>ساده‌ترین و پرکاربردترین روش: «برو بخواب و ۱۰ ثانیه دیگر بیدار شو». مهم‌ترین نکته که باید برای همیشه یادت بماند: <b>بعد از خواب عمیق، برنامه از اول شروع می‌شود</b>. انگار دکمه EN را زده باشی. پس <code>loop()</code> در این نوع برنامه‌ها اصلا اجرا نمی‌شود و همه کار در <code>setup()</code> انجام می‌شود.</p>
+
+<div class="code" data-file="DeepSleep_Timer.ino" id="dsTimer"><pre>
+// خواب عمیق با بیدارباش تایمری
+const uint64_t uS_PER_SEC = 1000000ULL;   // میکروثانیه در یک ثانیه
+const uint64_t SLEEP_SEC  = 10;           // هر ۱۰ ثانیه بیدار شو
+
+RTC_DATA_ATTR int bootCount = 0;          // در حافظه RTC: بعد از خواب می‌ماند
+int normalCount = 0;                      // در RAM معمولی: هر بار صفر می‌شود
+
+void printWakeReason() {
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  switch (cause) {
+    case ESP_SLEEP_WAKEUP_TIMER:    Serial.println("Wake: timer"); break;
+    case ESP_SLEEP_WAKEUP_EXT0:     Serial.println("Wake: EXT0 (one pin)"); break;
+    case ESP_SLEEP_WAKEUP_EXT1:     Serial.println("Wake: EXT1 (several pins)"); break;
+    case ESP_SLEEP_WAKEUP_TOUCHPAD: Serial.println("Wake: touch"); break;
+    default: Serial.println("Wake: power-on or reset (not from sleep)"); break;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);                             // فرصت برای باز شدن Serial Monitor
+  bootCount++;
+  normalCount++;
+  Serial.printf("bootCount=%d  normalCount=%d\n", bootCount, normalCount);
+  printWakeReason();
+
+  // ... اینجا کار اصلی: خواندن سنسور، ارسال داده ...
+
+  esp_sleep_enable_timer_wakeup(SLEEP_SEC * uS_PER_SEC);
+  Serial.println("Going to deep sleep for 10 s...");
+  Serial.flush();                         // صبر کن تا همه متن ارسال شود
+  esp_deep_sleep_start();                 // از اینجا به بعد اجرا نمی‌شود
+  Serial.println("This line never runs");
+}
+
+void loop() {
+  // هرگز اجرا نمی‌شود: بعد از بیداری، برنامه از setup شروع می‌شود
+}
+</pre></div>
+<ol class="walk" data-for="dsTimer">
+  <li data-lines="2-3"><b class="what">زمان خواب بر حسب میکروثانیه.</b> تابع تایمر خواب، زمان را بر حسب <b>میکروثانیه</b> می‌گیرد. ۱۰ ثانیه یعنی ۱۰ میلیون میکروثانیه. پسوند <code>ULL</code> یعنی «عدد بدون علامت ۶۴ بیتی» (unsigned long long).
+    <span class="why">عدد ۳۲ بیتی حداکثر حدود ۴٫۲۹ میلیارد است؛ یعنی فقط حدود ۷۱ دقیقه بر حسب میکروثانیه. اگر بنویسی <code>3600 * 1000000</code> (یک ساعت) بدون ULL، ضرب در ۳۲ بیت سرریز می‌کند و برد زمان کاملا اشتباهی می‌خوابد. <code>uint64_t</code> و <code>ULL</code> این خطر را از بین می‌برند.</span></li>
+  <li data-lines="5"><b class="what">RTC_DATA_ATTR.</b> این برچسب به کامپایلر می‌گوید متغیر را به جای RAM معمولی، در <b>حافظه کوچک RTC</b> (حدود ۸ کیلوبایت) بگذارد که در خواب عمیق برق دارد.
+    <span class="why">چون در خواب عمیق RAM اصلی خاموش می‌شود، این تنها راه ساده برای «به یاد ماندن» یک عدد بین دو بیداری است: شمارنده، آخرین دما، وضعیت هشدار. ولی با قطع برق یا دکمه EN این هم پاک می‌شود.</span></li>
+  <li data-lines="6"><b class="what">متغیر معمولی برای مقایسه.</b> <code>normalCount</code> در RAM عادی است.
+    <span class="why">در خروجی می‌بینی که bootCount هر بار زیاد می‌شود ولی normalCount همیشه ۱ است. این آزمایش، مفهوم «از اول شروع شدن» را با چشم خودت ثابت می‌کند.</span></li>
+  <li data-lines="8-17"><b class="what">چرا بیدار شدم؟</b> <code>esp_sleep_get_wakeup_cause()</code> علت بیداری را برمی‌گرداند: تایمر، پین (EXT0 یا EXT1)، لمس، یا هیچ‌کدام (یعنی تازه برق وصل شده یا ریست شده).
+    <span class="why">چون همه بیداری‌ها از setup شروع می‌شوند، این تنها راه برنامه برای فهمیدن این است که «بیدارباش معمولی تایمر است» یا «کاربر دکمه را زد» و بر اساس آن رفتار متفاوتی داشته باشد.</span></li>
+  <li data-lines="20-25"><b class="what">کار بیداری.</b> شمارنده‌ها زیاد و چاپ می‌شوند. <code>delay(500)</code> فقط برای آزمایش است.
+    <span class="why">در پروژه واقعی این delay را حذف کن؛ هر نیم ثانیه بیداری اضافی، در سناریوهای بالا دیدی چقدر گران است.</span></li>
+  <li data-lines="29"><b class="what">تنظیم منبع بیداری.</b> <code>esp_sleep_enable_timer_wakeup(زمان)</code> تایمر RTC را کوک می‌کند.
+    <span class="why">بدون هیچ منبع بیداری، <code>esp_deep_sleep_start()</code> برد را برای همیشه (تا ریست یا قطع برق) می‌خواباند. دقت کن تایمر RTC از یک نوسان‌ساز داخلی استفاده می‌کند و ممکن است چند درصد خطا داشته باشد؛ برای «هر ۱۰ دقیقه» مشکلی نیست، برای ساعت دقیق هست.</span></li>
+  <li data-lines="31"><b class="what">Serial.flush().</b> صبر می‌کند تا همه کاراکترهای در صف واقعا از پین TX خارج شوند.
+    <span class="why">بدون آن، برد ممکن است وسط ارسال خط آخر بخوابد و در Serial Monitor نیمه‌کاره یا درهم ببینی.</span></li>
+  <li data-lines="32-33"><b class="what">رفتن به خواب.</b> بعد از <code>esp_deep_sleep_start()</code> هیچ خطی اجرا نمی‌شود؛ خط ۳۳ عمدا گذاشته شده که هرگز چاپ نشود.
+    <span class="why">اگر یک روز این خط را در خروجی دیدی، یعنی خواب شروع نشده است (مثلا به خاطر خطای تنظیم منبع بیداری). یک تله کوچک برای عیب‌یابی.</span></li>
+  <li data-lines="36-38"><b class="what">loop خالی.</b> باید وجود داشته باشد چون Arduino آن را لازم دارد، ولی هرگز به آن نمی‌رسیم.
+    <span class="why">این الگوی استاندارد همه برنامه‌های «بیدار شو، کار کن، بخواب» است.</span></li>
+</ol>
+<div class="serial">bootCount=1  normalCount=1
+Wake: power-on or reset (not from sleep)
+Going to deep sleep for 10 s...
+ets Jun  8 2016 00:22:57
+rst:0x5 (DEEPSLEEP_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+...
+bootCount=2  normalCount=1
+Wake: timer
+Going to deep sleep for 10 s...</div>
+<p>خط <code>rst:0x5 (DEEPSLEEP_RESET)</code> پیام خود ESP32 هنگام بیدار شدن است و ثابت می‌کند برد واقعا از خواب عمیق برگشته و از اول بوت شده است.</p>
+
+<div class="wokwi" data-board="esp32" data-code-from="dsTimer">
+<p>این مدار سیم‌کشی ندارد؛ فقط برد. در Wokwi یک پروژه ESP32 خالی باز کن، کد را بچسبان و اجرا کن. خواب عمیق با تایمر در Wokwi اجرا می‌شود و بوت‌های پشت سر هم را در Serial Monitor می‌بینی. ولی یادت باشد Wokwi <b>جریان مصرفی را نشان نمی‌دهد</b>؛ صرفه‌جویی واقعی را فقط با مولتی‌متر روی برد واقعی می‌بینی.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="ext0">بیدار شدن با یک دکمه (EXT0)</h2>
+<p>گاهی نمی‌خواهی برد هر چند دقیقه بیدار شود؛ می‌خواهی فقط وقتی کسی دکمه را زد بیدار شود (مثل زنگ در یا کنترل از راه دور). برای این کار از <b>EXT0</b> استفاده می‌کنیم: یک پین مشخص با یک سطح مشخص (LOW یا HIGH) برد را بیدار می‌کند.</p>
+<div class="callout warn"><div class="ct">فقط پین‌های RTC می‌توانند بیدار کنند</div>
+<p>در خواب عمیق فقط بخش RTC برق دارد، پس فقط پین‌هایی که به RTC وصل‌اند (RTC GPIO) می‌توانند برد را بیدار کنند. روی ESP32 این‌ها هستند: <code>0, 2, 4, 12–15, 25–27, 32–39</code>. ما <b>GPIO33</b> را انتخاب کردیم چون هم RTC است، هم Strapping نیست و هم مقاومت بالاکش و پایین‌کش داخلی دارد. (GPIO34 تا 39 مقاومت داخلی ندارند و GPIO0، 2، 12 و 15 از پین‌های Strapping هستند.)</p></div>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"SW1","name":"دکمه فشاری بیدارباش","img":"button.svg","pins":[["1","یک طرف دکمه"],["2","طرف دیگر دکمه"]]}
+  ],
+  "wires":[["GPIO33","SW1.1","blue"],["SW1.2","GND","black"]]
+}</script><figcaption>دکمه بین GPIO33 و زمین. مقاومت بالاکش داخلی RTC پین را در حالت عادی HIGH نگه می‌دارد؛ فشردن دکمه آن را LOW می‌کند و برد بیدار می‌شود.</figcaption></div>
+
+<div class="code" data-file="DeepSleep_Button.ino" id="dsExt0"><pre>
+// بیدار شدن با دکمه (EXT0) روی GPIO33
+#include "driver/rtc_io.h"
+
+const gpio_num_t WAKE_PIN = GPIO_NUM_33;     // باید پین RTC باشد
+RTC_DATA_ATTR int bootCount = 0;
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  bootCount++;
+  Serial.printf("Boot #%d\n", bootCount);
+
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
+    Serial.println("Woken up by the button!");
+  }
+
+  // دکمه بین GPIO33 و GND است: فشردن = LOW
+  esp_sleep_enable_ext0_wakeup(WAKE_PIN, 0);   // 0 یعنی با LOW بیدار شو
+  rtc_gpio_pullup_en(WAKE_PIN);                // مقاومت بالاکش داخلی RTC روشن
+  rtc_gpio_pulldown_dis(WAKE_PIN);             // پایین‌کش خاموش
+
+  Serial.println("Sleeping until button press...");
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="dsExt0">
+  <li data-lines="2"><b class="what">کتابخانه rtc_io.</b> توابع <code>rtc_gpio_...</code> در این فایل سرآیند ESP-IDF تعریف شده‌اند.
+    <span class="why">در خواب عمیق، پین‌ها را دیگر <code>pinMode</code> کنترل نمی‌کند (آن بخش خاموش است)؛ بخش RTC کنترل می‌کند. پس مقاومت بالاکش را هم باید از طریق RTC روشن کنیم.</span></li>
+  <li data-lines="4"><b class="what">نوع gpio_num_t.</b> توابع خواب به جای عدد ساده، نوع <code>gpio_num_t</code> می‌خواهند؛ <code>GPIO_NUM_33</code> همان پین ۳۳ است.
+    <span class="why">این نوع مخصوص جلوی اشتباه‌هایی مثل دادن عدد پین نامعتبر را در زمان کامپایل می‌گیرد.</span></li>
+  <li data-lines="13-15"><b class="what">تشخیص بیداری با دکمه.</b> اگر علت بیداری EXT0 بود، پیام مخصوص چاپ می‌شود.
+    <span class="why">در پروژه واقعی اینجا کار اصلی انجام می‌شود: مثلا فرستادن پیام «زنگ در زده شد».</span></li>
+  <li data-lines="18"><b class="what">esp_sleep_enable_ext0_wakeup(پین، سطح).</b> سطح <code>0</code> یعنی «وقتی پین LOW شد بیدار شو»، <code>1</code> یعنی HIGH.
+    <span class="why">چون دکمه به GND وصل است، فشردن آن پین را LOW می‌کند. اگر دکمه را به 3V3 وصل کنی باید سطح را 1 بگذاری و به جای بالاکش، پایین‌کش روشن کنی.</span></li>
+  <li data-lines="19-20"><b class="what">بالاکش RTC.</b> پین در حالت عادی HIGH نگه داشته می‌شود و پایین‌کش خاموش می‌شود.
+    <span class="why">بدون مقاومت، پین «معلق» (<span class="term" data-t="Floating">Floating</span>) است و نویز اطراف ممکن است آن را LOW کند و برد بی‌دلیل بیدار شود. در حالت EXT0 بخش مربوط به این مقاومت‌ها خودکار روشن می‌ماند.</span></li>
+  <li data-lines="22-24"><b class="what">خواب.</b> مثل قبل، پیام، flush و خواب.
+    <span class="why">اگر هنگام اجرای این خط دکمه هنوز فشرده باشد، برد بلافاصله دوباره بیدار می‌شود. در پروژه واقعی قبل از خواب صبر کن تا دکمه رها شود.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="dsExt0">
+<p>در Wokwi دکمه را بعد از پیام <code>Sleeping until button press...</code> بزن. Wokwi مقاومت‌های بالاکش و پایین‌کش RTC را شبیه‌سازی می‌کند. اگر رفتار شبیه‌ساز با انتظار تو فرق داشت، حرف آخر را برد واقعی می‌زند.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 60, "left": -160, "attrs": { "color": "green" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "btn1:1.r", "esp:33", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="ext1">بیدار شدن با چند دکمه (EXT1)</h2>
+<p>EXT0 فقط یک پین را می‌پاید. اگر دو یا چند دکمه داری (مثلا «دکمه A: ارسال فوری» و «دکمه B: حالت تنظیمات»)، از <b>EXT1</b> استفاده کن. EXT1 یک <b>ماسک بیتی</b> از پین‌ها می‌گیرد و بعد از بیداری هم می‌گوید کدام پین باعث بیداری شد.</p>
+
+<div class="callout warn"><div class="ct">دام مهم: حالت‌های EXT1 روی ESP32 اصلی فقط دو تاست</div>
+<p>روی تراشه ESP32 اصلی (همین DevKitC) فقط دو حالت وجود دارد: <code>ESP_EXT1_WAKEUP_ANY_HIGH</code> (هر کدام از پین‌ها HIGH شد) و <code>ESP_EXT1_WAKEUP_ALL_LOW</code> (همه پین‌ها با هم LOW شدند). حالت <code>ESP_EXT1_WAKEUP_ANY_LOW</code> فقط برای تراشه‌های جدیدتر مثل ESP32-S2، S3، C6 و H2 تعریف شده؛ این را مستقیما در فایل <code>esp_sleep.h</code> ESP-IDF نسخه ۵ (پایه هسته ۳.x) بررسی کرده‌ایم. اگر در یک آموزش یا جواب هوش مصنوعی <code>ANY_LOW</code> را برای ESP32 معمولی دیدی، با خطای «was not declared in this scope» روبه‌رو می‌شوی. برای همین در این مثال دکمه‌ها را به <b>3V3</b> وصل می‌کنیم و «هر کدام HIGH شد» را می‌پاییم.</p></div>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"SWA","name":"دکمه A","img":"button.svg","pins":[["1","به 3V3"],["2","به GPIO32"]]},
+    {"id":"R1","name":"مقاومت ۱۰ کیلواهم (پایین‌کش A)","img":"resistor.svg","pins":[["1","به GPIO32"],["2","به GND"]]},
+    {"id":"SWB","name":"دکمه B","img":"button.svg","pins":[["1","به 3V3"],["2","به GPIO33"]]},
+    {"id":"R2","name":"مقاومت ۱۰ کیلواهم (پایین‌کش B)","img":"resistor.svg","pins":[["1","به GPIO33"],["2","به GND"]]}
+  ],
+  "wires":[["3V3","SWA.1","red"],["SWA.2","GPIO32","blue"],["GPIO32","R1.1","blue"],["R1.2","GND","black"],["3V3","SWB.1","red"],["SWB.2","GPIO33","blue"],["GPIO33","R2.1","blue"],["R2.2","GND","black"]]
+}</script><figcaption>هر دکمه یک سرش به 3V3 و سر دیگرش به یک پین RTC است. مقاومت ۱۰ کیلواهم هر پین را در حالت عادی LOW نگه می‌دارد. فشردن هر دکمه پین خودش را HIGH می‌کند.</figcaption></div>
+
+<div class="code" data-file="DeepSleep_TwoButtons.ino" id="dsExt1"><pre>
+// بیدار شدن با هر کدام از دو دکمه (EXT1)
+const int BTN_A = 32;
+const int BTN_B = 33;
+const uint64_t WAKE_MASK = (1ULL &lt;&lt; BTN_A) | (1ULL &lt;&lt; BTN_B);
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1) {
+    uint64_t st = esp_sleep_get_ext1_wakeup_status();   // کدام پین‌ها؟
+    if (st &amp; (1ULL &lt;&lt; BTN_A)) Serial.println("Button A (GPIO32) woke me");
+    if (st &amp; (1ULL &lt;&lt; BTN_B)) Serial.println("Button B (GPIO33) woke me");
+  } else {
+    Serial.println("Normal start");
+  }
+
+  // دکمه‌ها به 3V3 وصل‌اند و ۱۰ کیلو به GND دارند: فشردن = HIGH
+  esp_sleep_enable_ext1_wakeup(WAKE_MASK, ESP_EXT1_WAKEUP_ANY_HIGH);
+  Serial.println("Sleeping. Press A or B...");
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="dsExt1">
+  <li data-lines="2-4"><b class="what">ماسک بیتی.</b> هر پین یک بیت در یک عدد ۶۴ بیتی است. <code>1ULL &lt;&lt; 32</code> یعنی «عدد ۱ را ۳۲ خانه به چپ ببر»: عددی که فقط بیت ۳۲ آن یک است. با <code>|</code> (یا بیتی) دو بیت را با هم روشن می‌کنیم.
+    <span class="why">ESP32 بیش از ۳۲ پین دارد، پس عدد ۳۲ بیتی کافی نیست. اگر بنویسی <code>1 &lt;&lt; 32</code> (بدون ULL)، رفتار تعریف‌نشده است و ماسک غلط می‌شود؛ یکی از باگ‌های کلاسیک.</span></li>
+  <li data-lines="10-13"><b class="what">کدام دکمه بیدارم کرد؟</b> <code>esp_sleep_get_ext1_wakeup_status()</code> یک ماسک برمی‌گرداند که بیت پین‌های بیدارکننده در آن یک است. با <code>&amp;</code> (و بیتی) بیت هر دکمه را جدا بررسی می‌کنیم.
+    <span class="why">این یعنی یک برد خوابیده می‌تواند با دکمه‌های مختلف کارهای مختلف انجام دهد، بدون این که لازم باشد بعد از بیداری دوباره پین‌ها را بخواند (که ممکن است دکمه تا آن موقع رها شده باشد).</span></li>
+  <li data-lines="19"><b class="what">فعال کردن EXT1.</b> ماسک و حالت <code>ANY_HIGH</code> را می‌دهیم.
+    <span class="why">هسته ۳.x یک نام جدیدتر هم دارد (<code>esp_sleep_enable_ext1_wakeup_io</code>) که مثال‌های رسمی تازه از آن استفاده می‌کنند؛ نام قدیمی که اینجا آمده در همه نسخه‌های ۳.x کار می‌کند. در ESP-IDF نسخه ۶ ممکن است حذف شود.</span></li>
+  <li data-lines="20-22"><b class="what">خواب.</b> مثل مثال‌های قبل.
+    <span class="why">ما مقاومت پایین‌کش <b>بیرونی</b> گذاشتیم. EXT1 برخلاف EXT0 به‌طور پیش‌فرض بخش مقاومت‌های داخلی RTC را روشن نگه نمی‌دارد، پس مقاومت بیرونی مطمئن‌ترین راه برای مبتدی است.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="dsExt1">
+<p>دو دکمه، دو مقاومت ۱۰ کیلو. بعد از پیام <code>Sleeping</code> هر کدام از دکمه‌ها را بزن و ببین کدام گزارش می‌شود.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btnA", "top": 20, "left": -200, "attrs": { "color": "green", "label": "A" } },
+    { "type": "wokwi-pushbutton", "id": "btnB", "top": 120, "left": -200, "attrs": { "color": "blue", "label": "B" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 80, "left": -110, "attrs": { "value": "10000" } },
+    { "type": "wokwi-resistor", "id": "r2", "top": 180, "left": -110, "attrs": { "value": "10000" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "btnA:1.l", "esp:3V3", "red", [] ],
+    [ "btnA:2.r", "esp:32", "blue", [] ],
+    [ "r1:1", "esp:32", "blue", [] ],
+    [ "r1:2", "esp:GND.1", "black", [] ],
+    [ "btnB:1.l", "esp:3V3", "red", [] ],
+    [ "btnB:2.r", "esp:33", "blue", [] ],
+    [ "r2:1", "esp:33", "blue", [] ],
+    [ "r2:2", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="touch">بیدار شدن با لمس (Touch)</h2>
+<p>ESP32 چند پین لمسی دارد (<span class="term" data-t="Touch">Touch</span>) که بدون دکمه، با لمس یک سیم یا یک تکه فویل آلومینیومی کار می‌کنند. این پین‌ها می‌توانند برد را از خواب عمیق هم بیدار کنند. ما <b>T7 یعنی GPIO27</b> را انتخاب می‌کنیم چون Strapping نیست.</p>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"PAD","name":"صفحه لمسی: سیم جامپر یا فویل آلومینیومی","pins":[["1","یک سیم به GPIO27؛ سر دیگر آزاد برای لمس"]]}
+  ],
+  "wires":[["GPIO27","PAD.1","blue"]]
+}</script><figcaption>فقط یک سیم به GPIO27. سر دیگر سیم را به یک تکه فویل یا یک سکه بچسبان تا لمس آسان‌تر شود. هیچ مقاومتی لازم نیست.</figcaption></div>
+
+<div class="code" data-file="DeepSleep_Touch.ino" id="dsTouch"><pre>
+// بیدار شدن با لمس روی GPIO27 (T7)
+const int THRESHOLD = 40;   // روی ESP32: وقتی عدد لمس از این کمتر شد = لمس
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TOUCHPAD) {
+    Serial.println("Woken up by touch!");
+  }
+  Serial.printf("touchRead(T7) now = %d\n", touchRead(T7));
+  touchSleepWakeUpEnable(T7, THRESHOLD);   // API هسته 3.x
+  Serial.println("Touch the wire on GPIO27 to wake me");
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="dsTouch">
+  <li data-lines="2"><b class="what">آستانه لمس.</b> روی ESP32 اصلی، <code>touchRead</code> در حالت عادی عدد بزرگ‌تری می‌دهد و با لمس کم می‌شود. عدد ۴۰ همان مقداری است که مثال رسمی Espressif برای ESP32 استفاده می‌کند.
+    <span class="why">این عدد به طول سیم، اندازه فویل و حتی رطوبت هوا بستگی دارد. برای همین خط ۱۰ مقدار فعلی را چاپ می‌کند تا آستانه را خودت تنظیم کنی: معمولا چیزی بین عدد «بدون لمس» و «با لمس». (روی ESP32-S2 و S3 برعکس است: لمس عدد را بزرگ‌تر می‌کند.)</span></li>
+  <li data-lines="7-9"><b class="what">تشخیص بیداری با لمس.</b> علت <code>ESP_SLEEP_WAKEUP_TOUCHPAD</code> است.
+    <span class="why">مثل بقیه منابع، بعد از بیداری از setup شروع می‌کنیم و باید بفهمیم چرا.</span></li>
+  <li data-lines="11"><b class="what">touchSleepWakeUpEnable(پین لمسی، آستانه).</b> پین T7 را به عنوان منبع بیداری ثبت می‌کند.
+    <span class="why">این تابع در هسته ۲.۰.۶ به بعد اضافه شد و در ۳.x روش توصیه‌شده است. آموزش‌های قدیمی از <code>touchAttachInterrupt(T7, callback, Threshold)</code> و بعد <code>esp_sleep_enable_touchpad_wakeup()</code> استفاده می‌کنند.</span></li>
+</ol>
+<div class="callout info"><div class="ct">Wokwi و لمس</div>
+<p>جدول قابلیت‌های رسمی Wokwi برای ESP32 سنسور لمسی را جزو بخش‌های شبیه‌سازی‌شده فهرست نکرده است. این مثال را فقط روی برد واقعی امتحان کن.</p></div>
+
+<h2 id="hold">نگه داشتن وضعیت یک پین در خواب</h2>
+<p>فرض کن با یک پین یک ترانزیستور را کنترل می‌کنی که برق یک سنسور پرمصرف را قطع و وصل می‌کند. وقتی ESP32 می‌خوابد، پین‌ها ممکن است رها شوند و ترانزیستور ناخواسته روشن شود. تابع <code>gpio_hold_en</code> وضعیت پین را «قفل» می‌کند.</p>
+<div class="code" data-file="DeepSleep_Hold.ino" id="dsHold"><pre>
+// نگه داشتن وضعیت یک پین خروجی در خواب عمیق
+const gpio_num_t PWR_PIN = GPIO_NUM_25;   // مثلا پایه کنترل ترانزیستور برق سنسور
+
+void goToSleep() {
+  digitalWrite(PWR_PIN, LOW);             // وضعیت دلخواه: برق سنسور قطع
+  gpio_hold_en(PWR_PIN);                  // این وضعیت را قفل کن
+  gpio_deep_sleep_hold_en();              // قفل در خواب عمیق هم بماند
+  esp_sleep_enable_timer_wakeup(60 * 1000000ULL);
+  esp_deep_sleep_start();
+}
+
+void setup() {
+  gpio_hold_dis(PWR_PIN);                 // بعد از بیداری، اول قفل را باز کن
+  pinMode(PWR_PIN, OUTPUT);
+  digitalWrite(PWR_PIN, HIGH);            // برق سنسور وصل
+  delay(100);                             // ... خواندن سنسور ...
+  goToSleep();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="dsHold">
+  <li data-lines="5-7"><b class="what">قفل کردن پین.</b> اول وضعیت دلخواه را می‌نویسیم، بعد <code>gpio_hold_en</code> آن را قفل می‌کند. <code>gpio_deep_sleep_hold_en</code> روی ESP32 قفل پین‌های دیجیتال را در خواب عمیق هم فعال می‌کند.
+    <span class="why">GPIO25 یک پین RTC است و برای پین‌های RTC همان <code>gpio_hold_en</code> کافی است (معادل <code>rtc_gpio_hold_en</code>). خط ۷ برای پین‌های غیر RTC لازم است و بودنش ضرری ندارد.</span></li>
+  <li data-lines="13"><b class="what">باز کردن قفل بعد از بیداری.</b>
+    <span class="why">اگر قفل را باز نکنی، هر <code>digitalWrite</code> بعدی روی این پین بی‌اثر است و ساعت‌ها دنبال باگی می‌گردی که در کد نیست!</span></li>
+</ol>
+
+<h2 id="light">خواب سبک (Light Sleep): چرت کوتاه، ادامه از همان‌جا</h2>
+<p>در خواب سبک، RAM روشن می‌ماند. پس برنامه بعد از بیداری <b>از خط بعد از</b> <code>esp_light_sleep_start()</code> ادامه می‌دهد و همه متغیرهای معمولی سر جایشان هستند. هزینه‌اش: حدود ۰٫۸ میلی‌آمپر به جای ۱۰ میکروآمپر. خواب سبک برای وقفه‌های کوتاه (کسری از ثانیه تا چند ثانیه) و برنامه‌هایی مناسب است که نمی‌خواهی از اول شروع شوند.</p>
+<p>مزیت دیگر: برای بیدار شدن از خواب سبک با پین، لازم نیست پین RTC باشد؛ <b>هر GPIO</b> ورودی با <code>gpio_wakeup_enable</code> کار می‌کند.</p>
+
+<div class="code" data-file="LightSleep_Button.ino" id="lsDemo"><pre>
+// خواب سبک: برنامه از همان‌جا ادامه می‌دهد
+#include "driver/gpio.h"
+
+const int BTN = 33;            // دکمه بین GPIO33 و GND
+int counter = 0;               // متغیر معمولی؛ در خواب سبک پاک نمی‌شود
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BTN, INPUT_PULLUP);
+  gpio_wakeup_enable((gpio_num_t)BTN, GPIO_INTR_LOW_LEVEL);  // LOW = بیدار شو
+  esp_sleep_enable_gpio_wakeup();
+  esp_sleep_enable_timer_wakeup(5 * 1000000ULL);             // یا بعد از ۵ ثانیه
+}
+
+void loop() {
+  counter++;
+  Serial.printf("Awake! counter=%d\n", counter);
+  Serial.flush();                        // قبل از خواب، متن را کامل بفرست
+  esp_light_sleep_start();               // اینجا چرت می‌زند ...
+  // ... و بعد از بیداری از همین خط ادامه می‌دهد
+  esp_sleep_wakeup_cause_t c = esp_sleep_get_wakeup_cause();
+  Serial.println(c == ESP_SLEEP_WAKEUP_GPIO ? "Wake: button" : "Wake: timer");
+  delay(300);                            // مکث تا دکمه رها شود
+}
+</pre></div>
+<ol class="walk" data-for="lsDemo">
+  <li data-lines="5"><b class="what">یک شمارنده معمولی.</b> این بار <code>RTC_DATA_ATTR</code> لازم نیست.
+    <span class="why">در خواب سبک RAM روشن است. در خروجی می‌بینی counter مرتب زیاد می‌شود؛ مقایسه‌اش کن با normalCount در مثال خواب عمیق که همیشه ۱ بود.</span></li>
+  <li data-lines="9-11"><b class="what">بیدارباش با GPIO.</b> <code>gpio_wakeup_enable</code> تعیین می‌کند کدام پین با کدام سطح بیدار کند، و <code>esp_sleep_enable_gpio_wakeup</code> این نوع بیدارباش را روشن می‌کند.
+    <span class="why">بیدارباش GPIO بر اساس «سطح» است، نه «لبه». یعنی تا وقتی دکمه فشرده است، شرط بیداری برقرار است. برای همین در خط ۲۳ کمی صبر می‌کنیم.</span></li>
+  <li data-lines="12"><b class="what">دو منبع بیداری با هم.</b> تایمر ۵ ثانیه هم فعال است؛ هر کدام زودتر اتفاق بیفتد برد را بیدار می‌کند.
+    <span class="why">ترکیب منابع خیلی رایج است: «هر ساعت یک گزارش بفرست، ولی اگر دکمه زده شد فورا».</span></li>
+  <li data-lines="19"><b class="what">esp_light_sleep_start().</b> برد می‌خوابد و بعد از بیداری، اجرا از خط‌های بعدی (۲۰ به بعد) ادامه پیدا می‌کند.
+    <span class="why">این بزرگ‌ترین فرق با خواب عمیق است: هیچ ریستی رخ نمی‌دهد. دقت کن اتصال Wi-Fi در خواب سبک دستی حفظ نمی‌شود؛ اگر Wi-Fi روشن است قبل از خواب آن را خاموش کن یا از قابلیت‌های مدیریت توان خودکار ESP-IDF استفاده کن که از حوصله این درس بیرون است.</span></li>
+  <li data-lines="21-22"><b class="what">چه کسی بیدارم کرد؟</b> علت <code>ESP_SLEEP_WAKEUP_GPIO</code> یعنی دکمه، در غیر این صورت تایمر.
+    <span class="why">همان الگوی خواب عمیق، ولی حالا وسط loop.</span></li>
+</ol>
+<div class="callout info"><div class="ct">چرا این مثال بلوک Wokwi ندارد؟</div>
+<p>در جدول قابلیت‌های رسمی Wokwi، بخش RTC فقط «ناقص» علامت خورده و درباره رفتار خواب سبک چیزی تضمین نشده است. به جای این که تو را با یک شبیه‌سازی احتمالا متفاوت گیج کنیم، این مثال را روی برد واقعی امتحان کن.</p></div>
+
+<h2 id="project">پروژه: دیتالاگر دما و رطوبت با باتری</h2>
+<p>حالا همه چیز را کنار هم می‌گذاریم: هر ۱۰ دقیقه بیدار شو، DHT22 را بخوان، از طریق Wi-Fi و MQTT بفرست، و فورا بخواب. هدف طراحی: <b>کمترین زمان بیداری</b>. هر خط این برنامه را با این سؤال بسنج: «آیا این برد را بیشتر بیدار نگه می‌دارد؟»</p>
+
+<div class="gallery">
+  <figure><div class="frame"><img src="assets/img/dht22.svg" alt="سنسور DHT22"></div><figcaption>DHT22: دما و رطوبت، یک سیم داده</figcaption></figure>
+  <figure><div class="frame"><img src="assets/img/resistor.svg" alt="مقاومت ۱۰ کیلواهم"></div><figcaption>مقاومت ۱۰ کیلو بالاکش (در ماژول‌ها معمولا روی برد هست)</figcaption></figure>
+</div>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"DHT","name":"سنسور DHT22","img":"dht22.svg","pins":[["VCC","پایه ۱: تغذیه ۳٫۳ ولت"],["DATA","پایه ۲: داده"],["NC","پایه ۳: وصل نشود"],["GND","پایه ۴: زمین"]]},
+    {"id":"R1","name":"مقاومت ۱۰ کیلواهم","img":"resistor.svg","pins":[["1","به DATA"],["2","به 3V3"]]}
+  ],
+  "wires":[["3V3","DHT.VCC","red"],["GPIO4","DHT.DATA","blue"],["DHT.GND","GND","black"],["GPIO4","R1.1","blue"],["R1.2","3V3","red"]]
+}</script><figcaption>DHT22 روی GPIO4 (یک پین امن) با مقاومت بالاکش ۱۰ کیلواهم بین DATA و 3V3. اگر ماژول سه‌پایه DHT22 داری، مقاومت روی خود ماژول است و فقط سه سیم لازم داری.</figcaption></div>
+
+<div class="code" data-file="BatteryLogger.ino" id="logger"><pre>
+// دیتالاگر باتری‌خور: بیدار شو، بخوان، بفرست، بخواب
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;DHT.h&gt;
+
+// ---------- تنظیمات ----------
+const char* WIFI_SSID = "Wokwi-GUEST";           // در خانه: نام مودم خودت
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const char* TOPIC     = "esp32fa/lesson61/logger"; // یک نام یکتا برای خودت بساز
+const uint64_t SLEEP_MIN = 10;                     // هر ۱۰ دقیقه
+const uint32_t WIFI_TIMEOUT_MS = 8000;             // حداکثر زمان تلاش Wi-Fi
+
+#define DHT_PIN  4
+#define DHT_TYPE DHT22
+DHT dht(DHT_PIN, DHT_TYPE);
+WiFiClient net;
+PubSubClient mqtt(net);
+
+// ---------- حافظه RTC: بعد از خواب عمیق باقی می‌ماند ----------
+RTC_DATA_ATTR uint32_t bootCount = 0;
+RTC_DATA_ATTR uint8_t  savedChannel = 0;           // کانال Wi-Fi دفعه قبل
+RTC_DATA_ATTR uint8_t  savedBssid[6];              // MAC مودم دفعه قبل
+RTC_DATA_ATTR uint32_t failCount = 0;              // تعداد ارسال‌های ناموفق
+
+void goToSleep() {
+  WiFi.disconnect(true);                           // Wi-Fi را کامل خاموش کن
+  WiFi.mode(WIFI_OFF);
+  Serial.printf("Awake %lu ms, fails=%lu. Sleep %llu min\n", millis(), failCount, SLEEP_MIN);
+  Serial.flush();
+  esp_sleep_enable_timer_wakeup(SLEEP_MIN * 60ULL * 1000000ULL);
+  esp_deep_sleep_start();
+}
+
+bool connectWiFiFast() {
+  WiFi.mode(WIFI_STA);
+  WiFi.persistent(false);                          // هر بار در فلش ننویس
+  if (savedChannel != 0) {
+    WiFi.begin(WIFI_SSID, WIFI_PASS, savedChannel, savedBssid);  // میانبر
+  } else {
+    WiFi.begin(WIFI_SSID, WIFI_PASS);              // بار اول: جستجوی کامل
+  }
+  uint32_t start = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    if (millis() - start &gt; WIFI_TIMEOUT_MS) {
+      savedChannel = 0;                            // میانبر خراب بود؛ دفعه بعد کامل بگرد
+      return false;
+    }
+    delay(20);
+  }
+  savedChannel = WiFi.channel();                   // برای دفعه بعد نگه دار
+  memcpy(savedBssid, WiFi.BSSID(), 6);
+  return true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  bootCount++;
+  dht.begin();
+
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) {
+    Serial.println("DHT22 read failed");
+    failCount++;
+    goToSleep();                                   // بی‌خود Wi-Fi روشن نکن
+  }
+  Serial.printf("#%lu  T=%.1f C  H=%.1f %%\n", bootCount, t, h);
+
+  if (connectWiFiFast()) {
+    mqtt.setServer(MQTT_HOST, 1883);
+    String id = "esp32-logger-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+    if (mqtt.connect(id.c_str())) {
+      char msg[64];
+      snprintf(msg, sizeof(msg), "{\"t\":%.1f,\"h\":%.1f,\"n\":%lu}", t, h, bootCount);
+      mqtt.publish(TOPIC, msg);
+      mqtt.loop();
+      delay(50);                                   // فرصت کوتاه برای خروج بسته
+      mqtt.disconnect();
+      Serial.println(String("Sent: ") + msg);
+    } else {
+      failCount++;
+    }
+  } else {
+    failCount++;
+    Serial.println("Wi-Fi failed, will retry next wake");
+  }
+  goToSleep();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="logger">
+  <li data-lines="2-4"><b class="what">کتابخانه‌ها.</b> <code>WiFi.h</code> جزو هسته است. <code>PubSubClient</code> (از Nick O'Leary) و <code>DHT sensor library</code> (از Adafruit، که <code>Adafruit Unified Sensor</code> را هم می‌خواهد) را از Library Manager نصب کن.
+    <span class="why">همان کتابخانه‌هایی که در درس‌های <a href="3-3.html">۳.۳</a> و <a href="5-1.html">۵.۱</a> استفاده کردیم؛ چیز جدیدی برای یاد گرفتن نیست جز روش خوابیدن.</span></li>
+  <li data-lines="7-12"><b class="what">تنظیمات در یک جا.</b> نام شبکه، سرور MQTT، topic، زمان خواب و حداکثر زمان تلاش برای Wi-Fi.
+    <span class="why"><code>WIFI_TIMEOUT_MS</code> حیاتی است: اگر مودم خاموش باشد و برد بی‌نهایت منتظر Wi-Fi بماند، در یک شب باتری را خالی می‌کند. «هرگز بی‌نهایت منتظر نمان» قانون شماره یک دستگاه باتری‌خور است. topic را حتما با یک نام مخصوص خودت عوض کن چون broker.hivemq.com عمومی است و همه می‌توانند پیام‌ها را ببینند.</span></li>
+  <li data-lines="21-24"><b class="what">حافظه RTC برای میانبر Wi-Fi.</b> علاوه بر شمارنده‌ها، <b>کانال</b> و <b>BSSID</b> (آدرس MAC مودم) دفعه قبل را نگه می‌داریم.
+    <span class="why">اتصال معمولی Wi-Fi اول همه کانال‌ها را جستجو می‌کند تا مودم را پیدا کند؛ این جستجو می‌تواند چند ثانیه طول بکشد. اگر کانال و آدرس مودم را بدانیم، مستقیم سراغش می‌رویم. مستندات Wokwi هم برای همین دلیل استفاده از شماره کانال را توصیه می‌کند.</span></li>
+  <li data-lines="26-33"><b class="what">تابع خواب.</b> Wi-Fi را کامل خاموش می‌کند، مدت بیداری (<code>millis()</code>) را گزارش می‌کند و برای ۱۰ دقیقه می‌خوابد. <code>60ULL * 1000000ULL</code> دقیقه را به میکروثانیه تبدیل می‌کند.
+    <span class="why">چاپ <code>millis()</code> درست قبل از خواب مهم‌ترین عدد بهینه‌سازی است: «این دور چند میلی‌ثانیه بیدار بودم؟» با آن می‌توانی اثر هر تغییر را با عدد ببینی. یک فراخوانی تمیز برای خواب از همه جای برنامه، باعث می‌شود هیچ مسیری فراموش نشود.</span></li>
+  <li data-lines="35-54"><b class="what">اتصال سریع Wi-Fi.</b> اگر کانال ذخیره‌شده داریم، <code>WiFi.begin(ssid, pass, channel, bssid)</code> با میانبر وصل می‌شود؛ وگرنه اتصال معمولی. حلقه انتظار حداکثر ۸ ثانیه طول می‌کشد. بعد از موفقیت، کانال و BSSID ذخیره می‌شوند. اگر میانبر شکست خورد (مثلا مودم کانالش را عوض کرده)، <code>savedChannel = 0</code> باعث می‌شود دفعه بعد جستجوی کامل انجام شود.
+    <span class="why"><code>WiFi.persistent(false)</code> جلوی نوشتن تنظیمات در حافظه فلش را در هر بیداری می‌گیرد؛ فلش تعداد دفعات نوشتن محدودی دارد و نوشتن هم وقت و انرژی می‌برد. این‌جا تنها جایی است که <code>delay</code> کوتاه در حلقه قابل قبول است، چون کار دیگری جز انتظار نداریم.</span></li>
+  <li data-lines="61-68"><b class="what">اول سنسور، بعد Wi-Fi.</b> اگر خواندن DHT22 شکست خورد، <b>بدون روشن کردن Wi-Fi</b> می‌خوابیم.
+    <span class="why">Wi-Fi گران‌ترین بخش است. روشن کردنش برای فرستادن «هیچ» یعنی هدر دادن باتری. ترتیب کارها را همیشه طوری بچین که کارهای ارزان و احتمالا ناموفق اول انجام شوند.</span></li>
+  <li data-lines="70-76"><b class="what">اتصال MQTT و ارسال یک پیام JSON.</b> شناسه یکتای کلاینت از آدرس MAC ساخته می‌شود. پیام مثل <code>{"t":24.5,"h":40.0,"n":12}</code> است.
+    <span class="why">یک پیام JSON به جای سه پیام جداگانه، یعنی یک رفت و برگشت شبکه به جای سه تا: بیداری کوتاه‌تر. شماره بوت <code>n</code> کمک می‌کند در داشبورد بفهمی آیا پیامی گم شده است.</span></li>
+  <li data-lines="77-80"><b class="what">فرصت خروج بسته و قطع اتصال.</b> <code>mqtt.loop()</code> و مکث ۵۰ میلی‌ثانیه‌ای، به بسته فرصت می‌دهد واقعا از برد خارج شود؛ بعد اتصال مرتب بسته می‌شود.
+    <span class="why">اگر بلافاصله بعد از publish بخوابی، گاهی بسته هنوز در صف شبکه است و هرگز به سرور نمی‌رسد. ۵۰ میلی‌ثانیه برای یک اتصال سالم معمولا کافی است؛ اگر پیام گم می‌شود، این عدد را کمی بیشتر کن.</span></li>
+  <li data-lines="81-88"><b class="what">مدیریت شکست.</b> هر شکست شمرده می‌شود و در هر حال به خواب می‌رویم.
+    <span class="why">دستگاه باتری‌خور نباید برای «دوباره امتحان کردن» بیدار بماند. دور بعد خودش دوباره امتحان می‌کند. <code>failCount</code> به تو می‌گوید شبکه چقدر قابل اعتماد است.</span></li>
+</ol>
+
+<div class="callout tip"><div class="ct">ترفند اختیاری: IP ثابت</div>
+<p>بعد از وصل شدن به Wi-Fi، برد از مودم یک آدرس IP می‌گیرد (DHCP) که کمی زمان می‌برد. در شبکه خانه خودت می‌توانی یک IP ثابت بدهی تا این مرحله حذف شود. این خطوط را در <code>connectWiFiFast()</code> درست <b>قبل</b> از <code>WiFi.begin</code> بگذار (در Wokwi این کار را نکن چون شبکه‌اش آدرس‌های خودش را دارد):</p></div>
+<div class="code" data-file="static_ip_part.ino" id="staticIp"><pre>
+IPAddress ip(192, 168, 1, 50);        // یک IP آزاد، بیرون از محدوده DHCP مودم
+IPAddress gateway(192, 168, 1, 1);    // IP مودم
+IPAddress subnet(255, 255, 255, 0);
+IPAddress dns(8, 8, 8, 8);
+WiFi.config(ip, gateway, subnet, dns); // قبل از WiFi.begin
+</pre></div>
+<ol class="walk" data-for="staticIp">
+  <li data-lines="1-4"><b class="what">چهار آدرس.</b> IP خود برد، IP مودم (دروازه)، ماسک شبکه و یک سرور DNS برای تبدیل نام <code>broker.hivemq.com</code> به IP.
+    <span class="why">عددها را از تنظیمات مودم خودت بردار. اگر IP تکراری بدهی (که دستگاه دیگری دارد)، هر دو دستگاه مشکل پیدا می‌کنند؛ برای همین یک IP خارج از محدوده‌ای که مودم خودکار پخش می‌کند انتخاب کن.</span></li>
+  <li data-lines="5"><b class="what">WiFi.config.</b> این تنظیمات را قبل از اتصال اعمال می‌کند.
+    <span class="why">صرفه‌جویی معمولا کسری از ثانیه تا یکی دو ثانیه است، بسته به مودم. با چاپ <code>millis()</code> خودت اندازه بگیر؛ اگر فرقی نکرد، این پیچیدگی را نگه ندار.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="logger">
+<p>در Wokwi از تب <b>Library Manager</b> کتابخانه‌های <code>DHT sensor library</code> و <code>PubSubClient</code> را اضافه کن. Wokwi یک شبکه Wi-Fi مجازی به نام <code>Wokwi-GUEST</code> بدون رمز دارد که به اینترنت واقعی وصل است، پس پیام‌ها واقعا به broker.hivemq.com می‌رسند. برای تست سریع، موقتا در خط ۳۱ به جای <code>60ULL</code> بنویس <code>6ULL</code> تا هر یک دقیقه بیدار شود. با کلیک روی DHT22 در شبیه‌ساز، دما و رطوبت را عوض کن. برای دیدن پیام‌ها، در یک کلاینت MQTT (مثل همان که در درس ۵.۱ استفاده کردی) topic خودت را subscribe کن.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -40, "left": 180, "attrs": { "temperature": "24", "humidity": "40" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:4", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<div class="serial">#1  T=24.0 C  H=40.0 %
+Sent: {"t":24.0,"h":40.0,"n":1}
+Awake 3712 ms, fails=0. Sleep 10 min
+...
+#2  T=24.0 C  H=40.0 %
+Sent: {"t":24.0,"h":40.0,"n":2}
+Awake 1480 ms, fails=0. Sleep 10 min</div>
+<p>عددهای بالا نمونه‌اند و در شبکه تو فرق دارند؛ ولی الگو را ببین: بوت اول (با جستجوی کامل Wi-Fi) طولانی‌تر است و بوت‌های بعدی (با میانبر کانال) کوتاه‌تر.</p>
+
+<div class="callout why"><div class="ct">چرا MQTT و نه وب سرور؟</div>
+<p>وب سرور (درس <a href="4-2.html">۴.۲</a>) باید همیشه بیدار باشد تا کسی صفحه را باز کند؛ یعنی با خواب عمیق در تضاد است. در MQTT، دستگاه خودش هر وقت بیدار شد پیام را «هل می‌دهد» و می‌رود. دستگاه‌های باتری‌خور تقریبا همیشه «فرستنده» هستند، نه «سرور».</p></div>
+
+<h2 id="battery">باتری برای مبتدی‌ها: لیتیوم، رگولاتور، شارژر</h2>
+<p>پرکاربردترین باتری برای ESP32، باتری لیتیومی تک‌سلولی است: یا <b>LiPo</b> (کیسه‌ای و تخت، معمولا با سوکت JST) یا سلول استوانه‌ای <b>18650</b>. هر دو ولتاژ اسمی ۳٫۷ ولت دارند، وقتی پر هستند ۴٫۲ ولت و وقتی تقریبا خالی‌اند حدود ۳٫۰ ولت.</p>
+
+<div class="callout warn"><div class="ct">باتری را مستقیم به 3V3 وصل نکن</div>
+<p>پایه 3V3 برد مستقیم به ESP32 می‌رود و ESP32 حداکثر حدود ۳٫۶ ولت را تحمل می‌کند. باتری پر ۴٫۲ ولت است؛ یعنی مستقیم وصل کردنش می‌تواند تراشه را آسیب بزند. وصل کردنش به پایه 5V هم راه خوبی نیست: رگولاتور AMS1117 روی برد حدود یک ولت افت ولتاژ لازم دارد؛ با ورودی ۳٫۷ ولت خروجی‌اش زیر ۳ ولت می‌رود و برد در لحظه ارسال Wi-Fi ریست می‌شود (Brownout). تازه همان مصرف چند میلی‌آمپری بی‌باری‌اش را هم دارد.</p></div>
+
+<p>راه درست یک <b>رگولاتور LDO کم‌مصرف</b> است که دو ویژگی داشته باشد: (۱) <b>جریان بی‌باری (Quiescent) بسیار کم</b>، در حد چند میکروآمپر، و (۲) توان دادن جریان لحظه‌ای Wi-Fi (چند صد میلی‌آمپر) با افت ولتاژ کم.</p>
+<div class="table-wrap"><table>
+<tr><th>رگولاتور</th><th>حداکثر جریان</th><th>جریان بی‌باری (طبق دیتاشیت)</th><th>نکته</th></tr>
+<tr><td>AMS1117-3.3 (روی بیشتر بردها)</td><td>حدود ۱ آمپر</td><td>حدود ۵ mA</td><td>برای باتری مناسب نیست</td></tr>
+<tr><td>HT7833</td><td>۵۰۰ mA</td><td>چند میکروآمپر</td><td>انتخاب خوب و ارزان برای ESP32 با باتری لیتیومی</td></tr>
+<tr><td>MCP1700-3302</td><td>۲۵۰ mA</td><td>حدود ۱٫۶ µA</td><td>بی‌باری عالی، ولی ۲۵۰ mA برای قله‌های Wi-Fi مرزی است؛ خازن بزرگ (مثلا ۴۷۰ µF) در خروجی لازم است و باز هم ممکن است برد ریست شود</td></tr>
+</table></div>
+<div class="callout info"><div class="ct">افت ولتاژ یعنی چه؟</div>
+<p>هر رگولاتور برای این که ۳٫۳ ولت ثابت بدهد، ورودی‌اش باید کمی بالاتر از ۳٫۳ باشد. به این فاصله «افت ولتاژ» (Dropout) می‌گویند. با LDO خوب، باتری تا حدود ۳٫۵ ولت هم خروجی ۳٫۳ ولت درست می‌دهد؛ پایین‌تر از آن خروجی کمی افت می‌کند. ESP32 تا حدود ۳ ولت معمولا کار می‌کند، ولی Wi-Fi در ولتاژهای پایین ناپایدار می‌شود. دیتاشیت رگولاتوری را که می‌خری حتما بخوان.</p></div>
+
+<h3>شارژر: ماژول TP4056</h3>
+<p>باتری لیتیومی را <b>فقط</b> با شارژر مخصوص لیتیوم شارژ کن. ارزان‌ترین گزینه ماژول TP4056 است که با USB کار می‌کند و باتری را تا ۴٫۲ ولت شارژ می‌کند. دو نسخه دارد: فقط شارژر، و نسخه <b>با محافظ</b> (دارای تراشه DW01 و ترانزیستورهای کنار آن، و خروجی جداگانه OUT+ و OUT−). همیشه نسخه با محافظ را بخر و بار (رگولاتور و ESP32) را به <code>OUT+</code> و <code>OUT−</code> وصل کن، نه مستقیم به باتری.</p>
+<div class="callout example"><div class="ct">حساب کن: جریان شارژ</div>
+<p>روی ماژول TP4056 یک مقاومت به اسم R_PROG جریان شارژ را تعیین می‌کند. طبق دیتاشیت تقریبا <code>I = 1200 ÷ R_PROG</code> (جریان بر حسب آمپر، مقاومت بر حسب اهم). ماژول‌های معمولی ۱٫۲ کیلواهم دارند یعنی ۱ آمپر. قانون ایمنی: جریان شارژ را از ۱C باتری (عدد ظرفیت) بیشتر نکن. برای باتری ۵۰۰ میلی‌آمپر ساعت، ۱ آمپر یعنی ۲C و خطرناک است؛ باید R_PROG را حدود ۲٫۴ کیلواهم کنی تا جریان ۵۰۰ میلی‌آمپر شود.</p></div>
+
+<div class="callout warn"><div class="ct">ایمنی باتری لیتیومی: شوخی ندارد</div>
+<ul>
+  <li>باتری باد کرده، سوراخ شده، له شده یا داغ را فورا کنار بگذار؛ هرگز شارژ نکن.</li>
+  <li>قطب‌ها را هرگز اتصال کوتاه نکن؛ حتی یک لحظه. باتری لیتیومی جریان خیلی زیادی می‌دهد و سیم را داغ و ذوب می‌کند.</li>
+  <li><b>قطبیت سوکت JST را قبل از وصل کردن چک کن.</b> تولیدکننده‌های مختلف سیم قرمز و مشکی را در سوکت برعکس می‌گذارند؛ برعکس وصل کردن، شارژر یا برد را می‌سوزاند.</li>
+  <li>اولین شارژها را زیر نظر و روی سطح نسوز (مثلا کاشی یا سینی فلزی) انجام بده، نه روی تخت یا فرش.</li>
+  <li>سلول 18650 «بدون محافظ» را بدون مدار محافظ استفاده نکن.</li>
+  <li>باتری را زیر نور مستقیم آفتاب یا در ماشین داغ رها نکن.</li>
+</ul></div>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC (تغذیه از پایه 3V3)",
+  "parts":[
+    {"id":"CHG","name":"ماژول TP4056 با محافظ","pins":[["B+","به مثبت باتری"],["B-","به منفی باتری"],["OUT+","خروجی محافظت‌شده +"],["OUT-","خروجی محافظت‌شده −"]]},
+    {"id":"BAT","name":"باتری LiPo ۳٫۷ ولت","pins":[["+","مثبت"],["-","منفی"]]},
+    {"id":"LDO","name":"رگولاتور HT7833","pins":[["VIN","ورودی"],["VOUT","خروجی ۳٫۳ ولت"],["GND","زمین"]]}
+  ],
+  "wires":[["BAT.+","CHG.B+","red"],["BAT.-","CHG.B-","black"],["CHG.OUT+","LDO.VIN","red"],["CHG.OUT-","LDO.GND","black"],["LDO.VOUT","3V3","red"],["LDO.GND","GND","black"]]
+}</script><figcaption>زنجیره کامل تغذیه باتری‌خور: باتری ← شارژر با محافظ ← LDO کم‌مصرف ← پایه 3V3. کنار پایه‌های ورودی و خروجی LDO خازن‌هایی که دیتاشیتش گفته بگذار (مثلا ۱۰ µF سرامیکی) و یک خازن الکترولیت بزرگ‌تر (مثلا ۱۰۰ تا ۴۷۰ µF) نزدیک ESP32. هیچ‌وقت هم‌زمان USB و این منبع را وصل نکن؛ دو منبع روی یک خط 3V3 با هم دعوا می‌کنند.</figcaption></div>
+
+<h2 id="video">ویدیوهای کمکی</h2>
+<div class="video" data-yt="DYIlM0nRLT0" data-title="ESP32 Low Power Modes Explained: Active vs Deep Sleep vs Hibernate" data-channel="DroneBot Workshop" data-lang="انگلیسی">
+  <div class="sum"><ul>
+    <li>این ویدیو همراه یک مقاله در سایت DroneBot Workshop درباره حالت‌های کم‌مصرف ESP32 است. عددهایی را که برای هر حالت نشان می‌دهد با جدول همین درس مقایسه کن.</li>
+    <li>ببین با چه ابزاری جریان را اندازه می‌گیرد و آیا برد توسعه استفاده می‌کند یا تراشه خالی؛ اگر عددش با دیتاشیت فرق دارد، دلیلش را با بخش «حقیقت تلخ» همین درس توضیح بده.</li>
+    <li>اگر کدی با API قدیمی (هسته ۲.x) دید، با نسخه‌های همین درس مقایسه کن.</li>
+  </ul></div>
+</div>
+<div class="video" data-yt="-769_YIeGmI" data-title="#193 Comparison of 10 ESP32 Battery powered Boards without display (incl. deep-sleep)" data-channel="Andreas Spiess" data-lang="انگلیسی">
+  <div class="sum"><ul>
+    <li>این ویدیو قدیمی‌تر است ولی دقیقا همان حقیقت تلخ را با اندازه‌گیری نشان می‌دهد: جریان خواب بردهای مختلف با هم خیلی فرق دارد.</li>
+    <li>دقت کن کدام قطعه‌های روی برد (رگولاتور، مبدل USB، LED) باعث مصرف اضافه در خواب می‌شوند.</li>
+    <li>برای انتخاب برد پروژه باتری‌خور بعدی‌ات، معیارهایی را که او برای مقایسه به کار می‌برد یادداشت کن. مدل‌های خاص بردها ممکن است دیگر در بازار نباشند.</li>
+  </ul></div>
+</div>
+
+<h2 id="debug">وقتی کار نمی‌کند: عیب‌یابی</h2>
+<div class="table-wrap"><table>
+<tr><th>علامت</th><th>علت محتمل</th><th>راه حل</th></tr>
+<tr><td>برد خوابید و دیگر بیدار نمی‌شود</td><td>هیچ منبع بیداری تنظیم نشده، یا زمان تایمر بدون <code>ULL</code> سرریز کرده و عدد عجیبی شده</td><td>منبع بیداری را قبل از <code>esp_deep_sleep_start</code> چک کن. زمان را چاپ کن. همیشه از <code>uint64_t</code> و <code>ULL</code> استفاده کن.</td></tr>
+<tr><td>آپلود کد جدید شکست می‌خورد: <code>Failed to connect to ESP32</code></td><td>برد در خواب است و پورت USB نمی‌تواند با آن حرف بزند</td><td>دکمه <kbd>BOOT</kbd> را نگه دار، یک بار <kbd>EN</kbd> را بزن و رها کن، بعد آپلود کن (یا BOOT را هنگام <code>Connecting...</code> نگه دار). برای راحتی در زمان توسعه، اول setup یک <code>delay(5000)</code> بگذار تا فرصت آپلود داشته باشی و در نسخه نهایی حذفش کن.</td></tr>
+<tr><td>Serial Monitor بعد از هر بیداری قطع و وصل می‌شود یا خط اول را نمی‌بینی</td><td>هنگام خواب عمیق، ارتباط USB سریال هم از نظر کامپیوتر قطع و دوباره برقرار می‌شود</td><td>عادی است. برای دیدن خطوط اول، کمی <code>delay</code> بعد از <code>Serial.begin</code> بگذار (فقط در زمان آزمایش).</td></tr>
+<tr><td>برد مدام بلافاصله بیدار می‌شود</td><td>پین بیداری معلق است یا دکمه هنوز فشرده است؛ سطح بیداری برعکس انتخاب شده</td><td>مقاومت بالاکش یا پایین‌کش را چک کن. سطح (0 یا 1) را با نوع سیم‌کشی دکمه تطبیق بده. قبل از خواب صبر کن دکمه رها شود.</td></tr>
+<tr><td>EXT1 با <code>ESP_EXT1_WAKEUP_ANY_LOW</code> کامپایل نمی‌شود</td><td>این حالت روی ESP32 اصلی وجود ندارد</td><td>دکمه‌ها را به 3V3 با پایین‌کش ببند و <code>ANY_HIGH</code> بگذار (مثل همین درس).</td></tr>
+<tr><td>در خواب هنوز چند میلی‌آمپر مصرف است</td><td>رگولاتور، مبدل USB و LED برد توسعه</td><td>کد مشکل ندارد. از برد مخصوص باتری یا رگولاتور کم‌مصرف استفاده کن، LED را (با دقت) جدا کن، سنسورها را با ترانزیستور خاموش کن.</td></tr>
+<tr><td>برد هنگام بیدار شدن ریست می‌شود (پیام Brownout)</td><td>باتری ضعیف، رگولاتور ضعیف، یا مولتی‌متر روی بازه µA در مسیر</td><td>باتری را شارژ کن، رگولاتور ۵۰۰ mA و خازن بزرگ بگذار، مولتی‌متر را روی بازه mA ببر.</td></tr>
+<tr><td>DHT22 بعد از بیداری <code>nan</code> می‌دهد</td><td>سنسور تازه برق گرفته (اگر برقش را با پین قطع و وصل می‌کنی) و آماده نیست</td><td>طبق دیتاشیت، بعد از وصل شدن برق حدود ۱ تا ۲ ثانیه صبر کن. اگر برقش دائمی است، سیم‌کشی و مقاومت بالاکش را چک کن.</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>در پروژه‌های باتری‌خور، «فکر می‌کنم» ممنوع است؛ فقط «اندازه گرفتم». هر تغییری که می‌دهی، دو عدد را ثبت کن: جریان خواب (با مولتی‌متر) و مدت بیداری (با <code>millis()</code> قبل از خواب). اگر عدد بهتر نشد، تغییر را برگردان. کسی که عمر باتری را با دیتاشیت حساب می‌کند و اندازه نمی‌گیرد، یک هفته بعد با یک باتری خالی و یک مشتری عصبانی روبه‌رو می‌شود. و یک چیز دیگر: با باتری لیتیومی بی‌احتیاطی نکن. هیچ پروژه‌ای ارزش یک آتش‌سوزی را ندارد.</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">بعد از بیدار شدن از <b>خواب عمیق</b>، اجرای برنامه از کجا ادامه پیدا می‌کند؟</p>
+  <ol><li data-why="این رفتار خواب سبک است، نه خواب عمیق.">از خط بعد از <code>esp_deep_sleep_start()</code></li><li>از اول <code>setup()</code>، مثل ریست</li><li data-why="loop هرگز بدون گذشتن از setup اجرا نمی‌شود.">از اول <code>loop()</code></li><li data-why="برد بیدار می‌شود؛ بیدار ماندن بی‌نهایت در خواب فقط وقتی است که منبع بیداری نگذاشته باشی.">هیچ‌جا؛ برد باید دستی ریست شود</li></ol>
+  <div class="fb">در خواب عمیق RAM اصلی و CPU خاموش می‌شوند، پس برنامه از اول بوت می‌شود. فقط متغیرهای <code>RTC_DATA_ATTR</code> باقی می‌مانند.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">دستگاهی هر ۱۰ دقیقه ۲ ثانیه با ۱۰۰ mA بیدار است و بقیه وقت ۰٫۰۱ mA می‌کشد. جریان میانگین تقریبا چقدر است؟</p>
+  <ol><li data-why="این یعنی همیشه بیدار. زمان خواب را فراموش کرده‌ای.">۱۰۰ mA</li><li data-why="دوباره حساب کن: ۲۰۰ تقسیم بر ۶۰۰ حدود یک‌سوم است، نه ۵.">۵ mA</li><li>حدود ۰٫۳۴ mA</li><li data-why="این فقط جریان خواب است؛ سهم بیداری را حساب نکرده‌ای.">۰٫۰۱ mA</li></ol>
+  <div class="fb"><code>(100 × 2 + 0.01 × 598) ÷ 600 = (200 + 5.98) ÷ 600 ≈ 0.34 mA</code>. با باتری ۲۰۰۰ میلی‌آمپر ساعت یعنی حدود ۵۸۰۰ ساعت روی کاغذ.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">کد خواب عمیق تو درست است ولی برد DevKit در خواب ۹ mA می‌کشد. محتمل‌ترین دلیل چیست؟</p>
+  <ol><li>رگولاتور، مبدل USB به سریال و LED روی برد توسعه</li><li data-why="اگر تراشه واقعا خواب نبود، ده‌ها میلی‌آمپر می‌دید و پیام‌های بوت دوباره نمی‌آمد.">ESP32 اصلا نخوابیده</li><li data-why="Wi-Fi در خواب عمیق خاموش است و مصرفش صفر است.">Wi-Fi در خواب روشن مانده</li><li data-why="حافظه RTC فقط چند میکروآمپر سهم دارد.">متغیرهای RTC_DATA_ATTR زیادی تعریف کرده‌ای</li></ol>
+  <div class="fb">عدد ۱۰ میکروآمپر دیتاشیت فقط برای تراشه است. قطعه‌های همیشه‌روشن برد توسعه چند میلی‌آمپر اضافه می‌کنند.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">می‌خواهی ESP32 با فشار <b>هر کدام</b> از دو دکمه روی GPIO32 و GPIO33 از خواب عمیق بیدار شود. کدام درست است؟</p>
+  <ol><li data-why="EXT0 فقط یک پین را می‌پاید.">دو بار <code>esp_sleep_enable_ext0_wakeup</code> با دو پین</li><li data-why="این حالت روی ESP32 اصلی تعریف نشده و کامپایل نمی‌شود.">EXT1 با <code>ESP_EXT1_WAKEUP_ANY_LOW</code> و دکمه‌ها به GND</li><li data-why="بیدارباش GPIO معمولی مخصوص خواب سبک است.">فقط <code>gpio_wakeup_enable</code> برای هر دو پین</li><li>EXT1 با <code>ESP_EXT1_WAKEUP_ANY_HIGH</code>، دکمه‌ها به 3V3 و مقاومت پایین‌کش</li></ol>
+  <div class="fb">روی ESP32 اصلی حالت‌های EXT1 فقط <code>ANY_HIGH</code> و <code>ALL_LOW</code> هستند. برای «هر کدام»، باید با HIGH بیدار کنیم.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">چرا در دیتالاگر، سنسور DHT22 را <b>قبل از</b> روشن کردن Wi-Fi می‌خوانیم؟</p>
+  <ol><li data-why="DHT22 با Wi-Fi تداخل رادیویی ندارد.">چون Wi-Fi روی خواندن DHT22 تداخل می‌گذارد</li><li>تا اگر خواندن شکست خورد، انرژی گران Wi-Fi را هدر ندهیم</li><li data-why="ترتیب کتابخانه‌ها ربطی به این انتخاب ندارد.">چون کتابخانه DHT باید قبل از WiFi.h اجرا شود</li><li data-why="DHT22 به Wi-Fi نیازی ندارد.">چون DHT22 بدون Wi-Fi کار نمی‌کند</li></ol>
+  <div class="fb">Wi-Fi گران‌ترین کار است. کارهای ارزان و ممکن‌الشکست را اول انجام بده.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">برای اندازه‌گیری جریان مصرفی ESP32 با مولتی‌متر، کدام روش درست است؟</p>
+  <ol><li data-why="این اتصال کوتاه دو سر باتری از طریق آمپرمتر است!">دو پروب را مستقیم روی دو قطب باتری بگذاری</li><li data-why="با USB وصل، برق از USB می‌آید و عدد تو ربطی به باتری ندارد.">USB را وصل نگه داری و پروب‌ها را روی 3V3 و GND بگذاری</li><li>مسیر مثبت را قطع کنی و مولتی‌متر را روی حالت جریان، سری در مسیر بگذاری</li><li data-why="در حالت ولتاژ، مولتی‌متر جریان را اندازه نمی‌گیرد.">مولتی‌متر را روی ولت بگذاری و ولتاژ را بر ۱۰۰ تقسیم کنی</li></ol>
+  <div class="fb">آمپرمتر همیشه سری است، مثل کنتور آب. و بعد از کار، سیم قرمز را به سوکت ولتاژ برگردان.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+<div class="exercise"><div class="ct">تمرین ۱: بودجه انرژی خودت</div>
+<p>برد خودت را با برنامه <code>DeepSleep_Timer</code> راه بینداز و با مولتی‌متر جریان بیداری و خواب را اندازه بگیر. بعد با فرمول جریان میانگین، عمر یک باتری ۱۰۰۰ میلی‌آمپر ساعت را برای «هر ۵ دقیقه یک بیداری ۳ ثانیه‌ای» حساب کن. یک بار با عدد اندازه‌گیری‌شده خودت، یک بار با عدد دیتاشیت (۱۰ µA). چند برابر فرق دارند؟</p>
+<details><summary>راهنمایی</summary><p>یک دور = ۳۰۰ ثانیه. <code>I_avg = (I_awake × 3 + I_sleep × 297) ÷ 300</code>. واحدها را یکی کن: همه چیز را به mA ببر (۱۰ µA = ۰٫۰۱ mA). بعد ظرفیت را تقسیم کن و ۷۵ درصدش را به عنوان عدد واقع‌بینانه گزارش کن.</p></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۲: زنگ در بی‌سیم</div>
+<p>برنامه‌ای بنویس که برد در خواب عمیق باشد و با دکمه روی GPIO33 (EXT0) بیدار شود، به Wi-Fi وصل شود، پیام <code>ding</code> را به topic خودت در MQTT بفرستد و دوباره بخوابد. اگر Wi-Fi ظرف ۸ ثانیه وصل نشد، بدون فرستادن بخوابد.</p>
+<details><summary>راهنمایی</summary><p>تابع <code>connectWiFiFast()</code> و بخش MQTT دیتالاگر را بردار. به جای تایمر، <code>esp_sleep_enable_ext0_wakeup(GPIO_NUM_33, 0)</code> و بالاکش RTC را بگذار. یادت باشد قبل از خواب صبر کنی دکمه رها شود: <code>while (digitalRead(33) == LOW) delay(10);</code></p></details>
+<details><summary>جواب</summary>
+<div class="code" data-file="DoorBell.ino" id="exBell"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include "driver/rtc_io.h"
+
+const char* WIFI_SSID = "Wokwi-GUEST";
+const char* WIFI_PASS = "";
+WiFiClient net;
+PubSubClient mqtt(net);
+
+void sleepNow() {
+  pinMode(33, INPUT_PULLUP);
+  while (digitalRead(33) == LOW) delay(10);      // صبر تا دکمه رها شود
+  WiFi.mode(WIFI_OFF);
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_33, 0);
+  rtc_gpio_pullup_en(GPIO_NUM_33);
+  rtc_gpio_pulldown_dis(GPIO_NUM_33);
+  esp_deep_sleep_start();
+}
+
+void setup() {
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    uint32_t t0 = millis();
+    while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - t0 &lt; 8000) delay(20);
+    if (WiFi.status() == WL_CONNECTED) {
+      mqtt.setServer("broker.hivemq.com", 1883);
+      if (mqtt.connect("esp32-doorbell-fa")) {
+        mqtt.publish("esp32fa/yourname/doorbell", "ding");
+        mqtt.loop(); delay(50); mqtt.disconnect();
+      }
+    }
+  }
+  sleepNow();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="exBell">
+  <li data-lines="10-18"><b class="what">تابع خواب با صبر برای رها شدن دکمه.</b> اول پین را ورودی با بالاکش می‌کنیم تا بتوانیم بخوانیمش، منتظر رها شدن می‌مانیم، Wi-Fi را خاموش و EXT0 را تنظیم می‌کنیم.
+    <span class="why">بدون حلقه انتظار، اگر کاربر دکمه را کمی طولانی نگه دارد، برد بلافاصله دوباره بیدار می‌شود و دو بار «ding» می‌فرستد.</span></li>
+  <li data-lines="21-31"><b class="what">فقط اگر دکمه بیدارمان کرد، بفرست.</b> در روشن شدن اول (علت دیگر) مستقیم می‌خوابیم. Wi-Fi حداکثر ۸ ثانیه فرصت دارد.
+    <span class="why">این‌طوری وصل کردن باتری باعث یک «ding» الکی نمی‌شود. شرط زمانی داخل while همان قانون «هرگز بی‌نهایت منتظر نمان» است. شناسه کلاینت و topic را با نام خودت یکتا کن.</span></li>
+</ol>
+</details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۳: قطع برق سنسور در خواب</div>
+<p>DHT22 در حالت آماده‌به‌کار هم چند ده میکروآمپر مصرف می‌کند که کنار ۱۰ میکروآمپر ESP32 عدد کمی نیست. طرحی بده که برق DHT22 فقط هنگام بیداری وصل باشد. چه قطعه‌ای لازم است و چه تغییری در زمان‌بندی کد باید بدهی؟</p>
+<details><summary>راهنمایی</summary><p>یک ترانزیستور (یا برای جریان خیلی کم، خود یک پین GPIO، البته با بررسی جریان مجاز پین) برق VCC سنسور را کنترل کند. بخش «نگه داشتن وضعیت پین» را دوباره بخوان. دیتاشیت DHT22 می‌گوید بعد از وصل شدن برق باید مدتی صبر کرد؛ این زمان مستقیم به زمان بیداری اضافه می‌شود. حساب کن آیا این معامله به صرفه است.</p></details>
+</div>
+
+<div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
+<p>عمر باتری = ظرفیت ÷ جریان میانگین؛ و جریان میانگین را جریان خواب و مدت بیداری تعیین می‌کنند. خواب عمیق (حدود ۱۰ µA برای تراشه) برنامه را از setup شروع می‌کند و فقط <code>RTC_DATA_ATTR</code> را نگه می‌دارد؛ خواب سبک (حدود ۰٫۸ mA) از همان خط ادامه می‌دهد. برد توسعه در خواب چند میلی‌آمپر می‌کشد: همیشه با مولتی‌متر اندازه بگیر و باتری لیتیومی را فقط با شارژر محافظ‌دار و رگولاتور کم‌مصرف استفاده کن.</p></div>
+
+</article>
+</body>
+</html>

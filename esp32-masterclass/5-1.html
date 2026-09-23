@@ -1,0 +1,804 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>پروتکل MQTT با HiveMQ و Adafruit IO · مستر کلاس ESP32</title>
+<meta name="description" content="آموزش MQTT از صفر با ESP32: بروکر، موضوع، QoS، پیام ماندگار، وصیت‌نامه، اتصال به HiveMQ عمومی و HiveMQ Cloud با TLS، داشبورد Adafruit IO و Mosquitto محلی.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="5-1">
+
+<p class="lede">تا اینجا ESP32 تو فقط با مرورگری حرف می‌زد که روی همان مودم خانه بود. در این درس دستگاهت را به «اینترنت اشیا» واقعی وصل می‌کنی: دمای اتاق را هر ۱۰ ثانیه به یک سرور در اینترنت می‌فرستی و از هر جای دنیا (گوشی، کامپیوتر، داشبورد) یک LED را روشن و خاموش می‌کنی. زبان مشترک همه این‌ها <b>MQTT</b> است؛ پروتکلی که تقریبا همه پلتفرم‌های IoT آن را می‌فهمند.</p>
+
+<div class="goals">
+  <div><h4>🎯 بعد از این درس می‌توانی</h4><ul>
+    <li>توضیح بدهی Broker، Client، Topic، Publish و Subscribe چیست</li>
+    <li>فرق QoS ۰، ۱ و ۲، پیام ماندگار (Retained) و وصیت‌نامه (Last Will) را بگویی</li>
+    <li>ESP32 را به بروکر عمومی HiveMQ وصل کنی، داده JSON بفرستی و فرمان بگیری</li>
+    <li>اتصال امن TLS روی پورت 8883 (HiveMQ Cloud) بسازی و فرق <code>setInsecure</code> با گواهی ریشه را بفهمی</li>
+    <li>یک داشبورد با گیج دما و کلید LED در Adafruit IO بسازی</li>
+    <li>خطاهای اتصال را از روی عدد <code>state()</code> عیب‌یابی کنی</li>
+  </ul></div>
+  <div><h4>🧰 پیش‌نیاز و وسایل</h4><ul>
+    <li>درس <a href="4-1.html">۴.۱</a> (اتصال Wi-Fi) و درس <a href="3-3.html">۳.۳</a> (سنسور DHT22)</li>
+    <li>برد ESP32 DevKitC و یک مودم Wi-Fi با اینترنت (یا فقط Wokwi)</li>
+    <li>سنسور DHT22 + مقاومت ۱۰ کیلواهم (اگر ماژول سه‌پایه داری، مقاومت روی خودش هست)</li>
+    <li>یک LED + مقاومت ۲۲۰ اهم، برد بورد و سیم</li>
+    <li>کتابخانه‌ها: <b>PubSubClient</b> (Nick O'Leary)، <b>ArduinoJson</b> نسخه ۷ (Benoit Blanchon)، <b>DHT sensor library</b> (Adafruit)</li>
+  </ul></div>
+</div>
+
+<h2 id="why">چرا MQTT؟ مشکل روش قدیمی (HTTP)</h2>
+<p>در درس <a href="4-2.html">۴.۲</a> یک وب سرور روی ESP32 ساختی. آن روش یک مشکل بزرگ دارد: ESP32 فقط داخل شبکه خانه دیده می‌شود. از بیرون خانه (مثلا از اینترنت گوشی) نمی‌توانی مستقیم به آن وصل شوی، چون مودم اجازه نمی‌دهد کسی از بیرون به دستگاه‌های داخل وصل شود. این یک قابلیت امنیتی خوب است، نه ایراد.</p>
+<p>راه حل این است که <b>هم ESP32 و هم گوشی تو، هر دو به یک سرور وسط در اینترنت وصل شوند</b>. هر دو اتصال «از داخل به بیرون» است و مودم با آن مشکلی ندارد. این سرور وسط در دنیای MQTT اسمش <span class="term" data-t="Broker">Broker</span> (کارگزار) است.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره: کانال تلگرام</div>
+<p>یک کانال تلگرام را تصور کن به اسم «دمای اتاق علی». ESP32 مثل مدیر کانال است که هر ۱۰ ثانیه یک پست می‌گذارد: «۲۴٫۵ درجه». گوشی تو، لپ‌تاپ تو و یک داشبورد، عضو کانال هستند. مدیر کانال لازم نیست بداند چند نفر عضوند یا آن‌ها کجای دنیا هستند؛ فقط پست را به <b>خود تلگرام</b> می‌دهد و تلگرام به همه اعضا می‌رساند.</p>
+<p>در MQTT: تلگرام = <b>Broker</b>، اسم کانال = <b>Topic</b> (موضوع)، پست گذاشتن = <b>Publish</b> (انتشار)، عضو شدن = <b>Subscribe</b> (اشتراک)، هر کسی که به تلگرام وصل است (چه مدیر، چه عضو) = <b>Client</b> (مشتری).</p></div>
+
+<pre class="mermaid">flowchart LR
+  S["ESP32 اتاق<br/>(Publish دما)"] -->|"esp32course/ali/sensor/climate"| B(("Broker<br/>broker.hivemq.com"))
+  B --> P["گوشی<br/>(Subscribe)"]
+  B --> L["لپ‌تاپ<br/>(Subscribe)"]
+  B --> D["داشبورد<br/>(Subscribe)"]
+  P -->|"esp32course/ali/led/set = ON"| B
+  B -->|"فرمان"| S</pre>
+
+<p>به یک نکته مهم دقت کن: در MQTT فرستنده و گیرنده <b>هرگز مستقیم با هم حرف نمی‌زنند</b>. هر دو فقط Broker را می‌شناسند. به این می‌گویند «جدا بودن» (Decoupling). ESP32 لازم نیست IP گوشی تو را بداند و گوشی هم لازم نیست بداند ESP32 کجاست.</p>
+
+<h3>مقایسه با HTTP: «مدام پرسیدن» در برابر «خبرم کن»</h3>
+<p>فرض کن می‌خواهی LED را از گوشی روشن کنی. با HTTP (بدون MQTT) ESP32 باید مدام از یک سرور بپرسد «فرمان جدید داری؟». به این روش <b>Polling</b> (پرس‌وجوی پشت سر هم) می‌گویند. با MQTT، ESP32 یک بار وصل می‌شود، اتصال را باز نگه می‌دارد و Broker هر وقت فرمانی رسید، فورا آن را روی همان اتصال باز می‌فرستد (Push).</p>
+
+<pre class="mermaid">sequenceDiagram
+  participant E as ESP32
+  participant H as سرور HTTP
+  participant M as Broker MQTT
+  Note over E,H: روش HTTP Polling
+  E->>H: فرمان جدید داری؟
+  H-->>E: نه
+  E->>H: فرمان جدید داری؟
+  H-->>E: نه
+  E->>H: فرمان جدید داری؟
+  H-->>E: بله: LED روشن
+  Note over E,M: روش MQTT (اتصال همیشه باز)
+  E->>M: CONNECT + SUBSCRIBE led/set
+  M-->>E: (سکوت تا وقتی خبری شود)
+  M->>E: led/set = ON (بلافاصله)</pre>
+
+<div class="table-wrap"><table>
+<tr><th>ویژگی</th><th>HTTP با Polling (هر ۵ ثانیه)</th><th>MQTT</th></tr>
+<tr><td>تاخیر رسیدن فرمان</td><td>تا ۵ ثانیه (بسته به فاصله پرسیدن)</td><td>کسری از ثانیه (فقط زمان رفت‌وبرگشت اینترنت)</td></tr>
+<tr><td>حجم هر پیام</td><td>سربرگ HTTP معمولا چند صد بایت</td><td>سربرگ ثابت MQTT فقط ۲ بایت + اسم موضوع</td></tr>
+<tr><td>ترافیک وقتی خبری نیست</td><td>۱۲ درخواست در دقیقه، بی‌فایده</td><td>فقط یک PING کوچک هر چند ثانیه</td></tr>
+<tr><td>یک پیام برای چند گیرنده</td><td>هر گیرنده جدا باید بپرسد</td><td>Broker خودش به همه مشترک‌ها می‌رساند</td></tr>
+<tr><td>کجا بهتر است</td><td>گرفتن یک صفحه یا داده گاه‌به‌گاه (API)</td><td>داده دائمی سنسور و فرمان لحظه‌ای</td></tr>
+</table></div>
+
+<div class="callout why"><div class="ct">چرا MQTT این‌قدر سبک است؟</div>
+<p>MQTT در سال ۱۹۹۹ برای پایش خط لوله نفت از طریق ماهواره طراحی شد؛ جایی که هر بایت پول داشت و اتصال مدام قطع می‌شد. برای همین سربرگ‌ها خیلی کوچک‌اند و قابلیت‌هایی مثل «وصیت‌نامه» و «پیام ماندگار» برای دنیای اتصال‌های ناپایدار ساخته شده‌اند. دقیقا همان چیزی که یک سنسور کوچک با Wi-Fi معمولی لازم دارد.</p></div>
+
+<h2 id="concepts">مفهوم‌های اصلی MQTT، یکی‌یکی</h2>
+
+<h3>۱. Topic (موضوع) و سلسله‌مراتب آن</h3>
+<p>Topic یک رشته متنی است که با <code>/</code> به چند «سطح» تقسیم می‌شود، درست مثل آدرس پستی یا مسیر پوشه در کامپیوتر. مثلا:</p>
+<ul>
+  <li><code>home/livingroom/temp</code> دمای پذیرایی</li>
+  <li><code>home/livingroom/humidity</code> رطوبت پذیرایی</li>
+  <li><code>home/kitchen/temp</code> دمای آشپزخانه</li>
+  <li><code>home/kitchen/light/set</code> فرمان چراغ آشپزخانه</li>
+</ul>
+<p>لازم نیست Topic را از قبل روی Broker «بسازی». همین که اولین بار کسی روی آن Publish کند، وجود دارد. Topic به حروف بزرگ و کوچک حساس است: <code>Home/Temp</code> با <code>home/temp</code> فرق دارد.</p>
+
+<div class="callout tip"><div class="ct">قانون‌های نام‌گذاری Topic که بعدا نجاتت می‌دهند</div>
+<p>۱) از کلی به جزئی برو: <code>خانه/اتاق/دستگاه/کمیت</code>. ۲) فقط حروف کوچک انگلیسی، عدد، خط تیره و <code>/</code>. فاصله و حروف فارسی از نظر پروتکل مجازند ولی دردسر می‌سازند. ۳) Topic را با <code>/</code> شروع نکن؛ <code>/home/temp</code> یک سطح اول خالی دارد و با <code>home/temp</code> فرق دارد. ۴) برای فرمان‌ها از پسوند <code>/set</code> استفاده کن تا با وضعیت (<code>/state</code>) قاطی نشود.</p></div>
+
+<h3>۲. Wildcard: اشتراک در چند موضوع با یک دستور</h3>
+<p>وقتی Subscribe می‌کنی (فقط موقع اشتراک، نه موقع انتشار) می‌توانی از دو علامت ویژه استفاده کنی:</p>
+<div class="table-wrap"><table>
+<tr><th>علامت</th><th>معنی</th><th>مثال</th><th>چه چیزهایی را می‌گیرد</th></tr>
+<tr><td><code>+</code></td><td>دقیقا <b>یک سطح</b>، هر چه باشد</td><td><code>home/+/temp</code></td><td><code>home/livingroom/temp</code> و <code>home/kitchen/temp</code>، ولی <b>نه</b> <code>home/kitchen/light/set</code></td></tr>
+<tr><td><code>#</code></td><td><b>همه سطح‌های بعدی</b> (فقط آخر Topic)</td><td><code>home/kitchen/#</code></td><td><code>home/kitchen/temp</code> و <code>home/kitchen/light/set</code> و هر چه زیر kitchen باشد</td></tr>
+</table></div>
+
+<pre class="mermaid">flowchart TD
+  H["home"] --> LR["livingroom"]
+  H --> K["kitchen"]
+  LR --> T1["temp ✅ home/+/temp"]
+  LR --> HU["humidity"]
+  K --> T2["temp ✅ home/+/temp ✅ home/kitchen/#"]
+  K --> LI["light"]
+  LI --> SET["set ✅ home/kitchen/#"]</pre>
+
+<div class="callout example"><div class="ct">مثال با عدد</div>
+<p>ده سنسور در ده اتاق داری. بدون Wildcard، داشبورد باید ده بار Subscribe کند. با <code>home/+/temp</code> فقط یک بار. و اگر برای عیب‌یابی بخواهی «همه چیز» را ببینی: <code>home/#</code>.</p></div>
+
+<h3>۳. QoS: چقدر مطمئن باشیم پیام رسیده؟</h3>
+<p><span class="term" data-t="QoS">QoS</span> (کیفیت سرویس) عددی بین ۰ تا ۲ است که فرستنده برای هر پیام انتخاب می‌کند. هر چه بیشتر، اطمینان بیشتر ولی پیام‌های رفت‌وبرگشتی بیشتر.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره: اداره پست</div>
+<p><b>QoS 0</b> = نامه معمولی در صندوق پست می‌اندازی و می‌روی. معمولا می‌رسد، ولی اگر گم شد کسی خبردار نمی‌شود. <b>QoS 1</b> = نامه سفارشی با رسید. اگر رسید برنگشت، دوباره می‌فرستی؛ ممکن است گیرنده <b>دو نسخه</b> بگیرد. <b>QoS 2</b> = نامه سفارشی با تایید دو مرحله‌ای؛ دقیقا یک بار می‌رسد ولی کاغذبازی‌اش بیشتر است.</p></div>
+
+<pre class="mermaid">sequenceDiagram
+  participant C as Client (فرستنده)
+  participant B as Broker
+  Note over C,B: QoS 0 — بفرست و فراموش کن
+  C->>B: PUBLISH
+  Note over C,B: QoS 1 — حداقل یک بار
+  C->>B: PUBLISH (id=7)
+  B-->>C: PUBACK (id=7)
+  Note over C,B: QoS 2 — دقیقا یک بار
+  C->>B: PUBLISH (id=8)
+  B-->>C: PUBREC
+  C->>B: PUBREL
+  B-->>C: PUBCOMP</pre>
+
+<div class="table-wrap"><table>
+<tr><th>QoS</th><th>ضمانت</th><th>تعداد پیام در شبکه</th><th>کجا مناسب است</th></tr>
+<tr><td>0</td><td>حداکثر یک بار (ممکن است گم شود)</td><td>۱</td><td>دمای هر ۱۰ ثانیه؛ اگر یکی گم شد، ۱۰ ثانیه بعد تازه‌اش می‌رسد</td></tr>
+<tr><td>1</td><td>حداقل یک بار (ممکن است تکراری برسد)</td><td>۲</td><td>فرمان «LED روشن» یا هشدار؛ تکرار آن ضرری ندارد</td></tr>
+<tr><td>2</td><td>دقیقا یک بار</td><td>۴</td><td>شمارش پول یا دوز دارو؛ جایی که تکرار فاجعه است (در پروژه‌های ESP32 کم پیش می‌آید)</td></tr>
+</table></div>
+
+<div class="callout warn"><div class="ct">محدودیت کتابخانه PubSubClient</div>
+<p>کتابخانه‌ای که در این درس استفاده می‌کنیم (PubSubClient) برای سبک بودن، <b>فقط با QoS 0 منتشر می‌کند</b> و موقع Subscribe فقط QoS 0 یا 1 را پشتیبانی می‌کند. برای پروژه‌های آموزشی و بیشتر پروژه‌های خانگی کاملا کافی است. اگر روزی QoS 2 لازم داشتی، کتابخانه‌های دیگری مثل کلاینت داخلی ESP-IDF (<code>esp-mqtt</code>) هست.</p></div>
+
+<h3>۴. پیام ماندگار (Retained)</h3>
+<p>معمولا Broker پیام را به مشترک‌هایی که <b>همان لحظه</b> وصل‌اند می‌رساند و بعد فراموشش می‌کند. حالا فرض کن گوشی‌ات را ساعت ۹ روشن می‌کنی ولی ESP32 آخرین بار ساعت ۸:۵۹ وضعیتش را فرستاده بود. گوشی تا پیام بعدی هیچ نمی‌داند.</p>
+<p>اگر پیام را با پرچم <b>retain</b> بفرستی، Broker <b>آخرین پیام</b> آن Topic را نگه می‌دارد و به هر مشترک تازه، بلافاصله بعد از Subscribe تحویل می‌دهد. مثل «پیام سنجاق‌شده» بالای کانال تلگرام.</p>
+<div class="callout tip"><div class="ct">کی retain بزنیم، کی نه؟</div>
+<p>برای <b>وضعیت</b> (online یا offline، LED روشن است یا خاموش، آخرین دما) retain خوب است. برای <b>فرمان</b> (مثل «در را باز کن») retain خطرناک است: هر بار ESP32 ریست شود و دوباره Subscribe کند، فرمان قدیمی را دوباره می‌گیرد و در دوباره باز می‌شود!</p></div>
+
+<h3>۵. وصیت‌نامه (Last Will and Testament)</h3>
+<p>اگر ESP32 ناگهان خاموش شود (برق برود یا Wi-Fi قطع شود)، فرصت ندارد خداحافظی کند. MQTT برای این لحظه راه حل دارد: Client <b>موقع اتصال</b> یک پیام «وصیت‌نامه» به Broker می‌دهد: «اگر من بی‌خبر ناپدید شدم، این پیام را روی این Topic منتشر کن.» اگر Client مودبانه (با DISCONNECT) قطع شود، وصیت‌نامه اجرا نمی‌شود.</p>
+
+<h3>۶. Keep-alive: «هنوز زنده‌ای؟»</h3>
+<p>Broker از کجا بفهمد ESP32 ناپدید شده؟ با Keep-alive. Client قول می‌دهد حداقل هر <b>N ثانیه</b> یک پیام (یا یک PINGREQ کوچک) بفرستد. اگر Broker حدود <b>۱٫۵ برابر</b> این زمان هیچ چیزی نشنود، اتصال را مرده حساب می‌کند و وصیت‌نامه را منتشر می‌کند. در PubSubClient مقدار پیش‌فرض <b>۱۵ ثانیه</b> است (با <code>setKeepAlive</code> عوضش می‌کنی).</p>
+
+<pre class="mermaid">sequenceDiagram
+  participant E as ESP32
+  participant B as Broker
+  participant P as گوشی
+  E->>B: CONNECT (will: status = offline, retain)
+  E->>B: PUBLISH status = online (retain)
+  B->>P: status = online
+  loop هر ۱۵ ثانیه اگر پیامی نبود
+    E->>B: PINGREQ
+    B-->>E: PINGRESP
+  end
+  Note over E: برق رفت! ⚡
+  Note over B: حدود ۲۲ ثانیه (۱٫۵×۱۵) خبری نشد
+  B->>P: status = offline (وصیت‌نامه)</pre>
+
+<div class="callout why"><div class="ct">چرا این به تو مربوط است؟</div>
+<p>چون PING را خود کتابخانه داخل تابع <code>mqtt.loop()</code> می‌فرستد. اگر در <code>loop()</code> یک <code>delay(30000)</code> بگذاری، ESP32 نه PING می‌فرستد و نه پیام ورودی را می‌خواند؛ Broker بعد از حدود ۲۲ ثانیه اتصال را می‌بندد و تو خطای <code>-3</code> (اتصال از دست رفت) می‌بینی. برای همین در این درس همه زمان‌بندی‌ها با <code>millis()</code> است، نه <code>delay</code>.</p></div>
+
+<h3>۷. Client ID: کارت ملی هر دستگاه</h3>
+<p>هر Client موقع اتصال یک شناسه (Client ID) می‌فرستد. قانون مهم: <b>دو Client با یک ID نمی‌توانند هم‌زمان وصل باشند</b>. اگر دومی وصل شود، Broker اولی را بیرون می‌اندازد. اگر هر دو برنامه «اتصال دوباره خودکار» داشته باشند، مدام همدیگر را بیرون می‌اندازند و تو قطع و وصل بی‌پایان می‌بینی. برای همین ID را از روی MAC برد و یک عدد تصادفی می‌سازیم.</p>
+
+<h2 id="hivemq">بخش الف: بروکر عمومی HiveMQ (بدون ثبت‌نام)</h2>
+<p>شرکت HiveMQ یک Broker <b>عمومی و رایگان</b> برای یادگیری و تست دارد: <code>broker.hivemq.com</code> روی پورت <code>1883</code>. نه ثبت‌نام لازم دارد، نه رمز. برای شروع عالی است.</p>
+
+<div class="callout warn"><div class="ct">هشدار جدی: این Broker عمومی است</div>
+<p>هر کسی در دنیا می‌تواند روی هر Topicی Subscribe کند، حتی <code>#</code> (یعنی همه چیز!). پس: ۱) هیچ اطلاعات شخصی، رمز یا موقعیت مکانی نفرست. ۲) هیچ وسیله واقعی خطرناک (قفل در، بخاری، پمپ آب) را با آن کنترل نکن؛ هر کسی می‌تواند فرمان بفرستد. ۳) اسم Topic را <b>یکتا</b> انتخاب کن (مثلا <code>esp32course/ali1234/...</code>) وگرنه پیام‌های تو با پیام‌های هزاران دانشجوی دیگر که Topicی مثل <code>test/temp</code> دارند قاطی می‌شود. پیام‌ها رمزنگاری هم نمی‌شوند (پورت 1883 متن ساده است).</p></div>
+
+<h3>نصب کتابخانه‌ها</h3>
+<ol class="steps">
+  <li><b>Library Manager را باز کن.</b> در Arduino IDE از منوی <code>Tools › Manage Libraries</code> (یا آیکون کتاب در نوار کناری).</li>
+  <li><b>PubSubClient</b> را جستجو کن و نسخه <b>Nick O'Leary</b> را نصب کن (نسخه ۲٫۸). چند کتابخانه با اسم شبیه هست؛ نویسنده را چک کن.</li>
+  <li><b>ArduinoJson</b> نوشته <b>Benoit Blanchon</b> را نصب کن و مطمئن شو نسخه <b>7.x</b> است. کد این درس با نسخه ۶ کامپایل نمی‌شود (در ۶ به جای <code>JsonDocument</code> از <code>StaticJsonDocument&lt;200&gt;</code> استفاده می‌شد؛ آموزش‌های قدیمی اینترنت پر از آن است).</li>
+  <li><b>DHT sensor library</b> نوشته Adafruit را نصب کن. وقتی پرسید «Adafruit Unified Sensor» را هم نصب کنم؟ بگو <b>Install All</b>.</li>
+</ol>
+
+<h3>نقشه سیم‌کشی</h3>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"DHT1","name":"سنسور DHT22","img":"dht22.svg","pins":[["VCC","تغذیه ۳٫۳ ولت"],["DATA","داده (پایه ۲)"],["NC","وصل نمی‌شود"],["GND","زمین"]]},
+    {"id":"R2","name":"مقاومت ۱۰ کیلواهم (Pull-up)","img":"resistor.svg","pins":[["1","به 3V3"],["2","به DATA سنسور"]]},
+    {"id":"R1","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","طرف GPIO"],["2","طرف LED"]]},
+    {"id":"LED1","name":"LED (فرمان از اینترنت)","img":"led.svg","pins":[["A","آند (+) پایه بلند"],["K","کاتد (−) پایه کوتاه"]]}
+  ],
+  "wires":[["3V3","DHT1.VCC","red"],["GPIO27","DHT1.DATA","blue"],["DHT1.GND","GND","black"],["R2.1","3V3","red"],["R2.2","DHT1.DATA","blue"],["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>DHT22 روی GPIO27 با مقاومت بالاکش ۱۰ کیلواهم، و LED روی GPIO4 با مقاومت ۲۲۰ اهم. اگر ماژول DHT22 سه‌پایه (روی برد کوچک) داری، مقاومت ۱۰ کیلو روی خود ماژول هست و R2 لازم نیست.</figcaption></div>
+<p>چرا <b>GPIO27</b> برای سنسور؟ چون پایه‌ای «امن» است: Strapping نیست، فقط ورودی نیست و به فلش وصل نیست. نکته: GPIO27 جزو ADC2 است و وقتی Wi-Fi روشن است <b>آنالوگ‌خوانی</b> روی آن کار نمی‌کند؛ ولی DHT22 دیجیتال است، پس هیچ مشکلی نیست. LED هم مثل درس <a href="2-3.html">۲.۳</a> روی GPIO4 است.</p>
+
+<h3>برنامه کامل: انتشار دما و گرفتن فرمان LED</h3>
+<div class="code" data-file="MQTT_HiveMQ.ino" id="mqtt1"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#include &lt;DHT.h&gt;
+
+// ---- Wi-Fi (در Wokwi همین را نگه دار) ----
+const char* WIFI_SSID = "Wokwi-GUEST";
+const char* WIFI_PASS = "";
+
+// ---- بروکر عمومی HiveMQ ----
+const char* MQTT_HOST = "broker.hivemq.com";
+const int   MQTT_PORT = 1883;
+
+// پیشوند یکتا: ali1234 را با اسم و عدد دلخواه خودت عوض کن
+#define BASE "esp32course/ali1234"
+const char* TOPIC_CLIMATE = BASE "/sensor/climate";
+const char* TOPIC_CMD     = BASE "/led/set";
+const char* TOPIC_STATUS  = BASE "/status";
+
+const int LED_PIN = 4;
+const int DHT_PIN = 27;
+
+DHT dht(DHT_PIN, DHT22);
+WiFiClient net;              // لوله TCP خام
+PubSubClient mqtt(net);      // MQTT روی همان لوله
+
+char clientId[40];
+unsigned long lastPublish = 0;
+unsigned long lastTry = 0;
+
+// هر پیامی روی Topicهای مشترک‌شده برسد، این تابع صدا زده می‌شود
+void onMessage(char* topic, byte* payload, unsigned int length) {
+  char msg[32];
+  unsigned int n = (length &lt; sizeof(msg) - 1) ? length : sizeof(msg) - 1;
+  memcpy(msg, payload, n);
+  msg[n] = '\0';             // payload خودش '\0' ندارد!
+  Serial.printf("&lt;- [%s] %s\n", topic, msg);
+
+  if (strcmp(topic, TOPIC_CMD) == 0) {
+    if (strcmp(msg, "ON") == 0) {
+      digitalWrite(LED_PIN, HIGH);
+    } else if (strcmp(msg, "OFF") == 0) {
+      digitalWrite(LED_PIN, LOW);
+    } else {
+      Serial.println("Unknown command (use ON or OFF)");
+    }
+  }
+}
+
+void connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.print(" connected, IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+bool connectMqtt() {
+  Serial.printf("MQTT: connecting as %s ... ", clientId);
+  // وصیت‌نامه: اگر بی‌خبر قطع شدیم، Broker روی status بنویسد offline
+  if (mqtt.connect(clientId, TOPIC_STATUS, 1, true, "offline")) {
+    Serial.println("OK");
+    mqtt.publish(TOPIC_STATUS, "online", true);   // true یعنی retained
+    mqtt.subscribe(TOPIC_CMD, 1);
+    return true;
+  }
+  Serial.printf("failed, state=%d\n", mqtt.state());
+  return false;
+}
+
+void publishClimate() {
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) {
+    Serial.println("DHT22 read failed");
+    return;
+  }
+  JsonDocument doc;
+  doc["temp"] = serialized(String(t, 1));   // 24.3 با یک رقم اعشار
+  doc["hum"] = serialized(String(h, 1));
+  doc["uptime"] = millis() / 1000;
+  char buf[128];
+  serializeJson(doc, buf, sizeof(buf));
+  bool ok = mqtt.publish(TOPIC_CLIMATE, buf);
+  Serial.printf("-&gt; %s %s\n", buf, ok ? "" : "(publish FAILED)");
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  dht.begin();
+  connectWiFi();
+  // Client ID یکتا: MAC برد + یک عدد تصادفی
+  String mac = WiFi.macAddress();   // مثل 24:6F:28:AB:CD:EF
+  mac.replace(":", "");
+  snprintf(clientId, sizeof(clientId), "esp32-%s-%04X", mac.c_str(), (unsigned)(esp_random() &amp; 0xFFFF));
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  mqtt.setCallback(onMessage);
+}
+
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return;                  // Wi-Fi خودش دوباره وصل می‌شود (درس ۴.۱)
+  }
+  if (!mqtt.connected()) {
+    if (lastTry == 0 || millis() - lastTry &gt; 5000) {   // هر ۵ ثانیه یک تلاش
+      lastTry = millis();
+      connectMqtt();
+    }
+    return;                  // تا وصل نشده‌ایم، کار دیگری نکن
+  }
+  mqtt.loop();               // خواندن پیام‌های ورودی + فرستادن PING
+
+  if (millis() - lastPublish &gt;= 10000) {
+    lastPublish = millis();
+    publishClimate();
+  }
+}
+</pre></div>
+<p>این برنامه بلندترین برنامه‌ای است که تا حالا دیده‌ای، ولی از تکه‌های آشنا ساخته شده. روی هر کارت کلیک کن تا خط‌های مربوط پررنگ شود:</p>
+<ol class="walk" data-for="mqtt1">
+  <li data-lines="1-4"><b class="what">چهار کتابخانه.</b> <code>WiFi.h</code> برای اتصال به مودم، <code>PubSubClient.h</code> برای زبان MQTT، <code>ArduinoJson.h</code> برای ساختن متن JSON و <code>DHT.h</code> برای خواندن سنسور.
+    <span class="why">هر کتابخانه یک کار را خوب انجام می‌دهد. PubSubClient خودش اینترنت بلد نیست؛ فقط «زبان» MQTT را روی یک اتصال TCP که ما به او می‌دهیم صحبت می‌کند. همین جدایی باعث می‌شود بعدا با عوض کردن فقط یک خط، اتصال را امن (TLS) کنیم.</span></li>
+  <li data-lines="7-8"><b class="what">نام و رمز Wi-Fi.</b> در شبیه‌ساز Wokwi شبکه مجازی <code>Wokwi-GUEST</code> بدون رمز است. روی برد واقعی اسم و رمز مودم خودت را بنویس.
+    <span class="why">Wokwi یک مودم مجازی دارد که واقعا به اینترنت وصل است، پس ESP32 شبیه‌سازی‌شده هم می‌تواند به HiveMQ واقعی وصل شود.</span></li>
+  <li data-lines="11-12"><b class="what">آدرس Broker و پورت.</b> <code>broker.hivemq.com</code> روی پورت <code>1883</code>، پورت استاندارد MQTT بدون رمزنگاری.
+    <span class="why">هر سرویس روی یک «در» (پورت) مشخص گوش می‌دهد. 1883 برای MQTT ساده و 8883 برای MQTT امن (TLS) قرارداد جهانی است؛ بعدا هر دو را می‌بینی.</span></li>
+  <li data-lines="15-18"><b class="what">ساختن اسم Topicها.</b> <code>#define BASE</code> یک پیشوند مشترک می‌سازد. در C++ وقتی دو رشته ثابت کنار هم نوشته شوند (<code>BASE "/led/set"</code>)، کامپایلر آن‌ها را به هم می‌چسباند: <code>"esp32course/ali1234/led/set"</code>.
+    <span class="why">پیشوند را فقط یک جا عوض می‌کنی و همه Topicها یکتا می‌شوند. اگر <code>ali1234</code> را عوض نکنی و هم‌کلاسی‌ات هم عوض نکند، LED شما دو نفر را هر دو کنترل می‌کنید!</span></li>
+  <li data-lines="23-25"><b class="what">سه شیء اصلی.</b> <code>dht</code> سنسور است. <code>net</code> یک اتصال TCP خام است. <code>mqtt</code> کلاینت MQTT است که <code>net</code> را به عنوان «لوله» می‌گیرد.
+    <span class="why">مثل نامه و پاکت: PubSubClient نامه (پیام MQTT) را می‌نویسد، WiFiClient آن را در پاکت TCP می‌گذارد و از طریق Wi-Fi می‌فرستد.</span></li>
+  <li data-lines="27-29"><b class="what">متغیرهای سراسری.</b> جا برای Client ID، و دو «زمان‌سنج» برای آخرین انتشار و آخرین تلاش اتصال.
+    <span class="why">نوع <code>unsigned long</code> است چون <code>millis()</code> همین نوع را برمی‌گرداند؛ با <code>int</code> بعد از حدود ۲۴ روز سرریز و خراب می‌شد.</span></li>
+  <li data-lines="32"><b class="what">امضای تابع Callback.</b> PubSubClient هر وقت پیامی برسد این تابع را با سه ورودی صدا می‌زند: اسم Topic (رشته C)، آرایه بایت‌های پیام (<code>payload</code>) و طول آن.
+    <span class="why">امضا (نوع و ترتیب ورودی‌ها) باید دقیقا همین باشد، وگرنه <code>setCallback</code> کامپایل نمی‌شود. به این الگو «Callback» می‌گویند: تو تابع را می‌دهی، کتابخانه هر وقت لازم شد صدایش می‌زند.</span></li>
+  <li data-lines="33-36"><b class="what">مهم‌ترین تله MQTT: payload رشته نیست!</b> بایت‌های پیام را در یک آرایه ۳۲ خانه‌ای کپی می‌کنیم (حداکثر ۳۱ بایت) و خودمان آخرش <code>'\0'</code> می‌گذاریم.
+    <span class="why">در C++ توابع رشته‌ای مثل <code>strcmp</code> و <code>printf("%s")</code> آن‌قدر جلو می‌روند تا به بایت صفر برسند. payload این بایت صفر را ندارد؛ پس بدون این کپی، <code>strcmp</code> از آخر پیام رد می‌شود و آشغال حافظه را هم مقایسه می‌کند؛ نتیجه: گاهی «ON» تشخیص داده نمی‌شود یا برنامه کرش می‌کند. شرط <code>n</code> هم جلوی نوشتن بیرون از آرایه را می‌گیرد اگر کسی پیام خیلی بلند بفرستد.</span></li>
+  <li data-lines="37"><b class="what">چاپ پیام ورودی.</b> مثلا <code>&lt;- [esp32course/ali1234/led/set] ON</code>.
+    <span class="why">همیشه اول ببین دقیقا چه رسیده. نصف مشکلات MQTT این است که پیام با فاصله اضافه، حروف کوچک یا Topic اشتباه رسیده.</span></li>
+  <li data-lines="39-47"><b class="what">تصمیم‌گیری.</b> اگر پیام روی Topic فرمان بود: <code>ON</code> روشن، <code>OFF</code> خاموش، هر چیز دیگر پیام خطا.
+    <span class="why">اول Topic را چک می‌کنیم چون بعدا ممکن است در چند Topic مشترک شویم و همه پیام‌ها به همین یک تابع می‌آیند. شاخه آخر (پیام ناشناخته) برای عیب‌یابی است: اگر <code>on</code> با حرف کوچک بفرستی، می‌فهمی چرا کار نکرد.</span></li>
+  <li data-lines="50-60"><b class="what">اتصال Wi-Fi.</b> همان کد درس ۴.۱: حالت Station، شروع اتصال، صبر تا وصل شود، چاپ IP.
+    <span class="why">اینجا در setup منتظر ماندن با delay اشکالی ندارد، چون بدون Wi-Fi هیچ کار دیگری از دستگاه برنمی‌آید.</span></li>
+  <li data-lines="62-65"><b class="what">اتصال به Broker همراه با وصیت‌نامه.</b> ورودی‌های <code>connect</code> به ترتیب: Client ID، Topic وصیت‌نامه، QoS وصیت‌نامه (۱)، retain وصیت‌نامه (<code>true</code>)، متن آن (<code>offline</code>).
+    <span class="why">وصیت‌نامه فقط <b>هنگام اتصال</b> قابل تعیین است، نه بعدا. retain بودنش یعنی هر کس بعدا Subscribe کند، فورا می‌فهمد دستگاه خاموش است.</span></li>
+  <li data-lines="66-69"><b class="what">بعد از اتصال موفق.</b> وضعیت <code>online</code> را با retain منتشر می‌کنیم (روی وصیت‌نامه قبلی می‌نویسد)، سپس در Topic فرمان با QoS 1 مشترک می‌شویم.
+    <span class="why">Subscribe <b>باید</b> بعد از هر اتصال دوباره تکرار شود. ما «clean session» داریم، یعنی Broker بعد از قطع شدن، اشتراک‌های قبلی را فراموش می‌کند. برای همین subscribe داخل همین تابع است، نه در setup.</span></li>
+  <li data-lines="71-72"><b class="what">اگر اتصال شکست خورد.</b> عدد <code>mqtt.state()</code> را چاپ می‌کنیم.
+    <span class="why">این عدد دقیقا می‌گوید مشکل کجاست (شبکه، رمز، Client ID تکراری...). جدول معنی همه عددها در <a href="#debug">بخش عیب‌یابی</a> است.</span></li>
+  <li data-lines="76-81"><b class="what">خواندن سنسور و بررسی خطا.</b> اگر سنسور جواب ندهد، کتابخانه DHT مقدار <code>NaN</code> (یعنی «عدد نیست») برمی‌گرداند؛ با <code>isnan</code> آن را می‌گیریم و چیزی منتشر نمی‌کنیم.
+    <span class="why">انتشار <code>nan</code> روی داشبورد یعنی نمودار خراب و گیج سردرگم. داده بد نفرستادن بهتر از فرستادن داده غلط است.</span></li>
+  <li data-lines="82-85"><b class="what">ساختن JSON با ArduinoJson 7.</b> <code>JsonDocument doc;</code> یک سند خالی می‌سازد و با <code>doc["کلید"] = مقدار</code> پر می‌شود. <code>serialized(String(t, 1))</code> عدد را با دقیقا یک رقم اعشار به صورت متن خام در JSON می‌گذارد.
+    <span class="why">در نسخه ۷ اندازه سند خودکار تنظیم می‌شود و دیگر لازم نیست مثل نسخه ۶ عدد ظرفیت حدس بزنی. <code>String(t, 1)</code> از چاپ اعدادی مثل <code>24.29999924</code> جلوگیری می‌کند (float در حافظه دقیقا 24.3 نیست). یک JSON کوتاه یعنی پیام کوچک‌تر.</span></li>
+  <li data-lines="86-89"><b class="what">تبدیل به متن و انتشار.</b> <code>serializeJson</code> سند را در آرایه <code>buf</code> می‌نویسد (با <code>'\0'</code> در آخر). <code>mqtt.publish</code> آن را روی Topic می‌فرستد و <code>true</code> یا <code>false</code> برمی‌گرداند.
+    <span class="why">اگر <code>publish</code> مقدار <code>false</code> بدهد، دو علت رایج دارد: اتصال قطع است، یا پیام (Topic + متن + سربرگ) از بافر ۲۵۶ بایتی کتابخانه بزرگ‌تر شده. ما ۱۲۸ بایت را هم کمتر از آن نگه داشتیم.</span></li>
+  <li data-lines="97-100"><b class="what">ساختن Client ID یکتا.</b> MAC برد را بدون دونقطه می‌گیریم و یک عدد تصادفی ۴ رقمی هگز (از مولد اعداد تصادفی سخت‌افزاری <code>esp_random()</code>) به آن اضافه می‌کنیم. نتیجه چیزی مثل <code>esp32-246F28ABCDEF-3A9C</code>.
+    <span class="why">MAC هر برد واقعی یکتاست. ولی در Wokwi ممکن است همه دانشجوها MAC یکسانی داشته باشند؛ آن عدد تصادفی جلوی بیرون انداختن همدیگر از Broker عمومی را می‌گیرد.</span></li>
+  <li data-lines="101-102"><b class="what">معرفی Broker و Callback.</b> <code>setServer</code> فقط آدرس را ذخیره می‌کند؛ اتصال واقعی بعدا در loop انجام می‌شود. <code>setCallback</code> تابع <code>onMessage</code> را ثبت می‌کند.
+    <span class="why">اتصال را عمدا در loop گذاشتیم تا یک کد واحد هم «اولین اتصال» و هم «اتصال دوباره بعد از قطعی» را انجام دهد.</span></li>
+  <li data-lines="106-108"><b class="what">اگر Wi-Fi قطع است، صبر کن.</b> از loop برمی‌گردیم و دور بعد دوباره چک می‌کنیم.
+    <span class="why">هسته ESP32 به طور پیش‌فرض خودش Wi-Fi را دوباره وصل می‌کند (درس ۴.۱). تلاش برای وصل شدن به Broker بدون Wi-Fi فقط وقت تلف می‌کند.</span></li>
+  <li data-lines="109-115"><b class="what">اتصال دوباره بدون مسدود کردن (Non-blocking).</b> اگر به Broker وصل نیستیم، حداکثر هر ۵ ثانیه یک بار تلاش می‌کنیم، و بین تلاش‌ها loop آزاد است.
+    <span class="why">نسخه بد و رایج در اینترنت یک <code>while (!mqtt.connected()) { ...; delay(5000); }</code> است که برنامه را تا ابد گیر می‌اندازد؛ حتی دکمه‌ها و سنسورها هم کار نمی‌کنند. در روش ما اگر بخواهی دکمه‌ای هم بخوانی، بین تلاش‌ها کار می‌کند. شرط <code>lastTry == 0</code> باعث می‌شود اولین تلاش بلافاصله انجام شود. یادت باشد خود <code>connect()</code> اگر سرور جواب ندهد تا حدود ۱۵ ثانیه (Socket timeout) صبر می‌کند.</span></li>
+  <li data-lines="116"><b class="what">قلب برنامه: mqtt.loop().</b> پیام‌های رسیده را می‌خواند و <code>onMessage</code> را صدا می‌زند، و اگر لازم باشد PING زنده‌بودن را می‌فرستد.
+    <span class="why">اگر این خط اجرا نشود، هیچ فرمانی نمی‌رسد و Broker بعد از حدود ۲۲ ثانیه اتصال را مرده حساب می‌کند. هر چیزی که loop را طولانی متوقف کند (delay بلند، حلقه while) دشمن این خط است.</span></li>
+  <li data-lines="118-121"><b class="what">انتشار هر ۱۰ ثانیه با millis.</b> اگر از آخرین انتشار ۱۰۰۰۰ میلی‌ثانیه گذشته، دوباره منتشر کن.
+    <span class="why">DHT22 حداکثر هر ۲ ثانیه یک بار اندازه تازه می‌دهد، و دمای اتاق در ۱۰ ثانیه تقریبا عوض نمی‌شود. فرستادن سریع‌تر فقط ترافیک و (در سرویس‌هایی مثل Adafruit IO) سهمیه تو را هدر می‌دهد.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="mqtt1">
+<p>این پروژه کاملا در Wokwi شبیه‌سازی می‌شود، چون Wokwi یک شبکه Wi-Fi مجازی به اسم <code>Wokwi-GUEST</code> (بدون رمز) دارد که واقعا به اینترنت وصل است. مراحل: ۱) پروژه ESP32 خالی باز کن. ۲) <code>diagram.json</code> را با متن زیر عوض کن و کد را در <code>sketch.ino</code> بچسبان. ۳) در زبانه <b>Library Manager</b> (یا با ساختن فایل <code>libraries.txt</code>) سه کتابخانه را اضافه کن: <code>PubSubClient</code>، <code>ArduinoJson</code> و <code>DHT sensor library</code>. ۴) ▶ را بزن. روی سنسور DHT22 کلیک کن تا بتوانی دما را با اسلایدر عوض کنی و ببینی عدد منتشرشده عوض می‌شود.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -110, "left": 180, "attrs": { "temperature": "24.5", "humidity": "40" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 150, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 70, "left": 250, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:27", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<p>بعد از اجرا، در Serial Monitor باید چیزی شبیه این ببینی (عددها فرق دارد):</p>
+<div class="serial">WiFi..... connected, IP: 10.10.0.2
+MQTT: connecting as esp32-240AC4000110-3A9C ... OK
+-> {"temp":24.5,"hum":40.0,"uptime":12}
+-> {"temp":24.5,"hum":40.0,"uptime":22}
+&lt;- [esp32course/ali1234/led/set] ON
+-> {"temp":24.5,"hum":40.0,"uptime":32}</div>
+
+<h3>تست از بیرون: فرستادن فرمان و دیدن داده</h3>
+<p>ESP32 کارش را می‌کند؛ حالا یک Client دیگر لازم داری که نقش «گوشی» را بازی کند. سه راه:</p>
+<ol class="steps">
+  <li><b>ساده‌ترین: HiveMQ WebSocket Client در مرورگر.</b> به <a href="https://www.hivemq.com/demos/websocket-client/" target="_blank" rel="noopener">hivemq.com/demos/websocket-client</a> برو و بدون تغییر تنظیمات روی <b>Connect</b> بزن. این صفحه از طریق WebSocket به همان <code>broker.hivemq.com</code> وصل می‌شود.</li>
+  <li><b>Subscribe کن.</b> در بخش Subscriptions روی <b>Add New Topic Subscription</b> بزن و بنویس <code>esp32course/ali1234/#</code> (با پیشوند خودت). حالا هر ۱۰ ثانیه JSON دما را می‌بینی، و پیام <code>online</code> را هم که retain شده بود فورا می‌بینی.</li>
+  <li><b>فرمان بفرست.</b> در بخش Publish، Topic را <code>esp32course/ali1234/led/set</code> و Message را <code>ON</code> بنویس و Publish را بزن. LED باید روشن شود. بعد <code>OFF</code>.</li>
+  <li><b>وصیت‌نامه را ببین.</b> برد را از برق بکش (یا شبیه‌سازی Wokwi را متوقف کن). بعد از حدود ۲۰ ثانیه روی <code>.../status</code> پیام <code>offline</code> ظاهر می‌شود. این همان Last Will است!</li>
+</ol>
+<div class="callout tip"><div class="ct">ابزارهای دسکتاپ برای کار جدی‌تر</div>
+<p><b>MQTTX</b> (از شرکت EMQ، رایگان و متن‌باز، برای ویندوز، مک و لینوکس) و <b>MQTT Explorer</b> (رایگان، درخت Topicها را به شکل پوشه نشان می‌دهد و برای دیدن ساختار عالی است). در هر دو یک اتصال جدید با Host <code>broker.hivemq.com</code> و Port <code>1883</code> بساز. دقت کن MQTT Explorer به طور پیش‌فرض ممکن است روی <code>#</code> مشترک شود و روی Broker عمومی سیلی از پیام‌های دیگران ببینی؛ Topic را به پیشوند خودت محدود کن.</p></div>
+
+<div class="callout warn"><div class="ct">دسترسی از ایران</div>
+<p>بعضی سرویس‌های خارجی (HiveMQ، Adafruit IO و...) ممکن است از ایران کند باشند، گاهی در دسترس نباشند، یا بعضی دامنه‌ها و پورت‌ها روی بعضی اینترنت‌ها بسته باشند. اگر خطای <code>-2</code> (اتصال شبکه برقرار نشد) گرفتی در حالی که Wi-Fi وصل است، ممکن است مشکل از مسیر اینترنت باشد، نه کد تو. راه حل مطمئن و حرفه‌ای: Broker را <a href="#mosquitto">روی کامپیوتر خودت اجرا کن</a> (پایین همین درس).</p></div>
+
+<h2 id="tls">بخش ب: HiveMQ Cloud با اتصال امن TLS (پورت 8883)</h2>
+<p>بروکر عمومی برای یادگیری عالی است، ولی برای پروژه‌ای که واقعا در خانه استفاده می‌کنی، باید دو چیز داشته باشی: <b>رمز</b> (تا هر کسی نتواند فرمان بفرستد) و <b>رمزنگاری</b> (تا کسی وسط راه پیام و رمزت را نخواند). HiveMQ Cloud یک طرح رایگان (Serverless Free) دارد که هر دو را می‌دهد. در زمان نوشتن این درس، طرح رایگان تا ۱۰۰ اتصال هم‌زمان و ۱۰ گیگابایت ترافیک در ماه را پوشش می‌دهد که برای ده‌ها ESP32 خیلی زیاد است (عددها ممکن است عوض شوند؛ صفحه قیمت‌گذاری HiveMQ را ببین).</p>
+
+<ol class="steps">
+  <li><b>ثبت‌نام.</b> در <a href="https://www.hivemq.com/products/mqtt-cloud-broker/" target="_blank" rel="noopener">HiveMQ Cloud</a> حساب رایگان بساز و یک Cluster از نوع <b>Serverless (Free)</b> ایجاد کن.</li>
+  <li><b>آدرس Cluster را بردار.</b> در صفحه Overview چیزی شبیه <code>abc123def456.s1.eu.hivemq.cloud</code> و پورت <code>8883</code> (TLS) می‌بینی.</li>
+  <li><b>نام کاربری و رمز بساز.</b> در بخش <b>Access Management</b> یک Credential بساز (مثلا کاربر <code>esp32-room</code> با رمز بلند تصادفی). بدون این، هیچ Clientی وصل نمی‌شود.</li>
+</ol>
+
+<h3>TLS به زبان ساده</h3>
+<p>TLS همان چیزی است که قفل سبز کنار آدرس سایت‌ها در مرورگر را می‌سازد. دو کار می‌کند: ۱) <b>رمزنگاری</b>: پیام‌ها طوری درهم می‌شوند که کسی وسط راه (مثلا روی Wi-Fi کافه) نتواند بخواندشان. ۲) <b>احراز هویت سرور</b>: مطمئن می‌شوی واقعا با HiveMQ حرف می‌زنی، نه با یک سرور جعلی که خودش را جای HiveMQ جا زده.</p>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره: پاکت مهر و موم‌شده و کارت شناسایی</div>
+<p>رمزنگاری مثل گذاشتن نامه در پاکت دربسته است. ولی اگر پاکت را به <b>آدم اشتباه</b> بدهی، دربسته بودن فایده ندارد! احراز هویت یعنی قبل از دادن پاکت، کارت شناسایی تحویل‌گیرنده را چک کنی. «گواهی ریشه» (Root CA) مثل مهر اداره ثبت احوال روی آن کارت است: اگر مهر اصل باشد، کارت را قبول می‌کنی.</p></div>
+
+<div class="code" data-file="MQTT_HiveMQ_Cloud.ino (فقط تغییرات)" id="mqtt2"><pre>
+#include &lt;WiFiClientSecure.h&gt;   // به جای استفاده از WiFiClient ساده
+
+const char* MQTT_HOST = "abc123def456.s1.eu.hivemq.cloud";  // آدرس Cluster خودت
+const int   MQTT_PORT = 8883;                               // پورت TLS
+const char* MQTT_USER = "esp32-room";                       // از Access Management
+const char* MQTT_PASS = "a-long-random-password";
+
+// گواهی ریشه ISRG Root X1 (مال Let's Encrypt)، معتبر تا ۲۰۳۵
+static const char ROOT_CA[] = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
+TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
+cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4
+WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu
+ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY
+MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc
+h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+
+0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U
+A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW
+T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH
+B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC
+B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv
+KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn
+OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn
+jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw
+qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI
+rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV
+HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq
+hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL
+ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ
+3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK
+NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5
+ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur
+TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC
+jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc
+oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq
+4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA
+mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
+emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
+-----END CERTIFICATE-----
+)EOF";
+
+WiFiClientSecure net;          // لوله TCP رمزنگاری‌شده
+PubSubClient mqtt(net);
+
+// در setup()، قبل از mqtt.setServer:
+void setupTls() {
+  net.setCACert(ROOT_CA);      // روش درست: هویت سرور را بررسی کن
+  // net.setInsecure();        // فقط برای تست: رمزنگاری بدون بررسی هویت
+}
+
+// در connectMqtt()، فقط خط connect عوض می‌شود:
+bool connectMqttSecure() {
+  return mqtt.connect(clientId, MQTT_USER, MQTT_PASS,
+                      TOPIC_STATUS, 1, true, "offline");
+}
+</pre></div>
+<p>برنامه کامل همان <code>MQTT_HiveMQ.ino</code> بالاست؛ فقط این تکه‌ها را جایگزین کن: include، چهار ثابت اتصال، شیء <code>net</code>، تابع <code>setupTls()</code> که در setup قبل از <code>mqtt.setServer</code> صدا زده می‌شود و خط <code>connect</code> با نام کاربری و رمز.</p>
+<ol class="walk" data-for="mqtt2">
+  <li data-lines="1"><b class="what">WiFiClientSecure.</b> نسخه رمزنگاری‌شده WiFiClient که داخلش کتابخانه mbedTLS کار TLS را انجام می‌دهد.
+    <span class="why">چون PubSubClient فقط یک «لوله» می‌خواهد، با عوض کردن نوع لوله کل ارتباط امن می‌شود و بقیه کد MQTT دست نمی‌خورد.</span></li>
+  <li data-lines="3-6"><b class="what">آدرس، پورت 8883 و نام کاربری/رمز.</b> این‌ها را از صفحه Cluster و Access Management برمی‌داری.
+    <span class="why">روی پورت 8883، Broker انتظار دارد اول «دست دادن» TLS انجام شود. اگر اشتباهی WiFiClient ساده را به 8883 وصل کنی، اتصال با خطای <code>-2</code> یا <code>-4</code> شکست می‌خورد.</span></li>
+  <li data-lines="8-41"><b class="what">گواهی ریشه (Root CA).</b> این متن، کلید عمومی سازمان ISRG (صادرکننده گواهی‌های Let's Encrypt) است. <code>R"EOF( ... )EOF"</code> یک «رشته خام» C++ است که اجازه می‌دهد متن چندخطی را بدون گذاشتن <code>\n</code> در آخر هر خط بنویسی.
+    <span class="why">گواهی سرور HiveMQ Cloud را Let's Encrypt امضا کرده، و امضای Let's Encrypt را ISRG Root X1. ESP32 با داشتن ریشه می‌تواند کل زنجیره را بررسی کند. این گواهی تا ژوئن ۲۰۳۵ معتبر است؛ ولی اگر روزی HiveMQ صادرکننده‌اش را عوض کرد، باید گواهی را به‌روز کنی. گواهی فعلی را همیشه از مستندات HiveMQ چک کن.</span></li>
+  <li data-lines="43-44"><b class="what">لوله امن.</b> حالا <code>net</code> از نوع امن است و <code>mqtt</code> روی آن کار می‌کند.
+    <span class="why">TLS حدود ۴۰ تا ۵۰ کیلوبایت RAM برای بافرها و محاسبات رمزنگاری لازم دارد. ESP32 این را راحت دارد (برای همین روی بردهای کوچک‌تر مثل آردوینو UNO این کار ممکن نیست).</span></li>
+  <li data-lines="47-50"><b class="what">setCACert در برابر setInsecure.</b> <code>setCACert</code> یعنی «فقط به سروری اعتماد کن که گواهی‌اش با این ریشه امضا شده». <code>setInsecure</code> یعنی «رمزنگاری کن، ولی هر کسی گفت من HiveMQ هستم قبول کن».
+    <span class="why">حقیقت صادقانه: <code>setInsecure</code> جلوی کسی که فقط گوش می‌دهد را می‌گیرد، ولی جلوی کسی که <b>خودش را جای سرور جا بزند</b> (حمله مرد میانی) را نمی‌گیرد؛ آن وقت رمز MQTT تو را هم می‌دزدد. برای تست سریع قابل قبول است، برای دستگاهی که در خانه می‌ماند نه.</span></li>
+  <li data-lines="53-56"><b class="what">connect با نام کاربری و رمز.</b> ترتیب ورودی‌ها: ID، کاربر، رمز، سپس همان چهار ورودی وصیت‌نامه.
+    <span class="why">PubSubClient چند نسخه از <code>connect</code> دارد (Overload)؛ کامپایلر بر اساس تعداد و نوع ورودی‌ها تشخیص می‌دهد کدام را می‌خواهی. ترتیب را جابه‌جا نکن.</span></li>
+</ol>
+
+<div class="callout warn"><div class="ct">رمز را در کد نگذار و آپلودش نکن</div>
+<p>اگر کدت را روی GitHub می‌گذاری، رمز و کلیدها را در یک فایل جدا مثل <code>secrets.h</code> بگذار و آن فایل را در <code>.gitignore</code> بنویس. هر سال هزاران رمز و کلید API از همین راه لو می‌رود. در مورد گواهی ریشه نگرانی نیست؛ آن عمومی است و محرمانه نیست.</p></div>
+
+<div class="callout info"><div class="ct">اگر اتصال TLS شکست خورد</div>
+<p>در Serial Monitor چیزی مثل <code>X509 - Certificate verification failed</code> یا <code>-2</code> می‌بینی. به ترتیب چک کن: ۱) آدرس Cluster دقیقا کپی شده؟ ۲) پورت 8883 است؟ ۳) گواهی کامل و بدون حذف خط کپی شده؟ ۴) برای تشخیص، یک بار با <code>setInsecure()</code> امتحان کن: اگر وصل شد، مشکل فقط از گواهی است.</p></div>
+
+<h2 id="adafruit">بخش ج: داشبورد آماده با Adafruit IO</h2>
+<p>تا اینجا داده را فقط به صورت متن دیدی. Adafruit IO یک سرویس IoT است که هم Broker MQTT دارد، هم داده را ذخیره می‌کند و هم داشبورد گرافیکی (گیج، نمودار، کلید، اسلایدر) دارد؛ بدون یک خط کد وب. یعنی در ۱۵ دقیقه یک اپ کنترل از راه دور داری که روی گوشی هم باز می‌شود.</p>
+
+<h3>مفهوم‌های Adafruit IO</h3>
+<ul>
+  <li><b>Feed (خوراک):</b> یک «جوی داده» با اسم، مثل <code>temperature</code> یا <code>led</code>. هر عددی که به آن بفرستی با تاریخ و ساعت ذخیره می‌شود. هر Feed یک <b>key</b> دارد (اسم با حروف کوچک و خط تیره) که در Topic استفاده می‌شود.</li>
+  <li><b>Dashboard (داشبورد):</b> صفحه‌ای که بلوک‌ها (Block) رویش می‌چینی. هر بلوک به یک Feed وصل است: گیج Feed دما را نشان می‌دهد، کلید (Toggle) روی Feed فرمان می‌نویسد.</li>
+  <li><b>AIO Key:</b> رمز حساب تو برای دستگاه‌ها. در MQTT نام کاربری = نام کاربری Adafruit، و رمز = AIO Key.</li>
+  <li><b>قالب Topic:</b> <code>username/feeds/feed-key</code>؛ مثلا <code>ali_maker/feeds/temperature</code>.</li>
+</ul>
+
+<div class="table-wrap"><table>
+<tr><th>محدودیت طرح رایگان (در زمان نوشتن این درس)</th><th>مقدار</th></tr>
+<tr><td>تعداد Feed</td><td>۱۰</td></tr>
+<tr><td>تعداد Dashboard</td><td>۵</td></tr>
+<tr><td>سرعت داده</td><td><b>۳۰ داده در دقیقه</b> (کل حساب، نه هر Feed)</td></tr>
+<tr><td>مدت نگهداری داده</td><td>۳۰ روز</td></tr>
+</table></div>
+<div class="callout example"><div class="ct">حساب کن: از سهمیه بیرون نزن</div>
+<p>دو Feed داری (دما و رطوبت) و هر ۱۰ ثانیه هر دو را می‌فرستی: <code>2 × 6 = 12</code> داده در دقیقه. زیر ۳۰ است، خوب. اگر هر ثانیه بفرستی: <code>2 × 60 = 120</code> در دقیقه؛ چهار برابر سهمیه! Adafruit IO اول روی Topic <code>username/throttle</code> هشدار می‌دهد و اگر ادامه بدهی، حساب را موقتا (مثلا ۳۰ ثانیه) مسدود می‌کند. یادت باشد کلیک روی کلید داشبورد هم یک داده حساب می‌شود.</p></div>
+
+<ol class="steps">
+  <li><b>ثبت‌نام.</b> در <a href="https://io.adafruit.com" target="_blank" rel="noopener">io.adafruit.com</a> حساب رایگان بساز.</li>
+  <li><b>دو Feed بساز.</b> از منوی <b>Feeds › New Feed</b> یک Feed به اسم <code>temperature</code> و یکی به اسم <code>led</code> بساز. key هر کدام را در صفحه Feed چک کن (باید همان حروف کوچک باشد).</li>
+  <li><b>داشبورد بساز.</b> <b>Dashboards › New Dashboard</b>، اسمش را «اتاق من» بگذار و بازش کن. از آیکون چرخ‌دنده <b>Create New Block</b> را بزن.</li>
+  <li><b>بلوک Gauge (گیج).</b> آن را به Feed <code>temperature</code> وصل کن، حداقل ۰ و حداکثر ۵۰.</li>
+  <li><b>بلوک Toggle (کلید).</b> آن را به Feed <code>led</code> وصل کن. متن حالت روشن را <code>ON</code> و خاموش را <code>OFF</code> بگذار (معمولا پیش‌فرض همین است). این دقیقا همان متنی است که کد ما انتظار دارد.</li>
+  <li><b>کلید AIO را بردار.</b> روی آیکون کلید زرد (<b>My Key</b> یا «YOUR AIO KEY») بزن. Username و Active Key را کپی کن. این کلید مثل رمز است؛ به کسی نده.</li>
+</ol>
+
+<div class="code" data-file="MQTT_AdafruitIO.ino" id="mqtt3"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;DHT.h&gt;
+
+const char* WIFI_SSID = "YourWiFi";
+const char* WIFI_PASS = "YourPassword";
+
+// از صفحه My Key در Adafruit IO
+#define AIO_USER "your_username"
+#define AIO_KEY  "aio_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+const char* MQTT_HOST = "io.adafruit.com";
+const int   MQTT_PORT = 1883;
+
+// قالب Topic در Adafruit IO: username/feeds/feed-key
+const char* TOPIC_TEMP     = AIO_USER "/feeds/temperature";
+const char* TOPIC_LED      = AIO_USER "/feeds/led";
+const char* TOPIC_LED_GET  = AIO_USER "/feeds/led/get";
+const char* TOPIC_THROTTLE = AIO_USER "/throttle";
+const char* TOPIC_ERRORS   = AIO_USER "/errors";
+
+const int LED_PIN = 4;
+DHT dht(27, DHT22);
+WiFiClient net;
+PubSubClient mqtt(net);
+unsigned long lastPublish = 0, lastTry = 0;
+
+void onMessage(char* topic, byte* payload, unsigned int length) {
+  char msg[128];
+  unsigned int n = (length &lt; sizeof(msg) - 1) ? length : sizeof(msg) - 1;
+  memcpy(msg, payload, n);
+  msg[n] = '\0';
+  Serial.printf("&lt;- [%s] %s\n", topic, msg);
+  if (strcmp(topic, TOPIC_LED) == 0) {
+    digitalWrite(LED_PIN, strcmp(msg, "ON") == 0 ? HIGH : LOW);
+  }
+}
+
+bool connectMqtt() {
+  char id[24];
+  snprintf(id, sizeof(id), "esp32-%04X", (unsigned)(esp_random() &amp; 0xFFFF));
+  if (!mqtt.connect(id, AIO_USER, AIO_KEY)) {
+    Serial.printf("MQTT failed, state=%d\n", mqtt.state());
+    return false;
+  }
+  Serial.println("Adafruit IO connected");
+  mqtt.subscribe(TOPIC_LED);
+  mqtt.subscribe(TOPIC_THROTTLE);
+  mqtt.subscribe(TOPIC_ERRORS);
+  mqtt.publish(TOPIC_LED_GET, "");   // «آخرین مقدار led را برایم بفرست»
+  return true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  dht.begin();
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  mqtt.setCallback(onMessage);
+}
+
+void loop() {
+  if (!mqtt.connected()) {
+    if (lastTry == 0 || millis() - lastTry &gt; 10000) {
+      lastTry = millis();
+      connectMqtt();
+    }
+    return;
+  }
+  mqtt.loop();
+  if (millis() - lastPublish &gt;= 10000) {       // ۶ داده در دقیقه
+    lastPublish = millis();
+    float t = dht.readTemperature();
+    if (!isnan(t)) {
+      char buf[16];
+      snprintf(buf, sizeof(buf), "%.1f", t);   // فقط عدد، نه JSON
+      mqtt.publish(TOPIC_TEMP, buf);
+      Serial.printf("-&gt; temperature = %s\n", buf);
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="mqtt3">
+  <li data-lines="8-10"><b class="what">نام کاربری و AIO Key.</b> دقیقا همان‌هایی که از صفحه My Key کپی کردی. نام کاربری به حروف بزرگ و کوچک حساس است.
+    <span class="why">در Adafruit IO نام کاربری دو نقش دارد: هم برای ورود به Broker، هم اول هر Topic. اگر اینجا اشتباه باشد، یا وصل نمی‌شوی (خطای <code>5</code>) یا انتشارت رد می‌شود.</span></li>
+  <li data-lines="12-13"><b class="what">Broker مخصوص Adafruit.</b> <code>io.adafruit.com</code> پورت 1883.
+    <span class="why">روی 1883 کلید AIO تو بدون رمزنگاری فرستاده می‌شود. Adafruit خودش اتصال امن روی پورت <b>8883</b> را قویا توصیه می‌کند؛ برای آن دقیقا مثل بخش ب از <code>WiFiClientSecure</code> استفاده کن (برای شروع با <code>setInsecure()</code>، و برای کار جدی با گواهی ریشه‌ای که در مثال‌های رسمی کتابخانه Adafruit MQTT هست).</span></li>
+  <li data-lines="16-17"><b class="what">Topic دو Feed.</b> <code>AIO_USER "/feeds/temperature"</code> در زمان کامپایل به <code>"your_username/feeds/temperature"</code> تبدیل می‌شود.
+    <span class="why">Adafruit IO فقط Topicهایی با قالب <code>username/feeds/key</code> را قبول می‌کند؛ هر چیز دیگری با پیام «not a valid resource topic» روی Topic خطاها رد می‌شود.</span></li>
+  <li data-lines="18"><b class="what">Topic ویژه /get.</b> اگر روی <code>.../led/get</code> یک پیام (حتی خالی) منتشر کنی، Adafruit IO آخرین مقدار Feed <code>led</code> را فقط برای تو می‌فرستد.
+    <span class="why">Adafruit IO از پرچم retain پشتیبانی نمی‌کند. بدون این ترفند، اگر ESP32 ریست شود، تا وقتی کسی دوباره روی کلید نزند نمی‌داند LED باید روشن باشد یا خاموش.</span></li>
+  <li data-lines="19-20"><b class="what">Topicهای throttle و errors.</b> Adafruit IO هشدار سرعت زیاد و خطاهای تو (مثلا Topic اشتباه) را روی این دو Topic می‌فرستد.
+    <span class="why">پیام‌های خطا ذخیره نمی‌شوند؛ اگر لحظه‌ای که رخ می‌دهند مشترک نباشی، هرگز نمی‌فهمی چرا داده‌ات روی داشبورد نیامد.</span></li>
+  <li data-lines="28-37"><b class="what">Callback کوتاه‌تر.</b> مثل قبل payload را با <code>'\0'</code> به رشته تبدیل می‌کنیم (این بار بافر ۱۲۸ بایت چون پیام‌های خطا بلندترند). اگر پیام از Feed <code>led</code> بود، <code>ON</code> یعنی روشن و هر چیز دیگر خاموش.
+    <span class="why">عملگر سه‌تایی <code>شرط ? HIGH : LOW</code> یک if و else کوتاه در یک خط است. پیام‌های throttle و errors فقط چاپ می‌شوند.</span></li>
+  <li data-lines="39-44"><b class="what">اتصال با نام کاربری و کلید.</b> Client ID تصادفی می‌سازیم و با <code>connect(id, user, key)</code> وصل می‌شویم.
+    <span class="why">در Adafruit IO هویت تو با نام کاربری و کلید مشخص می‌شود و Client ID فقط باید بین دستگاه‌های خودت تکراری نباشد.</span></li>
+  <li data-lines="45-50"><b class="what">اشتراک در سه Topic و درخواست آخرین مقدار.</b> بعد از Subscribe روی Feed <code>led</code>، پیام خالی به <code>/get</code> می‌فرستیم تا وضعیت فعلی کلید برسد.
+    <span class="why">ترتیب مهم است: اول Subscribe، بعد get. اگر برعکس باشد، جواب قبل از اشتراک می‌رسد و گم می‌شود.</span></li>
+  <li data-lines="58-59"><b class="what">اتصال Wi-Fi فشرده.</b> همان کار <code>connectWiFi()</code> در برنامه اول، در دو خط.
+    <span class="why">برای کوتاه ماندن این مثال؛ در پروژه واقعی همان نسخه کامل با چاپ پیشرفت را بگذار.</span></li>
+  <li data-lines="65-71"><b class="what">اتصال دوباره هر ۱۰ ثانیه.</b> همان الگوی Non-blocking، این بار با فاصله ۱۰ ثانیه.
+    <span class="why">Adafruit IO به تلاش‌های اتصال خیلی سریع هم حساس است و ممکن است موقتا مسدودت کند. فاصله بیشتر بین تلاش‌ها، مودبانه‌تر است.</span></li>
+  <li data-lines="73-82"><b class="what">انتشار دما به صورت عدد خالی.</b> <code>snprintf("%.1f")</code> عدد را با یک رقم اعشار به متن تبدیل می‌کند، مثلا <code>24.5</code>.
+    <span class="why">بلوک گیج و نمودار Adafruit IO یک عدد ساده می‌خواهند. اگر JSON بفرستی، Feed آن را به عنوان متن ذخیره می‌کند و گیج چیزی نشان نمی‌دهد. هر ۱۰ ثانیه = ۶ داده در دقیقه، خیلی زیر سهمیه ۳۰ تایی.</span></li>
+</ol>
+<p>برنامه را آپلود کن، داشبورد را روی گوشی باز کن و کلید را بزن. LED باید در کمتر از یک ثانیه واکنش نشان دهد و گیج هر ۱۰ ثانیه به‌روز شود. 🎉</p>
+
+<h2 id="mosquitto">جایگزین مستقل: Broker شخصی با Mosquitto</h2>
+<p>اگر سرویس‌های خارجی کند یا در دسترس نبودند، یا نمی‌خواهی داده‌های خانه‌ات از کشور بیرون برود، می‌توانی Broker را خودت اجرا کنی. <b>Mosquitto</b> یک Broker رایگان و متن‌باز از بنیاد Eclipse است که روی یک کامپیوتر معمولی یا حتی Raspberry Pi راحت اجرا می‌شود. آن وقت ESP32 و گوشی تو (وقتی به Wi-Fi خانه وصل است) بدون اینترنت هم با هم کار می‌کنند.</p>
+<div class="code" data-lang="bash" data-file="Terminal (Ubuntu / Raspberry Pi OS)" id="mosq1"><pre>
+sudo apt update
+sudo apt install -y mosquitto mosquitto-clients
+echo "listener 1883
+allow_anonymous true" | sudo tee /etc/mosquitto/conf.d/lan.conf
+sudo systemctl restart mosquitto
+mosquitto_sub -h localhost -t "esp32course/#" -v
+</pre></div>
+<ol class="walk" data-for="mosq1">
+  <li data-lines="1-2"><b class="what">نصب.</b> بسته <code>mosquitto</code> خود Broker است و <code>mosquitto-clients</code> دو ابزار خط فرمان <code>mosquitto_pub</code> و <code>mosquitto_sub</code> برای تست.
+    <span class="why">روی ویندوز هم نصب‌کننده رسمی در سایت mosquitto.org هست؛ منطق تنظیم همین است.</span></li>
+  <li data-lines="3-4"><b class="what">اجازه اتصال از شبکه.</b> یک فایل تنظیم می‌سازیم که روی پورت 1883 برای همه کارت‌های شبکه گوش بدهد و اتصال بدون رمز را قبول کند.
+    <span class="why">Mosquitto از نسخه ۲ به بعد به طور پیش‌فرض فقط اتصال از خود همان کامپیوتر (localhost) را قبول می‌کند. بدون این دو خط، ESP32 خطای <code>-2</code> می‌گیرد. <code>allow_anonymous true</code> فقط برای شبکه خانگی مورد اعتماد مناسب است؛ برای کار جدی با <code>mosquitto_passwd</code> کاربر و رمز بساز.</span></li>
+  <li data-lines="5-6"><b class="what">راه‌اندازی دوباره و تست.</b> <code>mosquitto_sub</code> روی همه Topicهای زیر <code>esp32course</code> مشترک می‌شود و با <code>-v</code> اسم Topic را هم چاپ می‌کند.
+    <span class="why">در کد ESP32 فقط <code>MQTT_HOST</code> را به IP این کامپیوتر (مثلا <code>"192.168.1.50"</code>) عوض کن. IP را با دستور <code>hostname -I</code> ببین. اگر دیوار آتش (Firewall) روشن است، پورت 1883 را باز کن.</span></li>
+</ol>
+
+<h2 id="video">ویدیوی کمکی</h2>
+<div class="video" data-yt="jTeJxQFD8Ak" data-title="What is MQTT | MQTT Essentials Part 1" data-channel="HiveMQ" data-lang="انگلیسی">
+  <div class="sum"><ul>
+    <li>این ویدیو از مجموعه رسمی «MQTT Essentials» شرکت HiveMQ است؛ همان شرکتی که Broker عمومی این درس را اداره می‌کند.</li>
+    <li>دنبال سه نقش Publisher، Subscriber و Broker بگرد و آن‌ها را با مثال کانال تلگرام همین درس مقایسه کن.</li>
+    <li>دقت کن چرا می‌گوید فرستنده و گیرنده «از هم جدا» (decoupled) هستند؛ این در فضا، زمان یا هر دو یعنی چه؟</li>
+    <li>بعد از این ویدیو، بقیه قسمت‌های همان مجموعه (QoS، Retained، Last Will) را هم در کانال HiveMQ ببین.</li>
+  </ul></div>
+</div>
+
+<h2 id="debug">وقتی کار نمی‌کند: عیب‌یابی قدم به قدم</h2>
+<p>اولین ابزار تو عددی است که <code>mqtt.state()</code> برمی‌گرداند. معنی هر عدد (از فایل <code>PubSubClient.h</code>):</p>
+<div class="table-wrap"><table>
+<tr><th>state()</th><th>اسم در کتابخانه</th><th>یعنی</th><th>اول این را چک کن</th></tr>
+<tr><td><code>-4</code></td><td>MQTT_CONNECTION_TIMEOUT</td><td>Broker در زمان Keep-alive جواب نداد</td><td>اینترنت کند یا loop جایی گیر کرده</td></tr>
+<tr><td><code>-3</code></td><td>MQTT_CONNECTION_LOST</td><td>اتصال وسط کار قطع شد</td><td>delay بلند در loop، یا Client دیگری با همین ID وصل شد و تو را بیرون انداخت</td></tr>
+<tr><td><code>-2</code></td><td>MQTT_CONNECT_FAILED</td><td>اصلا اتصال TCP برقرار نشد</td><td>آدرس Host یا پورت اشتباه، اینترنت یا مسیر بسته، استفاده از WiFiClient ساده روی پورت TLS</td></tr>
+<tr><td><code>-1</code></td><td>MQTT_DISCONNECTED</td><td>مودبانه قطع شده یا هنوز وصل نشده</td><td>طبیعی است قبل از اولین connect</td></tr>
+<tr><td><code>0</code></td><td>MQTT_CONNECTED</td><td>وصل است</td><td>مشکل جای دیگری است (Topic؟)</td></tr>
+<tr><td><code>1</code></td><td>BAD_PROTOCOL</td><td>Broker نسخه پروتکل را قبول نکرد</td><td>کمیاب؛ Broker خیلی قدیمی</td></tr>
+<tr><td><code>2</code></td><td>BAD_CLIENT_ID</td><td>Client ID رد شد</td><td>ID خالی یا خیلی بلند (زیر ۲۳ کاراکتر امن‌ترین است)</td></tr>
+<tr><td><code>3</code></td><td>UNAVAILABLE</td><td>Broker در دسترس نیست</td><td>سرویس موقتا خراب است؛ بعدا دوباره امتحان کن</td></tr>
+<tr><td><code>4</code></td><td>BAD_CREDENTIALS</td><td>نام کاربری یا رمز اشتباه</td><td>کپی رمز با فاصله اضافه در آخر</td></tr>
+<tr><td><code>5</code></td><td>UNAUTHORIZED</td><td>اجازه اتصال نداری</td><td>در Adafruit IO: کلید AIO اشتباه یا منقضی؛ در HiveMQ Cloud: Credential ساخته نشده</td></tr>
+</table></div>
+
+<div class="table-wrap"><table>
+<tr><th>علامت</th><th>علت محتمل</th><th>راه حل</th></tr>
+<tr><td><code>publish</code> مقدار <code>false</code> برمی‌گرداند ولی وصل هستی</td><td>پیام از بافر ۲۵۶ بایتی پیش‌فرض بزرگ‌تر است (Topic + متن + حدود ۵ تا ۷ بایت سربرگ)</td><td>قبل از connect بنویس <code>mqtt.setBufferSize(512);</code> یا JSON را کوتاه‌تر کن</td></tr>
+<tr><td>پیام بلند می‌فرستی و Callback هیچ‌وقت صدا زده نمی‌شود</td><td>پیام ورودی هم از همان بافر بزرگ‌تر است و بی‌صدا دور ریخته می‌شود</td><td>همان <code>setBufferSize</code></td></tr>
+<tr><td>هر چند ثانیه قطع و وصل (state = -3)</td><td>دو دستگاه (یا Wokwi و برد واقعی) با یک Client ID</td><td>ID یکتا با MAC + عدد تصادفی، مثل کد این درس</td></tr>
+<tr><td>فرمان ON می‌رسد ولی LED روشن نمی‌شود</td><td>متن با حروف کوچک (<code>on</code>) یا با فاصله/خط جدید اضافه فرستاده شده</td><td>پیام چاپ‌شده در Serial را با دقت نگاه کن؛ در MQTTX گزینه ارسال را روی Plaintext بگذار</td></tr>
+<tr><td>پیام‌ها روی داشبورد نمی‌آید، هیچ خطایی هم نیست</td><td>Topic فرستنده و گیرنده یک حرف فرق دارد</td><td>در ابزار تست روی <code>پیشوند/#</code> مشترک شو و ببین پیام دقیقا کجا می‌رود</td></tr>
+<tr><td>ESP32 بعد از ریست فرمان قدیمی را دوباره اجرا می‌کند</td><td>فرمان با retain منتشر شده</td><td>فرمان‌ها را بدون retain بفرست؛ برای پاک کردن پیام ماندگار، یک پیام خالی با retain روی همان Topic بفرست</td></tr>
+<tr><td>هشدار «data rate limit reached» در Adafruit IO</td><td>بیش از ۳۰ داده در دقیقه</td><td>فاصله انتشار را زیاد کن؛ فقط وقتی مقدار عوض شد بفرست</td></tr>
+<tr><td>روی برد واقعی <code>-2</code>، در Wokwi سالم</td><td>مسیر اینترنت تو به آن سرویس بسته یا کند است</td><td>با Broker دیگر یا Mosquitto محلی امتحان کن تا مشکل کد از مشکل شبکه جدا شود</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>در MQTT، سه بخش جدا داری: دستگاه، Broker و گیرنده. وقتی چیزی کار نمی‌کند، مثل یک کارآگاه <b>یکی‌یکی</b> حذفشان کن. اول با MQTTX یا صفحه HiveMQ روی <code>پیشوند/#</code> مشترک شو و فقط نگاه کن: آیا پیام ESP32 به Broker می‌رسد؟ اگر نه، مشکل در دستگاه است (عدد state را بخوان). اگر بله، از همان ابزار یک فرمان بفرست: آیا ESP32 آن را در Serial چاپ می‌کند؟ هرگز هم‌زمان کد ESP32 و داشبورد را عوض نکن؛ دو متغیر هم‌زمان یعنی هیچ‌وقت نمی‌فهمی کدام درستش کرد. و یک قانون آهنین: <b>در loop هیچ delay بلندی نگذار</b>. نود درصد قطع و وصل‌های عجیبی که دانشجوها برایم می‌فرستند، همین است.</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">در MQTT، ESP32 و گوشی چطور با هم ارتباط برقرار می‌کنند؟</p>
+  <ol><li data-why="این کار HTTP مستقیم است؛ در MQTT دستگاه‌ها هرگز مستقیم به هم وصل نمی‌شوند.">گوشی مستقیم به IP دستگاه ESP32 وصل می‌شود</li><li>هر دو به یک Broker وصل می‌شوند و Broker پیام‌ها را بر اساس Topic جابه‌جا می‌کند</li><li data-why="ESP32 سرور نیست؛ فقط یک Client است که به Broker وصل می‌شود.">ESP32 نقش Broker را دارد و گوشی به آن وصل می‌شود</li><li data-why="MQTT روی TCP/IP کار می‌کند و به بلوتوث ربطی ندارد.">از طریق بلوتوث</li></ol>
+  <div class="fb">Broker مثل تلگرام است: فرستنده و گیرنده فقط او را می‌شناسند، نه همدیگر را. برای همین از بیرون خانه هم کار می‌کند.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">اشتراک در <code>home/+/temp</code> کدام پیام را <b>نمی‌گیرد</b>؟</p>
+  <ol><li data-why="+ دقیقا یک سطح است و kitchen یک سطح است؛ پس این را می‌گیرد.">home/kitchen/temp</li><li data-why="bedroom2 یک سطح است؛ این را هم می‌گیرد.">home/bedroom2/temp</li><li>home/floor1/kitchen/temp</li><li data-why="livingroom هم یک سطح است.">home/livingroom/temp</li></ol>
+  <div class="fb"><code>+</code> دقیقا یک سطح را جایگزین می‌کند. <code>floor1/kitchen</code> دو سطح است. برای گرفتن آن باید <code>home/#</code> یا <code>home/+/+/temp</code> بنویسی.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">پیام «در را باز کن» را با retain فرستاده‌ای. چه خطری دارد؟</p>
+  <ol><li>هر بار دستگاه ریست شود و دوباره Subscribe کند، فرمان قدیمی را می‌گیرد و در دوباره باز می‌شود</li><li data-why="retain تاثیری روی رمزنگاری ندارد.">پیام رمزنگاری نمی‌شود</li><li data-why="retain ربطی به QoS ندارد؛ پیام همچنان تحویل داده می‌شود.">پیام هرگز تحویل داده نمی‌شود</li><li data-why="Broker فقط آخرین پیام را نگه می‌دارد و این حجم ناچیزی است.">حافظه Broker پر می‌شود</li></ol>
+  <div class="fb">retain برای «وضعیت» است (online، دمای آخر)، نه برای «فرمان». فرمان ماندگار یعنی فرمانی که بارها اجرا می‌شود.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">در Callback نوشته‌ای <code>if (strcmp((char*)payload, "ON") == 0)</code> و گاهی کار می‌کند، گاهی نه. چرا؟</p>
+  <ol><li data-why="strcmp برای مقایسه رشته درست است؛ مشکل در ورودی آن است.">strcmp برای مقایسه متن مناسب نیست</li><li data-why="حروف بزرگ و کوچک اینجا مشکل نیست؛ پیام واقعا ON است.">چون ON باید با حروف کوچک باشد</li><li data-why="QoS فقط روی تحویل اثر دارد، نه روی محتوای بایت‌ها.">چون QoS صفر است</li><li>چون payload با بایت صفر تمام نمی‌شود و strcmp از آخر پیام جلوتر می‌رود</li></ol>
+  <div class="fb">payload آرایه بایت با طول مشخص است، نه رشته C. همیشه آن را با طول <code>length</code> در یک بافر کپی کن و <code>'\0'</code> بگذار.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">ESP32 تو هر حدود ۲۰ ثانیه از Broker قطع می‌شود و <code>state()</code> عدد <code>-3</code> می‌دهد. در loop یک <code>delay(30000)</code> داری. ارتباط این دو چیست؟</p>
+  <ol><li data-why="بافر روی قطع شدن دوره‌ای اثر ندارد؛ فقط پیام بزرگ را رد می‌کند.">بافر ۲۵۶ بایتی پر شده</li><li>در این ۳۰ ثانیه <code>mqtt.loop()</code> اجرا نمی‌شود، PING فرستاده نمی‌شود و Broker بعد از حدود ۱٫۵ برابر Keep-alive (۱۵ ثانیه) اتصال را مرده حساب می‌کند</li><li data-why="delay روی Wi-Fi اثر ندارد؛ هسته Wi-Fi روی یک Task جدا کار می‌کند.">delay باعث قطع شدن Wi-Fi می‌شود</li><li data-why="رمز اشتباه از اول اجازه اتصال نمی‌دهد (خطای 4 یا 5)، نه قطعی دوره‌ای.">رمز اشتباه است</li></ol>
+  <div class="fb">زمان‌بندی را با <code>millis()</code> بنویس تا <code>mqtt.loop()</code> مدام اجرا شود.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">چرا <code>setInsecure()</code> برای دستگاهی که همیشه در خانه کار می‌کند توصیه نمی‌شود؟</p>
+  <ol><li data-why="setInsecure هنوز رمزنگاری می‌کند؛ مشکلش جای دیگری است.">چون پیام‌ها رمزنگاری نمی‌شوند</li><li data-why="سرعت تقریبا فرقی نمی‌کند.">چون اتصال را خیلی کند می‌کند</li><li>چون هویت سرور بررسی نمی‌شود و یک سرور جعلی می‌تواند خودش را جای Broker جا بزند و رمز تو را بگیرد</li><li data-why="با HiveMQ Cloud هم کار می‌کند؛ مشکلش امنیتی است، نه سازگاری.">چون با HiveMQ Cloud کار نمی‌کند</li></ol>
+  <div class="fb">رمزنگاری بدون احراز هویت مثل پاکت دربسته‌ای است که به هر کس گفت «من پستچی‌ام» تحویل می‌دهی. با <code>setCACert</code> کارت شناسایی را چک می‌کنی.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+<div class="exercise"><div class="ct">تمرین ۱: فقط وقتی عوض شد بفرست</div>
+<p>برنامه بخش الف را طوری تغییر بده که دما را هر ۲ ثانیه بخواند، ولی فقط وقتی منتشر کند که حداقل ۰٫۳ درجه با آخرین مقدار منتشرشده فرق داشته باشد، یا ۶۰ ثانیه از آخرین انتشار گذشته باشد (تا داشبورد بداند دستگاه زنده است).</p>
+<details><summary>راهنمایی</summary><p>یک متغیر سراسری <code>float lastSent = -100;</code> نگه دار. شرط انتشار: <code>fabs(t - lastSent) &gt;= 0.3 || millis() - lastPublish &gt;= 60000</code>. بعد از انتشار <code>lastSent = t</code>.</p></details>
+<details><summary>جواب</summary>
+<div class="code" data-file="PublishOnChange.ino"><pre>
+float lastSent = -100;
+unsigned long lastRead = 0;
+
+void loop() {
+  // ... بخش اتصال مثل قبل ...
+  mqtt.loop();
+  if (millis() - lastRead &gt;= 2000) {
+    lastRead = millis();
+    float t = dht.readTemperature();
+    if (isnan(t)) return;
+    if (fabs(t - lastSent) &gt;= 0.3 || millis() - lastPublish &gt;= 60000) {
+      lastPublish = millis();
+      lastSent = t;
+      publishClimate();
+    }
+  }
+}
+</pre></div></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۲: گزارش وضعیت LED</div>
+<p>بعد از هر فرمان، ESP32 وضعیت واقعی LED را روی Topic <code>.../led/state</code> با retain منتشر کند (<code>ON</code> یا <code>OFF</code>). چرا این Topic باید با <code>.../led/set</code> فرق داشته باشد؟</p>
+<details><summary>راهنمایی</summary><p>داخل <code>onMessage</code> بعد از <code>digitalWrite</code>، <code>mqtt.publish(TOPIC_STATE, msg, true)</code> را صدا بزن. فکر کن اگر state و set یکی بود و ESP32 هم در آن مشترک بود، بعد از انتشار چه اتفاقی می‌افتاد.</p></details>
+<details><summary>جواب</summary><p>اگر یک Topic بود، ESP32 پیام خودش را دوباره دریافت می‌کرد (چون در آن مشترک است)، دوباره اجرا و دوباره منتشر می‌کرد: یک حلقه بی‌پایان. جدا کردن «فرمان» (set، بدون retain) از «وضعیت» (state، با retain) الگوی استاندارد سیستم‌هایی مثل Home Assistant است.</p></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۳: دو دستگاه، یک داشبورد</div>
+<p>اگر دو ESP32 داری (یا دو تب Wokwi)، هر دو را با پیشوندهای <code>.../room1</code> و <code>.../room2</code> اجرا کن. در MQTTX فقط با <b>یک</b> Subscribe دمای هر دو اتاق را ببین.</p>
+<details><summary>جواب</summary><p>ساختار Topic را <code>esp32course/ali1234/room1/sensor/climate</code> و <code>.../room2/sensor/climate</code> بگذار و در ابزار روی <code>esp32course/ali1234/+/sensor/climate</code> مشترک شو. یادت نرود Client ID دو دستگاه باید فرق کند؛ کد ما این را خودکار تضمین می‌کند.</p></details>
+</div>
+
+<div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
+<p>در MQTT همه Clientها فقط به Broker وصل‌اند و روی Topic (با Wildcardهای <code>+</code> و <code>#</code>) Publish و Subscribe می‌کنند؛ QoS، retain و Last Will برای اتصال‌های ناپایدار ساخته شده‌اند. در PubSubClient: payload را خودت با <code>'\0'</code> ببند، ID یکتا بساز، بعد از هر اتصال دوباره Subscribe کن و <code>mqtt.loop()</code> را بدون delay مدام اجرا کن. برای امنیت از TLS روی 8883 با <code>setCACert</code> استفاده کن، و Adafruit IO یا Mosquitto محلی دو راه سریع برای داشبورد و استقلال هستند.</p></div>
+
+</article>
+</body>
+</html>
