@@ -510,7 +510,7 @@
 
   /* ---------- Mermaid (در صورت نیاز) ---------- */
   if (article.querySelector(".mermaid")) {
-    var sc = el("script", { src: "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js" });
+    var sc = el("script", { src: "assets/vendor/mermaid.min.js" });
     sc.onload = function () {
       var dark = (document.documentElement.getAttribute("data-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")) === "dark";
       window.mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default", fontFamily: "Vazirmatn, Tahoma, sans-serif" });
