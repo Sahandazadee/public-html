@@ -1,0 +1,899 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>پروژه نهایی: ایستگاه پایش محیط با هشدار ابری · مستر کلاس ESP32</title>
+<meta name="description" content="پروژه نهایی دوره ESP32: ایستگاه پایش محیط با DHT22، LDR، نمایشگر OLED، هشدار محلی با LED و بازر، Wi-Fi و MQTT به HiveMQ یا Adafruit IO، هشدار ابری با هیسترزیس و محدودیت نرخ، ساخته‌شده قدم به قدم.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="6-3">
+
+<p class="lede">این درس امتحان نهایی توست، ولی امتحانی که با هم می‌نویسیم. یک ایستگاه پایش محیط کامل می‌سازیم: دما، رطوبت و نور را اندازه می‌گیرد، روی نمایشگر نشان می‌دهد، اگر هوا بیش از حد گرم شد با چراغ و بوق هشدار می‌دهد، و همه چیز را از طریق اینترنت به یک داشبورد ابری می‌فرستد. تقریبا همه چیزهایی که در این دوره یاد گرفتی اینجا کنار هم قرار می‌گیرند. مهم‌تر از خود پروژه، <b>روش ساختن</b> آن است: قدم به قدم، و هر قدم آزمایش‌شده.</p>
+
+<div class="goals">
+  <div><h4>🎯 بعد از این درس می‌توانی</h4><ul>
+    <li>قبل از کدنویسی، نیازمندی‌ها و معماری یک پروژه را روی کاغذ بیاوری</li>
+    <li>پین‌ها را با دلیل انتخاب کنی و فهرست قطعات بنویسی</li>
+    <li>یک پروژه بزرگ را در گام‌های کوچک آزمایش‌پذیر بسازی</li>
+    <li>با <code>millis()</code> چند کار هم‌زمان را بدون مسدود کردن برنامه زمان‌بندی کنی</li>
+    <li>هشداری بسازی که با هیسترزیس نوسان نکند و با محدودیت نرخ پیام اسپم نفرستد</li>
+    <li>داده‌ها را با MQTT به HiveMQ یا Adafruit IO بفرستی و روی داشبورد ببینی</li>
+  </ul></div>
+  <div><h4>🧰 پیش‌نیاز و وسایل</h4><ul>
+    <li>درس‌های <a href="3-1.html">۳.۱</a> (LDR، دکمه)، <a href="3-2.html">۳.۲</a> (PWM)، <a href="3-3.html">۳.۳</a> (OLED، DHT22)، <a href="4-1.html">۴.۱</a> (Wi-Fi)، <a href="5-1.html">۵.۱</a> (MQTT) و <a href="6-1.html">۶.۱</a> (خواب)</li>
+    <li>برد ESP32 DevKitC، سنسور DHT22، ماژول LDR (یا LDR + مقاومت ۱۰ کیلو)</li>
+    <li>نمایشگر OLED SSD1306 با رابط I2C</li>
+    <li>LED قرمز + مقاومت ۲۲۰ اهم، بازر پیزو پسیو، دکمه فشاری</li>
+    <li>دو برد بورد یا یک برد بورد بزرگ، سیم جامپر</li>
+  </ul></div>
+</div>
+
+<h2 id="prd">قدم صفر: نیازمندی‌ها (یک PRD کوچک)</h2>
+<p>حرفه‌ای‌ها قبل از کد، یک سند کوتاه می‌نویسند که بگوید محصول <b>دقیقا</b> چه کاری باید بکند. به آن PRD (سند نیازمندی‌های محصول) می‌گویند. بدون آن، پروژه مدام بزرگ‌تر می‌شود و هیچ‌وقت «تمام» نمی‌شود، چون نمی‌دانی «تمام» یعنی چه.</p>
+<div class="callout analogy"><div class="ct">مثال از زندگی: نقشه ساختمان</div>
+<p>هیچ بنایی بدون نقشه شروع به آجرچینی نمی‌کند. اگر وسط کار صاحبخانه بگوید «راستی یک طبقه دیگر هم می‌خواهم»، ستون‌ها از قبل برای آن طراحی نشده‌اند. PRD نقشه پروژه توست: کوتاه، ولی روشن.</p></div>
+
+<div class="table-wrap"><table>
+<tr><th>شناسه</th><th>نیازمندی</th><th>معیار پذیرش (از کجا بفهمم انجام شده؟)</th></tr>
+<tr><td>R1</td><td>اندازه‌گیری دما و رطوبت</td><td>هر ۲ ثانیه یک بار؛ خطای سنسور به شکل «ERR» نمایش داده شود، نه عدد غلط</td></tr>
+<tr><td>R2</td><td>اندازه‌گیری نور محیط</td><td>درصد نور ۰ تا ۱۰۰؛ با پوشاندن سنسور کم شود</td></tr>
+<tr><td>R3</td><td>نمایش محلی</td><td>OLED دما، رطوبت، نور، وضعیت Wi-Fi و MQTT و وضعیت هشدار را نشان دهد</td></tr>
+<tr><td>R4</td><td>هشدار محلی</td><td>بالای ۳۵ درجه: LED چشمک بزند و بازر بوق بزند؛ دکمه بازر را بی‌صدا کند</td></tr>
+<tr><td>R5</td><td>بدون نوسان (هیسترزیس)</td><td>هشدار فقط وقتی خاموش شود که دما زیر ۳۳ درجه برود</td></tr>
+<tr><td>R6</td><td>ارسال به ابر</td><td>هر ۳۰ ثانیه دما، رطوبت و نور به MQTT فرستاده شود</td></tr>
+<tr><td>R7</td><td>هشدار ابری بدون اسپم</td><td>یک پیام هنگام شروع هشدار، یک پیام هنگام پایان، و در طول هشدار حداکثر یک یادآوری هر ۱۰ دقیقه</td></tr>
+<tr><td>R8</td><td>مقاوم در برابر قطع شبکه</td><td>با قطع Wi-Fi یا سرور، نمایش و هشدار محلی بدون وقفه ادامه دهد و اتصال خودکار برگردد</td></tr>
+<tr><td>R9 (اختیاری)</td><td>حالت باتری</td><td>با خواب عمیق، هر چند دقیقه یک بار اندازه‌گیری و ارسال</td></tr>
+</table></div>
+<div class="callout why"><div class="ct">چرا R8 این‌قدر مهم است؟</div>
+<p>اینترنت قطع می‌شود؛ این یک واقعیت است، نه یک احتمال. دستگاهی که با قطع اینترنت هشدار محلی‌اش هم از کار بیفتد، درست همان لحظه‌ای که لازمش داری ساکت است. قانون طراحی: <b>کارهای محلی هرگز منتظر شبکه نمی‌مانند.</b></p></div>
+
+<h2 id="arch">معماری سیستم</h2>
+<pre class="mermaid">flowchart LR
+  subgraph IN["ورودی‌ها"]
+    DHT["DHT22<br/>دما و رطوبت<br/>GPIO4"]
+    LDR["ماژول LDR<br/>نور<br/>GPIO34"]
+    BTN["دکمه بی‌صدا<br/>GPIO33"]
+  end
+  subgraph ESP["ESP32: منطق و زمان‌بندی با millis"]
+    R["خواندن سنسورها<br/>هر ۲ ثانیه"]
+    A["منطق هشدار<br/>هیسترزیس ۳۵ / ۳۳"]
+    P["ارسال MQTT<br/>هر ۳۰ ثانیه"]
+  end
+  subgraph OUT["خروجی‌های محلی"]
+    OLED["OLED<br/>I2C 21/22"]
+    LED["LED قرمز<br/>GPIO25"]
+    BUZ["بازر<br/>GPIO26"]
+  end
+  subgraph CLOUD["ابر"]
+    BR["بروکر MQTT<br/>HiveMQ یا Adafruit IO"]
+    DB["داشبورد و گوشی"]
+  end
+  DHT --> R
+  LDR --> R
+  BTN --> A
+  R --> A
+  R --> OLED
+  A --> LED
+  A --> BUZ
+  R --> P
+  A --> P
+  P -- "Wi-Fi" --> BR
+  BR --> DB</pre>
+<p>سه «جریان» داریم: خواندن سنسور (سریع و محلی)، تصمیم هشدار (محلی)، و ارسال به ابر (کند و ممکن‌الشکست). معماری طوری است که جریان سوم هرگز دو تای اول را معطل نکند.</p>
+
+<h2 id="pins">انتخاب پین‌ها (با دلیل)</h2>
+<div class="table-wrap"><table>
+<tr><th>قطعه</th><th>پین ESP32</th><th>چرا این پین؟</th></tr>
+<tr><td>OLED SDA / SCL</td><td>GPIO21 / GPIO22</td><td>پین‌های پیش‌فرض I2C در هسته آردوینو؛ همه کتابخانه‌ها و آموزش‌ها همین را فرض می‌کنند</td></tr>
+<tr><td>DHT22 DATA</td><td>GPIO4</td><td>پین امن: Strapping نیست، به فلش وصل نیست، هم ورودی هم خروجی (DHT هر دو را لازم دارد)</td></tr>
+<tr><td>LDR (خروجی آنالوگ AO)</td><td>GPIO34</td><td><b>ADC1</b> است. پین‌های ADC2 وقتی Wi-Fi روشن است قابل استفاده نیستند؛ چون ما Wi-Fi داریم، فقط ADC1 (GPIO32 تا 39) امن است. GPIO34 فقط ورودی است که برای سنسور مشکلی نیست</td></tr>
+<tr><td>LED هشدار</td><td>GPIO25</td><td>خروجی امن و بدون نقش Strapping</td></tr>
+<tr><td>بازر</td><td>GPIO26</td><td>خروجی امن؛ با LEDC (PWM) صدای بوق تولید می‌کنیم</td></tr>
+<tr><td>دکمه بی‌صدا</td><td>GPIO33</td><td>مقاومت بالاکش داخلی دارد و <b>پین RTC</b> است؛ پس در حالت باتری (خواب عمیق) همین دکمه می‌تواند برد را بیدار کند (درس <a href="6-1.html#ext0">۶.۱</a>)</td></tr>
+</table></div>
+<div class="callout warn"><div class="ct">دام کلاسیک: LDR روی ADC2</div>
+<p>اگر LDR را روی مثلا GPIO25 یا GPIO26 (که ADC2 هستند) بگذاری، بدون Wi-Fi کاملا کار می‌کند؛ ولی همین که Wi-Fi روشن شود، <code>analogRead</code> دیگر عدد درست نمی‌دهد. این یکی از آن باگ‌هایی است که در گام ۱ (بدون Wi-Fi) دیده نمی‌شود و در گام ۴ ناگهان ظاهر می‌شود. برای همین از اول درست انتخاب می‌کنیم.</p></div>
+
+<h2 id="bom">فهرست قطعات (BOM)</h2>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>قطعه</th><th>تعداد</th><th>توضیح</th></tr>
+<tr><td>۱</td><td>برد ESP32 DevKitC (یا DOIT DevKit V1)</td><td>۱</td><td>هر برد ESP32 با ماژول WROOM</td></tr>
+<tr><td>۲</td><td>سنسور DHT22 (AM2302)</td><td>۱</td><td>ماژول سه‌پایه مقاومت بالاکش دارد؛ سنسور چهارپایه خالی، مقاومت ۱۰ کیلو لازم دارد</td></tr>
+<tr><td>۳</td><td>ماژول LDR با خروجی AO</td><td>۱</td><td>یا یک LDR + مقاومت ۱۰ کیلو به شکل تقسیم‌کننده ولتاژ (درس ۳.۱)</td></tr>
+<tr><td>۴</td><td>نمایشگر OLED ۰٫۹۶ اینچ SSD1306، I2C، ۱۲۸×۶۴</td><td>۱</td><td>چهار پایه: GND، VCC، SCL، SDA (ترتیب پایه‌ها در مدل‌های مختلف فرق دارد؛ روی برد را بخوان)</td></tr>
+<tr><td>۵</td><td>LED قرمز ۵ میلی‌متری</td><td>۱</td><td></td></tr>
+<tr><td>۶</td><td>مقاومت ۲۲۰ اهم</td><td>۱</td><td>برای LED</td></tr>
+<tr><td>۷</td><td>مقاومت ۱۰ کیلواهم</td><td>۱</td><td>بالاکش DHT22 (اگر ماژول نیست)</td></tr>
+<tr><td>۸</td><td>بازر پیزو <b>پسیو</b></td><td>۱</td><td>بازر پیزو کوچک جریان کمی می‌کشد و مستقیم به پین وصل می‌شود. بازر مغناطیسی یا «اکتیو» ۵ ولتی جریان بیشتری می‌کشد و ترانزیستور لازم دارد</td></tr>
+<tr><td>۹</td><td>دکمه فشاری ۶ میلی‌متری</td><td>۱</td><td></td></tr>
+<tr><td>۱۰</td><td>برد بورد + سیم جامپر نر به نر</td><td>—</td><td>برد DevKitC پهن است؛ دو برد بورد کنار هم راحت‌تر است</td></tr>
+<tr><td>۱۱</td><td>کابل USB دیتا</td><td>۱</td><td></td></tr>
+</table></div>
+
+<div class="gallery">
+  <figure><div class="frame"><img src="assets/img/dht22.svg" alt="سنسور DHT22"></div><figcaption>DHT22: دما و رطوبت</figcaption></figure>
+  <figure><div class="frame"><img src="assets/img/ldr.svg" alt="مقاومت نوری LDR"></div><figcaption>LDR: مقاومتی که با نور کم می‌شود</figcaption></figure>
+  <figure><div class="frame"><img src="assets/img/oled-photo1.jpg" alt="نمایشگر OLED ۰٫۹۶ اینچ"></div><figcaption>OLED SSD1306 <span class="src">تصویر: ThingPulse، مجوز MIT</span></figcaption></figure>
+  <figure><div class="frame"><img src="assets/img/buzzer.svg" alt="بازر پیزو"></div><figcaption>بازر پیزو</figcaption></figure>
+</div>
+<p class="src" style="font-size:13px;color:var(--ink-mute)">تصویرهای DHT22، LDR و بازر: قطعه‌های Fritzing، مجوز CC BY-SA 3.0.</p>
+
+<h2 id="wiring">سیم‌کشی کامل</h2>
+<p>سیم‌کشی را در دو نقشه آورده‌ایم تا شلوغ نشود: اول ورودی‌ها و نمایشگر، بعد خروجی‌های هشدار و دکمه. همه قطعه‌ها با <b>۳٫۳ ولت</b> تغذیه می‌شوند، نه ۵ ولت؛ چون خروجی سنسورها مستقیم به پین‌های ESP32 می‌رود.</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"DHT","name":"سنسور DHT22","img":"dht22.svg","pins":[["VCC","تغذیه ۳٫۳ ولت"],["DATA","داده"],["GND","زمین"]]},
+    {"id":"R1","name":"مقاومت ۱۰ کیلو (بالاکش DHT)","img":"resistor.svg","pins":[["1","به DATA"],["2","به 3V3"]]},
+    {"id":"LDR","name":"ماژول LDR","img":"ldr.svg","pins":[["VCC","۳٫۳ ولت"],["GND","زمین"],["AO","خروجی آنالوگ"]]},
+    {"id":"OLED","name":"OLED SSD1306 I2C","img":"oled-photo2.jpg","pins":[["VCC","۳٫۳ ولت"],["GND","زمین"],["SDA","داده I2C"],["SCL","ساعت I2C"]]}
+  ],
+  "wires":[["3V3","DHT.VCC","red"],["GPIO4","DHT.DATA","blue"],["DHT.GND","GND","black"],["GPIO4","R1.1","blue"],["R1.2","3V3","red"],["3V3","LDR.VCC","red"],["LDR.GND","GND","black"],["GPIO34","LDR.AO","blue"],["3V3","OLED.VCC","red"],["OLED.GND","GND","black"],["GPIO21","OLED.SDA","yellow"],["GPIO22","OLED.SCL","green"]]
+}</script><figcaption>نقشه ۱: ورودی‌ها و نمایشگر. همه 3V3ها روی ریل مثبت برد بورد و همه GNDها روی ریل منفی جمع می‌شوند. اگر ماژول DHT22 سه‌پایه داری، R1 را نگذار.</figcaption></div>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"R2","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","به GPIO25"],["2","به آند LED"]]},
+    {"id":"LED","name":"LED قرمز هشدار","img":"led.svg","pins":[["A","آند (+) پایه بلند"],["K","کاتد (−)"]]},
+    {"id":"BZ","name":"بازر پیزو پسیو","img":"buzzer.svg","pins":[["+","پایه مثبت"],["-","پایه منفی"]]},
+    {"id":"SW","name":"دکمه بی‌صدا","img":"button.svg","pins":[["1","به GPIO33"],["2","به GND"]]}
+  ],
+  "wires":[["GPIO25","R2.1","orange"],["R2.2","LED.A","orange"],["LED.K","GND","black"],["GPIO26","BZ.+","orange"],["BZ.-","GND","black"],["GPIO33","SW.1","blue"],["SW.2","GND","black"]]
+}</script><figcaption>نقشه ۲: خروجی‌های هشدار و دکمه. دکمه از بالاکش داخلی استفاده می‌کند و مقاومت بیرونی لازم ندارد.</figcaption></div>
+
+<h2 id="method">روش ساختن: گام‌های کوچک، هر گام آزمایش‌شده</h2>
+<p>بزرگ‌ترین اشتباه مبتدی‌ها: همه قطعه‌ها را وصل می‌کنند، ۲۰۰ خط کد می‌نویسند، آپلود می‌کنند و... هیچ چیز کار نمی‌کند. حالا مشکل کجاست؟ سنسور؟ نمایشگر؟ Wi-Fi؟ کد؟ نمی‌دانی. ما شش گام برمی‌داریم و تا گام قبلی کار نکرده، به گام بعد نمی‌رویم:</p>
+<ol class="steps">
+  <li><b>سنسورها</b> ← عدد درست در Serial Monitor</li>
+  <li><b>نمایشگر</b> ← همان عددها روی OLED</li>
+  <li><b>هشدار محلی</b> ← LED و بازر با هیسترزیس، بدون delay</li>
+  <li><b>Wi-Fi</b> ← اتصال و اتصال دوباره بدون مسدود کردن</li>
+  <li><b>MQTT</b> ← پیام آزمایشی در کلاینت MQTT</li>
+  <li><b>ادغام و هشدار ابری</b> ← برنامه نهایی با زمان‌بندی millis</li>
+</ol>
+<div class="callout analogy"><div class="ct">مثل پختن غذا</div>
+<p>آشپز خوب هر ماده را جدا می‌چشد: آیا نمک کافی است؟ آیا گوشت پخته؟ بعد آن‌ها را با هم مخلوط می‌کند. اگر همه را با هم در دیگ بریزی و آخرش مزه‌اش بد شد، نمی‌دانی تقصیر کدام بود.</p></div>
+
+<h2 id="m1">گام ۱: سنسورها</h2>
+<div class="code" data-file="Step1_Sensors.ino" id="m1code"><pre>
+// گام ۱: فقط سنسورها؛ خروجی در Serial Monitor
+#include &lt;DHT.h&gt;
+
+const int PIN_DHT = 4;
+const int PIN_LDR = 34;                  // ADC1: با Wi-Fi هم کار می‌کند
+DHT dht(PIN_DHT, DHT22);
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  analogReadResolution(12);              // خروجی 0 تا 4095
+}
+
+void loop() {
+  float t = dht.readTemperature();       // سانتی‌گراد
+  float h = dht.readHumidity();          // درصد
+  int raw = analogRead(PIN_LDR);
+  int lightPct = map(raw, 4095, 0, 0, 100);   // نور بیشتر = ولتاژ کمتر
+  if (isnan(t) || isnan(h)) Serial.println("DHT22 error!");
+  else Serial.printf("T=%.1f C  H=%.0f %%  LDR raw=%d  light=%d %%\n", t, h, raw, lightPct);
+  delay(2000);                           // در این گام آزمایشی delay اشکالی ندارد
+}
+</pre></div>
+<ol class="walk" data-for="m1code">
+  <li data-lines="4-6"><b class="what">پین‌ها و شیء سنسور.</b> DHT22 روی GPIO4 و LDR روی GPIO34، دقیقا مثل جدول پین‌ها.
+    <span class="why">از همین گام اول پین‌های نهایی را استفاده می‌کنیم. اگر الان پین موقتی بگذاری، در ادغام نهایی یک جای دیگر برای خطا ساخته‌ای.</span></li>
+  <li data-lines="11"><b class="what">دقت ADC.</b> ۱۲ بیت یعنی عدد ۰ تا ۴۰۹۵.
+    <span class="why">این پیش‌فرض ESP32 است، ولی نوشتنش صریحا نشان می‌دهد به چه بازه‌ای تکیه کرده‌ایم و بعدا در <code>map</code> از آن استفاده می‌کنیم.</span></li>
+  <li data-lines="15-16"><b class="what">خواندن DHT22.</b> دما به سانتی‌گراد و رطوبت به درصد. اگر خواندن شکست بخورد، <code>NaN</code> (یعنی «عدد نیست») برمی‌گردد.
+    <span class="why">DHT22 کند است و حداکثر هر ۲ ثانیه یک بار داده تازه می‌دهد. برای همین کل سیستم را روی دوره ۲ ثانیه‌ای طراحی کرده‌ایم.</span></li>
+  <li data-lines="17-18"><b class="what">نور به درصد.</b> <code>map(raw, 4095, 0, 0, 100)</code> بازه را <b>برعکس</b> تبدیل می‌کند: ۴۰۹۵ (تاریک) ← ۰ درصد، ۰ (روشن) ← ۱۰۰ درصد.
+    <span class="why">در ماژول‌های رایج LDR (و ماژول Wokwi)، با زیاد شدن نور ولتاژ AO کم می‌شود. اگر ماژول تو برعکس است (با پوشاندن سنسور، درصد زیاد می‌شود)، فقط ترتیب را عوض کن: <code>map(raw, 0, 4095, 0, 100)</code>. این عدد «درصد نسبی» است، نه لوکس واقعی.</span></li>
+  <li data-lines="19-20"><b class="what">چاپ با بررسی خطا.</b> اگر هر کدام NaN بود پیام خطا، وگرنه همه مقادیر در یک خط.
+    <span class="why">چاپ <code>raw</code> کنار درصد، در عیب‌یابی کمک می‌کند: اگر raw همیشه ۰ یا ۴۰۹۵ است، سیم‌کشی LDR مشکل دارد، نه فرمول.</span></li>
+</ol>
+<div class="callout tip"><div class="ct">آزمون قبول گام ۱</div>
+<p>دما و رطوبت عدد معقول (مثلا ۲۰ تا ۳۰ درجه و ۲۰ تا ۶۰ درصد) نشان دهند؛ با گرفتن سنسور در دست دما کم‌کم بالا برود؛ با پوشاندن LDR درصد نور کم شود. سیم DATA را جدا کن: باید «DHT22 error!» ببینی. همه درست؟ برو گام ۲.</p></div>
+
+<h2 id="m2">گام ۲: نمایشگر OLED</h2>
+<div class="code" data-file="Step2_Display.ino" id="m2code"><pre>
+// گام ۲: نمایش روی OLED
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+
+DHT dht(4, DHT22);
+Adafruit_SSD1306 oled(128, 64, &amp;Wire, -1);   // -1: پایه ریست ندارد
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  Wire.begin(21, 22);                          // SDA, SCL
+  if (!oled.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found! check wiring/address");
+    while (true) delay(1000);                  // بدون نمایشگر، این گام معنی ندارد
+  }
+  oled.setTextColor(SSD1306_WHITE);
+}
+
+void loop() {
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  oled.clearDisplay();
+  oled.setTextSize(2);
+  oled.setCursor(0, 0);
+  if (isnan(t)) oled.print("T: ERR"); else { oled.print(t, 1); oled.print(" C"); }
+  oled.setCursor(0, 24);
+  if (isnan(h)) oled.print("H: ERR"); else { oled.print(h, 0); oled.print(" %"); }
+  oled.display();                              // تا این خط، چیزی روی صفحه نمی‌آید
+  delay(2000);
+}
+</pre></div>
+<ol class="walk" data-for="m2code">
+  <li data-lines="2-5"><b class="what">کتابخانه‌ها.</b> <code>Wire</code> برای I2C (جزو هسته)، <code>Adafruit GFX</code> برای رسم متن و شکل، <code>Adafruit SSD1306</code> برای خود نمایشگر.
+    <span class="why">GFX «زبان رسم» مشترک بین نمایشگرهای Adafruit است؛ SSD1306 مترجم آن برای این نمایشگر خاص. هر دو را از Library Manager نصب کن.</span></li>
+  <li data-lines="8"><b class="what">ساخت شیء نمایشگر.</b> عرض ۱۲۸، ارتفاع ۶۴، روی باس <code>Wire</code>، بدون پایه ریست.
+    <span class="why">ماژول‌های چهارپایه پایه ریست ندارند؛ ۱- یعنی «ریست را نرم‌افزاری انجام بده».</span></li>
+  <li data-lines="13-17"><b class="what">راه‌اندازی I2C و نمایشگر.</b> آدرس رایج <code>0x3C</code> است. اگر <code>begin</code> شکست بخورد، پیام می‌دهیم و متوقف می‌شویم.
+    <span class="why">در این گام آزمایشی، توقف درست است: می‌خواهیم مشکل نمایشگر را فورا ببینیم. در برنامه نهایی این کار را <b>نمی‌کنیم</b>، چون خرابی نمایشگر نباید هشدار و ارسال را هم از کار بیندازد (R8). اگر پیدا نشد، آدرس <code>0x3D</code> را امتحان کن یا با برنامه اسکنر I2C درس ۳.۳ آدرس را پیدا کن.</span></li>
+  <li data-lines="24-30"><b class="what">رسم.</b> پاک کردن بافر، اندازه متن ۲ (حروف ۱۲×۱۶ پیکسل)، رفتن به مختصات، چاپ، و در آخر <code>display()</code>.
+    <span class="why">همه دستورهای رسم فقط در یک بافر در RAM نوشته می‌شوند؛ <code>display()</code> کل بافر را یک‌جا از طریق I2C می‌فرستد. این باعث می‌شود صفحه چشمک نزند. <code>print(t, 1)</code> یعنی یک رقم اعشار.</span></li>
+</ol>
+
+<h2 id="m3">گام ۳: هشدار محلی با هیسترزیس (بدون delay)</h2>
+<p>قبل از کد، دو مفهوم کلیدی:</p>
+<div class="callout analogy"><div class="ct">هیسترزیس: مثل ترموستات بخاری</div>
+<p>اگر هشدار را با یک عدد (۳۵ درجه) روشن و با <b>همان</b> عدد خاموش کنی، وقتی دما حوالی ۳۵ درجه است (۳۴٫۹، ۳۵٫۱، ۳۴٫۹...) هشدار مدام روشن و خاموش می‌شود و بازر دیوانه‌ات می‌کند. ترموستات بخاری هم همین را حل کرده: در ۲۰ درجه روشن می‌شود ولی تا ۲۲ درجه نشود خاموش نمی‌شود. به این «فاصله امن» هیسترزیس می‌گویند. ما هشدار را بالای ۳۵ روشن و زیر ۳۳ خاموش می‌کنیم.</p></div>
+
+<figure><div class="frame"><svg viewBox="0 0 720 260" style="direction:ltr" role="img" aria-label="نمودار هیسترزیس دما و وضعیت هشدار">
+  <rect width="720" height="260" fill="#fff"/>
+  <line x1="60" y1="200" x2="700" y2="200" stroke="#152033" stroke-width="2"/>
+  <line x1="60" y1="200" x2="60" y2="20" stroke="#152033" stroke-width="2"/>
+  <line x1="60" y1="70" x2="700" y2="70" stroke="#d6457a" stroke-dasharray="6 4"/>
+  <text x="54" y="74" font-size="12" fill="#d6457a" text-anchor="end">35°</text>
+  <line x1="60" y1="110" x2="700" y2="110" stroke="#12a37f" stroke-dasharray="6 4"/>
+  <text x="54" y="114" font-size="12" fill="#12a37f" text-anchor="end">33°</text>
+  <text x="695" y="64" font-size="12" fill="#d6457a" text-anchor="end" direction="rtl">مرز روشن شدن</text>
+  <text x="695" y="126" font-size="12" fill="#12a37f" text-anchor="end" direction="rtl">مرز خاموش شدن</text>
+  <path d="M60 160 C120 150 150 100 190 80 C210 72 220 62 240 66 C260 72 270 58 290 64 C310 72 320 60 340 70 C360 80 380 76 400 90 C420 104 440 100 460 112 C480 122 520 140 560 150 C600 158 650 160 700 160" fill="none" stroke="#2f7af0" stroke-width="3"/>
+  <text x="120" y="150" font-size="12" fill="#2f7af0" direction="rtl">دما</text>
+  <rect x="232" y="215" width="226" height="16" fill="#d6457a" opacity=".85"/>
+  <text x="345" y="227" font-size="12" fill="#fff" text-anchor="middle" direction="rtl">هشدار روشن</text>
+  <text x="140" y="227" font-size="12" fill="#4d5b70" text-anchor="middle" direction="rtl">خاموش</text>
+  <text x="580" y="227" font-size="12" fill="#4d5b70" text-anchor="middle" direction="rtl">خاموش</text>
+  <line x1="232" y1="66" x2="232" y2="215" stroke="#d6457a" stroke-width="1" stroke-dasharray="2 3"/>
+  <line x1="458" y1="112" x2="458" y2="215" stroke="#12a37f" stroke-width="1" stroke-dasharray="2 3"/>
+  <text x="380" y="250" font-size="12" fill="#152033" text-anchor="middle" direction="rtl">دما چند بار حوالی ۳۵ بالا و پایین رفت، ولی هشدار فقط یک بار روشن و یک بار خاموش شد.</text>
+</svg></div>
+<figcaption>هیسترزیس: هشدار با عبور از ۳۵ درجه روشن می‌شود و فقط وقتی دما زیر ۳۳ درجه برود خاموش می‌شود. <span class="src">تصویر: طراحی برای این درس</span></figcaption></figure>
+
+<p>مفهوم دوم: <b>زمان‌بندی بدون delay</b> (درس <a href="3-1.html">۳.۱</a>). چون LED باید چشمک بزند، بازر بوق بزند و دکمه هم‌زمان خوانده شود، نمی‌توانیم با <code>delay(2000)</code> برنامه را قفل کنیم. به جایش هر کار را با «آیا وقتش رسیده؟» (<code>millis()</code>) انجام می‌دهیم.</p>
+
+<div class="code" data-file="Step3_Alarm.ino" id="m3code"><pre>
+// گام ۳: هشدار محلی با هیسترزیس و بدون delay
+#include &lt;DHT.h&gt;
+
+const int PIN_LED = 25, PIN_BUZ = 26, PIN_BTN = 33;
+const float TEMP_HIGH = 35.0, TEMP_CLEAR = 33.0;
+DHT dht(4, DHT22);
+
+float tempC = NAN;
+bool alarmOn = false, muted = false;
+uint32_t tSensor = 0;
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  pinMode(PIN_LED, OUTPUT);
+  pinMode(PIN_BTN, INPUT_PULLUP);
+  ledcAttach(PIN_BUZ, 2000, 8);           // API هسته 3.x
+}
+
+void loop() {
+  if (millis() - tSensor &gt;= 2000) {       // هر ۲ ثانیه، بدون متوقف کردن برنامه
+    tSensor = millis();
+    float t = dht.readTemperature();
+    if (!isnan(t)) tempC = t;
+    if (!alarmOn &amp;&amp; tempC &gt; TEMP_HIGH) { alarmOn = true;  muted = false; Serial.println("ALARM ON"); }
+    if (alarmOn &amp;&amp; tempC &lt; TEMP_CLEAR) { alarmOn = false; Serial.println("ALARM OFF"); }
+  }
+  if (alarmOn &amp;&amp; digitalRead(PIN_BTN) == LOW) muted = true;   // دکمه = بی‌صدا
+
+  bool blink = (millis() / 250) % 2;      // هر ۲۵۰ میلی‌ثانیه صفر و یک می‌شود
+  digitalWrite(PIN_LED, alarmOn &amp;&amp; blink);
+  static bool buzzing = false;
+  bool wantBuzz = alarmOn &amp;&amp; !muted &amp;&amp; blink;
+  if (wantBuzz != buzzing) {              // فقط وقتی لازم است LEDC را عوض کن
+    ledcWriteTone(PIN_BUZ, wantBuzz ? 2000 : 0);
+    buzzing = wantBuzz;
+  }
+}
+</pre></div>
+<ol class="walk" data-for="m3code">
+  <li data-lines="5"><b class="what">دو آستانه.</b> ۳۵ برای روشن شدن و ۳۳ برای خاموش شدن.
+    <span class="why">فاصله ۲ درجه از نوسان طبیعی خواندن DHT22 (حدود نیم درجه) و نوسان‌های کوتاه دمای اتاق بزرگ‌تر است. فاصله خیلی کم = نوسان؛ فاصله خیلی زیاد = هشدار دیر خاموش می‌شود.</span></li>
+  <li data-lines="8-10"><b class="what">وضعیت برنامه.</b> آخرین دمای معتبر (اول NaN)، روشن بودن هشدار، بی‌صدا بودن، و زمان آخرین خواندن.
+    <span class="why">این متغیرها «حافظه» برنامه‌اند. چون loop هزاران بار در ثانیه اجرا می‌شود، هر تصمیم باید بر اساس وضعیت ذخیره‌شده باشد، نه منتظر ماندن.</span></li>
+  <li data-lines="17"><b class="what">ledcAttach برای بازر.</b> پین ۲۶ را به PWM با فرکانس اولیه ۲۰۰۰ هرتز و دقت ۸ بیت وصل می‌کند.
+    <span class="why">بازر پسیو خودش صدا تولید نمی‌کند؛ باید با یک موج مربعی در فرکانس صوتی به لرزه بیفتد. این API هسته ۳.x است؛ در ۲.x باید <code>ledcSetup</code> و <code>ledcAttachPin</code> می‌نوشتی (درس <a href="3-2.html">۳.۲</a>).</span></li>
+  <li data-lines="21-27"><b class="what">خواندن زمان‌بندی‌شده و منطق هیسترزیس.</b> هر ۲ ثانیه دما خوانده می‌شود؛ فقط اگر معتبر بود جایگزین می‌شود. هشدار خاموش + دما بالای ۳۵ ← روشن (و بی‌صدا لغو). هشدار روشن + دما زیر ۳۳ ← خاموش.
+    <span class="why">شرط‌ها «وضعیت فعلی» را هم چک می‌کنند؛ پس پیام «ALARM ON» فقط یک بار، در لحظه تغییر، چاپ می‌شود. این همان الگویی است که بعدا برای پیام ابری بدون اسپم استفاده می‌کنیم. اگر دما NaN باشد، هر مقایسه‌ای با آن false است و وضعیت عوض نمی‌شود.</span></li>
+  <li data-lines="28"><b class="what">دکمه بی‌صدا.</b> اگر در حال هشدار دکمه فشرده شد، بازر ساکت می‌شود؛ LED همچنان چشمک می‌زند.
+    <span class="why">بی‌صدا کردن فقط صدا را قطع می‌کند، نه خود هشدار را؛ خطر هنوز وجود دارد و باید دیده شود. با شروع هشدار بعدی، muted دوباره false می‌شود (خط ۲۵).</span></li>
+  <li data-lines="30-31"><b class="what">چشمک بدون delay.</b> <code>millis() / 250</code> هر ۲۵۰ میلی‌ثانیه یکی زیاد می‌شود؛ باقیمانده تقسیم بر ۲ یکی در میان ۰ و ۱ است.
+    <span class="why">یک ترفند یک‌خطی برای چشمک زدن بدون هیچ متغیر اضافی. LED فقط وقتی روشن است که هشدار روشن باشد و blink یک باشد.</span></li>
+  <li data-lines="32-37"><b class="what">بازر فقط هنگام تغییر.</b> <code>ledcWriteTone(pin, 2000)</code> بوق ۲ کیلوهرتز، <code>ledcWriteTone(pin, 0)</code> سکوت. ولی فقط وقتی خواسته با وضعیت فعلی فرق دارد.
+    <span class="why">loop هزاران بار در ثانیه می‌چرخد. تنظیم دوباره PWM در هر دور بی‌فایده است و ممکن است صدای بازر را خش‌دار کند. متغیر <code>static</code> وضعیت قبلی را بین دورها به خاطر می‌سپارد.</span></li>
+</ol>
+<div class="callout tip"><div class="ct">آزمون قبول گام ۳</div>
+<p>در Wokwi روی DHT22 کلیک کن و دما را به ۳۶ ببر: LED باید چشمک بزند و بازر بوق بزند. دکمه را بزن: بازر ساکت، LED همچنان چشمک. دما را به ۳۴ بیاور: هشدار <b>نباید</b> خاموش شود (هیسترزیس!). به ۳۲ بیاور: خاموش. روی برد واقعی، سنسور را برای چند ثانیه نزدیک (نه چسبیده به) یک سشوار با باد ملایم بگیر، یا موقتا <code>TEMP_HIGH</code> را کمی بالاتر از دمای اتاق بگذار.</p></div>
+
+<h2 id="m4">گام ۴: Wi-Fi بدون مسدود کردن</h2>
+<p>در درس <a href="4-1.html">۴.۱</a> اتصال و اتصال دوباره را یاد گرفتی. نکته این گام: <b>هرگز</b> در loop با <code>while</code> منتظر Wi-Fi نمانیم، چون در آن مدت هشدار محلی کار نمی‌کند (R8).</p>
+<div class="code" data-file="Step4_WiFi.ino" id="m4code"><pre>
+// گام ۴: Wi-Fi غیرمسدودکننده
+#include &lt;WiFi.h&gt;
+
+const char* WIFI_SSID = "Wokwi-GUEST";
+const char* WIFI_PASS = "";
+uint32_t tWifi = 0;
+bool wasConnected = false;
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);        // شروع اتصال؛ منتظر نمی‌مانیم
+}
+
+void loop() {
+  bool ok = (WiFi.status() == WL_CONNECTED);
+  if (ok &amp;&amp; !wasConnected) {
+    Serial.print("WiFi connected, IP = ");
+    Serial.println(WiFi.localIP());
+  }
+  if (!ok &amp;&amp; wasConnected) Serial.println("WiFi lost!");
+  if (!ok &amp;&amp; millis() - tWifi &gt;= 15000) {  // هر ۱۵ ثانیه یک تلاش دوباره
+    tWifi = millis();
+    Serial.println("WiFi not connected, retrying...");
+    WiFi.reconnect();
+  }
+  wasConnected = ok;
+  // ... اینجا بقیه کارها بدون معطلی اجرا می‌شوند ...
+}
+</pre></div>
+<ol class="walk" data-for="m4code">
+  <li data-lines="12"><b class="what">شروع اتصال و رفتن.</b> <code>WiFi.begin</code> فقط اتصال را <b>شروع</b> می‌کند و فورا برمی‌گردد.
+    <span class="why">اتصال در پس‌زمینه (توسط سیستم عامل FreeRTOS داخل ESP32) انجام می‌شود. ما فقط هر وقت لازم شد وضعیت را نگاه می‌کنیم.</span></li>
+  <li data-lines="16-21"><b class="what">تشخیص تغییر وضعیت.</b> با مقایسه وضعیت فعلی و قبلی (<code>wasConnected</code>)، فقط لحظه وصل شدن و لحظه قطع شدن پیام چاپ می‌شود.
+    <span class="why">این همان الگوی «لبه» است که در هشدار هم دیدی: کار را در لحظه تغییر انجام بده، نه در هر دور loop.</span></li>
+  <li data-lines="22-26"><b class="what">تلاش دوباره دوره‌ای.</b> اگر وصل نیستیم، هر ۱۵ ثانیه یک بار <code>WiFi.reconnect()</code>.
+    <span class="why">هسته ESP32 به‌طور پیش‌فرض خودش هم برای اتصال دوباره تلاش می‌کند؛ این تلاش دستی یک لایه اطمینان اضافه است. فاصله ۱۵ ثانیه جلوی «کوبیدن» مودم با درخواست‌های پشت سر هم را می‌گیرد.</span></li>
+</ol>
+
+<h2 id="m5">گام ۵: MQTT</h2>
+<p>بروکر عمومی <code>broker.hivemq.com</code> روی پورت ۱۸۸۳ بدون ثبت‌نام کار می‌کند (درس <a href="5-1.html">۵.۱</a>). چون <b>عمومی</b> است، هر کسی می‌تواند پیام‌های تو را ببیند؛ پس topic را با یک پیشوند یکتا بساز (مثلا با نام و یک عدد تصادفی) و هیچ داده خصوصی نفرست.</p>
+<div class="code" data-file="Step5_MQTT.ino" id="m5code"><pre>
+// گام ۵: ارسال پیام آزمایشی به MQTT
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+
+const char* MQTT_HOST = "broker.hivemq.com";
+const char* BASE = "esp32fa/station-42/";      // این را یکتا کن!
+WiFiClient net;
+PubSubClient mqtt(net);
+uint32_t tMqtt = 0, tPub = 0;
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin("Wokwi-GUEST", "");
+  mqtt.setServer(MQTT_HOST, 1883);
+}
+
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) return;   // بدون Wi-Fi کاری نکن
+  if (!mqtt.connected()) {
+    if (millis() - tMqtt &lt; 5000) return;      // حداکثر هر ۵ ثانیه یک تلاش
+    tMqtt = millis();
+    String id = "esp32-station-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+    Serial.println(mqtt.connect(id.c_str()) ? "MQTT connected" : "MQTT failed");
+    return;
+  }
+  mqtt.loop();                                 // اتصال را زنده نگه دار
+  if (millis() - tPub &gt;= 10000) {
+    tPub = millis();
+    String topic = String(BASE) + "test";
+    String msg = String(millis() / 1000);
+    mqtt.publish(topic.c_str(), msg.c_str());
+    Serial.println("Published " + topic + " = " + msg);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="m5code">
+  <li data-lines="6"><b class="what">پیشوند topic.</b> همه topicهای این پروژه با <code>esp32fa/station-42/</code> شروع می‌شوند.
+    <span class="why">یک پیشوند یعنی می‌توانی در کلاینت با <code>esp32fa/station-42/#</code> همه پیام‌های ایستگاه را یک‌جا ببینی. و اگر به Adafruit IO رفتی، فقط همین یک خط را عوض می‌کنی.</span></li>
+  <li data-lines="18-25"><b class="what">اتصال با فاصله.</b> اگر Wi-Fi نیست، فورا از loop برمی‌گردیم. اگر MQTT وصل نیست، حداکثر هر ۵ ثانیه یک بار تلاش می‌کنیم. شناسه کلاینت از آدرس MAC ساخته می‌شود.
+    <span class="why">شناسه باید یکتا باشد؛ اگر دو دستگاه با یک شناسه وصل شوند، بروکر اولی را بیرون می‌اندازد و آن‌ها مدام همدیگر را قطع می‌کنند. توجه: خود <code>mqtt.connect</code> ممکن است وقتی سرور در دسترس نیست چند ثانیه طول بکشد؛ این تنها نقطه‌ای است که کمی مسدود می‌شویم.</span></li>
+  <li data-lines="26"><b class="what">mqtt.loop().</b> باید مرتب صدا زده شود.
+    <span class="why">پیام‌های «زنده‌ام» (keep-alive) را به بروکر می‌فرستد و پیام‌های ورودی را پردازش می‌کند. اگر loop با delay طولانی قفل شود، بروکر فکر می‌کند دستگاه مرده و اتصال را قطع می‌کند.</span></li>
+  <li data-lines="27-33"><b class="what">انتشار هر ۱۰ ثانیه.</b> زمان روشن بودن برد (ثانیه) را به topic <code>.../test</code> می‌فرستد.
+    <span class="why">یک پیام آزمایشی ساده و همیشه‌متغیر؛ اگر عدد در کلاینت زیاد می‌شود، کل زنجیره (Wi-Fi، DNS، TCP، MQTT) سالم است.</span></li>
+</ol>
+<div class="callout tip"><div class="ct">پیام‌ها را کجا ببینم؟</div>
+<p>در یک کلاینت MQTT (مثلا کلاینت وب HiveMQ یا برنامه‌ای که در درس ۵.۱ استفاده کردی) به <code>broker.hivemq.com</code> وصل شو و topic <code>esp32fa/station-42/#</code> را subscribe کن (<code>#</code> یعنی «همه زیرشاخه‌ها»). آزمون قبول گام ۵: هر ۱۰ ثانیه یک عدد جدید ببینی.</p></div>
+
+<h2 id="final">گام ۶: برنامه نهایی یکپارچه</h2>
+<p>حالا همه گام‌ها را در یک برنامه با ساختار تمیز کنار هم می‌گذاریم. ساختار برنامه:</p>
+<ul>
+  <li><b>تنظیمات</b> همه در بالا؛ برای تغییر رفتار، لازم نیست در کد بگردی.</li>
+  <li><b>هر مسئولیت یک تابع</b>: خواندن سنسور، منطق هشدار، خروجی‌ها، نمایشگر، شبکه، ارسال.</li>
+  <li><b>loop فقط زمان‌بندی می‌کند</b>: «آیا وقت خواندن است؟ آیا وقت ارسال است؟» و بقیه را به توابع می‌سپارد.</li>
+</ul>
+
+<div class="code" data-file="EnvStation.ino" id="finalCode"><pre>
+// ایستگاه پایش محیط با هشدار ابری — درس ۶.۳
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+
+// ================== ۱. تنظیمات ==================
+const char* WIFI_SSID = "Wokwi-GUEST";
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const uint16_t MQTT_PORT = 1883;
+const char* MQTT_USER = nullptr;               // Adafruit IO: نام کاربری
+const char* MQTT_KEY  = nullptr;               // Adafruit IO: AIO Key
+const char* BASE      = "esp32fa/station-42/"; // پیشوند یکتای topicها
+
+const float TEMP_HIGH  = 35.0;                 // بالاتر از این: هشدار
+const float TEMP_CLEAR = 33.0;                 // پایین‌تر از این: پایان هشدار
+const uint32_t SENSOR_MS  = 2000;              // هر ۲ ثانیه خواندن
+const uint32_t PUBLISH_MS = 30000;             // هر ۳۰ ثانیه ارسال
+const uint32_t REMIND_MS  = 600000;            // یادآوری هشدار: حداکثر هر ۱۰ دقیقه
+
+// ================== ۲. پین‌ها ==================
+const int PIN_DHT = 4;
+const int PIN_LDR = 34;                        // ADC1: با Wi-Fi کار می‌کند
+const int PIN_LED = 25;
+const int PIN_BUZ = 26;
+const int PIN_BTN = 33;                        // دکمه بی‌صدا
+
+// ================== ۳. اشیا و وضعیت ==================
+DHT dht(PIN_DHT, DHT22);
+Adafruit_SSD1306 oled(128, 64, &amp;Wire, -1);
+WiFiClient net;
+PubSubClient mqtt(net);
+
+float tempC = NAN, hum = NAN;
+int lightPct = 0;
+bool alarmOn = false, muted = false, oledOk = false;
+uint32_t tSensor = 0, tPublish = 0, tAlert = 0, tWifi = 0, tMqtt = 0;
+
+// ================== ۴. سنسورها ==================
+void readSensors() {
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (!isnan(t) &amp;&amp; !isnan(h)) { tempC = t; hum = h; }
+  else Serial.println("DHT22 read failed, keeping last value");
+  int raw = analogRead(PIN_LDR);               // 0..4095
+  lightPct = map(raw, 4095, 0, 0, 100);        // نور بیشتر = ولتاژ کمتر
+}
+
+// ================== ۵. ارسال به ابر ==================
+void publishValue(const char* name, float v, int decimals) {
+  char topic[64], payload[16];
+  snprintf(topic, sizeof(topic), "%s%s", BASE, name);
+  snprintf(payload, sizeof(payload), "%.*f", decimals, v);
+  mqtt.publish(topic, payload);
+}
+
+void publishAll() {
+  if (!mqtt.connected() || isnan(tempC)) return;
+  publishValue("temp", tempC, 1);
+  publishValue("hum", hum, 0);
+  publishValue("light", lightPct, 0);
+  Serial.println("Published to MQTT");
+}
+
+void publishAlert(const char* msg) {
+  tAlert = millis();                           // شمارش یادآوری از نو
+  Serial.println(msg);
+  if (!mqtt.connected()) return;
+  char topic[64];
+  snprintf(topic, sizeof(topic), "%salert", BASE);
+  mqtt.publish(topic, msg);
+}
+
+// ================== ۶. منطق هشدار (هیسترزیس + محدودیت نرخ) ==================
+void updateAlarm() {
+  if (isnan(tempC)) return;
+  if (!alarmOn &amp;&amp; tempC &gt; TEMP_HIGH) {
+    alarmOn = true;
+    muted = false;
+    publishAlert("ALERT: temperature high");
+  } else if (alarmOn &amp;&amp; tempC &lt; TEMP_CLEAR) {
+    alarmOn = false;
+    publishAlert("OK: temperature back to normal");
+  } else if (alarmOn &amp;&amp; millis() - tAlert &gt;= REMIND_MS) {
+    publishAlert("ALERT: still high");         // یادآوری، نه اسپم
+  }
+}
+
+void driveOutputs() {
+  if (alarmOn &amp;&amp; digitalRead(PIN_BTN) == LOW) muted = true;
+  bool blink = (millis() / 250) % 2;
+  digitalWrite(PIN_LED, alarmOn &amp;&amp; blink);
+  static bool buzzing = false;
+  bool wantBuzz = alarmOn &amp;&amp; !muted &amp;&amp; blink;
+  if (wantBuzz != buzzing) {
+    ledcWriteTone(PIN_BUZ, wantBuzz ? 2000 : 0);
+    buzzing = wantBuzz;
+  }
+}
+
+// ================== ۷. نمایشگر ==================
+void drawDisplay() {
+  if (!oledOk) return;                         // نمایشگر نیست؟ بقیه کارها ادامه دارد
+  oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setCursor(0, 0);
+  oled.print(WiFi.status() == WL_CONNECTED ? "WiFi OK  " : "WiFi --  ");
+  oled.print(mqtt.connected() ? "MQTT OK" : "MQTT --");
+  oled.setTextSize(2);
+  oled.setCursor(0, 14);
+  if (isnan(tempC)) oled.print("T: ERR");
+  else { oled.print(tempC, 1); oled.print(" C"); }
+  oled.setCursor(0, 34);
+  if (isnan(hum)) oled.print("H: ERR");
+  else { oled.print(hum, 0); oled.print(" %"); }
+  oled.setTextSize(1);
+  oled.setCursor(0, 56);
+  oled.printf("Light %d%%  %s", lightPct, alarmOn ? (muted ? "ALARM(m)" : "ALARM!") : "normal");
+  oled.display();
+}
+
+// ================== ۸. شبکه (بدون مسدود کردن) ==================
+void keepWiFi() {
+  if (WiFi.status() == WL_CONNECTED) return;
+  if (millis() - tWifi &lt; 15000) return;        // هر ۱۵ ثانیه یک تلاش
+  tWifi = millis();
+  Serial.println("WiFi: reconnecting...");
+  WiFi.reconnect();
+}
+
+void keepMqtt() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (mqtt.connected()) { mqtt.loop(); return; }
+  if (millis() - tMqtt &lt; 5000) return;         // هر ۵ ثانیه یک تلاش
+  tMqtt = millis();
+  String id = "esp32-station-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+  String will = String(BASE) + "status";
+  if (mqtt.connect(id.c_str(), MQTT_USER, MQTT_KEY, will.c_str(), 0, true, "offline")) {
+    mqtt.publish(will.c_str(), "online", true);
+    Serial.println("MQTT connected");
+  } else {
+    Serial.printf("MQTT failed, state=%d\n", mqtt.state());
+  }
+}
+
+// ================== ۹. setup و loop ==================
+void setup() {
+  Serial.begin(115200);
+  pinMode(PIN_LED, OUTPUT);
+  pinMode(PIN_BTN, INPUT_PULLUP);
+  ledcAttach(PIN_BUZ, 2000, 8);                // API هسته 3.x
+  analogReadResolution(12);
+  dht.begin();
+  Wire.begin(21, 22);
+  oledOk = oled.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  if (oledOk) oled.setTextColor(SSD1306_WHITE);
+  else Serial.println("OLED not found, continuing without display");
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  tWifi = millis();
+}
+
+void loop() {
+  uint32_t now = millis();
+  if (now - tSensor &gt;= SENSOR_MS) {
+    tSensor = now;
+    readSensors();
+    updateAlarm();
+    drawDisplay();
+  }
+  if (now - tPublish &gt;= PUBLISH_MS) {
+    tPublish = now;
+    publishAll();
+  }
+  keepWiFi();
+  keepMqtt();
+  driveOutputs();
+}
+</pre></div>
+<p>برنامه را بخش به بخش مرور می‌کنیم. روی هر کارت بزن تا خط‌هایش در کد بالا پررنگ شود.</p>
+<ol class="walk" data-for="finalCode">
+  <li data-lines="9-22"><b class="what">بخش ۱: تنظیمات.</b> شبکه، بروکر، نام کاربری و کلید (برای HiveMQ عمومی <code>nullptr</code> یعنی «ندارد»)، پیشوند topic، آستانه‌ها و فاصله‌های زمانی.
+    <span class="why">هر عددی که ممکن است روزی بخواهی عوض کنی، باید اسم داشته باشد و بالای برنامه باشد. «عدد جادویی» ۶۰۰۰۰۰ وسط کد را شش ماه بعد هیچ‌کس نمی‌فهمد؛ <code>REMIND_MS</code> را همه می‌فهمند. در پروژه واقعی رمزها را به فایل <code>secrets.h</code> ببر (درس <a href="6-2.html#privacy">۶.۲</a>).</span></li>
+  <li data-lines="24-29"><b class="what">بخش ۲: پین‌ها.</b> دقیقا مطابق جدول پین‌ها و نقشه‌های سیم‌کشی.
+    <span class="why">یک منبع حقیقت: اگر سیمی را جابه‌جا کردی، فقط این‌جا را عوض می‌کنی.</span></li>
+  <li data-lines="31-40"><b class="what">بخش ۳: اشیا و وضعیت.</b> سنسور، نمایشگر، کلاینت شبکه و MQTT؛ بعد آخرین مقدارها، وضعیت هشدار، سالم بودن نمایشگر، و «زمان آخرین بار» برای هر کار زمان‌بندی‌شده.
+    <span class="why">پنج متغیر <code>t...</code> پنج «ساعت» مستقل‌اند: هر کار ساعت خودش را دارد و بقیه را معطل نمی‌کند. این قلب زمان‌بندی بدون delay است.</span></li>
+  <li data-lines="42-50"><b class="what">بخش ۴: خواندن سنسورها.</b> مثل گام ۱، با یک تفاوت: اگر DHT22 خطا داد، آخرین مقدار معتبر نگه داشته می‌شود.
+    <span class="why">DHT22 گاهی یک خواندن را از دست می‌دهد. پاک کردن عدد با هر خطای تکی، باعث پرش «ERR» روی نمایشگر و قطع داده ابری می‌شود. تا اولین خواندن موفق، مقدار NaN است و نمایشگر ERR نشان می‌دهد (R1). در تمرین ۲ این را هوشمندتر می‌کنی.</span></li>
+  <li data-lines="52-58"><b class="what">بخش ۵ (الف): یک تابع برای ارسال هر عدد.</b> نام topic با <code>BASE</code> ساخته می‌شود و عدد با تعداد رقم اعشار دلخواه به متن تبدیل می‌شود (<code>%.*f</code>).
+    <span class="why">سه بار تکرار یک کد، یعنی سه جا برای باگ. یک تابع کوچک یعنی یک جا. از <code>snprintf</code> با آرایه ثابت به جای <code>String</code> استفاده کردیم تا حافظه را تکه‌تکه نکنیم؛ در برنامه‌ای که ماه‌ها روشن است مهم است.</span></li>
+  <li data-lines="60-66"><b class="what">بخش ۵ (ب): ارسال همه مقادیر.</b> اگر MQTT وصل نیست یا هنوز هیچ دمای معتبری نداریم، ارسال نمی‌شود.
+    <span class="why">فرستادن «nan» به داشبورد نمودارها را خراب می‌کند. سه topic جدا (<code>temp</code>، <code>hum</code>، <code>light</code>) با Adafruit IO سازگارند که هر feed یک عدد می‌خواهد. با ۳ مقدار هر ۳۰ ثانیه، یعنی ۶ پیام در دقیقه، زیر محدودیت نرخ نسخه رایگان Adafruit IO (حدود ۳۰ داده در دقیقه) می‌مانیم.</span></li>
+  <li data-lines="68-75"><b class="what">بخش ۵ (ج): پیام هشدار.</b> زمان را ثبت می‌کند، در Serial چاپ می‌کند و اگر وصل هستیم به <code>.../alert</code> می‌فرستد.
+    <span class="why"><code>tAlert</code> حتی اگر ارسال ناموفق باشد به‌روز می‌شود؛ یعنی قطع شبکه باعث تلاش مکرر و انبوه پیام در لحظه وصل شدن نمی‌شود. نقطه ضعف آگاهانه: اگر شبکه در لحظه شروع هشدار قطع باشد، اولین پیام گم می‌شود و یادآوری ۱۰ دقیقه بعد جبرانش می‌کند (تمرین ۱ این را بهتر می‌کند).</span></li>
+  <li data-lines="77-90"><b class="what">بخش ۶ (الف): هیسترزیس و محدودیت نرخ.</b> سه حالت: شروع هشدار (بالای ۳۵ و قبلا خاموش)، پایان هشدار (زیر ۳۳ و قبلا روشن)، یادآوری (هنوز روشن و ۱۰ دقیقه از پیام قبلی گذشته).
+    <span class="why">این سه شاخه دقیقا R5 و R7 را پیاده می‌کنند. بدون شاخه سوم، کاربری که پیام اول را ندیده هرگز نمی‌فهمد مشکل ادامه دارد. بدون محدودیت زمانی، هر ۲ ثانیه یک پیام می‌آمد: ۱۸۰۰ پیام در ساعت! گوشی‌ات بی‌صدا می‌شود و وقتی واقعا لازم است، دیگر هشدار را نمی‌بینی.</span></li>
+  <li data-lines="92-102"><b class="what">بخش ۶ (ب): خروجی‌های محلی.</b> همان منطق گام ۳: دکمه بی‌صدا، چشمک LED و بازر فقط هنگام تغییر.
+    <span class="why">این تابع در <b>هر</b> دور loop اجرا می‌شود تا چشمک و دکمه روان باشند؛ برخلاف خواندن سنسور که فقط هر ۲ ثانیه است. کار سبک، زیاد؛ کار سنگین، کم.</span></li>
+  <li data-lines="104-123"><b class="what">بخش ۷: نمایشگر.</b> خط بالا وضعیت شبکه؛ وسط دما و رطوبت با حروف درشت؛ پایین نور و وضعیت هشدار (<code>ALARM(m)</code> یعنی بی‌صدا شده). اگر نمایشگر پیدا نشده بود، تابع فورا برمی‌گردد.
+    <span class="why">نمایش وضعیت Wi-Fi و MQTT روی صفحه، عیب‌یابی در محل را بدون لپ‌تاپ ممکن می‌کند. <code>oledOk</code> یعنی خرابی نمایشگر (مثلا یک سیم شل) هشدار و ارسال را از کار نمی‌اندازد؛ برخلاف گام ۲ که عمدا متوقف می‌شد.</span></li>
+  <li data-lines="125-132"><b class="what">بخش ۸ (الف): نگهداری Wi-Fi.</b> مثل گام ۴.
+    <span class="why">اگر وصل هستیم، تابع در کسری از میکروثانیه برمی‌گردد؛ پس صدا زدنش در هر دور loop هزینه‌ای ندارد.</span></li>
+  <li data-lines="134-147"><b class="what">بخش ۸ (ب): نگهداری MQTT با «وصیت‌نامه» (LWT).</b> هنگام اتصال به بروکر می‌گوییم: «اگر من بی‌خبر قطع شدم، از طرف من پیام <code>offline</code> را با retain روی <code>.../status</code> منتشر کن». بلافاصله بعد از اتصال خودمان <code>online</code> را با retain می‌فرستیم.
+    <span class="why">با این ترفند، داشبورد همیشه می‌داند ایستگاه زنده است یا نه؛ حتی اگر برق ایستگاه قطع شود و فرصت خداحافظی نداشته باشد. retain یعنی هر کس بعدا subscribe کند، آخرین وضعیت را فورا می‌گیرد. <code>mqtt.state()</code> در صورت شکست، کد خطا را می‌دهد (مثلا منفی یعنی مشکل شبکه، ۴ و ۵ یعنی نام کاربری یا کلید غلط). اگر Adafruit IO از retain پشتیبانی نکرد، فقط همان بخش بی‌اثر می‌شود.</span></li>
+  <li data-lines="149-165"><b class="what">بخش ۹ (الف): setup.</b> پین‌ها، بازر با API هسته ۳.x، ADC، سنسور، I2C و نمایشگر (بدون توقف در صورت خرابی)، شروع اتصال Wi-Fi (بدون انتظار) و تنظیم بروکر.
+    <span class="why">setup هیچ حلقه انتظاری ندارد؛ یعنی دستگاه در کسری از ثانیه وارد loop می‌شود و هشدار محلی از همان ابتدا کار می‌کند، حتی اگر مودم خاموش باشد (R8).</span></li>
+  <li data-lines="167-182"><b class="what">بخش ۹ (ب): loop، زمان‌بند مرکزی.</b> هر ۲ ثانیه: خواندن، تصمیم هشدار، به‌روزرسانی نمایشگر. هر ۳۰ ثانیه: ارسال. در هر دور: نگهداری Wi-Fi و MQTT و خروجی‌ها.
+    <span class="why">کل منطق برنامه در حدود ۱۵ خط قابل خواندن است. اگر فردا ویژگی جدیدی خواستی (مثلا ذخیره در کارت SD هر ۵ دقیقه)، فقط یک متغیر زمان و یک شرط <code>if</code> دیگر اضافه می‌کنی. <code>now - tX &gt;= فاصله</code> حتی بعد از سرریز millis (حدود ۴۹ روز) درست کار می‌کند.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="finalCode">
+<p>کل ایستگاه در Wokwi: در تب Library Manager این کتابخانه‌ها را اضافه کن: <code>DHT sensor library</code>، <code>Adafruit SSD1306</code>، <code>Adafruit GFX Library</code> و <code>PubSubClient</code>. Wi-Fi مجازی <code>Wokwi-GUEST</code> به اینترنت واقعی وصل است، پس پیام‌ها واقعا به broker.hivemq.com می‌رسند و می‌توانی در کلاینت MQTT خودت ببینی‌شان. روی DHT22 کلیک کن و دما را بالای ۳۵ ببر؛ روی سنسور نور کلیک کن و مقدار لوکس را عوض کن. <b>حتما</b> <code>BASE</code> را به یک پیشوند مخصوص خودت تغییر بده.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -110, "left": 170, "attrs": { "temperature": "28", "humidity": "45" } },
+    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": 250, "left": 170, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled1", "top": 60, "left": 260, "attrs": { "i2cAddress": "0x3c" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": -130, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 40, "left": -60, "attrs": { "color": "red" } },
+    { "type": "wokwi-buzzer", "id": "bz1", "top": 170, "left": -160, "attrs": { "volume": "0.2" } },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 280, "left": -170, "attrs": { "color": "yellow", "label": "Mute" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:4", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:AO", "esp:34", "blue", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "r1:1", "esp:25", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ],
+    [ "bz1:2", "esp:26", "orange", [] ],
+    [ "bz1:1", "esp:GND.1", "black", [] ],
+    [ "btn1:1.l", "esp:33", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<div class="serial">WiFi: reconnecting...
+MQTT connected
+Published to MQTT
+ALERT: temperature high
+Published to MQTT
+OK: temperature back to normal</div>
+<p>(خط اول ممکن است نیاید؛ بستگی دارد اتصال اول چقدر طول بکشد.)</p>
+
+<h2 id="dashboard">داشبورد: HiveMQ یا Adafruit IO</h2>
+<div class="table-wrap"><table>
+<tr><th></th><th>HiveMQ عمومی</th><th>Adafruit IO</th></tr>
+<tr><td>ثبت‌نام</td><td>لازم نیست</td><td>لازم است (حساب رایگان)</td></tr>
+<tr><td>تنظیمات برنامه</td><td><code>MQTT_HOST = "broker.hivemq.com"</code>، USER و KEY برابر <code>nullptr</code></td><td><code>MQTT_HOST = "io.adafruit.com"</code>، <code>MQTT_USER</code> = نام کاربری، <code>MQTT_KEY</code> = AIO Key، <code>BASE = "نام‌کاربری/feeds/"</code></td></tr>
+<tr><td>نمایش</td><td>هر کلاینت MQTT؛ نمودار و داشبورد را باید خودت بسازی (مثلا با Node-RED)</td><td>داشبورد آماده: ابزارک عدد، نمودار، نشانگر؛ feedها (temp، hum، light، alert، status) خودکار ساخته می‌شوند</td></tr>
+<tr><td>حریم خصوصی</td><td>همه می‌توانند پیام‌ها را ببینند</td><td>فقط با کلید تو (کلید را در کد عمومی منتشر نکن)</td></tr>
+<tr><td>محدودیت</td><td>بروکر آزمایشی؛ تضمین در دسترس بودن ندارد</td><td>نسخه رایگان محدودیت تعداد feed و حدود ۳۰ داده در دقیقه دارد (عددهای فعلی را در سایت‌شان چک کن)</td></tr>
+</table></div>
+<div class="callout warn"><div class="ct">هشدار امنیتی</div>
+<p>روی بروکر عمومی هرگز چیزی را کنترل نکن (مثلا «topic خاموش کردن بخاری»): هر کسی می‌تواند به آن topic پیام بفرستد. این پروژه فقط <b>می‌فرستد</b>، پس روی بروکر عمومی خطری ندارد جز این که دیگران داده‌هایت را ببینند.</p></div>
+
+<h2 id="battery">حالت باتری (اختیاری): ترکیب با درس ۶.۱</h2>
+<p>برنامه بالا همیشه روشن است و حدود ۱۰۰ میلی‌آمپر مصرف دارد؛ با باتری فقط یکی دو روز دوام می‌آورد. برای حالت باتری (R9) باید طراحی را عوض کنی، نه فقط یک خط اضافه کنی:</p>
+<ul>
+  <li>همه کار در <code>setup()</code>: بیدار شو، سنسور را بخوان، اگر لازم است پیام بفرست، بخواب (مثلا ۵ دقیقه). loop خالی می‌ماند.</li>
+  <li>وضعیت هشدار و زمان آخرین پیام در <code>RTC_DATA_ATTR</code>؛ چون <code>millis()</code> بعد از هر بیداری از صفر شروع می‌شود، برای محدودیت نرخ به جای زمان، «تعداد بیداری‌ها» را بشمار.</li>
+  <li>بازر و LED چشمک‌زن در خواب کار نمی‌کنند؛ هشدار محلی عملا به یک بوق کوتاه در هر بیداری تبدیل می‌شود. این یک مصالحه است که باید در PRD بنویسی.</li>
+  <li>OLED را قبل از خواب خاموش کن (<code>oled.ssd1306_command(SSD1306_DISPLAYOFF)</code>) وگرنه روشن می‌ماند و باتری می‌خورد.</li>
+  <li>دکمه روی GPIO33 (پین RTC) با EXT0 برد را برای نمایش فوری بیدار کند.</li>
+</ul>
+<p>پیاده‌سازی کامل این حالت تمرین ۳ است.</p>
+
+<h2 id="test">برنامه آزمایش و چک‌لیست پذیرش</h2>
+<p>قبل از این که بگویی «تمام شد»، این آزمایش‌ها را یکی‌یکی انجام بده و تیک بزن. هر کدام به یک نیازمندی PRD برمی‌گردد:</p>
+<div class="table-wrap"><table>
+<tr><th>آزمایش</th><th>چه کار کنم</th><th>نتیجه مورد انتظار</th><th>نیازمندی</th></tr>
+<tr><td>T1</td><td>روشن کردن عادی</td><td>ظرف چند ثانیه دما و رطوبت روی OLED؛ «WiFi OK» و «MQTT OK»</td><td>R1، R3</td></tr>
+<tr><td>T2</td><td>جدا کردن سیم DATA سنسور DHT22 قبل از روشن کردن</td><td>OLED «T: ERR» نشان دهد؛ هیچ «nan» به MQTT نرود</td><td>R1</td></tr>
+<tr><td>T3</td><td>پوشاندن LDR با دست، بعد تاباندن چراغ قوه</td><td>درصد نور کم و بعد زیاد شود</td><td>R2</td></tr>
+<tr><td>T4</td><td>دما را به ۳۶ برسان</td><td>LED چشمک، بوق، یک پیام «ALERT» در MQTT</td><td>R4، R7</td></tr>
+<tr><td>T5</td><td>دکمه را بزن</td><td>بازر ساکت، LED همچنان چشمک، OLED «ALARM(m)»</td><td>R4</td></tr>
+<tr><td>T6</td><td>دما را به ۳۴ بیاور</td><td>هشدار <b>روشن بماند</b></td><td>R5</td></tr>
+<tr><td>T7</td><td>دما را ۱۲ دقیقه بالای ۳۵ نگه دار</td><td>دقیقا یک پیام «still high» (نه صدها پیام)</td><td>R7</td></tr>
+<tr><td>T8</td><td>دما را به ۳۲ بیاور</td><td>هشدار خاموش و یک پیام «OK»</td><td>R5، R7</td></tr>
+<tr><td>T9</td><td>مودم را خاموش کن (یا در Wokwi SSID را غلط بنویس)</td><td>نمایش و هشدار محلی بدون وقفه ادامه دهند؛ «WiFi --» روی OLED</td><td>R8</td></tr>
+<tr><td>T10</td><td>مودم را دوباره روشن کن</td><td>بدون ریست، ظرف کمتر از یک دقیقه «MQTT OK» و ارسال دوباره</td><td>R8</td></tr>
+<tr><td>T11</td><td>برق ایستگاه را ناگهان قطع کن</td><td>بعد از مدتی (حدود ۱٫۵ برابر keep-alive) در <code>.../status</code> مقدار «offline» ظاهر شود</td><td>R6</td></tr>
+<tr><td>T12</td><td>۲۴ ساعت روشن بماند</td><td>بدون ریست و بدون قفل شدن؛ نمودار داشبورد پیوسته</td><td>همه</td></tr>
+</table></div>
+
+<h2 id="enclosure">جعبه و محل نصب</h2>
+<ul>
+  <li><b>سنسور را از ESP32 دور کن.</b> ESP32 و رگولاتور روی برد، به‌خصوص با Wi-Fi روشن، گرم می‌شوند. DHT22 چسبیده به برد، چند درجه بیشتر از دمای واقعی اتاق نشان می‌دهد. دست‌کم چند سانتی‌متر فاصله بده یا سنسور را با سیم بیرون جعبه بگذار.</li>
+  <li><b>هوا باید جریان داشته باشد.</b> جعبه دربسته، رطوبت و دمای داخل خودش را اندازه می‌گیرد. برای سنسور سوراخ‌های تهویه بگذار.</li>
+  <li><b>نور مستقیم خورشید ممنوع.</b> خورشید مستقیم روی DHT22، دمای «خود سنسور» را اندازه می‌گیرد نه هوا. LDR را ولی باید جایی گذاشت که نور محیط را ببیند.</li>
+  <li><b>دور از منابع گرما و رطوبت</b> (بخاری، کتری، آشپزخانه) مگر این که دقیقا همان را بخواهی بپایی.</li>
+  <li><b>برای بیرون از خانه</b> جعبه ضدآب و یک «سایه‌بان تشعشع» (مثل پوسته‌های بشقابی ایستگاه‌های هواشناسی) لازم است؛ و ESP32 را از آب و میعان دور نگه دار.</li>
+  <li><b>آنتن Wi-Fi را نپوشان.</b> آنتن روی ماژول WROOM (بخش موج‌دار انتهای ماژول) نباید نزدیک فلز یا زیر سیم‌ها باشد.</li>
+</ul>
+
+<h2 id="ideas">ایده‌هایی برای ادامه</h2>
+<ul>
+  <li><b>ذخیره روی کارت SD</b> هر ۵ دقیقه، تا اگر اینترنت قطع بود داده گم نشود (درس <a href="3-3.html">۳.۳</a>).</li>
+  <li><b>صفحه وب محلی</b> که مقادیر را در شبکه خانه نشان دهد (درس <a href="4-2.html">۴.۲</a>).</li>
+  <li><b>سنسورهای ماهواره‌ای با ESP-NOW</b>: چند ESP32 کوچک باتری‌خور در اتاق‌های مختلف، داده را به این ایستگاه بفرستند (درس <a href="5-2.html">۵.۲</a>).</li>
+  <li><b>ربات تلگرام</b> برای فرستادن هشدار به گوشی.</li>
+  <li><b>تنظیم آستانه از راه دور</b> با subscribe کردن به یک topic (روی بروکر خصوصی و امن!).</li>
+</ul>
+
+<h2 id="video">ویدیوی کمکی</h2>
+<div class="video" data-yt="9G-nMGcELG8" data-title="#48 Connect ESP8266 with the world (and IFTT) through MQTT and Adafruit.io (Tutorial)" data-channel="Andreas Spiess" data-lang="انگلیسی">
+  <div class="sum"><ul>
+    <li>این ویدیو قدیمی است و با ESP8266 کار می‌کند، نه ESP32؛ ولی مفهوم MQTT و Adafruit IO همان است. آن را برای <b>فهم معماری</b> ببین، نه برای کپی کد.</li>
+    <li>دقت کن feedها و داشبورد در Adafruit IO چطور ساخته می‌شوند و نام کاربری و کلید کجا استفاده می‌شوند. ظاهر سایت از آن زمان عوض شده است.</li>
+    <li>ببین چطور پیام‌ها از دستگاه به بروکر و از بروکر به سرویس‌های دیگر (مثل IFTTT و Node-RED) می‌روند؛ این همان جعبه «ابر» در نمودار معماری ماست.</li>
+  </ul></div>
+</div>
+
+<h2 id="debug">وقتی کار نمی‌کند: عیب‌یابی</h2>
+<div class="table-wrap"><table>
+<tr><th>علامت</th><th>علت محتمل</th><th>راه حل</th></tr>
+<tr><td>نور همیشه ۰ یا ۱۰۰، یا با روشن شدن Wi-Fi عجیب شد</td><td>LDR روی پین ADC2، یا سیم AO جدا</td><td>LDR فقط روی GPIO32 تا 39 (ADC1). مقدار raw را چاپ کن (گام ۱).</td></tr>
+<tr><td>OLED هیچ چیز نشان نمی‌دهد و Serial می‌گوید «OLED not found»</td><td>SDA و SCL جابه‌جا، آدرس 0x3D، یا VCC وصل نیست</td><td>ترتیب پایه‌ها روی برد نمایشگر را بخوان؛ اسکنر I2C درس ۳.۳ را اجرا کن.</td></tr>
+<tr><td>دما چند درجه بیشتر از واقعیت است</td><td>گرمای ESP32 یا نور خورشید</td><td>سنسور را دورتر ببر (بخش جعبه و محل نصب). با یک دماسنج مرجع مقایسه کن.</td></tr>
+<tr><td>هشدار مدام روشن و خاموش می‌شود</td><td>هیسترزیس خیلی کم یا برداشته شده</td><td>فاصله TEMP_HIGH و TEMP_CLEAR را دست‌کم ۱ تا ۲ درجه نگه دار.</td></tr>
+<tr><td><code>MQTT failed, state=-2</code></td><td>اتصال شبکه به بروکر برقرار نشد (DNS، اینترنت، پورت بسته)</td><td>اینترنت را چک کن؛ در شبکه‌های محدود پورت ۱۸۸۳ ممکن است بسته باشد.</td></tr>
+<tr><td><code>MQTT failed, state=4</code> یا <code>5</code> (Adafruit IO)</td><td>نام کاربری یا AIO Key غلط</td><td>کلید را دوباره کپی کن؛ نام کاربری به حروف بزرگ و کوچک حساس است.</td></tr>
+<tr><td>MQTT مدام وصل و قطع می‌شود</td><td>شناسه کلاینت تکراری (دو دستگاه یا دو شبیه‌ساز)، یا loop جایی با delay طولانی قفل شده</td><td>شناسه یکتا؛ هیچ delay طولانی در loop نگذار.</td></tr>
+<tr><td>بازر صدا نمی‌دهد</td><td>بازر اکتیو به جای پسیو، یا قطبیت برعکس</td><td>بازر پسیو استفاده کن؛ پایه + به GPIO26.</td></tr>
+<tr><td>خطای کامپایل <code>'ledcAttach' was not declared</code></td><td>هسته ۲.x نصب است</td><td>هسته را از Boards Manager به ۳.x به‌روز کن (درس <a href="6-2.html#ex2">۶.۲</a>).</td></tr>
+<tr><td>برد هنگام اتصال Wi-Fi ریست می‌شود (Brownout)</td><td>کابل USB بلند و نازک یا پورت USB ضعیف</td><td>کابل کوتاه و باکیفیت، یا هاب USB برق‌دار.</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>اگر این پروژه را قدم به قدم ساختی و همه دوازده آزمایش پذیرش را گذراندی، به تو تبریک می‌گویم؛ صادقانه. ولی یک هشدار: وسوسه می‌شوی مستقیم برنامه نهایی را کپی کنی و گام‌ها را رد کنی. این کار را نکن. ارزش این درس در برنامه نهایی نیست (آن را هر هوش مصنوعی می‌نویسد)؛ ارزشش در <b>روش</b> است: نیازمندی روشن، پین با دلیل، گام کوچک، آزمایش قبل از ادامه، و طراحی برای روزی که اینترنت قطع است. این روش را در هر پروژه بعدی تکرار کن تا عادتت شود. مهندس خوب کسی نیست که هیچ‌وقت باگ ندارد؛ کسی است که می‌داند باگ دقیقا در کدام گام است.</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">چرا LDR را به GPIO34 وصل کردیم و نه مثلا به GPIO26؟</p>
+  <ol><li data-why="GPIO26 خروجی و ورودی دارد؛ مشکل از جای دیگری است.">GPIO26 فقط خروجی است</li><li>GPIO34 روی ADC1 است؛ ADC2 (مثل GPIO26) وقتی Wi-Fi روشن است کار نمی‌کند</li><li data-why="دقت ADC1 و ADC2 هر دو ۱۲ بیت است.">GPIO34 دقت بیشتری دارد</li><li data-why="LDR به هیچ پروتکل خاصی نیاز ندارد.">GPIO34 تنها پین I2C است</li></ol>
+  <div class="fb">ADC2 با رادیوی Wi-Fi مشترک است. در پروژه‌ای که Wi-Fi دارد، ورودی آنالوگ فقط روی ADC1 (GPIO32 تا 39).</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">هشدار با TEMP_HIGH=35 و TEMP_CLEAR=33 روشن است. دما به ۳۴ درجه می‌رسد. چه می‌شود؟</p>
+  <ol><li data-why="برای خاموش شدن، دما باید زیر ۳۳ برود.">هشدار خاموش می‌شود</li><li data-why="پیام پایان فقط هنگام خاموش شدن هشدار فرستاده می‌شود.">پیام «OK» فرستاده می‌شود</li><li>هشدار روشن می‌ماند</li><li data-why="هیسترزیس برای جلوگیری از همین نوسان است.">هشدار سریع روشن و خاموش می‌شود</li></ol>
+  <div class="fb">این همان هیسترزیس است: بین ۳۳ و ۳۵ وضعیت قبلی حفظ می‌شود.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">اگر شاخه «یادآوری» و متغیر <code>tAlert</code> را حذف کنیم و در هر خواندن که دما بالای ۳۵ است پیام هشدار بفرستیم، در یک ساعت هشدار چند پیام فرستاده می‌شود؟</p>
+  <ol><li>حدود ۱۸۰۰ پیام (هر ۲ ثانیه یکی)</li><li data-why="بدون محدودیت نرخ، در هر خواندن پیام فرستاده می‌شود.">۶ پیام</li><li data-why="فاصله ارسال عادی ۳۰ ثانیه است، ولی پیام هشدار در هر خواندن (۲ ثانیه) فرستاده می‌شد.">۱۲۰ پیام</li><li data-why="دقیقا یکی فقط با منطق «لبه» ممکن است.">۱ پیام</li></ol>
+  <div class="fb">۳۶۰۰ ÷ ۲ = ۱۸۰۰. محدودیت نرخ این را به ۱ پیام شروع + حداکثر ۶ یادآوری در ساعت کاهش می‌دهد.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">چرا در setup برنامه نهایی با <code>while</code> منتظر وصل شدن Wi-Fi نمی‌مانیم؟</p>
+  <ol><li data-why="while در setup مجاز است؛ مسئله طراحی است.">چون while در setup خطای کامپایل می‌دهد</li><li data-why="WiFi.begin بدون انتظار هم اتصال را کامل می‌کند.">چون بدون while، Wi-Fi هرگز وصل نمی‌شود</li><li data-why="مصرف انرژی دلیل اصلی این تصمیم نیست.">چون while مصرف برق را زیاد می‌کند</li><li>چون اگر مودم خاموش باشد، هشدار محلی هم هرگز شروع به کار نمی‌کند</li></ol>
+  <div class="fb">R8: کارهای محلی هرگز منتظر شبکه نمی‌مانند. اتصال در پس‌زمینه انجام می‌شود.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">پیام «وصیت‌نامه» (LWT) با مقدار <code>offline</code> روی topic وضعیت، چه زمانی منتشر می‌شود؟</p>
+  <ol><li data-why="هنگام اتصال، خود برنامه «online» را می‌فرستد.">هر بار که دستگاه وصل می‌شود</li><li>وقتی بروکر بفهمد دستگاه بدون خداحافظی قطع شده (مثلا قطع برق)</li><li data-why="LWT ربطی به دمای بالا ندارد.">وقتی دما از ۳۵ بالاتر برود</li><li data-why="بروکر LWT را از طرف دستگاه منتشر می‌کند، نه دستگاه با زمان‌بندی.">هر ۳۰ ثانیه</li></ol>
+  <div class="fb">LWT را دستگاه هنگام اتصال به بروکر می‌سپارد و بروکر فقط در صورت قطع ناگهانی آن را منتشر می‌کند.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">ایستگاه دما را ۴ درجه بیشتر از دماسنج دیواری نشان می‌دهد. اولین چیزی که بررسی می‌کنی چیست؟</p>
+  <ol><li data-why="عددهای آستانه روی اندازه‌گیری اثری ندارند.">عدد TEMP_HIGH</li><li data-why="DHT22 کالیبره‌شده از کارخانه است؛ اول محیط را بررسی کن.">کتابخانه DHT را عوض می‌کنی</li><li>فاصله سنسور از ESP32 و منابع گرما و نور خورشید</li><li data-why="Wi-Fi روی خواندن دیجیتال DHT22 اثری ندارد؛ ولی گرمای آن دارد.">Wi-Fi را خاموش می‌کنی تا تداخل رادیویی نباشد</li></ol>
+  <div class="fb">گرمای خود ESP32 و رگولاتور رایج‌ترین علت است. سنسور باید هوای آزاد اتاق را حس کند، نه گرمای برد را.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+<div class="exercise"><div class="ct">تمرین ۱: هشدار گم‌نشدنی</div>
+<p>در برنامه فعلی، اگر شبکه در لحظه شروع هشدار قطع باشد، پیام «ALERT» گم می‌شود. برنامه را طوری تغییر بده که پیام هشدار در یک متغیر «در انتظار ارسال» بماند و به محض وصل شدن MQTT فرستاده شود.</p>
+<details><summary>راهنمایی</summary><p>یک متغیر <code>const char* pendingAlert = nullptr;</code> بساز. در <code>publishAlert</code>، اگر وصل نیستی، پیام را در آن بگذار. در <code>keepMqtt</code>، بلافاصله بعد از اتصال موفق، اگر <code>pendingAlert</code> خالی نیست، آن را بفرست و خالی کن. چون پیام‌ها رشته‌های ثابت‌اند، نگه داشتن اشاره‌گر به آن‌ها امن است.</p></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۲: سنسور مرده</div>
+<p>اگر DHT22 برای همیشه جدا شود، برنامه فعلی آخرین دمای معتبر را تا ابد نشان می‌دهد و ارسال می‌کند؛ این دروغ است. تغییری بده که اگر ۵ خواندن پشت سر هم شکست خورد، <code>tempC</code> و <code>hum</code> دوباره NaN شوند و یک پیام <code>"ERROR: sensor"</code> (فقط یک بار) به topic هشدار برود.</p>
+<details><summary>راهنمایی</summary><p>یک شمارنده <code>failStreak</code> در <code>readSensors</code>: با موفقیت صفر، با شکست یکی زیاد. وقتی دقیقا به ۵ رسید (نه بزرگ‌تر یا مساوی، تا پیام فقط یک بار برود)، مقدارها را NaN کن و <code>publishAlert</code> را صدا بزن. <code>publishAll</code> از قبل با NaN چیزی نمی‌فرستد و نمایشگر «ERR» نشان می‌دهد.</p></details>
+<details><summary>جواب</summary>
+<div class="code" data-file="readSensors_v2_part.ino" id="exFail"><pre>
+// جایگزین تابع readSensors در برنامه نهایی (بخشی از برنامه)
+int failStreak = 0;
+
+void readSensors() {
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (!isnan(t) &amp;&amp; !isnan(h)) {
+    tempC = t; hum = h;
+    failStreak = 0;
+  } else {
+    failStreak++;
+    if (failStreak == 5) {                   // دقیقا یک بار
+      tempC = NAN; hum = NAN;
+      publishAlert("ERROR: sensor");
+    }
+  }
+  int raw = analogRead(PIN_LDR);
+  lightPct = map(raw, 4095, 0, 0, 100);
+}
+</pre></div>
+<ol class="walk" data-for="exFail">
+  <li data-lines="7-9"><b class="what">موفقیت شمارنده را صفر می‌کند.</b>
+    <span class="why">یعنی فقط شکست‌های <b>پشت سر هم</b> شمرده می‌شوند؛ یک خطای تکی گاه‌به‌گاه عادی است.</span></li>
+  <li data-lines="11-15"><b class="what">در شکست پنجم، اعلام خرابی.</b> مقدارها NaN و یک پیام خطا.
+    <span class="why">شرط <code>== 5</code> به جای <code>&gt;= 5</code> یعنی پیام فقط یک بار می‌رود، نه در هر خواندن بعدی؛ همان اصل «بدون اسپم». پنج خواندن یعنی ۱۰ ثانیه، که با یک خطای تصادفی اشتباه گرفته نمی‌شود. <code>publishAlert</code> باید قبل از این تابع تعریف شده باشد (مثل برنامه نهایی که بخش ۵ قبل از استفاده است، یا با یک اعلان پیشاپیش).</span></li>
+</ol>
+</details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۳: حالت باتری</div>
+<p>نسخه باتری ایستگاه را بساز (بخش «حالت باتری» را ببین): هر ۵ دقیقه بیدار شود، بخواند، روی OLED برای ۳ ثانیه نشان دهد، اگر هشدار شروع یا تمام شد پیام بفرست، هر ۶ بیداری یک بار مقادیر را بفرستد، و بخوابد. دکمه GPIO33 برد را برای نمایش فوری بیدار کند. بعد با فرمول درس ۶.۱ عمر یک باتری ۲۰۰۰ میلی‌آمپر ساعت را تخمین بزن.</p>
+<details><summary>راهنمایی</summary><p>متغیرهای <code>RTC_DATA_ATTR bool alarmOn</code> و <code>RTC_DATA_ATTR uint32_t wakeCount</code>. شرط ارسال مقادیر: <code>wakeCount % 6 == 0</code>. یادآوری هشدار: هر ۲ بیداری (۱۰ دقیقه). برای Wi-Fi از <code>connectWiFiFast()</code> درس ۶.۱ با حد زمانی استفاده کن و فقط وقتی چیزی برای فرستادن داری Wi-Fi را روشن کن. قبل از خواب OLED را با <code>SSD1306_DISPLAYOFF</code> خاموش کن و EXT0 را روی GPIO33 با سطح LOW و بالاکش RTC تنظیم کن. برای بیداری با دکمه، ارسال را رد کن و فقط نمایش بده.</p></details>
+</div>
+
+<h2 id="certificate">🎓 تو حالا می‌توانی...</h2>
+<div class="callout info"><div class="ct">گواهی پایان دوره مستر کلاس ESP32 فارسی</div>
+<p>اگر این دوره را خوانده و پروژه‌هایش را خودت ساخته‌ای، حالا می‌توانی:</p>
+<ul>
+  <li>بردهای ESP32 را بشناسی، پین درست را با دلیل انتخاب کنی و از پین‌های خطرناک دوری کنی</li>
+  <li>برنامه بنویسی، آپلود کنی و با Serial Monitor و Wokwi عیب‌یابی کنی</li>
+  <li>ورودی و خروجی دیجیتال و آنالوگ، PWM، و پروتکل‌های I2C، SPI و UART را به کار ببری</li>
+  <li>دستگاهت را به Wi-Fi وصل کنی، وب سرور بسازی و با بلوتوث حرف بزنی</li>
+  <li>با MQTT و ESP-NOW دستگاه‌های اینترنت اشیا بسازی</li>
+  <li>مصرف انرژی را حساب و اندازه‌گیری کنی و دستگاه باتری‌خور طراحی کنی</li>
+  <li>از هوش مصنوعی مثل یک مهندس استفاده کنی: دقیق بپرسی و سخت‌گیرانه بازبینی کنی</li>
+  <li>یک پروژه کامل را از نیازمندی تا آزمایش پذیرش، قدم به قدم بسازی</li>
+</ul>
+<p>این «گواهی» روی کاغذ نیست؛ در پروژه‌ای است که روی میزت کار می‌کند. عکسش را بگیر و نگه دار.</p></div>
+
+<h2 id="next">قدم‌های بعدی یادگیری</h2>
+<ul>
+  <li><b>ESP-IDF</b>: چارچوب رسمی Espressif که هسته آردوینو روی آن ساخته شده. کنترل کامل‌تر، مدیریت توان پیشرفته، و ابزارهای حرفه‌ای. از <a href="https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/index.html" target="_blank" rel="noopener">راهنمای شروع ESP-IDF</a> شروع کن.</li>
+  <li><b>FreeRTOS و Taskها</b>: ESP32 دو هسته دارد و زیر هسته آردوینو، FreeRTOS اجرا می‌شود. با <code>xTaskCreatePinnedToCore</code> می‌توانی مثلا شبکه را روی یک هسته و هشدار را روی هسته دیگر اجرا کنی. قدم طبیعی بعد از زمان‌بندی با millis است.</li>
+  <li><b>طراحی PCB</b>: وقتی پروژه روی برد بورد کار کرد، نسخه واقعی و قابل اعتماد آن روی یک برد مدار چاپی است؛ بدون سیم شل، کوچک‌تر و با رگولاتور کم‌مصرف برای باتری. آموزش فارسی <a href="../kicad-9-tutorial/">طراحی PCB با KiCad 9</a> در همین سایت را ببین.</li>
+  <li><b>امنیت اینترنت اشیا</b>: MQTT روی TLS (پورت ۸۸۸۳)، بروکر خصوصی، و به‌روزرسانی نرم‌افزار از راه دور (OTA).</li>
+  <li><b>تراشه‌های جدیدتر</b>: ESP32-S3 (هوش مصنوعی روی دستگاه، USB مستقیم) و ESP32-C6 (Wi-Fi 6 و Thread/Zigbee) در درس <a href="1-2.html">۱.۲</a> معرفی شدند.</li>
+</ul>
+
+<div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
+<p>پروژه بزرگ را با نیازمندی روشن (PRD)، معماری و جدول پین با دلیل شروع کن و در گام‌های کوچک آزمایش‌شده بساز: سنسور، نمایشگر، هشدار، Wi-Fi، MQTT، ادغام. برنامه نهایی با توابع جدا و زمان‌بندی <code>millis()</code> هیچ‌وقت منتظر شبکه نمی‌ماند؛ هشدار با هیسترزیس نوسان نمی‌کند و با محدودیت نرخ اسپم نمی‌فرستد. قبل از «تمام شد»، همه آزمایش‌های پذیرش را بگذران و سنسور را از گرمای ESP32 دور نصب کن.</p></div>
+
+</article>
+</body>
+</html>

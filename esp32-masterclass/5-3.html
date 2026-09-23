@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESP32-CAM: پخش زنده تصویر و ذخیره عکس روی کارت SD · مستر کلاس ESP32</title>
+<meta name="description" content="آموزش کامل ESP32-CAM برای مبتدی: معرفی قطعات برد AI-Thinker، پروگرام کردن با مبدل USB-TTL یا ESP32-CAM-MB، پخش زنده با CameraWebServer، عکس‌برداری زمان‌گذر روی کارت microSD با خواب عمیق و حل مشکلات تغذیه.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="5-3">
+
+<p class="lede">ESP32-CAM یک برد کوچک به اندازه یک تمبر پستی است که یک ESP32، یک دوربین ۲ مگاپیکسلی، ۴ مگابایت رم اضافه و یک جای کارت microSD را با هم دارد، و قیمتش از یک وعده غذا کمتر است. در این درس با آن یک دوربین مداربسته Wi-Fi می‌سازی که در مرورگر تصویر زنده نشان می‌دهد، و بعد یک دوربین «زمان‌گذر» (Time-lapse) که هر چند دقیقه یک عکس روی کارت SD ذخیره می‌کند و بین عکس‌ها می‌خوابد. این برد بدقلق هم هست: <b>بیشتر مشکلاتش از تغذیه است</b>، و ما یاد می‌گیریم از اول درست کار کنیم.</p>
+
+<div class="goals">
+  <div><h4>🎯 بعد از این درس می‌توانی</h4><ul>
+    <li>قسمت‌های برد AI-Thinker ESP32-CAM و پایه‌های آزاد آن را بشناسی</li>
+    <li>برد را با مبدل USB-TTL یا پایه ESP32-CAM-MB پروگرام کنی (بدون سوزاندن!)</li>
+    <li>مثال رسمی CameraWebServer را درست تنظیم کنی و تصویر زنده را در مرورگر ببینی</li>
+    <li>معنی تنظیم‌های کلیدی <code>camera_config_t</code> را توضیح بدهی</li>
+    <li>عکس را در حالت ۱ بیتی روی کارت microSD ذخیره کنی و با خواب عمیق یک دوربین زمان‌گذر بسازی</li>
+    <li>خطاهای رایج (Camera init failed، Brownout، Timed out) را عیب‌یابی کنی</li>
+  </ul></div>
+  <div><h4>🧰 پیش‌نیاز و وسایل</h4><ul>
+    <li>درس‌های <a href="4-1.html">۴.۱</a> (Wi-Fi) و <a href="3-3.html">۳.۳</a> (کارت SD)؛ مطالعه <a href="6-1.html">۶.۱</a> (خواب عمیق) مفید است</li>
+    <li>برد <b>AI-Thinker ESP32-CAM</b> با دوربین OV2640</li>
+    <li>ترجیحا پایه پروگرامر <b>ESP32-CAM-MB</b>؛ یا یک مبدل USB به سریال (CP2102، CH340 یا FTDI) + ۵ سیم جامپر ماده به ماده</li>
+    <li>کابل USB دیتای سالم و کوتاه، و یک منبع تغذیه ۵ ولت حداقل ۲ آمپر</li>
+    <li>کارت microSD (ترجیحا ۴ تا ۳۲ گیگابایت، فرمت FAT32)</li>
+  </ul></div>
+</div>
+
+<h2 id="anatomy">آشنایی با برد: چه چیزهایی رویش هست؟</h2>
+<figure><div class="frame"><img src="assets/img/esp32cam-pins.jpg" alt="برد AI-Thinker ESP32-CAM با برچسب پایه‌ها"></div>
+<figcaption>برد AI-Thinker ESP32-CAM از پشت (سمت ماژول ESP32-S). ۱۶ پایه دارد: سمت چپ GPIO4، 2، 14، 15، 13، 12، GND و 5V؛ سمت راست GND، GPIO1 (U0TXD)، GPIO3 (U0RXD)، پایه خروجی 3.3V/5V، GND، GPIO0، GPIO16 و 3.3V. دکمه RST پایین برد است.<span class="src">تصویر: مخزن raphaelbs/esp32-cam-ai-thinker در GitHub، مجوز Apache-2.0</span></figcaption></figure>
+
+<div class="table-wrap"><table>
+<tr><th>قطعه</th><th>مشخصات</th><th>چرا مهم است</th></tr>
+<tr><td>ماژول ESP32-S</td><td>همان تراشه ESP32 دوهسته‌ای با Wi-Fi و بلوتوث، ۴ مگابایت فلش</td><td>هر چه در درس‌های قبل یاد گرفتی اینجا هم کار می‌کند</td></tr>
+<tr><td>دوربین <b>OV2640</b></td><td>۲ مگاپیکسل، حداکثر ۱۶۰۰×۱۲۰۰ (UXGA)، خودش JPEG فشرده می‌سازد</td><td>چون خود دوربین JPEG می‌دهد، ESP32 لازم نیست تصویر را فشرده کند؛ برای همین این پردازنده کوچک می‌تواند ویدیو پخش کند</td></tr>
+<tr><td><span class="term" data-t="PSRAM">PSRAM</span> ۴ مگابایت</td><td>رم اضافه بیرون از تراشه</td><td>SRAM داخلی ESP32 حدود ۵۲۰ کیلوبایت است و یک عکس UXGA ممکن است چند صد کیلوبایت باشد. بدون PSRAM فقط تصویرهای کوچک ممکن است</td></tr>
+<tr><td>جای کارت microSD</td><td>به رابط SD_MMC (پین‌های 14، 15، 2، 4، 12، 13) وصل است</td><td>ذخیره عکس بدون نیاز به اینترنت</td></tr>
+<tr><td>LED فلش سفید</td><td><b>GPIO4</b>، خیلی پرنور</td><td>با خط داده DATA1 کارت SD مشترک است؛ مشکل مهمی که پایین‌تر حلش می‌کنیم</td></tr>
+<tr><td>LED قرمز کوچک</td><td><b>GPIO33</b>، پشت برد، منطق معکوس (LOW = روشن)</td><td>برای نشان دادن وضعیت برنامه، بدون کور کردن چشم!</td></tr>
+<tr><td>آنتن</td><td>آنتن روی برد (PCB) + کانکتور IPEX برای آنتن خارجی</td><td>انتخاب بین این دو با یک مقاومت صفر اهم کوچک کنار آنتن است؛ فقط وصل کردن آنتن خارجی کافی نیست</td></tr>
+<tr><td><b>پورت USB</b></td><td><b>ندارد!</b></td><td>برای پروگرام کردن، مبدل یا پایه جدا لازم است (بخش بعد)</td></tr>
+</table></div>
+
+<figure><div class="frame"><img src="assets/img/esp32cam-flash-sd.jpg" alt="جدول اتصال پایه‌های دوربین و کارت SD به ESP32"></div>
+<figcaption>کدام پایه ESP32 به دوربین و کدام به کارت SD وصل است. دقت کن DATA1 کارت SD و LED فلش هر دو روی PIN4 (GPIO4) هستند. تقریبا همه پایه‌ها مشغول‌اند؛ برای پروژه‌های تو فقط چند پایه آزاد می‌ماند.<span class="src">تصویر: مخزن raphaelbs/esp32-cam-ai-thinker در GitHub، مجوز Apache-2.0</span></figcaption></figure>
+
+<div class="callout warn"><div class="ct">پایه‌های آزاد خیلی کم است</div>
+<p>دوربین ۱۶ پایه و کارت SD تا ۶ پایه را اشغال می‌کنند. اگر از کارت SD در حالت ۱ بیتی استفاده کنی، GPIO12، GPIO13 و GPIO4 آزاد می‌شوند؛ GPIO16 هم به PSRAM وصل است و نباید استفاده شود. GPIO12 یک Strapping Pin حساس است: اگر هنگام روشن شدن HIGH باشد، ولتاژ فلش اشتباه تنظیم می‌شود و برد بوت نمی‌کند. پس ESP32-CAM برای پروژه‌هایی با سنسور و موتور زیاد مناسب نیست؛ آن‌ها را با یک ESP32 دیگر و ارتباط <a href="5-2.html">ESP-NOW</a> یا <a href="5-1.html">MQTT</a> ترکیب کن.</p></div>
+
+<h2 id="program">پروگرام کردن: برد USB ندارد، پس چه کنیم؟</h2>
+<p>ESP32 معمولی (DevKitC) یک تراشه مبدل USB به سریال (CP2102 یا CH340) و دو ترانزیستور دارد که به طور خودکار دکمه BOOT را «می‌زنند». ESP32-CAM برای کوچک و ارزان ماندن هیچ‌کدام را ندارد. دو راه داری:</p>
+
+<h3>راه ۱ (توصیه‌شده): پایه ESP32-CAM-MB</h3>
+<p>یک برد کوچک که ESP32-CAM رویش سوار می‌شود و تراشه CH340، سوکت USB و مدار خودکار ریست را دارد. برد را رویش بگذار (جهت را با چاپ روی برد تطبیق بده: جای آنتن و پایه‌های 5V و GND باید با هم بخوانند)، کابل USB بزن و مثل یک ESP32 معمولی آپلود کن. تغذیه ۵ ولت هم از همان USB می‌رسد.</p>
+<div class="callout tip"><div class="ct">اگر با MB هم آپلود نشد</div>
+<p>بعضی نسخه‌های MB مدار خودکار را درست اجرا نمی‌کنند. روش دستی: دکمه <b>IO0</b> روی MB را نگه دار، یک بار دکمه <b>RST</b> روی خود ESP32-CAM را بزن و رها کن، بعد IO0 را رها کن و آپلود را شروع کن. بعد از آپلود یک بار دیگر RST را بزن تا برنامه اجرا شود.</p></div>
+
+<h3>راه ۲: مبدل USB-TTL (FTDI، CP2102، CH340)</h3>
+<figure><div class="frame"><img src="assets/img/esp32cam-ftdi.png" alt="شماتیک اتصال ESP32-CAM به مبدل USB به TTL"></div>
+<figcaption>شماتیک اتصال: GND به GND، U0T برد به RX مبدل، U0R برد به TX مبدل، و یک کلید که IO0 را به GND وصل می‌کند (در شکل اسمش RESET button است، ولی در واقع کلید حالت پروگرام روی IO0 است). در این شکل 5V از یک منبع تغذیه جدا (EXTERNAL PSU) می‌آید، که بهترین کار است.<span class="src">تصویر: مخزن raphaelbs/esp32-cam-ai-thinker در GitHub، مجوز Apache-2.0</span></figcaption></figure>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32-CAM (AI-Thinker)",
+  "parts":[
+    {"id":"TTL","name":"مبدل USB به TTL","pins":[["5V","خروجی ۵ ولت USB"],["GND","زمین"],["TX","فرستنده مبدل"],["RX","گیرنده مبدل"]]},
+    {"id":"J1","name":"سیم جامپر حالت پروگرام","pins":[["1","سر اول"],["2","سر دوم"]]}
+  ],
+  "wires":[["5V","TTL.5V","red"],["GND","TTL.GND","black"],["U0R","TTL.TX","yellow"],["U0T","TTL.RX","blue"],["GPIO0","J1.1","purple"],["J1.2","GND","black"]]
+}</script><figcaption>تغذیه ۵ ولت به پایه 5V برد (نه 3.3V)، سیم‌های داده <b>ضربدری</b> (TX به RX و RX به TX)، و GPIO0 با یک جامپر به GND فقط در زمان آپلود. پایه U0R همان GPIO3 و U0T همان GPIO1 است.</figcaption></div>
+
+<ol class="steps">
+  <li><b>ولتاژ منطقی مبدل را روی ۳٫۳ ولت بگذار.</b> اگر مبدل تو (مثل بیشتر FTDIها) جامپر 3.3V/5V دارد، آن را روی 3.3V بگذار تا سیگنال TX آن ۳٫۳ ولتی باشد؛ پایه‌های ESP32 برای ورودی ۵ ولت طراحی نشده‌اند. بسیاری از آموزش‌ها با ۵ ولت هم جواب گرفته‌اند، ولی «کار کردن» با «امن بودن» فرق دارد.</li>
+  <li><b>تغذیه را از پایه ۵ ولت بده.</b> پایه 5V مبدل (اگر دارد) یا بهتر، یک منبع ۵ ولت جدا را به پایه <b>5V</b> ESP32-CAM بزن و زمین‌ها را مشترک کن. تغذیه از خروجی 3.3V مبدل تقریبا همیشه به Brownout یا آپلود ناموفق می‌رسد، چون جریانش کم است.</li>
+  <li><b>سیم‌های داده را ضربدری بزن.</b> <code>U0R</code> (دریافت برد) به <code>TX</code> (فرستادن مبدل) و <code>U0T</code> به <code>RX</code>. مثل دو نفر که تلفن حرف می‌زنند: دهان یکی به گوش دیگری.</li>
+  <li><b>GPIO0 را به GND وصل کن</b> و دکمه RST را بزن. حالا برد در حالت «دریافت برنامه» (Download mode) است.</li>
+  <li><b>آپلود کن.</b> وقتی Arduino IDE گفت <code>Hard resetting via RTS pin...</code>، جامپر GPIO0 را <b>بردار</b> و دوباره RST را بزن تا برنامه اجرا شود.</li>
+</ol>
+<div class="callout why"><div class="ct">چرا جامپر GPIO0 را باید برداشت؟</div>
+<p>ESP32 هنگام روشن شدن یا ریست، پایه GPIO0 را نگاه می‌کند: LOW یعنی «برنامه جدید می‌خواهم»، HIGH یعنی «برنامه ذخیره‌شده را اجرا کن». اگر جامپر بماند، برد هر بار در حالت دانلود می‌ماند و برنامه‌ات اجرا نمی‌شود. تازه روی ESP32-CAM، GPIO0 همان سیگنال ساعت دوربین (XCLK) هم هست؛ وصل ماندنش به GND دوربین را هم از کار می‌اندازد.</p></div>
+
+<h3>تنظیمات Arduino IDE</h3>
+<ol class="steps">
+  <li><b>برد:</b> <code>Tools › Board › esp32 › AI Thinker ESP32-CAM</code>. در این گزینه PSRAM به طور خودکار فعال است و منوی جدایی برایش نیست.</li>
+  <li><b>Partition Scheme:</b> پیش‌فرض این برد <b>Huge APP (3MB No OTA/1MB SPIFFS)</b> است. همین را نگه دار؛ برنامه دوربین و وب سرور بزرگ است و در ۱٫۲ مگابایت جا نمی‌شود (خطای <code>Sketch too big</code>).</li>
+  <li><b>Port:</b> پورت مبدل یا MB (مثلا <code>COM7</code>).</li>
+</ol>
+
+<h2 id="power">قانون شماره یک: تغذیه، تغذیه، تغذیه</h2>
+<p>ESP32-CAM در لحظه‌هایی که Wi-Fi فرستنده‌اش را روشن می‌کند و هم‌زمان دوربین فعال است، جریان لحظه‌ای بالایی (چند صد میلی‌آمپر) می‌کشد. اگر منبع یا کابل نتواند این جریان را بدهد، ولتاژ برای چند میلی‌ثانیه افت می‌کند و محافظ افت ولتاژ (<span class="term" data-t="Brownout">Brownout</span>) تراشه را ریست می‌کند. نتیجه: برد مدام ریست می‌شود و تو فکر می‌کنی کدت خراب است.</p>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره: شیر آب و لوله باریک</div>
+<p>فرض کن همه شیرهای خانه را هم‌زمان باز کنی و لوله اصلی باریک باشد: فشار آب ناگهان می‌افتد. کابل USB نازک و بلند مثل همان لوله باریک است، و Wi-Fi مثل باز شدن هم‌زمان همه شیرها.</p></div>
+<div class="callout example"><div class="ct">حساب کن: چرا کابل مهم است</div>
+<p>یک کابل USB ارزان و یک متری ممکن است در مسیر رفت و برگشت حدود ۰٫۵ اهم مقاومت داشته باشد. با جریان لحظه‌ای ۰٫۵ آمپر: <code>V = I × R = 0.5 × 0.5 = 0.25V</code> افت. پس ۵ ولت به ۴٫۷۵ می‌رسد؛ بعد رگولاتور AMS1117 روی برد هم حدود ۱ ولت یا بیشتر افت دارد و اگر ورودی‌اش پایین بیاید، خروجی ۳٫۳ ولت هم می‌افتد. هر دهم ولت مهم است. کابل کوتاه و ضخیم + منبع ۵ ولت ۲ آمپر = خداحافظی با Brownout.</p></div>
+<div class="callout warn"><div class="ct">راه حل غلطی که در اینترنت زیاد می‌بینی</div>
+<p>بعضی آموزش‌ها با خط <code>WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);</code> محافظ Brownout را خاموش می‌کنند. این مثل درآوردن باتری آژیر دود است چون زیادی بوق می‌زند! مشکل (ولتاژ پایین) سر جایش است؛ فقط دیگر خبردار نمی‌شوی و به جایش عکس‌های خراب، فایل‌های نیمه‌کاره روی کارت SD و هنگ کردن‌های تصادفی می‌گیری. تغذیه را درست کن، نه آژیر را.</p></div>
+
+<h2 id="webserver">پروژه ۱: دوربین زنده در مرورگر (CameraWebServer)</h2>
+<p>Espressif یک مثال کامل آماده کرده که وب سرور، پخش زنده و صفحه تنظیمات دارد. لازم نیست هیچ کدی بنویسی؛ فقط دو جا را تنظیم می‌کنی.</p>
+<ol class="steps">
+  <li><b>باز کن:</b> <code>File › Examples › ESP32 › Camera › CameraWebServer</code>. (این مثال زیر بخش «Examples for AI Thinker ESP32-CAM» یا «ESP32» ظاهر می‌شود؛ باید اول برد درست انتخاب شده باشد.) Arduino IDE از تو می‌خواهد یک کپی ذخیره کنی؛ ذخیره کن.</li>
+  <li><b>مدل دوربین را انتخاب کن.</b> در هسته‌های جدید (۳.۲.۱ به بعد) این انتخاب در زبانه جدای <code>board_config.h</code> است. در نسخه‌های قدیمی‌تر همین خط‌ها بالای فایل <code>CameraWebServer.ino</code> هستند.</li>
+</ol>
+<div class="code" data-file="board_config.h (تکه تغییرات)" id="cfg1"><pre>
+//#define CAMERA_MODEL_WROVER_KIT // Has PSRAM
+//#define CAMERA_MODEL_ESP_EYE  // Has PSRAM
+//#define CAMERA_MODEL_ESP32S3_EYE // Has PSRAM
+#define CAMERA_MODEL_AI_THINKER // Has PSRAM
+</pre></div>
+<ol class="walk" data-for="cfg1">
+  <li data-lines="1-3"><b class="what">مدل‌های دیگر را خاموش کن.</b> جلوی هر مدل دیگری که فعال است (در نسخه فعلی به طور پیش‌فرض <code>CAMERA_MODEL_ESP_EYE</code> فعال است) <code>//</code> بگذار.
+    <span class="why">هر مدل، پین‌های دوربین را جای دیگری وصل کرده. اگر دو مدل هم‌زمان فعال باشند یا مدل اشتباه، <code>esp_camera_init</code> دنبال دوربین در پایه‌های غلط می‌گردد و خطای <code>0x105</code> یا <code>0x20001</code> (دوربین پیدا نشد) می‌دهد.</span></li>
+  <li data-lines="4"><b class="what">AI-Thinker را فعال کن.</b> <code>//</code> جلوی <code>CAMERA_MODEL_AI_THINKER</code> را پاک کن.
+    <span class="why">فایل <code>camera_pins.h</code> بر اساس همین اسم، پین‌های درست را انتخاب می‌کند: XCLK روی GPIO0، SDA و SCL دوربین روی 26 و 27، PWDN روی 32 و LED فلش روی 4.</span></li>
+</ol>
+<ol class="steps">
+  <li><b>اسم و رمز Wi-Fi را بنویس.</b> در <code>CameraWebServer.ino</code> دو خط <code>const char *ssid = "**********";</code> و <code>const char *password = "**********";</code> را با اسم و رمز مودم خودت عوض کن. دقت کن ESP32 فقط شبکه ۲٫۴ گیگاهرتز را می‌بیند.</li>
+  <li><b>آپلود کن</b> (با روش MB یا USB-TTL بالا)، Serial Monitor را روی 115200 باز کن و RST را بزن.</li>
+  <li><b>IP را بردار.</b> در Serial پیامی مثل <code>Camera Ready! Use 'http://192.168.1.42' to connect</code> می‌بینی. همان آدرس را در مرورگر گوشی یا کامپیوتری که به <b>همان مودم</b> وصل است باز کن.</li>
+  <li><b>Start Stream</b> را بزن. تصویر زنده ظاهر می‌شود. دکمه <b>Get Still</b> یک عکس تکی می‌گیرد. در منوی کنار، Resolution، Quality، روشنایی و آینه کردن تصویر (H-Mirror، V-Flip) را امتحان کن. اسلایدر LED Intensity هم فلش را کنترل می‌کند.</li>
+</ol>
+<div class="serial">WiFi connecting.....
+WiFi connected
+Camera Ready! Use 'http://192.168.1.42' to connect</div>
+<div class="callout tip"><div class="ct">نکته‌های کاربردی پخش زنده</div>
+<p>پخش زنده روی پورت <b>81</b> است (آدرس مستقیم: <code>http://192.168.1.42:81/stream</code>) و در هر لحظه فقط <b>یک</b> بیننده می‌تواند آن را ببیند؛ اگر در تب دیگری باز است، تب جدید چیزی نشان نمی‌دهد. هر چه رزولوشن بالاتر، تعداد فریم در ثانیه کمتر: در VGA (۶۴۰×۴۸۰) تصویر روان‌تری از UXGA (۱۶۰۰×۱۲۰۰) می‌گیری. عدد دقیق به قدرت Wi-Fi و نور بستگی دارد.</p></div>
+
+<h3>داخل مثال چه می‌گذرد؟ تنظیمات کلیدی camera_config_t</h3>
+<p>تکه زیر از خود مثال رسمی است. <code>camera_config_t</code> یک struct بزرگ است که به کتابخانه دوربین می‌گوید دوربین به کدام پایه‌ها وصل است و تصویر را چطور بدهد:</p>
+<div class="code" data-file="CameraWebServer.ino (تکه‌ای از setup)" id="camcfg"><pre>
+config.xclk_freq_hz = 20000000;
+config.frame_size = FRAMESIZE_UXGA;
+config.pixel_format = PIXFORMAT_JPEG;  // for streaming
+config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+config.fb_location = CAMERA_FB_IN_PSRAM;
+config.jpeg_quality = 12;
+config.fb_count = 1;
+
+if (config.pixel_format == PIXFORMAT_JPEG) {
+  if (psramFound()) {
+    config.jpeg_quality = 10;
+    config.fb_count = 2;
+    config.grab_mode = CAMERA_GRAB_LATEST;
+  } else {
+    config.frame_size = FRAMESIZE_SVGA;
+    config.fb_location = CAMERA_FB_IN_DRAM;
+  }
+}
+
+esp_err_t err = esp_camera_init(&amp;config);
+if (err != ESP_OK) {
+  Serial.printf("Camera init failed with error 0x%x", err);
+  return;
+}
+</pre></div>
+<ol class="walk" data-for="camcfg">
+  <li data-lines="1"><b class="what">ساعت دوربین (XCLK) = ۲۰ مگاهرتز.</b> ESP32 یک سیگنال ساعت روی GPIO0 به دوربین می‌دهد و دوربین با این ضرب‌آهنگ پیکسل‌ها را بیرون می‌فرستد.
+    <span class="why">۲۰ مگاهرتز مقدار استاندارد OV2640 است. اگر تصویر خط‌خطی یا ناپایدار بود، بعضی‌ها ۱۰ مگاهرتز را امتحان می‌کنند؛ فریم کمتر ولی پایدارتر.</span></li>
+  <li data-lines="2"><b class="what">frame_size: اندازه تصویر.</b> <code>FRAMESIZE_UXGA</code> یعنی ۱۶۰۰×۱۲۰۰. گزینه‌های رایج: <code>QVGA</code> ۳۲۰×۲۴۰، <code>VGA</code> ۶۴۰×۴۸۰، <code>SVGA</code> ۸۰۰×۶۰۰، <code>XGA</code> ۱۰۲۴×۷۶۸، <code>SXGA</code> ۱۲۸۰×۱۰۲۴.
+    <span class="why">کتابخانه بافر را برای بزرگ‌ترین اندازه‌ای که اینجا می‌گویی از قبل رزرو می‌کند. مثال با UXGA شروع می‌کند تا بعدا بتوانی از منوی وب هر اندازه‌ای انتخاب کنی، و بعد برای سرعت اولیه آن را روی QVGA پایین می‌آورد.</span></li>
+  <li data-lines="3"><b class="what">pixel_format: JPEG.</b> دوربین خودش تصویر را به JPEG فشرده می‌کند.
+    <span class="why">یک تصویر خام ۱۶۰۰×۱۲۰۰ با ۲ بایت برای هر پیکسل حدود ۳٫۸ مگابایت است؛ همان تصویر به صورت JPEG معمولا چند ده تا چند صد کیلوبایت. بدون JPEG سخت‌افزاری، پخش زنده روی ESP32 عملا ممکن نبود.</span></li>
+  <li data-lines="4"><b class="what">grab_mode.</b> <code>WHEN_EMPTY</code> یعنی «بافر را وقتی خالی شد پر کن». <code>LATEST</code> یعنی «همیشه تازه‌ترین فریم را نگه دار».
+    <span class="why">با <code>WHEN_EMPTY</code> فریمی که می‌گیری ممکن است چند لحظه قدیمی باشد؛ برای عکس تکی مهم است (در پروژه ۲ می‌بینی چرا چند فریم اول را دور می‌ریزیم).</span></li>
+  <li data-lines="5"><b class="what">fb_location: بافر در PSRAM.</b> «Frame Buffer» جایی از رم است که عکس کامل در آن قرار می‌گیرد.
+    <span class="why">یک JPEG بزرگ در رم داخلی ESP32 (که Wi-Fi و برنامه هم از آن استفاده می‌کنند) جا نمی‌شود. PSRAM چهار مگابایتی دقیقا برای همین روی برد است.</span></li>
+  <li data-lines="6"><b class="what">jpeg_quality.</b> عددی بین ۰ تا ۶۳؛ <b>کمتر یعنی کیفیت بهتر</b> و فایل بزرگ‌تر.
+    <span class="why">۱۰ تا ۱۲ تعادل خوبی است. زیر ۸ فایل‌ها خیلی بزرگ می‌شوند و ممکن است در بافر جا نشوند (تصویر نصفه).</span></li>
+  <li data-lines="7"><b class="what">fb_count: تعداد بافر.</b> یک یا دو بافر.
+    <span class="why">با دو بافر، دوربین فریم بعدی را پر می‌کند در حالی که تو فریم قبلی را می‌فرستی؛ پخش روان‌تر، ولی رم دو برابر. بدون PSRAM یک بافر.</span></li>
+  <li data-lines="9-18"><b class="what">تصمیم بر اساس وجود PSRAM.</b> اگر <code>psramFound()</code> درست بود: کیفیت بهتر (۱۰)، دو بافر و همیشه تازه‌ترین فریم. اگر نبود: اندازه را به SVGA کم کن و بافر را در رم داخلی (DRAM) بگذار.
+    <span class="why">یک برنامه برای بردهای با و بدون PSRAM. اگر روی AI-Thinker (که PSRAM دارد) پیام کمبود حافظه دیدی، یعنی برد اشتباه در منوی Tools انتخاب شده و PSRAM فعال نیست.</span></li>
+  <li data-lines="20-24"><b class="what">راه‌اندازی دوربین و بررسی خطا.</b> <code>esp_camera_init</code> با این تنظیمات دوربین را روشن می‌کند و اگر موفق نبود، کد خطا را به صورت هگز چاپ می‌کند.
+    <span class="why">این کد خطا مهم‌ترین سرنخ تو است؛ جدول <a href="#debug">عیب‌یابی</a> معنی رایج‌ترین‌ها را دارد.</span></li>
+</ol>
+
+<h2 id="timelapse">پروژه ۲: دوربین زمان‌گذر با کارت SD و خواب عمیق</h2>
+<p>حالا دوربینی می‌سازیم که بدون Wi-Fi و بدون کامپیوتر کار کند: بیدار می‌شود، یک عکس با کیفیت کامل می‌گیرد، آن را با شماره ترتیبی روی کارت SD ذخیره می‌کند و ۵ دقیقه به خواب عمیق می‌رود. با آن می‌توانی رشد گیاه، ساخت‌وساز یا حرکت ابرها را ضبط کنی.</p>
+
+<pre class="mermaid">flowchart TD
+  W["بیدار شدن (ریست از خواب عمیق)"] --> C["راه‌اندازی دوربین"]
+  C --> S["اتصال کارت SD در حالت ۱ بیتی"]
+  S --> D["دور ریختن ۳ فریم اول"]
+  D --> P["گرفتن عکس"]
+  P --> N["خواندن شماره از Preferences"]
+  N --> F["ذخیره /img_00042.jpg"]
+  F --> Z["خواب عمیق ۵ دقیقه"]
+  Z --> W
+  C -.->|"خطا"| Z
+  S -.->|"خطا"| Z</pre>
+
+<h3>مشکل مهم: LED فلش و کارت SD روی یک پایه</h3>
+<p>کارت SD دو حالت کار دارد: <b>۴ بیتی</b> (چهار خط داده DATA0 تا DATA3، سریع‌تر) و <b>۱ بیتی</b> (فقط DATA0، کمی کندتر). روی ESP32-CAM، خط DATA1 همان GPIO4 است که LED فلش پرنور به آن وصل است. در حالت ۴ بیتی، هر بار که داده روی کارت نوشته می‌شود، <b>فلش چشمک می‌زند</b>؛ آزاردهنده است، برق مصرف می‌کند و در عکس شب ممکن است دیده شود.</p>
+<p>راه حل: <code>SD_MMC.begin("/sdcard", true)</code>. آن <code>true</code> یعنی حالت ۱ بیتی؛ کارت فقط با GPIO14 (CLK)، GPIO15 (CMD) و GPIO2 (DATA0) کار می‌کند و GPIO4، GPIO12 و GPIO13 آزاد می‌مانند. برای عکسی که هر ۵ دقیقه ذخیره می‌شود، سرعت حالت ۱ بیتی کاملا کافی است.</p>
+
+<div class="callout info"><div class="ct">آماده کردن کارت microSD</div>
+<p>کارت را در کامپیوتر با فرمت <b>FAT32</b> فرمت کن. کارت‌های ۴ تا ۳۲ گیگابایتی (SDHC) کم‌دردسرترین‌اند؛ کارت‌های بزرگ‌تر معمولا exFAT هستند و ممکن است بدون فرمت دوباره mount نشوند. کارت را قبل از روشن کردن برد جا بزن.</p></div>
+
+<div class="code" data-file="TimeLapse_SD.ino" id="tl1"><pre>
+#include "esp_camera.h"
+#include "FS.h"
+#include "SD_MMC.h"
+#include &lt;Preferences.h&gt;
+#include "driver/rtc_io.h"
+
+// پین‌های دوربین برد AI-Thinker ESP32-CAM
+#define PWDN_GPIO_NUM  32
+#define RESET_GPIO_NUM -1
+#define XCLK_GPIO_NUM   0
+#define SIOD_GPIO_NUM  26
+#define SIOC_GPIO_NUM  27
+#define Y9_GPIO_NUM    35
+#define Y8_GPIO_NUM    34
+#define Y7_GPIO_NUM    39
+#define Y6_GPIO_NUM    36
+#define Y5_GPIO_NUM    21
+#define Y4_GPIO_NUM    19
+#define Y3_GPIO_NUM    18
+#define Y2_GPIO_NUM     5
+#define VSYNC_GPIO_NUM 25
+#define HREF_GPIO_NUM  23
+#define PCLK_GPIO_NUM  22
+
+const int FLASH_LED = 4;
+const uint64_t SLEEP_MINUTES = 5;
+
+RTC_DATA_ATTR int bootCount = 0;   // در خواب عمیق زنده می‌ماند
+Preferences prefs;
+
+bool initCamera() {
+  camera_config_t config = {};
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = Y2_GPIO_NUM;
+  config.pin_d1 = Y3_GPIO_NUM;
+  config.pin_d2 = Y4_GPIO_NUM;
+  config.pin_d3 = Y5_GPIO_NUM;
+  config.pin_d4 = Y6_GPIO_NUM;
+  config.pin_d5 = Y7_GPIO_NUM;
+  config.pin_d6 = Y8_GPIO_NUM;
+  config.pin_d7 = Y9_GPIO_NUM;
+  config.pin_xclk = XCLK_GPIO_NUM;
+  config.pin_pclk = PCLK_GPIO_NUM;
+  config.pin_vsync = VSYNC_GPIO_NUM;
+  config.pin_href = HREF_GPIO_NUM;
+  config.pin_sccb_sda = SIOD_GPIO_NUM;
+  config.pin_sccb_scl = SIOC_GPIO_NUM;
+  config.pin_pwdn = PWDN_GPIO_NUM;
+  config.pin_reset = RESET_GPIO_NUM;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG;
+  config.frame_size = FRAMESIZE_UXGA;      // 1600x1200
+  config.jpeg_quality = 10;                // 0 تا 63؛ کمتر = بهتر
+  config.fb_count = 1;
+  config.fb_location = CAMERA_FB_IN_PSRAM;
+  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+
+  esp_err_t err = esp_camera_init(&amp;config);
+  if (err != ESP_OK) {
+    Serial.printf("Camera init failed: 0x%x\n", err);
+    return false;
+  }
+  return true;
+}
+
+void goToSleep() {
+  Serial.printf("Sleeping %llu minutes...\n", SLEEP_MINUTES);
+  pinMode(FLASH_LED, OUTPUT);
+  digitalWrite(FLASH_LED, LOW);
+  rtc_gpio_hold_en(GPIO_NUM_4);            // فلش در خواب خاموش بماند
+  esp_sleep_enable_timer_wakeup(SLEEP_MINUTES * 60ULL * 1000000ULL);
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+void setup() {
+  Serial.begin(115200);
+  bootCount++;
+  Serial.printf("\nBoot #%d\n", bootCount);
+  rtc_gpio_hold_dis(GPIO_NUM_4);
+
+  if (!psramFound()) {
+    Serial.println("No PSRAM! Check board selection.");
+    goToSleep();
+  }
+  if (!initCamera()) goToSleep();
+
+  if (!SD_MMC.begin("/sdcard", true)) {    // true = حالت ۱ بیتی
+    Serial.println("SD card mount failed");
+    goToSleep();
+  }
+
+  // چند فریم اول را دور بریز تا نوردهی خودکار تنظیم شود
+  for (int i = 0; i &lt; 3; i++) {
+    camera_fb_t *tmp = esp_camera_fb_get();
+    if (tmp) esp_camera_fb_return(tmp);
+  }
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    Serial.println("Capture failed");
+    goToSleep();
+  }
+
+  prefs.begin("timelapse", false);
+  uint32_t photoNum = prefs.getUInt("num", 0) + 1;
+
+  char path[32];
+  snprintf(path, sizeof(path), "/img_%05lu.jpg", (unsigned long)photoNum);
+  File file = SD_MMC.open(path, FILE_WRITE);
+  if (file) {
+    file.write(fb-&gt;buf, fb-&gt;len);
+    file.close();
+    prefs.putUInt("num", photoNum);        // فقط بعد از ذخیره موفق
+    Serial.printf("Saved %s (%u bytes)\n", path, (unsigned)fb-&gt;len);
+  } else {
+    Serial.println("Failed to open file");
+  }
+  prefs.end();
+  esp_camera_fb_return(fb);
+  goToSleep();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="tl1">
+  <li data-lines="1-5"><b class="what">کتابخانه‌ها.</b> <code>esp_camera.h</code> درایور دوربین، <code>FS.h</code> و <code>SD_MMC.h</code> برای کارت SD، <code>Preferences.h</code> برای ذخیره شماره عکس در فلش، و <code>driver/rtc_io.h</code> برای قفل کردن پایه فلش در خواب.
+    <span class="why">همه همراه هسته ESP32 نصب‌اند. <code>SD_MMC</code> از رابط سخت‌افزاری SDMMC استفاده می‌کند، نه SPI (که در درس ۳.۳ با ماژول جدا دیدی)؛ روی ESP32-CAM کارت به همین رابط سیم‌کشی شده.</span></li>
+  <li data-lines="7-23"><b class="what">نقشه پایه‌های دوربین.</b> همان عددهای <code>camera_pins.h</code> برای AI-Thinker. <code>Y2</code> تا <code>Y9</code> هشت خط داده تصویر، <code>XCLK</code> ساعت، <code>PCLK</code> ساعت پیکسل، <code>VSYNC</code> و <code>HREF</code> علامت شروع فریم و خط، <code>SIOD</code>/<code>SIOC</code> گذرگاه تنظیمات (شبیه I2C) و <code>PWDN</code> خاموش‌کننده دوربین.
+    <span class="why">اینجا آن‌ها را مستقیم نوشتیم تا برنامه به فایل‌های مثال وابسته نباشد و در یک فایل کپی شود. این عددها را با جدول تصویر بالا (CAM ↔ ESP32) مقایسه کن: D0 = PIN5 یعنی <code>Y2_GPIO_NUM 5</code>. <code>RESET_GPIO_NUM -1</code> یعنی این برد پایه ریست دوربین را به ESP32 وصل نکرده.</span></li>
+  <li data-lines="25-26"><b class="what">ثابت‌ها.</b> پایه فلش و فاصله عکس‌ها به دقیقه. نوع <code>uint64_t</code> (عدد ۶۴ بیتی) است.
+    <span class="why">زمان خواب بر حسب <b>میکروثانیه</b> داده می‌شود: ۵ دقیقه = <code>5 × 60 × 1,000,000 = 300,000,000</code> میکروثانیه. برای یک ساعت می‌شود ۳٬۶۰۰٬۰۰۰٬۰۰۰ که از سقف عدد ۳۲ بیتی بی‌علامت (حدود ۴٫۲۹ میلیارد) نزدیک است و بیشتر از آن سرریز می‌کند. با ۶۴ بیت خیالت راحت است.</span></li>
+  <li data-lines="28"><b class="what">RTC_DATA_ATTR.</b> این متغیر در حافظه کوچک RTC نگه داشته می‌شود که در خواب عمیق برق دارد.
+    <span class="why">خواب عمیق یعنی ESP32 عملا خاموش می‌شود و بیدار شدن مثل ریست است: همه متغیرهای معمولی از نو صفر می‌شوند. <code>bootCount</code> در خواب زنده می‌ماند، ولی با قطع برق یا دکمه RST <b>صفر می‌شود</b>. برای همین شماره فایل را در آن نگذاشتیم.</span></li>
+  <li data-lines="29"><b class="what">Preferences.</b> یک «دفترچه» کوچک در حافظه فلش (بخش NVS) که با قطع برق هم پاک نمی‌شود.
+    <span class="why">اگر شماره عکس فقط در RAM یا RTC بود، بعد از هر قطع برق دوباره از ۱ شروع می‌شد و <code>img_00001.jpg</code> قبلی روی کارت بازنویسی می‌شد. Preferences جانشین مدرن EEPROM در ESP32 است.</span></li>
+  <li data-lines="32"><b class="what">صفر کردن struct.</b> <code>camera_config_t config = {};</code> همه فیلدها را صفر می‌کند.
+    <span class="why">این struct فیلدهای بیشتری از آن چه ما پر می‌کنیم دارد (مثلا <code>sccb_i2c_port</code>). بدون صفر کردن، آن فیلدها مقدار تصادفی دارند و دوربین ممکن است یک بار کار کند و بار دیگر نه.</span></li>
+  <li data-lines="33-50"><b class="what">پر کردن پایه‌ها.</b> کانال و تایمر LEDC (برای ساختن سیگنال XCLK)، هشت خط داده و بقیه سیگنال‌ها.
+    <span class="why">کتابخانه دوربین سیگنال ساعت ۲۰ مگاهرتز را با همان سخت‌افزار PWM (LEDC) می‌سازد که در درس ۳.۲ برای LED استفاده کردی. اگر در برنامه‌ات از LEDC برای چیز دیگری استفاده می‌کنی، کانال ۰ و تایمر ۰ را به آن نده.</span></li>
+  <li data-lines="51-57"><b class="what">تنظیم کیفیت.</b> JPEG، اندازه کامل ۱۶۰۰×۱۲۰۰، کیفیت ۱۰، یک بافر در PSRAM، حالت <code>WHEN_EMPTY</code>.
+    <span class="why">برای زمان‌گذر، کیفیت از سرعت مهم‌تر است؛ یک بافر کافی است چون فقط یک عکس می‌گیریم. هر عکس UXGA با کیفیت ۱۰ بسته به صحنه معمولا چند صد کیلوبایت است؛ یک کارت ۸ گیگابایتی هزاران عکس جا دارد.</span></li>
+  <li data-lines="59-64"><b class="what">راه‌اندازی دوربین.</b> اگر خطا بود، کد را چاپ و <code>false</code> برمی‌گرداند.
+    <span class="why">تابع به جای گیر انداختن برنامه، نتیجه را برمی‌گرداند تا setup تصمیم بگیرد (اینجا: بخواب و بعدا دوباره امتحان کن).</span></li>
+  <li data-lines="67-71"><b class="what">خاموش نگه داشتن فلش در خواب.</b> GPIO4 را LOW و سپس با <code>rtc_gpio_hold_en</code> «قفل» می‌کنیم.
+    <span class="why">در خواب عمیق، پایه‌های معمولی رها (شناور) می‌شوند و ترانزیستور فلش ممکن است نیمه‌روشن شود؛ یعنی یک LED پرنور که کل شب باتری را می‌خورد و در عکس‌ها نور عجیب می‌اندازد. GPIO4 جزو پایه‌های RTC است و می‌توان وضعیتش را در خواب نگه داشت.</span></li>
+  <li data-lines="72-74"><b class="what">تنظیم زنگ ساعت و خوابیدن.</b> تایمر بیدارباش را تنظیم، پیام‌های Serial را کامل ارسال (<code>flush</code>) و به خواب عمیق می‌رویم.
+    <span class="why"><code>60ULL</code> یعنی عدد ۶۰ از نوع ۶۴ بیتی؛ این باعث می‌شود کل ضرب ۶۴ بیتی انجام شود و سرریز نکند. بدون <code>flush</code> ممکن است آخرین پیام نصفه چاپ شود چون برد قبل از فرستادن کامل آن خاموش می‌شود. جزئیات خواب عمیق در درس <a href="6-1.html">۶.۱</a> است.</span></li>
+  <li data-lines="79-81"><b class="what">شمارش بیدار شدن و باز کردن قفل فلش.</b> بعد از هر بیدار شدن، قفل GPIO4 را برمی‌داریم.
+    <span class="why">اگر قفل باز نشود، پایه تا ابد در همان حالت می‌ماند. <code>bootCount</code> فقط برای دیدن در Serial است که بفهمی چرخه واقعا تکرار می‌شود.</span></li>
+  <li data-lines="83-87"><b class="what">بررسی PSRAM و دوربین.</b> اگر PSRAM نیست یا دوربین راه نیفتاد، مستقیم به خواب برو.
+    <span class="why">دوربینی که در باغ گذاشته‌ای نباید با اولین خطا برای همیشه گیر کند. خوابیدن و تلاش دوباره ۵ دقیقه بعد، در برابر خطاهای موقت (مثلا ولتاژ پایین لحظه‌ای) مقاوم است.</span></li>
+  <li data-lines="89-92"><b class="what">اتصال کارت SD در حالت ۱ بیتی.</b> ورودی اول نقطه اتصال (mount point) و دومی <code>true</code> برای ۱ بیتی.
+    <span class="why">همان مشکل فلش و DATA1 که بالا توضیح دادیم. بعد از mount، هر مسیری که با <code>/</code> شروع شود روی کارت است.</span></li>
+  <li data-lines="94-98"><b class="what">دور ریختن سه فریم اول.</b> سه عکس می‌گیریم و بلافاصله بافرشان را پس می‌دهیم.
+    <span class="why">دوربین تازه‌روشن شده هنوز نوردهی و تعادل رنگ خودکار (AEC/AWB) را تنظیم نکرده؛ فریم اول معمولا خیلی تیره یا سبز است. و با <code>WHEN_EMPTY</code> فریمی که در بافر مانده ممکن است قدیمی باشد.</span></li>
+  <li data-lines="99-103"><b class="what">گرفتن عکس اصلی.</b> <code>esp_camera_fb_get()</code> اشاره‌گری به بافر عکس برمی‌گرداند؛ <code>fb-&gt;buf</code> بایت‌های JPEG و <code>fb-&gt;len</code> طول آن است.
+    <span class="why">اگر <code>NULL</code> برگردد (مثلا تغذیه ضعیف)، هرگز به <code>fb-&gt;buf</code> دست نزن؛ برنامه کرش می‌کند.</span></li>
+  <li data-lines="105-109"><b class="what">شماره عکس بعدی و اسم فایل.</b> شماره قبلی را از Preferences (با مقدار پیش‌فرض ۰) می‌خوانیم و یکی اضافه می‌کنیم. <code>%05lu</code> عدد را پنج رقمی با صفر جلو می‌نویسد: <code>/img_00042.jpg</code>.
+    <span class="why">صفرهای جلو باعث می‌شوند فایل‌ها در کامپیوتر به ترتیب درست مرتب شوند (<code>img_00010</code> بعد از <code>img_00009</code>، نه بعد از <code>img_1</code>). نرم‌افزارهای ساخت ویدیو از عکس هم همین ترتیب را می‌خواهند.</span></li>
+  <li data-lines="110-118"><b class="what">نوشتن فایل.</b> فایل را برای نوشتن باز، بایت‌های JPEG را یک‌جا می‌نویسیم و می‌بندیم. شماره فقط بعد از موفقیت ذخیره می‌شود.
+    <span class="why"><code>close()</code> ضروری است؛ تا فایل بسته نشود، اطلاعات جدول فایل‌ها روی کارت به‌روز نمی‌شود و فایل خراب یا صفر بایتی می‌ماند. اگر ذخیره شکست بخورد، شماره زیاد نمی‌شود تا دفعه بعد همان شماره دوباره امتحان شود.</span></li>
+  <li data-lines="119-121"><b class="what">مرتب کردن و خوابیدن.</b> Preferences را می‌بندیم، بافر را به کتابخانه پس می‌دهیم و می‌خوابیم.
+    <span class="why">پس دادن بافر عادت خوبی است (در برنامه‌ای که نمی‌خوابد، فراموش کردنش یعنی بعد از چند عکس حافظه تمام می‌شود و <code>fb_get</code> دیگر عکسی نمی‌دهد).</span></li>
+  <li data-lines="124"><b class="what">loop خالی.</b> هرگز به آن نمی‌رسیم.
+    <span class="why">در برنامه‌های خواب عمیق، کل کار در setup است؛ هر بیدار شدن یعنی یک بار اجرای setup از اول.</span></li>
+</ol>
+<div class="serial">Boot #1
+Saved /img_00001.jpg (187432 bytes)
+Sleeping 5 minutes...
+
+Boot #2
+Saved /img_00002.jpg (191208 bytes)
+Sleeping 5 minutes...</div>
+<p>(اندازه فایل‌ها به صحنه بستگی دارد.) برای ساختن ویدیو از عکس‌ها، کارت را در کامپیوتر بگذار و با نرم‌افزار رایگانی مثل ffmpeg دستور <code>ffmpeg -framerate 24 -i img_%05d.jpg timelapse.mp4</code> را اجرا کن.</p>
+
+<div class="callout warn"><div class="ct">واقعیت مصرف برق</div>
+<p>درس ۶.۱ می‌گوید ESP32 در خواب عمیق فقط حدود ۱۰ میکروآمپر مصرف می‌کند. این عدد مال <b>تراشه</b> است، نه برد ESP32-CAM. روی این برد، رگولاتور AMS1117، دوربین (که پایه PWDN آن در خواب رها می‌شود) و کارت SD هم برق می‌کشند و مصرف واقعی در خواب معمولا در حد <b>میلی‌آمپر</b> است. اگر می‌خواهی با باتری کار کنی، مصرف را خودت با مولتی‌متر اندازه بگیر؛ به عدد دیتاشیت تراشه اعتماد نکن.</p></div>
+
+<div class="callout info"><div class="ct">در Wokwi چه؟</div>
+<p>در زمان نوشتن این درس، Wokwi برد ESP32-CAM، سنسور دوربین OV2640 و رابط SD_MMC را شبیه‌سازی نمی‌کند (درخواست آن در مخزن wokwi-features ثبت شده). پس این درس فقط با سخت‌افزار واقعی انجام می‌شود. خوشبختانه ESP32-CAM یکی از ارزان‌ترین بردهای این دوره است.</p></div>
+
+<h2 id="limits">محدودیت‌های صادقانه ESP32-CAM</h2>
+<ul>
+  <li><b>گرما:</b> موقع پخش زنده طولانی، ماژول و رگولاتور گرم می‌شوند (به حدی که با دست حس می‌کنی). در جعبه بسته، سوراخ تهویه بگذار. گرمای زیاد نویز تصویر را هم بیشتر می‌کند.</li>
+  <li><b>آنتن:</b> آنتن روی برد ضعیف است و بدنه فلزی یا دیوار آن را بدتر می‌کند. برای آنتن خارجی، علاوه بر وصل کردن آنتن به کانکتور IPEX، باید مقاومت صفر اهم کوچک کنار آنتن را جابه‌جا کنی (لحیم‌کاری ریز). بدون این کار آنتن خارجی عملا وصل نیست.</li>
+  <li><b>کیفیت تصویر:</b> OV2640 یک دوربین ۲ مگاپیکسلی ارزان است؛ در نور کم نویز زیادی دارد و دید در شب (IR) ندارد. برای تشخیص حرکت یا پلاک، انتظار کیفیت دوربین مداربسته حرفه‌ای را نداشته باش.</li>
+  <li><b>امنیت:</b> CameraWebServer رمز ندارد و روی HTTP (بدون رمزنگاری) کار می‌کند. هر کس به Wi-Fi خانه تو وصل باشد، تصویر را می‌بیند. <b>هرگز</b> با Port Forwarding مودم آن را به اینترنت باز نکن.</li>
+</ul>
+
+<div class="callout why"><div class="ct">حریم خصوصی و اخلاق: دوربین یعنی مسئولیت</div>
+<p>دوربین کوچک و ارزان یعنی قدرت زیاد، و قدرت زیاد یعنی مسئولیت. از کسی بدون اطلاع و رضایتش فیلم یا عکس نگیر. دوربین را در جاهای خصوصی (حمام، اتاق خواب دیگران، خانه همسایه، محل کار بدون اجازه) نگذار. اگر دوربین در فضای مشترک است، به بقیه بگو و برچسب بزن. تصویرها را امن نگه دار و بعد از نیاز پاک کن. قوانین ضبط تصویر در هر کشور فرق دارد؛ نادانستن قانون عذر نیست. یک مهندس خوب قبل از «می‌توانم؟» می‌پرسد «باید؟»</p></div>
+
+<h2 id="video">ویدیوی کمکی</h2>
+<div class="video" data-yt="visj0KE5VtY" data-title="ESP32 CAM - 10 Dollar Camera for IoT Projects" data-channel="DroneBot Workshop" data-lang="انگلیسی">
+  <div class="sum"><ul>
+    <li>بخش‌های معرفی برد، استفاده از مبدل FTDI، مثال Camera Web Server، حل مشکل Brownout و آنتن خارجی را ببین؛ دقیقا موضوع‌های این درس.</li>
+    <li>ویدیو قبل از هسته ۳ ساخته شده؛ اگر دیدی مدل دوربین را بالای فایل <code>.ino</code> انتخاب می‌کند، در هسته جدید همان کار را در <code>board_config.h</code> انجام بده.</li>
+    <li>دقت کن مدرس برای حل Brownout چه تغذیه‌ای پیشنهاد می‌کند و آن را با بخش «قانون شماره یک» همین درس مقایسه کن.</li>
+    <li>ببین برای آنتن خارجی کدام قطعه کوچک را جابه‌جا می‌کند.</li>
+  </ul></div>
+</div>
+
+<h2 id="debug">وقتی کار نمی‌کند: عیب‌یابی قدم به قدم</h2>
+<div class="table-wrap"><table>
+<tr><th>علامت</th><th>علت محتمل</th><th>راه حل</th></tr>
+<tr><td><code>Camera init failed with error 0x105</code></td><td><code>ESP_ERR_NOT_FOUND</code>: دوربین پیدا نشد. کابل نواری دوربین کامل جا نرفته، مدل اشتباه در board_config.h، یا تغذیه ضعیف</td><td>قفل مشکی کانکتور را باز کن، کابل را صاف و تا ته جا بزن و قفل را ببند. مدل را <code>CAMERA_MODEL_AI_THINKER</code> بگذار. با تغذیه ۵ ولت قوی امتحان کن</td></tr>
+<tr><td><code>Camera init failed with error 0x20001</code></td><td><code>ESP_ERR_CAMERA_NOT_DETECTED</code>: همان داستان، با کد خطای کتابخانه دوربین</td><td>مثل ردیف بالا؛ اگر درست نشد، ممکن است ماژول دوربین خراب باشد (یک دوربین دیگر امتحان کن)</td></tr>
+<tr><td><code>Camera init failed with error 0x101</code> یا پیام کمبود حافظه</td><td><code>ESP_ERR_NO_MEM</code>: PSRAM فعال نیست</td><td>برد <b>AI Thinker ESP32-CAM</b> را در Tools انتخاب کن (نه ESP32 Dev Module)</td></tr>
+<tr><td><code>Brownout detector was triggered</code> و ریست پشت سر هم</td><td>ولتاژ تغذیه موقع روشن شدن Wi-Fi می‌افتد</td><td>منبع ۵ ولت ۲ آمپر، کابل کوتاه و سالم، تغذیه از پایه 5V (نه 3.3V). محافظ Brownout را خاموش نکن</td></tr>
+<tr><td><code>Failed to connect to ESP32: Timed out waiting for packet header</code></td><td>برد در حالت دانلود نیست یا TX و RX جابه‌جاست</td><td>GPIO0 به GND، سپس RST، بعد آپلود. TX مبدل به U0R و RX به U0T. با MB: IO0 را نگه دار و RST را بزن</td></tr>
+<tr><td>آپلود موفق، ولی Serial فقط <code>waiting for download</code> می‌گوید</td><td>جامپر GPIO0 هنوز به GND وصل است</td><td>جامپر را بردار و RST را بزن</td></tr>
+<tr><td><code>SD card mount failed</code></td><td>کارت نیست، exFAT است، بزرگ یا خراب است، یا تغذیه ضعیف</td><td>کارت ۴ تا ۳۲ گیگ با FAT32 فرمت کن و قبل از روشن کردن جا بزن. با کارت دیگر امتحان کن</td></tr>
+<tr><td>LED فلش موقع ذخیره روی کارت چشمک می‌زند</td><td>کارت در حالت ۴ بیتی است و DATA1 روی GPIO4 است</td><td><code>SD_MMC.begin("/sdcard", true)</code></td></tr>
+<tr><td>عکس اول خیلی تیره یا سبز</td><td>نوردهی خودکار هنوز تنظیم نشده</td><td>چند فریم اول را دور بریز (مثل کد پروژه ۲)</td></tr>
+<tr><td>صفحه وب باز می‌شود ولی Stream چیزی نشان نمی‌دهد</td><td>پخش زنده در تب یا دستگاه دیگری باز است (فقط یک بیننده)</td><td>تب‌های دیگر را ببند؛ رزولوشن را پایین بیاور</td></tr>
+<tr><td>Wi-Fi وصل نمی‌شود یا پخش مدام قطع می‌شود</td><td>سیگنال ضعیف (آنتن PCB، فاصله، بدنه فلزی)</td><td>برد را نزدیک مودم امتحان کن؛ در صورت نیاز آنتن خارجی با جابه‌جایی مقاومت</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>ESP32-CAM صبر و نظم می‌خواهد. قبل از این که حتی یک خط کد را عوض کنی، سه چیز را قطعی کن: <b>تغذیه</b> (۵ ولت قوی از پایه 5V، کابل کوتاه)، <b>کابل دوربین</b> (کامل جا رفته و قفل شده)، <b>انتخاب برد</b> (AI Thinker ESP32-CAM و مدل درست در board_config.h). نود درصد پیام‌هایی که دانشجوها با عنوان «کدم کار نمی‌کند» می‌فرستند، یکی از این سه است. اول مثال رسمی CameraWebServer را بی‌تغییر (جز مدل و Wi-Fi) اجرا کن؛ اگر آن کار نکرد، مشکل سخت‌افزاری است و کد خودت را متهم نکن. و هرگز با خاموش کردن Brownout مشکل را پنهان نکن؛ آژیری که بوق می‌زند دشمن تو نیست.</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="3">
+  <p class="q">چرا باید GPIO0 را فقط هنگام آپلود به GND وصل کنی و بعد برداری؟</p>
+  <ol><li data-why="GPIO0 ربطی به تغذیه ندارد؛ برد با GPIO0 به زمین نمی‌سوزد.">چون وصل ماندنش برد را می‌سوزاند</li><li data-why="سرعت آپلود به GPIO0 بستگی ندارد.">چون سرعت آپلود را کم می‌کند</li><li>چون ESP32 با GPIO0 روی LOW هنگام ریست به حالت دانلود می‌رود و برنامه اجرا نمی‌شود؛ تازه GPIO0 سیگنال XCLK دوربین هم هست</li><li data-why="کارت SD روی پایه‌های 14، 15، 2 و... است، نه GPIO0.">چون کارت SD به GPIO0 وصل است</li></ol>
+  <div class="fb">GPIO0 یک Strapping Pin است: LOW در لحظه ریست یعنی «منتظر برنامه جدید». بعد از آپلود باید HIGH (آزاد) باشد.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">برد مدام با پیام <code>Brownout detector was triggered</code> ریست می‌شود. بهترین کار کدام است؟</p>
+  <ol><li>منبع ۵ ولت قوی‌تر و کابل کوتاه‌تر، تغذیه از پایه 5V</li><li data-why="این فقط آژیر را خاموش می‌کند؛ ولتاژ پایین و خرابی‌های بعدی سر جایش می‌ماند.">خاموش کردن محافظ Brownout با WRITE_PERI_REG</li><li data-why="تغذیه از 3.3V مبدل جریان کمتری دارد و مشکل را بدتر می‌کند.">تغذیه از پایه 3.3V مبدل USB-TTL</li><li data-why="کیفیت JPEG روی جریان لحظه‌ای Wi-Fi اثر چندانی ندارد.">کم کردن jpeg_quality</li></ol>
+  <div class="fb">Brownout یعنی ولتاژ افت کرده؛ درمان واقعی، تغذیه درست است.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">چرا در پروژه زمان‌گذر کارت SD را با <code>SD_MMC.begin("/sdcard", true)</code> باز می‌کنیم؟</p>
+  <ol><li data-why="حالت ۱ بیتی کندتر است، نه سریع‌تر.">چون حالت ۱ بیتی سریع‌تر است</li><li data-why="FAT32 به فرمت کارت مربوط است، نه به این پارامتر.">چون کارت را FAT32 فرمت می‌کند</li><li data-why="true در ورودی دوم یعنی ۱ بیتی؛ فرمت کردن ورودی سوم است و پیش‌فرض false.">چون اگر mount نشد کارت را فرمت می‌کند</li><li>چون خط DATA1 کارت با LED فلش روی GPIO4 مشترک است و حالت ۱ بیتی GPIO4 را آزاد می‌گذارد</li></ol>
+  <div class="fb">در حالت ۱ بیتی فقط CLK، CMD و DATA0 استفاده می‌شوند و فلش هنگام نوشتن چشمک نمی‌زند.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">اگر شماره عکس را فقط در یک متغیر <code>RTC_DATA_ATTR</code> نگه داری، چه مشکلی پیش می‌آید؟</p>
+  <ol><li data-why="RTC_DATA_ATTR دقیقا برای زنده ماندن در خواب عمیق است.">در هر خواب عمیق صفر می‌شود</li><li>با قطع برق یا ریست صفر می‌شود و عکس‌های قبلی روی کارت بازنویسی می‌شوند</li><li data-why="حافظه RTC کوچک است ولی یک عدد صحیح به راحتی در آن جا می‌شود.">حافظه RTC برای یک عدد کافی نیست</li><li data-why="RTC_DATA_ATTR ربطی به کارت SD ندارد.">کارت SD را خراب می‌کند</li></ol>
+  <div class="fb">حافظه RTC فقط در خواب عمیق برق دارد. برای ماندگاری در برابر قطع برق از Preferences (فلش) استفاده کن.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">در <code>camera_config_t</code>، تغییر <code>jpeg_quality</code> از ۱۰ به ۳۰ چه اثری دارد؟</p>
+  <ol><li data-why="عدد بیشتر یعنی فشرده‌سازی بیشتر، نه کیفیت بیشتر.">کیفیت بهتر و فایل بزرگ‌تر</li><li data-why="رزولوشن را frame_size تعیین می‌کند، نه jpeg_quality.">رزولوشن تصویر سه برابر می‌شود</li><li>فشرده‌سازی بیشتر: فایل کوچک‌تر و کیفیت پایین‌تر</li><li data-why="تعداد بافر را fb_count تعیین می‌کند.">تعداد بافرها بیشتر می‌شود</li></ol>
+  <div class="fb">در این کتابخانه عدد <b>کمتر</b> یعنی کیفیت <b>بهتر</b> (بازه ۰ تا ۶۳).</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+<div class="exercise"><div class="ct">تمرین ۱: عکس با فلش در شب</div>
+<p>برنامه زمان‌گذر را طوری تغییر بده که فلش را ۲۰۰ میلی‌ثانیه قبل از گرفتن عکس اصلی روشن و بلافاصله بعد از آن خاموش کند. چرا حالا دیگر نگران تداخل فلش با کارت SD نیستیم؟</p>
+<details><summary>راهنمایی</summary><p>بعد از <code>rtc_gpio_hold_dis</code>، <code>pinMode(FLASH_LED, OUTPUT)</code> بگذار. قبل از <code>esp_camera_fb_get()</code> اصلی (و بعد از دور ریختن فریم‌ها)، <code>digitalWrite(FLASH_LED, HIGH); delay(200);</code> و بعد از گرفتن عکس <code>digitalWrite(FLASH_LED, LOW);</code>.</p></details>
+<details><summary>جواب</summary><p>چون کارت در حالت ۱ بیتی است و از GPIO4 استفاده نمی‌کند، GPIO4 کاملا در اختیار ماست. نکته: فلش جریان زیادی می‌کشد؛ اگر هم‌زمان با فلش Brownout گرفتی، باز هم مشکل تغذیه است. برای عکس بهتر، فریم‌های دور ریختنی را هم با فلش روشن بگیر تا نوردهی خودکار با نور فلش تنظیم شود.</p></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۲: پوشه برای هر روز</div>
+<p>به جای ذخیره همه عکس‌ها در ریشه کارت، برای هر ۲۸۸ عکس (یک روز با فاصله ۵ دقیقه) یک پوشه جدا بساز: <code>/day001/img_00001.jpg</code>.</p>
+<details><summary>راهنمایی</summary><p>شماره روز = <code>(photoNum - 1) / 288 + 1</code>. اسم پوشه را با <code>snprintf</code> بساز، اگر <code>!SD_MMC.exists(dir)</code> بود <code>SD_MMC.mkdir(dir)</code>، بعد مسیر کامل فایل را بساز.</p></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۳: فکر کن (بدون کد)</div>
+<p>دوستت می‌خواهد ESP32-CAM را با یک باتری ۲۰۰۰ میلی‌آمپر ساعتی در باغ بگذارد و هر ۵ دقیقه عکس بگیرد. فرض کن هر بیدار شدن ۳ ثانیه با ۲۰۰ میلی‌آمپر طول بکشد و مصرف در خواب ۵ میلی‌آمپر باشد. باتری تقریبا چند روز دوام می‌آورد؟ کدام بخش مصرف بزرگ‌تر است؟</p>
+<details><summary>جواب</summary><p>در هر ساعت ۱۲ بیدار شدن: <code>12 × 3s × 200mA = 7200 mA·s = 2 mAh</code>. خواب تقریبا تمام ساعت: حدود <code>5 mAh</code>. جمع حدود ۷ میلی‌آمپر ساعت در ساعت؛ <code>2000 ÷ 7 ≈ 285</code> ساعت، یعنی حدود ۱۲ روز (در عمل کمتر، چون ظرفیت واقعی باتری و راندمان رگولاتور کمتر از ایده‌آل است). بخش بزرگ‌تر <b>مصرف خواب برد</b> است، نه عکس‌برداری؛ برای همین برای پروژه باتری‌خور جدی، رگولاتور کم‌مصرف یا قطع برق دوربین با ترانزیستور لازم است.</p></details>
+</div>
+
+<div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
+<p>ESP32-CAM (AI-Thinker) یک ESP32 با دوربین OV2640، PSRAM چهار مگابایتی و جای microSD است که پورت USB ندارد؛ با ESP32-CAM-MB یا مبدل USB-TTL (TX و RX ضربدری، GPIO0 به GND فقط هنگام آپلود) پروگرامش کن و برد «AI Thinker ESP32-CAM» را انتخاب کن. CameraWebServer با انتخاب <code>CAMERA_MODEL_AI_THINKER</code> و Wi-Fi پخش زنده می‌دهد، و <code>camera_config_t</code> اندازه، کیفیت و جای بافر (PSRAM) را تعیین می‌کند. برای ذخیره روی کارت از <code>SD_MMC.begin("/sdcard", true)</code> (حالت ۱ بیتی، آزاد شدن فلش) و برای شماره ماندگار از Preferences استفاده کن، و یادت باشد مشکل شماره یک این برد تغذیه است: ۵ ولت قوی، کابل کوتاه، Brownout را خاموش نکن.</p></div>
+
+</article>
+</body>
+</html>
