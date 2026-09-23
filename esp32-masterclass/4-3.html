@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>بلوتوث کلاسیک و BLE با گوشی · مستر کلاس ESP32</title>
+<meta name="description" content="بلوتوث از صفر برای مبتدی: مقایسه Bluetooth Classic و BLE، کنترل LED با BluetoothSerial و اپ Serial Bluetooth Terminal، و ساخت سرور BLE با سرویس و characteristic نوشتنی و notify روی ESP32 (core 3.x) و آزمایش با nRF Connect.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="4-3">
+
+<p class="lede">Wi-Fi برای وصل شدن به مودم و اینترنت عالی است؛ ولی اگر مودمی در کار نباشد چه؟ در ماشین، در کوه، یا وقتی فقط می‌خواهی با گوشی که در دستت است، یک وسیله را در همان اتاق کنترل کنی. اینجا نوبت <b>بلوتوث</b> است. ESP32 دو نوع بلوتوث دارد و در این درس هر دو را می‌سازی: اول یک «سیم سریال بی‌سیم» با بلوتوث کلاسیک، بعد یک دستگاه BLE حرفه‌ای که مثل ساعت‌های هوشمند با گوشی حرف می‌زند.</p>
+
+<div class="goals">
+  <div><h4>🎯 بعد از این درس می‌توانی</h4><ul>
+    <li>فرق بلوتوث کلاسیک و BLE را با عدد توضیح بدهی و بدانی کدام برد کدام را دارد</li>
+    <li>با <code>BluetoothSerial</code> از گوشی اندرویدی فرمان متنی بفرستی و LED را کنترل کنی</li>
+    <li>مفاهیم GATT (سرور، سرویس، characteristic، UUID، read/write/notify) را بفهمی</li>
+    <li>یک سرور BLE با characteristic نوشتنی و notify بسازی و با nRF Connect آزمایشش کنی</li>
+  </ul></div>
+  <div><h4>🧰 پیش‌نیاز و وسایل</h4><ul>
+    <li>درس <a href="2-3.html">۲.۳</a> (LED) و درس <a href="4-1.html">۴.۱</a> (رویدادها و millis)</li>
+    <li>برد <b>ESP32 معمولی</b> (DevKitC یا مشابه). برای بخش الف، ESP32-C3 یا S3 کار نمی‌کند</li>
+    <li>یک LED و مقاومت ۲۲۰ اهم</li>
+    <li>گوشی اندرویدی با اپ رایگان <b>Serial Bluetooth Terminal</b> (نوشته Kai Morich) و اپ رایگان <b>nRF Connect</b> (شرکت Nordic، برای اندروید و آیفون)</li>
+  </ul></div>
+</div>
+
+<div class="callout warn"><div class="ct">این درس فقط روی سخت‌افزار واقعی</div>
+<p>شبیه‌ساز Wokwi رادیوی بلوتوث را شبیه‌سازی نمی‌کند (نه Classic و نه BLE؛ این قابلیت در فهرست درخواست‌های Wokwi هنوز باز است). کد ممکن است آنجا کامپایل شود ولی هیچ گوشی‌ای نمی‌تواند به آن وصل شود. پس این درس Wokwi ندارد و به برد واقعی و گوشی نیاز داری.</p></div>
+
+<h2 id="intro">بلوتوث از صفر: دو زبان متفاوت با یک اسم</h2>
+<p>«بلوتوث» در واقع اسم دو فناوری است که هر دو روی همان فرکانس ۲٫۴ گیگاهرتز (مثل Wi-Fi) کار می‌کنند، ولی زبانشان کاملا فرق دارد و مستقیم با هم حرف نمی‌زنند:</p>
+<ul>
+  <li><b>بلوتوث کلاسیک (Bluetooth Classic یا BR/EDR):</b> نسخه قدیمی‌تر، برای جریان پیوسته داده. هدفون، اسپیکر، هندزفری ماشین و انتقال فایل بین گوشی‌های قدیمی.</li>
+  <li><b>بلوتوث کم‌مصرف (Bluetooth Low Energy یا BLE):</b> از سال ۲۰۱۰ (بلوتوث ۴٫۰). برای بسته‌های کوچک داده با مصرف خیلی کم. ساعت و دستبند هوشمند، ترازوی هوشمند، سنسور دما، ردیاب کلید.</li>
+</ul>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره: تماس تلفنی در برابر پیامک</div>
+<p>بلوتوث کلاسیک مثل <b>تماس تلفنی</b> است: خط باز می‌ماند و دو طرف پیوسته حرف می‌زنند؛ برای صدا عالی است ولی باتری را می‌خورد. BLE مثل <b>پیامک</b> است: بیشتر وقت‌ها ساکت است و هر چند وقت یک پیام کوتاه می‌فرستد؛ باتری سکه‌ای یک سنسور BLE ممکن است ماه‌ها و حتی سال‌ها دوام بیاورد.</p></div>
+
+<div class="table-wrap"><table>
+<tr><th></th><th>بلوتوث کلاسیک</th><th>BLE</th></tr>
+<tr><td>برد معمول</td><td>حدود ۱۰ متر (دستگاه‌های رایج کلاس ۲)</td><td>حدود ۱۰ تا ۵۰ متر در فضای باز، بسته به توان و آنتن؛ داخل خانه معمولا حدود ۱۰ متر</td></tr>
+<tr><td>سرعت خام رادیو</td><td>۱ تا ۳ مگابیت بر ثانیه (با EDR)</td><td>۱ مگابیت بر ثانیه (در بلوتوث ۵ تا ۲ مگابیت)؛ سرعت واقعی داده خیلی کمتر، معمولا ده‌ها کیلوبایت بر ثانیه</td></tr>
+<tr><td>مصرف</td><td>بالا و پیوسته (اتصال همیشه فعال)</td><td>بسیار کم به طور میانگین؛ رادیو بیشتر وقت خاموش است</td></tr>
+<tr><td>مدل ارتباط</td><td>یک «لوله» پیوسته، مثل سیم سریال (پروفایل SPP)</td><td>جدول مقدارها (GATT): خواندن، نوشتن، اعلان</td></tr>
+<tr><td>کاربرد</td><td>صدا، انتقال پیوسته داده، جایگزین سیم سریال</td><td>سنسور، دستگاه‌های باتری‌خور، کنترل ساده از اپ گوشی</td></tr>
+<tr><td>آیفون</td><td>SPP را برای دستگاه‌های معمولی پشتیبانی <b>نمی‌کند</b></td><td>کاملا پشتیبانی می‌کند</td></tr>
+</table></div>
+<div class="callout example"><div class="ct">مثال با عدد: مصرف ESP32</div>
+<p>دقت کن «کم‌مصرف» یعنی کم‌مصرف بودن <b>پروتکل</b>. خود ESP32 وقتی رادیو روشن است، حدود ۱۰۰ میلی‌آمپر یا بیشتر می‌کشد، چه Classic چه BLE. تفاوت BLE این است که می‌توانی رادیو را بیشتر وقت خاموش نگه داری (مثلا هر ۱ ثانیه چند میلی‌ثانیه روشن)؛ این را در درس <a href="6-1.html">۶.۱ خواب عمیق</a> کامل می‌بینی.</p></div>
+
+<h3>کدام برد کدام بلوتوث را دارد؟</h3>
+<div class="table-wrap"><table>
+<tr><th>تراشه</th><th>Bluetooth Classic</th><th>BLE</th></tr>
+<tr><td><b>ESP32</b> (برد این دوره، DevKitC و DOIT)</td><td>✅ دارد</td><td>✅ دارد (نسخه ۴٫۲)</td></tr>
+<tr><td>ESP32-S3</td><td>❌ ندارد</td><td>✅ BLE 5</td></tr>
+<tr><td>ESP32-C3</td><td>❌ ندارد</td><td>✅ BLE 5</td></tr>
+<tr><td>ESP32-C6</td><td>❌ ندارد</td><td>✅ BLE 5</td></tr>
+<tr><td>ESP32-S2</td><td>❌ ندارد</td><td>❌ اصلا بلوتوث ندارد</td></tr>
+</table></div>
+<div class="callout warn"><div class="ct">دقت کن: C3 و S3 بلوتوث کلاسیک ندارند</div>
+<p>اگر برد تو ESP32-C3 یا ESP32-S3 است، بخش الف (BluetoothSerial) اصلا کامپایل نمی‌شود و خطای <code>Serial Port Profile for Bluetooth is not available or not enabled</code> یا مشابه آن می‌گیری. مستقیم برو سراغ <a href="#ble">بخش ب (BLE)</a> که روی همه این بردها (جز S2) کار می‌کند.</p></div>
+
+<h2 id="wiring">سیم‌کشی (برای هر دو بخش)</h2>
+<p>فقط یک LED روی GPIO4، دقیقا مثل درس ۲.۳. بقیه کار بی‌سیم است.</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"R1","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","طرف اول (جهت ندارد)"],["2","طرف دوم"]]},
+    {"id":"LED1","name":"LED قرمز","img":"led.svg","pins":[["A","آند (+) پایه بلند"],["K","کاتد (−) پایه کوتاه"]]}
+  ],
+  "wires":[["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>GPIO4 ← مقاومت ۲۲۰ اهم ← LED ← GND. آنتن برد (سر برد، جایی که الگوی زیگزاگ مسی است) را از سیم‌ها و فلز دور نگه دار.</figcaption></div>
+
+<h2 id="classic">بخش الف: بلوتوث کلاسیک، سیم سریال بی‌سیم</h2>
+<p>کتابخانه داخلی <code>BluetoothSerial</code> کاری می‌کند که ESP32 برای گوشی مثل یک «پورت سریال» دیده شود؛ همان Serial Monitor، ولی بدون سیم. هر چه گوشی بفرستد، ESP32 با <code>SerialBT.read()</code> می‌خواند و هر چه ESP32 با <code>SerialBT.println()</code> بنویسد، روی صفحه گوشی ظاهر می‌شود. پروفایلی که این کار را انجام می‌دهد <b>SPP</b> (Serial Port Profile) نام دارد.</p>
+<div class="callout warn"><div class="ct">آیفون این بخش را پشتیبانی نمی‌کند</div>
+<p>iOS به اپ‌ها اجازه نمی‌دهد با پروفایل SPP به دستگاه‌های بلوتوث کلاسیکی که تأییدیه ویژه اپل (MFi) ندارند وصل شوند. پس با آیفون اپی برای این بخش پیدا نمی‌کنی. اگر آیفون داری، این بخش را بخوان تا مفهوم را یاد بگیری و آزمایش عملی را در <a href="#ble">بخش BLE</a> انجام بده؛ BLE روی آیفون کاملا کار می‌کند.</p></div>
+
+<div class="code" data-file="BT_Classic_LED.ino" id="codeBT"><pre>
+#include &lt;BluetoothSerial.h&gt;
+
+// اگر برد تو C3 یا S3 است، این خط جلوی کامپایل را می‌گیرد (Classic ندارند)
+#if !defined(CONFIG_BT_SPP_ENABLED)
+#error "Bluetooth Classic (SPP) is only available on the original ESP32"
+#endif
+
+BluetoothSerial SerialBT;           // «پورت سریال بی‌سیم»
+const int LED_PIN = 4;
+bool ledOn = false;
+String line = "";                   // حروف رسیده را اینجا جمع می‌کنیم
+
+void handleCommand(String cmd) {
+  cmd.trim();                       // فاصله و \r و \n اضافه را پاک کن
+  cmd.toLowerCase();                // "ON" و "On" هم قبول شود
+  if (cmd.length() == 0) return;    // خط خالی را نادیده بگیر
+
+  Serial.printf("Command: [%s]\n", cmd.c_str());
+  if (cmd == "on") {
+    ledOn = true;
+    SerialBT.println("OK: LED is ON");
+  } else if (cmd == "off") {
+    ledOn = false;
+    SerialBT.println("OK: LED is OFF");
+  } else if (cmd == "status") {
+    SerialBT.println(ledOn ? "LED is ON" : "LED is OFF");
+  } else {
+    SerialBT.println("Unknown command. Use: on / off / status");
+  }
+  digitalWrite(LED_PIN, ledOn ? HIGH : LOW);
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  if (!SerialBT.begin("ESP32-LED")) {           // اسمی که گوشی می‌بیند
+    Serial.println("Bluetooth init failed!");
+    while (true) delay(1000);                   // بدون بلوتوث ادامه نمی‌دهیم
+  }
+  Serial.println("Bluetooth ready. Pair your phone with 'ESP32-LED'");
+}
+
+void loop() {
+  while (SerialBT.available()) {                // تا وقتی حرف تازه رسیده
+    char c = SerialBT.read();
+    if (c == '\n' || c == '\r') {               // پایان یک فرمان
+      handleCommand(line);
+      line = "";
+    } else if (line.length() &lt; 32) {            // سقف طول، برای امنیت حافظه
+      line += c;
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="codeBT">
+  <li data-lines="1"><b class="what">کتابخانه BluetoothSerial.</b> همراه پکیج ESP32 نصب شده است.
+    <span class="why">این کتابخانه همه پیچیدگی پشته بلوتوث (Bluedroid) را پنهان می‌کند و رابطی دقیقا مثل <code>Serial</code> به تو می‌دهد؛ هر چه درباره Serial بلدی، اینجا هم کار می‌کند.</span></li>
+  <li data-lines="3-6"><b class="what">نگهبان زمان کامپایل.</b> <code>#if !defined(CONFIG_BT_SPP_ENABLED)</code> یعنی «اگر پشتیبانی SPP در این برد روشن نیست». در آن صورت <code>#error</code> کامپایل را با یک پیام روشن متوقف می‌کند.
+    <span class="why">بهتر است همان موقع کامپایل با یک جمله واضح بفهمی برد انتخابی‌ات (مثلا C3) بلوتوث کلاسیک ندارد، تا این که با ده‌ها خطای نامفهوم روبه‌رو شوی. این خطوط با <code>#</code> شروع می‌شوند و قبل از کامپایل بررسی می‌شوند، نه روی برد.</span></li>
+  <li data-lines="8-11"><b class="what">شیء بلوتوث و متغیرها.</b> <code>SerialBT</code> پورت سریال بی‌سیم ماست. <code>ledOn</code> وضعیت LED را نگه می‌دارد و <code>line</code> حروف رسیده را تا رسیدن «Enter» جمع می‌کند.
+    <span class="why">داده بلوتوث حرف به حرف و گاهی تکه‌تکه می‌رسد، نه یک‌جا. مثل وقتی کسی کلمه‌ای را حرف به حرف هجی می‌کند؛ تا جمله تمام نشده، نباید تصمیم بگیری.</span></li>
+  <li data-lines="13-16"><b class="what">تمیز کردن فرمان.</b> <code>trim()</code> فاصله‌ها و کاراکترهای نامرئی <code>\r</code> و <code>\n</code> را از دو سر متن پاک می‌کند. <code>toLowerCase()</code> همه حروف را کوچک می‌کند. متن خالی را نادیده می‌گیریم.
+    <span class="why">اپ‌ها در پایان هر پیام معمولا <code>\r\n</code> (دو کاراکتر) می‌فرستند و کاربرها گاهی «On » با فاصله یا «ON» تایپ می‌کنند. بدون این دو خط، <code>"on\r" == "on"</code> غلط است و مبتدی ساعت‌ها فکر می‌کند بلوتوث کار نمی‌کند. به این می‌گویند پردازش <b>مقاوم</b> (Robust) ورودی. هر دو تابع خود متن را تغییر می‌دهند و چیزی برنمی‌گردانند.</span></li>
+  <li data-lines="18"><b class="what">لاگ در Serial Monitor.</b> فرمان تمیزشده را بین <code>[ ]</code> چاپ می‌کنیم.
+    <span class="why">براکت‌ها نشان می‌دهند آیا کاراکتر نامرئی یا فاصله‌ای مانده یا نه: <code>[on]</code> درست است، <code>[on ]</code> یعنی مشکلی در trim هست.</span></li>
+  <li data-lines="19-30"><b class="what">تصمیم‌گیری و پاسخ.</b> سه فرمان <code>on</code>، <code>off</code> و <code>status</code>. هر فرمان پاسخی با <code>SerialBT.println</code> به گوشی می‌فرستد. فرمان ناشناخته هم پیام راهنما می‌گیرد. در پایان LED را با <code>ledOn</code> هماهنگ می‌کنیم.
+    <span class="why">پاسخ دادن به هر فرمان یعنی کاربر روی گوشی مطمئن می‌شود فرمانش رسیده و اجرا شده. یک <code>digitalWrite</code> در انتها به جای چند تا در شاخه‌ها، یعنی LED همیشه دقیقا با وضعیت ذخیره‌شده یکی است.</span></li>
+  <li data-lines="36-40"><b class="what">روشن کردن بلوتوث.</b> <code>SerialBT.begin("ESP32-LED")</code> بلوتوث را با این اسم روشن می‌کند و اگر شکست بخورد <code>false</code> برمی‌گرداند. در آن صورت پیام خطا می‌دهیم و برنامه را متوقف می‌کنیم.
+    <span class="why">این اسمی است که در لیست بلوتوث گوشی می‌بینی؛ اسم مشخص بده تا با وسایل دیگر قاطی نشود. توقف با <code>while (true)</code> اینجا عمدی است: برنامه‌ای که هدفش فقط بلوتوث است، بدون بلوتوث کاری ندارد. (در برنامه‌ای که کارهای دیگر هم دارد، به جای توقف فقط یک متغیر خطا را روشن می‌کردیم.)</span></li>
+  <li data-lines="43-52"><b class="what">loop: جمع کردن حروف.</b> تا وقتی حرفی رسیده (<code>available()</code>)، آن را بخوان. اگر <code>\n</code> یا <code>\r</code> بود، یعنی پایان فرمان: آن را اجرا کن و <code>line</code> را خالی کن. وگرنه حرف را به <code>line</code> اضافه کن، به شرطی که از ۳۲ حرف بیشتر نشود.
+    <span class="why">هیچ delay یا انتظاری در loop نیست؛ فقط حروفی را که آماده‌اند برمی‌دارد. سقف ۳۲ حرف جلوی این را می‌گیرد که کسی با فرستادن متن طولانی بی‌پایان، حافظه ESP32 را پر کند؛ هرگز به طول ورودی بیرونی اعتماد نکن. چون <code>\r\n</code> دو بار handleCommand را صدا می‌زند، بار دوم با متن خالی است که در خط ۱۶ نادیده گرفته می‌شود.</span></li>
+</ol>
+
+<h3>آزمایش با گوشی اندرویدی</h3>
+<ol class="steps">
+  <li><b>آپلود کن</b> و Serial Monitor را روی 115200 باز کن. باید <code>Bluetooth ready. Pair your phone with 'ESP32-LED'</code> را ببینی.</li>
+  <li><b>جفت کردن (Pair):</b> در گوشی به <code>Settings › Bluetooth</code> برو، دستگاه‌های جدید را جستجو کن و روی <code>ESP32-LED</code> بزن. معمولا بدون رمز جفت می‌شود (اگر رمز خواست، تأیید کن یا <code>1234</code> را امتحان کن).</li>
+  <li><b>اپ Serial Bluetooth Terminal</b> را باز کن. از منوی ☰ گزینه <b>Devices</b> و بعد تب <b>Bluetooth Classic</b> را بزن و <code>ESP32-LED</code> را انتخاب کن.</li>
+  <li><b>وصل شو:</b> به صفحه ترمینال برگرد و آیکون اتصال (دو شاخه) بالای صفحه را بزن. پیام <code>Connected</code> را می‌بینی.</li>
+  <li><b>فرمان بده:</b> <code>on</code> را تایپ کن و ارسال کن. LED روشن می‌شود و پاسخ <code>OK: LED is ON</code> روی گوشی می‌آید. <code>OFF</code>، <code>Status</code> و <code>hello</code> را هم امتحان کن.</li>
+</ol>
+<div class="serial">Bluetooth ready. Pair your phone with 'ESP32-LED'
+Command: [on]
+Command: [off]
+Command: [status]
+Command: [hello]</div>
+<div class="callout tip"><div class="ct">دکمه‌های آماده در اپ</div>
+<p>در Serial Bluetooth Terminal ردیف دکمه‌های <b>M1، M2…</b> پایین صفحه را نگه دار تا ویرایش شوند؛ یکی را با متن <code>on</code> و دیگری را با <code>off</code> تنظیم کن. حالا یک کنترل از راه دور دو دکمه‌ای داری، بدون نوشتن حتی یک خط برنامه اندروید.</p></div>
+
+<h2 id="ble">بخش ب: BLE و مفهوم GATT</h2>
+<p>در BLE دیگر «لوله پیوسته» وجود ندارد. به جایش هر دستگاه BLE یک <b>جدول مرتب از مقدارها</b> دارد که گوشی می‌تواند آن‌ها را بخواند، بنویسد یا مشترکشان شود. به این ساختار <b>GATT</b> (Generic Attribute Profile) می‌گویند. قبل از کد، این چند اسم را باید مثل اسم دوستانت بشناسی.</p>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره: کمد کشودار اداره</div>
+<p>ESP32 یک <b>کمد</b> در راهروی یک اداره است (<b>Server</b>). کمد چند <b>قفسه</b> دارد و هر قفسه به یک موضوع اختصاص دارد (<b>Service</b>، مثلا «قفسه چراغ‌ها»). در هر قفسه چند <b>کشو</b> است که روی هر کدام یک برچسب یکتا چسبیده (<b>Characteristic</b> با <b>UUID</b>) و داخلش یک مقدار است، مثلا «on». روی هر کشو هم نوشته چه کارهایی مجاز است (<b>Properties</b>): «فقط نگاه کن» (Read)، «می‌توانی یادداشت بگذاری» (Write)، یا «هر وقت محتوا عوض شد، به تو پیامک می‌زنم» (Notify). گوشی (<b>Client</b>) کارمندی است که سراغ کمد می‌آید.</p></div>
+<div class="table-wrap"><table>
+<tr><th>مفهوم</th><th>یعنی</th><th>در پروژه ما</th></tr>
+<tr><td><b>GATT Server</b></td><td>دستگاهی که داده را نگه می‌دارد</td><td>ESP32 با اسم <code>ESP32-BLE-LED</code></td></tr>
+<tr><td><b>GATT Client</b></td><td>دستگاهی که سراغ داده می‌آید</td><td>گوشی با nRF Connect</td></tr>
+<tr><td><b>Service</b></td><td>گروهی از مقدارهای مرتبط</td><td>یک سرویس با UUID <code>0582d484-…</code></td></tr>
+<tr><td><b>Characteristic</b></td><td>یک مقدار واحد با برچسب و مجوز</td><td>«چراغ» (Read + Write) و «شمارنده» (Read + Notify)</td></tr>
+<tr><td><b>UUID</b></td><td>شناسه یکتا؛ ۱۶ بیتی برای استانداردها یا ۱۲۸ بیتی برای ساخته‌های خودت</td><td>سه UUID تصادفی ۱۲۸ بیتی</td></tr>
+<tr><td><b>Descriptor</b></td><td>اطلاعات اضافه درباره یک characteristic</td><td><code>0x2902</code>: کلیدی که گوشی با آن notify را روشن می‌کند</td></tr>
+<tr><td><b>Advertising</b></td><td>فریاد زدن «من اینجام!» چند بار در ثانیه تا گوشی‌ها پیدایت کنند</td><td>اسم و UUID سرویس را اعلام می‌کنیم</td></tr>
+</table></div>
+<pre class="mermaid">flowchart TB
+  P["گوشی با nRF Connect&lt;br/&gt;GATT Client"]
+  subgraph ESP["ESP32-BLE-LED: GATT Server"]
+    S["Service&lt;br/&gt;0582d484-…"]
+    C1["Characteristic چراغ&lt;br/&gt;851c0eca-…&lt;br/&gt;READ + WRITE"]
+    C2["Characteristic شمارنده&lt;br/&gt;e8f00efd-…&lt;br/&gt;READ + NOTIFY"]
+    D["Descriptor 0x2902&lt;br/&gt;کلید روشن کردن notify"]
+    S --&gt; C1
+    S --&gt; C2
+    C2 --&gt; D
+  end
+  P -- "write: on" --&gt; C1
+  C2 -. "notify هر ۲ ثانیه" .-&gt; P</pre>
+<div class="callout why"><div class="ct">چرا UUID این‌قدر طولانی است؟</div>
+<p>سازمان بلوتوث برای سرویس‌های استاندارد، UUIDهای کوتاه ۱۶ بیتی تعریف کرده؛ مثلا <code>0x180F</code> یعنی «سرویس باتری» و <code>0x2A19</code> یعنی «درصد باتری». هر گوشی دنیا این‌ها را می‌شناسد. برای چیزی که خودت اختراع کرده‌ای (مثل چراغ ما) باید یک UUID ۱۲۸ بیتی تصادفی بسازی. تعداد حالت‌های ممکن آن‌قدر زیاد است (حدود ۱۰ به توان ۳۸) که احتمال این که کس دیگری در دنیا همان را بسازد عملا صفر است. برای ساختن UUID خودت از سایتی مثل <a href="https://www.uuidgenerator.net/" target="_blank" rel="noopener">uuidgenerator.net</a> استفاده کن. هرگز UUIDهای استاندارد را برای کار خودت استفاده نکن، چون گوشی فکر می‌کند دستگاه تو مثلا یک ضربان‌سنج است.</p></div>
+<div class="callout example"><div class="ct">Notify با عدد</div>
+<p>بدون Notify، گوشی برای دیدن مقدار تازه باید هر بار «بخواند» (Read)؛ مثل Polling در درس ۴.۲. با Notify، ESP32 هر ۲ ثانیه مقدار جدید را خودش می‌فرستد. در یک ساعت یعنی ۱۸۰۰ پیام کوچک، به جای این که گوشی مثلا هر ۲۰۰ میلی‌ثانیه (۱۸۰۰۰ بار در ساعت) بپرسد «چیز تازه‌ای هست؟». ده برابر پیام کمتر، یعنی باتری کمتر برای هر دو طرف.</p></div>
+
+<h3>برنامه سرور BLE</h3>
+<div class="code" data-file="BLE_LED_Counter.ino" id="codeBLE"><pre>
+#include &lt;BLEDevice.h&gt;
+#include &lt;BLEServer.h&gt;
+#include &lt;BLEUtils.h&gt;
+#include &lt;BLE2902.h&gt;
+
+// شناسه‌های یکتای (UUID) خودمان — با یک مولد UUID تصادفی ساخته شده‌اند
+#define SERVICE_UUID       "0582d484-de7b-45b7-b730-09a9fae5cbf4"
+#define LED_CHAR_UUID      "851c0eca-a1b1-4b1e-9a56-9f9f546e7ab6"
+#define COUNTER_CHAR_UUID  "e8f00efd-6510-4206-8140-d2feea0d4aa7"
+
+const int LED_PIN = 4;
+BLEServer* pServer = nullptr;
+BLECharacteristic* pLedChar = nullptr;
+BLECharacteristic* pCounterChar = nullptr;
+volatile bool deviceConnected = false;
+bool wasConnected = false;
+uint32_t counter = 0;
+unsigned long lastNotify = 0;
+
+// ۱) وقتی گوشی وصل یا قطع می‌شود
+class ServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* s) override {
+    deviceConnected = true;
+    Serial.println("Phone connected");
+  }
+  void onDisconnect(BLEServer* s) override {
+    deviceConnected = false;
+    Serial.println("Phone disconnected");
+  }
+};
+
+// ۲) وقتی گوشی روی characteristic چراغ چیزی می‌نویسد
+class LedCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* c) override {
+    String v = c-&gt;getValue();               // در core 3.x نوعش String است
+    v.trim();
+    v.toLowerCase();
+    Serial.printf("LED write: [%s]\n", v.c_str());
+    if (v == "on" || v == "1") {
+      digitalWrite(LED_PIN, HIGH);
+      c-&gt;setValue("on");
+    } else if (v == "off" || v == "0") {
+      digitalWrite(LED_PIN, LOW);
+      c-&gt;setValue("off");
+    }
+  }
+};
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+
+  BLEDevice::init("ESP32-BLE-LED");                 // اسم در لیست اسکن
+  pServer = BLEDevice::createServer();
+  pServer-&gt;setCallbacks(new ServerCallbacks());
+
+  BLEService* service = pServer-&gt;createService(SERVICE_UUID);
+
+  pLedChar = service-&gt;createCharacteristic(
+      LED_CHAR_UUID,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
+  pLedChar-&gt;setCallbacks(new LedCallbacks());
+  pLedChar-&gt;setValue("off");
+
+  pCounterChar = service-&gt;createCharacteristic(
+      COUNTER_CHAR_UUID,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+  pCounterChar-&gt;addDescriptor(new BLE2902());       // کلید روشن/خاموش notify برای گوشی
+
+  service-&gt;start();
+
+  BLEAdvertising* adv = BLEDevice::getAdvertising();
+  adv-&gt;addServiceUUID(SERVICE_UUID);
+  adv-&gt;setScanResponse(true);
+  BLEDevice::startAdvertising();
+  Serial.println("Advertising as ESP32-BLE-LED ...");
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  // ۳) هر ۲ ثانیه یک عدد تازه برای گوشی بفرست
+  if (deviceConnected &amp;&amp; now - lastNotify &gt;= 2000) {
+    lastNotify = now;
+    counter++;
+    String msg = "count=" + String(counter);
+    pCounterChar-&gt;setValue(msg);
+    pCounterChar-&gt;notify();
+    Serial.println("notify: " + msg);
+  }
+
+  // ۴) گوشی رفت؟ دوباره آگهی بده تا بقیه پیدایمان کنند
+  if (!deviceConnected &amp;&amp; wasConnected) {
+    delay(500);                                     // فرصت به پشته بلوتوث
+    pServer-&gt;startAdvertising();
+    Serial.println("Advertising again");
+    wasConnected = false;
+  }
+  if (deviceConnected &amp;&amp; !wasConnected) {
+    wasConnected = true;
+  }
+}
+</pre></div>
+<ol class="walk" data-for="codeBLE">
+  <li data-lines="1-4"><b class="what">چهار فایل کتابخانه BLE داخلی.</b> <code>BLEDevice</code> (خود دستگاه)، <code>BLEServer</code> (سرور GATT)، <code>BLEUtils</code> (ابزارها) و <code>BLE2902</code> (descriptor مخصوص notify).
+    <span class="why">همه این‌ها بخشی از کتابخانه BLE داخلی پکیج ESP32 هستند؛ نصب جداگانه لازم نیست. همین کد روی ESP32، C3، S3 و C6 کار می‌کند.</span></li>
+  <li data-lines="6-9"><b class="what">سه UUID.</b> یکی برای سرویس و دو تا برای دو characteristic. <code>#define</code> متن را جایگزین می‌کند.
+    <span class="why">UUIDها باید در ESP32 و در اپ گوشی یکی باشند؛ گذاشتن آن‌ها بالای برنامه، پیدا و مقایسه کردنشان را آسان می‌کند.</span></li>
+  <li data-lines="11-18"><b class="what">متغیرهای سراسری.</b> اشاره‌گر (pointer) به سرور و دو characteristic تا در loop هم به آن‌ها دسترسی داشته باشیم. <code>deviceConnected</code> با <code>volatile</code> چون از Task بلوتوث عوض می‌شود. <code>counter</code> عددی است که هر ۲ ثانیه می‌فرستیم.
+    <span class="why">علامت <code>*</code> یعنی «آدرس یک شیء» نه خود شیء؛ کتابخانه BLE اشیا را خودش می‌سازد و فقط آدرسشان را به ما می‌دهد. <code>nullptr</code> یعنی «هنوز به جایی اشاره نمی‌کند». دلیل <code>volatile</code> همان است که در درس ۴.۱ برای رویدادهای Wi-Fi دیدی.</span></li>
+  <li data-lines="20-30"><b class="what">کلاس callback سرور.</b> یک کلاس که از <code>BLEServerCallbacks</code> ارث می‌برد و دو تابع <code>onConnect</code> و <code>onDisconnect</code> آن را بازنویسی می‌کند (<code>override</code>). کتابخانه هنگام وصل و قطع شدن گوشی این‌ها را صدا می‌زند.
+    <span class="why">این همان ایده «زنگ در» درس ۴.۱ است، فقط به شکل کلاس C++. <code>override</code> به کامپایلر می‌گوید «مطمئن شو واقعا تابعی از کلاس پدر را بازنویسی می‌کنم»؛ اگر اسم یا ورودی را اشتباه بنویسی، به جای سکوت و کار نکردن، خطای کامپایل می‌گیری. مثل رویدادهای Wi-Fi، اینجا فقط یک متغیر را عوض می‌کنیم و کار سنگین را به loop می‌سپاریم.</span></li>
+  <li data-lines="32-35"><b class="what">callback نوشتن: onWrite.</b> هر بار که گوشی روی characteristic چراغ چیزی بنویسد، این تابع صدا زده می‌شود. <code>c-&gt;getValue()</code> مقدار نوشته‌شده را می‌دهد.
+    <span class="why">علامت <code>-&gt;</code> یعنی «از طریق این اشاره‌گر، این تابع را صدا بزن». در core 3.x، <code>getValue()</code> یک <code>String</code> آردوینویی برمی‌گرداند (پایین‌تر درباره تفاوت با 2.x می‌خوانی).</span></li>
+  <li data-lines="36-45"><b class="what">تمیز کردن و اجرا.</b> دوباره <code>trim</code> و <code>toLowerCase</code>. اگر «on» یا «1» بود LED روشن، اگر «off» یا «0» بود خاموش. بعد با <code>c-&gt;setValue</code> مقدار characteristic را به شکل استاندارد («on» یا «off») درمی‌آوریم.
+    <span class="why">پذیرفتن «1» و «0» کار را برای اپ‌هایی که عدد می‌فرستند راحت می‌کند. به‌روز کردن مقدار باعث می‌شود اگر گوشی بعدا این characteristic را «بخواند»، وضعیت واقعی LED را ببیند، نه متنی که کاربر تایپ کرده. ورودی ناشناخته هیچ کاری نمی‌کند؛ ایمن‌ترین پیش‌فرض.</span></li>
+  <li data-lines="53-55"><b class="what">راه‌اندازی دستگاه و سرور.</b> <code>BLEDevice::init</code> پشته BLE را با یک اسم روشن می‌کند. <code>createServer</code> سرور GATT را می‌سازد و <code>setCallbacks</code> کلاس زنگ در را به آن معرفی می‌کند.
+    <span class="why"><code>::</code> یعنی «تابعی که مال خود کلاس است، نه یک شیء خاص»؛ چون فقط یک دستگاه BLE داریم. <code>new</code> یک شیء callback می‌سازد که تا آخر عمر برنامه زنده می‌ماند.</span></li>
+  <li data-lines="57"><b class="what">ساختن سرویس.</b> «قفسه» ما با UUID خودش.
+    <span class="why">همه characteristicها باید داخل یک سرویس باشند؛ characteristic بی‌سرویس وجود ندارد.</span></li>
+  <li data-lines="59-63"><b class="what">characteristic چراغ.</b> با مجوز <code>PROPERTY_READ | PROPERTY_WRITE</code> ساخته می‌شود؛ علامت <code>|</code> یعنی «هر دو». callback نوشتن به آن وصل می‌شود و مقدار اولیه «off» است.
+    <span class="why">فقط مجوزهایی را بده که لازم است: این کشو notify ندارد چون LED خودش تغییر نمی‌کند؛ فقط ما عوضش می‌کنیم. مقدار اولیه یعنی اگر گوشی قبل از هر نوشتنی بخواند، جواب درست بگیرد.</span></li>
+  <li data-lines="65-68"><b class="what">characteristic شمارنده و descriptor 0x2902.</b> مجوز <code>READ | NOTIFY</code>. سپس <code>addDescriptor(new BLE2902())</code> descriptor استاندارد CCCD را اضافه می‌کند.
+    <span class="why">طبق استاندارد بلوتوث، گوشی notify را با نوشتن روی همین descriptor روشن می‌کند (وقتی در nRF Connect آیکون سه‌فلش را می‌زنی). در پشته Bluedroid (پیش‌فرض ESP32 معمولی در آردوینو) اگر آن را اضافه نکنی، گوشی نمی‌تواند مشترک شود و هیچ notifyی نمی‌رسد. در پشته NimBLE خودکار اضافه می‌شود ولی نوشتنش ضرری ندارد.</span></li>
+  <li data-lines="70"><b class="what">service-&gt;start().</b> سرویس را فعال می‌کند.
+    <span class="why">تا start نشود، گوشی حتی بعد از اتصال هم آن را در فهرست نمی‌بیند. همه characteristicها باید قبل از این خط ساخته شوند.</span></li>
+  <li data-lines="72-76"><b class="what">آگهی دادن (Advertising).</b> UUID سرویس را به آگهی اضافه می‌کنیم، پاسخ اسکن (Scan Response) را روشن می‌کنیم و آگهی را شروع می‌کنیم.
+    <span class="why">بسته آگهی BLE خیلی کوچک است (۳۱ بایت). UUID ۱۲۸ بیتی ۱۶ بایت آن را می‌گیرد؛ Scan Response یک بسته دوم است که اسم دستگاه در آن جا می‌شود. نتیجه: گوشی هم اسم را می‌بیند و هم می‌تواند بر اساس سرویس فیلتر کند.</span></li>
+  <li data-lines="82-90"><b class="what">notify هر ۲ ثانیه، بدون delay.</b> اگر گوشی وصل است و ۲۰۰۰ میلی‌ثانیه گذشته، شمارنده را زیاد کن، متنی مثل <code>count=7</code> بساز، با <code>setValue</code> در characteristic بگذار و با <code>notify()</code> بفرست.
+    <span class="why">متن به جای عدد خام باینری فرستادیم چون nRF Connect متن را مستقیم نشان می‌دهد و تو بدون تبدیل هگز آن را می‌خوانی. در پروژه واقعی، به جای شمارنده، مقدار سنسور (مثلا دمای DHT22) را می‌فرستی. وقتی کسی وصل نیست، notify نمی‌فرستیم؛ فرستادن به هیچ‌کس فقط انرژی هدر می‌دهد.</span></li>
+  <li data-lines="92-98"><b class="what">آگهی دوباره بعد از قطع.</b> اگر الان وصل نیست ولی قبلا بود، یعنی گوشی تازه رفته: ۵۰۰ میلی‌ثانیه صبر، بعد <code>startAdvertising()</code>.
+    <span class="why">مهم‌ترین دام BLE برای مبتدی‌ها: در این کتابخانه، وقتی گوشی وصل می‌شود آگهی متوقف می‌شود و بعد از قطع شدن <b>خودبه‌خود دوباره شروع نمی‌شود</b>. بدون این بخش، ESP32 بعد از اولین قطع شدن برای همیشه نامرئی می‌شود تا ریستش کنی. ۵۰۰ میلی‌ثانیه به پشته بلوتوث فرصت می‌دهد اتصال قبلی را کامل ببندد. این delay کوتاه فقط یک بار بعد از هر قطع اتفاق می‌افتد.</span></li>
+  <li data-lines="99-101"><b class="what">ثبت لحظه اتصال.</b> وقتی تازه وصل شده، <code>wasConnected</code> را true کن.
+    <span class="why">این دو متغیر با هم «لبه» را تشخیص می‌دهند: لحظه تغییر از قطع به وصل یا برعکس. همان ایده تشخیص لحظه فشار دکمه در درس ۳.۱.</span></li>
+</ol>
+
+<div class="callout warn"><div class="ct">دقت کن: تفاوت core 3.x با 2.x در BLE</div>
+<p>در core 2.x تابع <code>getValue()</code> یک <code>std::string</code> (رشته استاندارد C++) برمی‌گرداند و تقریبا همه آموزش‌های قدیمی این را دارند: <code>std::string value = pCharacteristic-&gt;getValue();</code>. در core 3.x این تابع <code>String</code> آردوینو برمی‌گرداند و آن خط دیگر کامپایل نمی‌شود (خطایی شبیه <code>conversion from 'String' to non-scalar type 'std::string' requested</code>). راه حل: بنویس <code>String value = ...</code>. اگر واقعا std::string لازم داری: <code>std::string v = c-&gt;getValue().c_str();</code>. در core 3.x همچنین <code>setValue</code> یک <code>String</code> می‌پذیرد. جزئیات در <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/migration_guides/2.x_to_3.0.html" target="_blank" rel="noopener">راهنمای مهاجرت 2.x به 3.0</a>.</p></div>
+<div class="callout tip"><div class="ct">جایگزین سبک‌تر: NimBLE-Arduino</div>
+<p>کتابخانه BLE داخلی روی پشته Bluedroid ساخته شده که حجم زیادی از فلش و RAM می‌گیرد. کتابخانه <a href="https://github.com/h2zero/NimBLE-Arduino" target="_blank" rel="noopener">NimBLE-Arduino</a> (از Library Manager) همین کار را با حافظه خیلی کمتر انجام می‌دهد و در پروژه‌هایی که Wi-Fi و BLE را با هم دارند محبوب است. اسم کلاس‌ها شبیه است (<code>NimBLEDevice</code>، <code>NimBLEServer</code>…) ولی امضای بعضی callbackها فرق دارد؛ پس کد را خط به خط کپی نکن و مثال‌های خود کتابخانه را ببین.</p></div>
+
+<h3>آزمایش با nRF Connect (قدم به قدم)</h3>
+<ol class="steps">
+  <li><b>آپلود کن</b> و Serial Monitor را باز کن: <code>Advertising as ESP32-BLE-LED ...</code>. توجه: برای BLE لازم <b>نیست</b> از تنظیمات بلوتوث گوشی Pair کنی؛ همه کار داخل اپ است. در اندروید اگر اپ اجازه «مکان» یا «دستگاه‌های نزدیک» خواست، بده (اسکن BLE بدون آن کار نمی‌کند).</li>
+  <li><b>اسکن:</b> nRF Connect را باز کن. در تب <b>SCANNER</b> روی <b>SCAN</b> بزن. <code>ESP32-BLE-LED</code> را در فهرست پیدا کن و روی <b>CONNECT</b> کنارش بزن.</li>
+  <li><b>سرویس را باز کن:</b> صفحه جدیدی با چند سرویس باز می‌شود. دو تای اول (Generic Access و Generic Attribute) استاندارد هستند. روی <b>Unknown Service</b> با UUID <code>0582d484-…</code> بزن تا باز شود. دو <b>Unknown Characteristic</b> می‌بینی.</li>
+  <li><b>نوشتن روی چراغ:</b> کنار characteristic <code>851c0eca-…</code> (Properties: READ, WRITE) روی آیکون <b>فلش رو به بالا</b> بزن. در پنجره باز شده، نوع داده را از فهرست کشویی روی <b>TEXT</b> (یا UTF-8) بگذار، <code>on</code> را تایپ کن و <b>SEND</b> را بزن. LED روشن می‌شود. 🎉</li>
+  <li><b>خواندن:</b> آیکون <b>فلش رو به پایین</b> همان characteristic را بزن؛ مقدار <code>"on"</code> را می‌بینی. حالا <code>off</code> بفرست و دوباره بخوان.</li>
+  <li><b>مشترک شدن در notify:</b> کنار characteristic <code>e8f00efd-…</code> (READ, NOTIFY) روی آیکون <b>چند فلش رو به پایین</b> بزن. هر ۲ ثانیه مقدار عوض می‌شود: <code>count=1</code>، <code>count=2</code>… (اپ مقدار را هم به صورت هگز و هم متن نشان می‌دهد).</li>
+  <li><b>قطع و وصل:</b> در بالای صفحه <b>DISCONNECT</b> را بزن. در Serial Monitor <code>Advertising again</code> را می‌بینی و دوباره می‌توانی وصل شوی. این یعنی بخش «آگهی دوباره» درست کار می‌کند.</li>
+</ol>
+<div class="serial">Advertising as ESP32-BLE-LED ...
+Phone connected
+LED write: [on]
+notify: count=1
+notify: count=2
+LED write: [off]
+notify: count=3
+Phone disconnected
+Advertising again</div>
+<div class="callout tip"><div class="ct">در آیفون</div>
+<p>nRF Connect برای iOS هم هست و مراحل تقریبا یکی است؛ فقط ظاهر آیکون‌ها فرق دارد. آیفون گاهی اسم دستگاه را در حافظه خودش نگه می‌دارد؛ اگر اسم را در کد عوض کردی و آیفون هنوز اسم قدیمی را نشان داد، بلوتوث گوشی را یک بار خاموش و روشن کن.</p></div>
+
+<h2 id="security">امنیت: چه کسی می‌تواند وصل شود؟</h2>
+<p>هر دو برنامه این درس <b>بدون قفل</b> هستند. در بخش الف، ESP32 از روش «Just Works» استفاده می‌کند: هر گوشی در برد حدود ۱۰ متری می‌تواند بدون رمز جفت شود. در بخش ب، هر کس nRF Connect داشته باشد می‌تواند وصل شود و روی characteristic چراغ بنویسد. برای LED آموزشی مشکلی نیست؛ برای قفل در، هرگز.</p>
+<ul>
+  <li><b>جفت شدن امن (Pairing / Bonding):</b> BLE می‌تواند اتصال را رمزگذاری کند و قبل از اولین اتصال یک رمز ۶ رقمی (Passkey) بخواهد. کتابخانه BLE کلاس <code>BLESecurity</code> را برای این کار دارد (در کتابخانه‌های ESP32 و NimBLE مثال‌های «Secure» یا «Passkey» را ببین). رمز ثابت در کد هم باز بهتر از هیچ است.</li>
+  <li><b>قاعده پیش‌فرض ایمن:</b> مثل درس ۴.۲، فرمان نامفهوم هیچ کاری نکند و خروجی خطرناک پیش‌فرض خاموش باشد.</li>
+  <li><b>بعد از کار:</b> در بخش الف، اگر نمی‌خواهی دستگاه همیشه قابل جفت شدن باشد، بعد از کار بلوتوث را با <code>SerialBT.end()</code> خاموش کن.</li>
+</ul>
+
+<h2 id="video">ویدیوی کمکی</h2>
+<div class="video" data-yt="0Q_4q1zU6Zc" data-title="Bluetooth Classic &amp; BLE with ESP32" data-channel="DroneBot Workshop" data-lang="انگلیسی">
+  <div class="sum"><ul>
+    <li>این ویدیوی حدود ۳۸ دقیقه‌ای هر دو بخش این درس را پوشش می‌دهد: اول بلوتوث کلاسیک با ترمینال سریال، بعد سرور و کلاینت BLE.</li>
+    <li>در بخش Classic ببین مدرس گوشی را چطور جفت می‌کند و در اپ ترمینال به کدام گزینه وصل می‌شود؛ با مراحل بخش الف ما مقایسه کن.</li>
+    <li>در بخش BLE دقت کن سرویس و characteristic را چطور توضیح می‌دهد و آن را با مثال «کمد کشودار» این درس تطبیق بده.</li>
+    <li>ویدیو قبل از core 3.x ضبط شده؛ اگر در کد آن <code>std::string value = ...getValue()</code> دیدی، طبق هشدار بالا آن را <code>String</code> بنویس.</li>
+  </ul></div>
+</div>
+
+<h2 id="debug">وقتی کار نمی‌کند: عیب‌یابی قدم به قدم</h2>
+<div class="table-wrap"><table>
+<tr><th>علامت</th><th>علت محتمل</th><th>راه حل</th></tr>
+<tr><td>خطای کامپایل <code>Bluetooth Classic (SPP) is only available...</code> یا <code>Serial Port Profile ... not available</code></td><td>برد انتخابی C3، S3 یا C6 است</td><td>بلوتوث کلاسیک فقط روی ESP32 معمولی است. در منوی Tools برد <b>ESP32 Dev Module</b> را انتخاب کن یا از BLE استفاده کن.</td></tr>
+<tr><td><code>Sketch too big</code> یا «text section exceeds available space»</td><td>کتابخانه بلوتوث بزرگ است و از فضای برنامه پیش‌فرض (حدود ۱٫۲ مگابایت) بیشتر شده، به‌خصوص با Wi-Fi هم‌زمان</td><td><code>Tools › Partition Scheme</code> را روی <b>Huge APP (3MB No OTA/1MB SPIFFS)</b> بگذار، یا برای BLE از NimBLE-Arduino استفاده کن.</td></tr>
+<tr><td>کد قدیمی BLE کامپایل نمی‌شود: <code>conversion from 'String' to ... std::string</code></td><td>کد برای core 2.x نوشته شده</td><td><code>std::string</code> را به <code>String</code> تغییر بده (هشدار بالا).</td></tr>
+<tr><td>فرمان <code>on</code> می‌رسد ولی LED روشن نمی‌شود؛ Serial <code>[on]</code> نشان نمی‌دهد</td><td>کاراکترهای <code>\r\n</code> یا فاصله در فرمان</td><td>مطمئن شو <code>trim()</code> و <code>toLowerCase()</code> در کد هست؛ لاگ براکت‌دار را ببین.</td></tr>
+<tr><td>ESP32 در لیست بلوتوث آیفون دیده نمی‌شود (بخش الف)</td><td>آیفون SPP را پشتیبانی نمی‌کند</td><td>از گوشی اندرویدی استفاده کن یا مستقیم سراغ BLE برو.</td></tr>
+<tr><td>nRF Connect دستگاه را پیدا نمی‌کند</td><td>اجازه مکان یا Nearby Devices داده نشده؛ یا گوشی دیگری از قبل وصل است</td><td>اجازه‌ها را بده و Location گوشی را روشن کن. هر بار فقط یک گوشی می‌تواند وصل باشد؛ اپ‌های دیگر را ببند.</td></tr>
+<tr><td>بار اول وصل می‌شود، بعد از قطع دیگر پیدا نمی‌شود</td><td>آگهی بعد از قطع دوباره شروع نشده</td><td>بخش «آگهی دوباره» (<code>startAdvertising</code> در loop) را اضافه کن.</td></tr>
+<tr><td>notify نمی‌رسد</td><td>آیکون اشتراک (چند فلش) زده نشده، یا descriptor 0x2902 اضافه نشده</td><td>آیکون notify را بزن؛ مطمئن شو <code>addDescriptor(new BLE2902())</code> در کد هست.</td></tr>
+<tr><td>نوشتن <code>on</code> در nRF Connect کار نمی‌کند ولی Serial مقدار عجیبی نشان می‌دهد</td><td>نوع داده روی BYTE ARRAY (هگز) بوده</td><td>در پنجره Write نوع را روی <b>TEXT</b> بگذار.</td></tr>
+<tr><td>برد هنگام روشن شدن بلوتوث ریست می‌شود (<code>Brownout</code>)</td><td>تغذیه ضعیف، مثل Wi-Fi</td><td>کابل USB بهتر؛ بخش برق درس <a href="4-1.html#power">۴.۱</a>.</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>BLE اولش گیج‌کننده است چون هیچ «پیامی» نمی‌بینی، فقط جدول مقدار. اشتباه رایج این است که مبتدی هنوز در ذهنش «فرستادن پیام» را تصور می‌کند و وقتی کار نکرد، کد را از پنج آموزش مختلف قاطی می‌کند. این کار را نکن. اول با nRF Connect، بدون هیچ اپ خودت، ثابت کن سرور درست است: سرویس دیده می‌شود، نوشتن کار می‌کند، notify می‌رسد. فقط بعد از آن سراغ ساختن اپ یا وصل کردن سنسور برو. در هر سیستمی که دو طرف دارد، همیشه یک طرف را با ابزاری که <b>مطمئنی درست است</b> آزمایش کن. و یادت باشد: قطع شدن گوشی یک اتفاق عادی است، نه استثنا؛ برنامه‌ای که بعد از اولین قطع شدن نامرئی می‌شود، خراب است.</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="3">
+  <p class="q">دوستت یک ESP32-C3 دارد و برنامه BluetoothSerial را آپلود می‌کند. چه اتفاقی می‌افتد؟</p>
+  <ol><li data-why="C3 اصلا بلوتوث کلاسیک ندارد که بتواند با آیفون یا اندروید وصل شود.">کار می‌کند ولی فقط با اندروید</li><li data-why="سرعت ربطی به این ندارد؛ سخت‌افزار این قابلیت را ندارد.">کار می‌کند ولی کندتر</li><li>کامپایل نمی‌شود، چون ESP32-C3 فقط BLE دارد و بلوتوث کلاسیک (SPP) ندارد</li><li data-why="C3 بلوتوث دارد، ولی فقط نوع BLE.">کامپایل می‌شود ولی چون C3 اصلا بلوتوث ندارد، هیچ اتفاقی نمی‌افتد</li></ol>
+  <div class="fb">فقط ESP32 معمولی بلوتوث کلاسیک دارد. C3، S3 و C6 فقط BLE دارند و S2 اصلا بلوتوث ندارد.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">در nRF Connect روی characteristic شمارنده، بدون زدن آیکون اشتراک، مقدار هیچ‌وقت عوض نمی‌شود. چرا؟</p>
+  <ol><li>چون notify فقط به گوشی‌ای فرستاده می‌شود که با نوشتن روی descriptor 0x2902 مشترک شده باشد</li><li data-why="شمارنده در loop زیاد می‌شود، ربطی به اپ ندارد.">چون ESP32 فقط وقتی اپ باز است می‌شمارد</li><li data-why="PROPERTY_READ به گوشی اجازه خواندن دستی می‌دهد، ولی خودکار چیزی نمی‌فرستد.">چون مجوز READ کافی نیست و باید WRITE هم اضافه شود</li><li data-why="notify کاملا با اندروید کار می‌کند.">چون اندروید notify را پشتیبانی نمی‌کند</li></ol>
+  <div class="fb">اشتراک یعنی گوشی به ESP32 می‌گوید «از این به بعد تغییرات را برایم بفرست». این کار با CCCD (همان 0x2902) انجام می‌شود.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">اگر خط <code>pServer-&gt;startAdvertising();</code> را از loop حذف کنی، چه می‌شود؟</p>
+  <ol><li data-why="init و startAdvertising در setup هنوز هستند، پس بار اول کار می‌کند.">ESP32 اصلا پیدا نمی‌شود</li><li data-why="notify فقط به وصل بودن بستگی دارد، نه به آگهی.">notify کار نمی‌کند</li><li data-why="LED ربطی به آگهی ندارد.">LED روشن نمی‌شود</li><li>بار اول وصل می‌شوی، ولی بعد از قطع شدن، ESP32 دیگر در اسکن دیده نمی‌شود تا ریست شود</li></ol>
+  <div class="fb">با اتصال، آگهی متوقف می‌شود و بعد از قطع، خودکار شروع نمی‌شود. آگهی دوباره را خودت باید شروع کنی.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">کد قدیمی <code>std::string value = c-&gt;getValue();</code> در core 3.x کامپایل نمی‌شود. درست‌ترین تغییر کدام است؟</p>
+  <ol><li data-why="برگشتن به نسخه قدیمی مشکل را حل نمی‌کند، فقط عقب می‌اندازد.">core را به 2.x برگردان</li><li>‏<code>String value = c-&gt;getValue();</code></li><li data-why="char تنها یک حرف را نگه می‌دارد، نه یک متن.">‏<code>char value = c-&gt;getValue();</code></li><li data-why="int متن را نگه نمی‌دارد.">‏<code>int value = c-&gt;getValue();</code></li></ol>
+  <div class="fb">در core 3.x، getValue یک String آردوینو برمی‌گرداند. متدهای trim و toLowerCase هم روی همین String کار می‌کنند.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">چرا در بخش الف، قبل از مقایسه فرمان، <code>trim()</code> را صدا می‌زنیم؟</p>
+  <ol><li data-why="trim حروف را کوچک نمی‌کند؛ این کار toLowerCase است.">تا حروف بزرگ کوچک شوند</li><li data-why="trim متن را کوتاه نمی‌کند مگر فاصله‌های دو طرف را.">تا فرمان‌های طولانی کوتاه شوند</li><li>چون اپ‌ها در پایان پیام کاراکترهای نامرئی <code>\r</code> و <code>\n</code> یا فاصله می‌فرستند و بدون trim، <code>"on\r"</code> با <code>"on"</code> برابر نیست</li><li data-why="حافظه با سقف ۳۲ حرف محافظت می‌شود، نه با trim.">تا حافظه ESP32 پر نشود</li></ol>
+  <div class="fb">ورودی کاربر را همیشه قبل از مقایسه تمیز کن. این ساده‌ترین شکل «پردازش مقاوم ورودی» است.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+<div class="exercise"><div class="ct">تمرین ۱: فرمان blink</div>
+<p>به برنامه بلوتوث کلاسیک فرمان <code>blink</code> اضافه کن که LED را ۵ بار (هر بار ۲۰۰ میلی‌ثانیه روشن و ۲۰۰ خاموش) چشمک بزند و در پایان به حالت قبلی برگردد. فرمان <code>help</code> هم فهرست همه فرمان‌ها را بفرستد.</p>
+<details><summary>راهنمایی</summary><p>ساده‌ترین نسخه یک حلقه <code>for</code> با <code>delay</code> داخل <code>handleCommand</code> است (۲ ثانیه). نسخه حرفه‌ای (بدون delay): یک متغیر <code>blinksLeft = 10</code> تنظیم کن و در loop با الگوی <code>millis()</code> هر ۲۰۰ میلی‌ثانیه LED را برعکس کن و یکی از blinksLeft کم کن. کدام را انتخاب کردی و چرا؟</p></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۲: notify پتانسیومتر</div>
+<p>در برنامه BLE، به جای شمارنده، مقدار یک پتانسیومتر روی GPIO34 (مثل درس ۴.۲) را هر ۵۰۰ میلی‌ثانیه notify کن؛ ولی <b>فقط وقتی مقدار بیش از ۲۰ واحد تغییر کرده</b>.</p>
+<details><summary>راهنمایی</summary><p>یک متغیر <code>int lastSent = -100;</code> نگه دار. در loop: <code>int v = analogRead(34); if (abs(v - lastSent) &gt; 20) { ... notify ...; lastSent = v; }</code>. چرا شرط ۲۰ واحد؟ چون ADC کمی نویز دارد و بدون آن، حتی وقتی به پتانسیومتر دست نمی‌زنی، مدام پیام می‌رود.</p></details>
+<details><summary>جواب</summary>
+<div class="code" data-file="BLE_Pot (تکه loop)" id="codeEx3"><pre>
+const int POT_PIN = 34;                     // ADC1
+int lastSent = -100;                        // طوری که اولین بار حتما بفرستد
+
+void loop() {
+  unsigned long now = millis();
+  if (deviceConnected &amp;&amp; now - lastNotify &gt;= 500) {
+    lastNotify = now;
+    int v = analogRead(POT_PIN);            // 0 تا 4095
+    if (abs(v - lastSent) &gt; 20) {           // فقط تغییر واقعی، نه نویز
+      String msg = "pot=" + String(v);
+      pCounterChar-&gt;setValue(msg);
+      pCounterChar-&gt;notify();
+      lastSent = v;
+    }
+  }
+  // ... بخش «آگهی دوباره» مثل قبل ...
+}
+</pre></div></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۳: فکر کن (بدون کد)</div>
+<p>می‌خواهی یک سنسور دمای باتری‌خور برای اتاق بسازی که دمایش را روی گوشی ببینی. بلوتوث کلاسیک، BLE یا Wi-Fi با وب سرور (درس ۴.۲)؟ برای هر کدام یک مزیت و یک عیب بنویس و انتخابت را با دلیل توضیح بده. اگر بخواهی دما را از محل کار هم ببینی، جوابت عوض می‌شود؟</p>
+</div>
+
+<div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
+<p>بلوتوث کلاسیک یک لوله پیوسته است (با <code>BluetoothSerial</code> مثل Serial بی‌سیم، فقط روی ESP32 معمولی و فقط با اندروید) و BLE یک جدول مقدار کم‌مصرف است که روی ESP32، C3، S3 و C6 و با آیفون هم کار می‌کند. در BLE سرور سرویس‌هایی دارد که characteristicهایی با UUID و مجوز Read/Write/Notify دارند؛ notify بدون descriptor 0x2902 و اشتراک گوشی نمی‌رسد و بعد از هر قطع شدن باید آگهی را دوباره شروع کنی. ورودی را با <code>trim</code> و <code>toLowerCase</code> تمیز کن، در core 3.x <code>getValue()</code> یک <code>String</code> است، و بدون Pairing هر کسی در برد می‌تواند وصل شود.</p></div>
+
+</article>
+</body>
+</html>

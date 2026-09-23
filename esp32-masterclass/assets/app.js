@@ -173,7 +173,12 @@
         if (fa_ && t[1] === "tk-com") {
           var mm = /^(\s*(?:\/\/|\/\*|\*)?\s*)([\s\S]*)$/.exec(p);
           lines[lines.length - 1] += '<span class="tk-com">' + esc(mm[1]) + '</span><span class="tk-com fa-run" dir="rtl">' + esc(mm[2]) + '</span>';
-        } else if (fa_ && t[1] === "tk-str") lines[lines.length - 1] += '<span class="tk-str fa-run" dir="auto">' + esc(p) + '</span>';
+        } else if (fa_ && t[1] === "tk-str") {
+          /* فقط تکه‌های فارسی داخل رشته را جدا راست‌به‌چپ می‌کنیم تا ترتیب بقیه خط به هم نریزد */
+          lines[lines.length - 1] += '<span class="tk-str">' + p.split(/([\u0600-\u06FF][\u0600-\u06FF\u200c ]*[\u0600-\u06FF]|[\u0600-\u06FF])/).map(function (seg, k) {
+            return k % 2 ? '<span class="fa-run" dir="rtl">' + esc(seg) + '</span>' : esc(seg);
+          }).join("") + '</span>';
+        }
         else lines[lines.length - 1] += t[1] ? '<span class="' + t[1] + '">' + esc(p) + '</span>' : esc(p);
       });
     });
