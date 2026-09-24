@@ -1,0 +1,955 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Final project: an environment station with cloud alerts · ESP32 Masterclass</title>
+<meta name="description" content="The ESP32 course's final project: an environment monitoring station with a DHT22, an LDR, an OLED display, local alarms with an LED and a buzzer, Wi-Fi and MQTT to HiveMQ or Adafruit IO, and cloud alerts with hysteresis and rate limiting, built step by step.">
+<link rel="alternate" hreflang="fa" href="../6-3.html"><link rel="alternate" hreflang="en" href="6-3.html">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="../assets/course.js"></script>
+<script defer src="../assets/glossary-en.js"></script>
+<script defer src="../assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="6-3">
+
+<p class="lede">This lesson is your final exam, but it's an exam we write together. We'll build a complete environment monitoring station: it measures temperature, humidity and light, shows them on a display, warns you with a light and a beeper if it gets too hot, and sends everything over the internet to a cloud dashboard. Almost everything you've learned in this course comes together here. Even more important than the project itself is <b>the way we build it</b>: one step at a time, and every step tested.</p>
+
+<div class="goals">
+  <div><h4>🎯 After this lesson you can</h4><ul>
+    <li>Put a project's requirements and architecture on paper before you write any code</li>
+    <li>Choose pins for a reason and write a parts list</li>
+    <li>Build a big project in small, testable steps</li>
+    <li>Schedule several jobs at once with <code>millis()</code> without blocking the program</li>
+    <li>Build an alarm that doesn't flicker (thanks to hysteresis) and doesn't spam (thanks to rate limiting)</li>
+    <li>Send data with MQTT to HiveMQ or Adafruit IO and see it on a dashboard</li>
+  </ul></div>
+  <div><h4>🧰 Prerequisites and parts</h4><ul>
+    <li>Lessons <a href="3-1.html">3.1</a> (LDR, button), <a href="3-2.html">3.2</a> (PWM), <a href="3-3.html">3.3</a> (OLED, DHT22), <a href="4-1.html">4.1</a> (Wi-Fi), <a href="5-1.html">5.1</a> (MQTT), <a href="5-4.html">5.4</a> (FreeRTOS, for the optional improvements) and <a href="6-1.html">6.1</a> (sleep)</li>
+    <li>An ESP32 DevKitC board, a DHT22 sensor, an LDR module (or an LDR + a 10 kΩ resistor)</li>
+    <li>An SSD1306 OLED display with an I2C interface</li>
+    <li>A red LED + a 220 Ω resistor, a passive piezo buzzer, a push button</li>
+    <li>Two breadboards or one large breadboard, jumper wires</li>
+  </ul></div>
+</div>
+
+<h2 id="prd">Step zero: requirements (a small PRD)</h2>
+<p>Before writing code, professionals write a short document that says <b>exactly</b> what the product must do. It's called a PRD (Product Requirements Document). Without one, a project keeps growing and is never "done", because you don't know what "done" means.</p>
+<div class="callout analogy"><div class="ct">An everyday example: a building plan</div>
+<p>No builder starts laying bricks without a plan. If halfway through the owner says "Oh, by the way, I want one more floor", the columns were never designed to carry it. The PRD is your project's plan: short, but clear.</p></div>
+
+<div class="table-wrap"><table>
+<tr><th>ID</th><th>Requirement</th><th>Acceptance criterion (how do I know it's done?)</th></tr>
+<tr><td>R1</td><td>Measure temperature and humidity</td><td>Once every 2 seconds; a sensor error is shown as "ERR", never as a wrong number</td></tr>
+<tr><td>R2</td><td>Measure ambient light</td><td>Light as a percentage from 0 to 100; it drops when you cover the sensor</td></tr>
+<tr><td>R3</td><td>Local display</td><td>The OLED shows temperature, humidity, light, Wi-Fi and MQTT status, and alarm status</td></tr>
+<tr><td>R4</td><td>Local alarm</td><td>Above 35 degrees: the LED blinks and the buzzer beeps; the button silences the buzzer</td></tr>
+<tr><td>R5</td><td>No flickering (hysteresis)</td><td>The alarm only turns off once the temperature drops below 33 degrees</td></tr>
+<tr><td>R6</td><td>Send to the cloud</td><td>Every 30 seconds, temperature, humidity and light are sent over MQTT</td></tr>
+<tr><td>R7</td><td>Cloud alerts without spam</td><td>One message when the alarm starts, one when it ends, and at most one reminder every 10 minutes while it lasts</td></tr>
+<tr><td>R8</td><td>Survives network outages</td><td>If Wi-Fi or the server drops, the display and local alarm keep running without a pause, and the connection comes back on its own</td></tr>
+<tr><td>R9 (optional)</td><td>Battery mode</td><td>Using deep sleep, measure and send once every few minutes</td></tr>
+</table></div>
+<div class="callout why"><div class="ct">Why is R8 so important?</div>
+<p>The internet goes down; that's a fact, not a possibility. A device whose local alarm also stops working when the internet drops will be silent at exactly the moment you need it. The design rule: <b>local jobs never wait for the network.</b></p></div>
+
+<h2 id="arch">System architecture</h2>
+<pre class="mermaid">flowchart LR
+  subgraph IN["Inputs"]
+    DHT["DHT22<br/>temperature and humidity<br/>GPIO4"]
+    LDR["LDR module<br/>light<br/>GPIO34"]
+    BTN["Mute button<br/>GPIO33"]
+  end
+  subgraph ESP["Brain: ESP32"]
+    R["Read sensors<br/>every 2 seconds"]
+    A["Alarm logic<br/>hysteresis 35 / 33"]
+    P["Send MQTT<br/>every 30 seconds"]
+  end
+  subgraph OUT["Local outputs"]
+    OLED["OLED<br/>I2C 21/22"]
+    LED["Red LED<br/>GPIO25"]
+    BUZ["Buzzer<br/>GPIO26"]
+  end
+  subgraph CLOUD["Cloud"]
+    BR["MQTT broker<br/>HiveMQ or Adafruit IO"]
+    DB["Dashboard and phone"]
+  end
+  DHT --> R
+  LDR --> R
+  BTN --> A
+  R --> A
+  R --> OLED
+  A --> LED
+  A --> BUZ
+  R --> P
+  A --> P
+  P -- "Wi-Fi" --> BR
+  BR --> DB</pre>
+<p>We have three "flows": reading the sensors (fast and local), deciding on the alarm (local), and sending to the cloud (slow, and it can fail). The architecture makes sure the third flow never holds up the first two.</p>
+
+<h2 id="pins">Choosing the pins (with reasons)</h2>
+<div class="table-wrap"><table>
+<tr><th>Part</th><th>ESP32 pin</th><th>Why this pin?</th></tr>
+<tr><td>OLED SDA / SCL</td><td>GPIO21 / GPIO22</td><td>The default I2C pins in the Arduino core; every library and tutorial assumes them</td></tr>
+<tr><td>DHT22 DATA</td><td>GPIO4</td><td>A safe pin: not a strapping pin, not wired to the flash, and it can be both input and output (the DHT needs both)</td></tr>
+<tr><td>LDR (analog output AO)</td><td>GPIO34</td><td>It's on <b>ADC1</b>. ADC2 pins can't be used while Wi-Fi is on; since we use Wi-Fi, only ADC1 (GPIO32 to 39) is safe. GPIO34 is input-only, which is no problem for a sensor</td></tr>
+<tr><td>Alarm LED</td><td>GPIO25</td><td>A safe output with no strapping role</td></tr>
+<tr><td>Buzzer</td><td>GPIO26</td><td>A safe output; we make the beep with LEDC (PWM)</td></tr>
+<tr><td>Mute button</td><td>GPIO33</td><td>It has an internal pull-up resistor and it's an <b>RTC pin</b>, so in battery mode (deep sleep) this same button can wake the board (lesson <a href="6-1.html#ext0">6.1</a>)</td></tr>
+</table></div>
+<div class="callout warn"><div class="ct">A classic trap: the LDR on ADC2</div>
+<p>If you put the LDR on, say, GPIO25 or GPIO26 (which are ADC2 pins), it works perfectly without Wi-Fi; but the moment Wi-Fi turns on, <code>analogRead</code> stops giving correct numbers. It's one of those bugs you don't see in step 1 (no Wi-Fi) that suddenly shows up in step 4. That's why we choose correctly from the start.</p></div>
+
+<h2 id="bom">Parts list (BOM)</h2>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Part</th><th>Qty</th><th>Notes</th></tr>
+<tr><td>1</td><td>ESP32 DevKitC board (or DOIT DevKit V1)</td><td>1</td><td>Any ESP32 board with a WROOM module</td></tr>
+<tr><td>2</td><td>DHT22 sensor (AM2302)</td><td>1</td><td>The 3-pin module has a pull-up resistor on board; the bare 4-pin sensor needs a 10 kΩ resistor</td></tr>
+<tr><td>3</td><td>LDR module with an AO output</td><td>1</td><td>Or an LDR + a 10 kΩ resistor as a voltage divider (lesson 3.1)</td></tr>
+<tr><td>4</td><td>0.96-inch SSD1306 OLED display, I2C, 128×64</td><td>1</td><td>Four pins: GND, VCC, SCL, SDA (the pin order differs between models; read the labels on the board)</td></tr>
+<tr><td>5</td><td>Red 5 mm LED</td><td>1</td><td></td></tr>
+<tr><td>6</td><td>220 Ω resistor</td><td>1</td><td>For the LED</td></tr>
+<tr><td>7</td><td>10 kΩ resistor</td><td>1</td><td>DHT22 pull-up (if you don't have the module)</td></tr>
+<tr><td>8</td><td><b>Passive</b> piezo buzzer</td><td>1</td><td>A small piezo buzzer draws little current and connects straight to a pin. A magnetic or 5 V "active" buzzer draws more current and needs a transistor</td></tr>
+<tr><td>9</td><td>6 mm push button</td><td>1</td><td></td></tr>
+<tr><td>10</td><td>Breadboard + male-to-male jumper wires</td><td>—</td><td>The DevKitC is wide; two breadboards side by side are easier</td></tr>
+<tr><td>11</td><td>USB data cable</td><td>1</td><td></td></tr>
+</table></div>
+
+<div class="gallery">
+  <figure><div class="frame"><img src="../assets/img/dht22.svg" alt="DHT22 sensor"></div><figcaption>DHT22: temperature and humidity</figcaption></figure>
+  <figure><div class="frame"><img src="../assets/img/ldr.svg" alt="LDR photoresistor"></div><figcaption>LDR: a resistor whose resistance drops with light</figcaption></figure>
+  <figure><div class="frame"><img src="../assets/img/oled-photo1.jpg" alt="0.96-inch OLED display"></div><figcaption>OLED SSD1306 <span class="src">Image: ThingPulse, MIT license</span></figcaption></figure>
+  <figure><div class="frame"><img src="../assets/img/buzzer.svg" alt="Piezo buzzer"></div><figcaption>Piezo buzzer</figcaption></figure>
+</div>
+<p class="src" style="font-size:13px;color:var(--ink-mute)">DHT22, LDR and buzzer images: Fritzing parts, CC BY-SA 3.0.</p>
+
+<h3 id="libs">Installing the libraries (once, before step 1)</h3>
+<p>If you installed them in earlier lessons, just check they're still there. In the Arduino IDE, open <code>Tools › Manage Libraries</code> (or the book icon in the sidebar), then search for and install these. Pay attention to the <b>author's name</b>; there are lots of libraries with the same name:</p>
+<ol class="steps">
+  <li><b>DHT sensor library</b> by <b>Adafruit</b> (search: <code>DHT sensor</code>). When it asks whether to also install the <b>Adafruit Unified Sensor</b> dependency, click <b>Install All</b>.</li>
+  <li><b>Adafruit SSD1306</b> by <b>Adafruit</b> (search: <code>SSD1306</code>). This one also needs <b>Adafruit GFX Library</b> and <b>Adafruit BusIO</b>; again, <b>Install All</b>.</li>
+  <li><b>PubSubClient</b> by <b>Nick O'Leary</b> (search: <code>PubSubClient</code>), the same library as in lesson <a href="5-1.html">5.1</a>.</li>
+</ol>
+<p><code>WiFi.h</code> and <code>Wire.h</code> are part of the ESP32 core itself and don't need a separate install. The core must be version <b>3.x</b> (check the version of "esp32 by Espressif Systems" in <code>Tools › Board › Boards Manager</code>); otherwise <code>ledcAttach</code> won't compile.</p>
+
+<h2 id="wiring">Complete wiring</h2>
+<p>We've split the wiring into two diagrams so it doesn't get cluttered: first the inputs and the display, then the alarm outputs and the button. Every part is powered from <b>3.3 V</b>, not 5 V, because the sensor outputs go straight to ESP32 pins.</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"DHT","name":"DHT22 sensor","img":"dht22.svg","pins":[["VCC","3.3 V power"],["DATA","data"],["GND","ground"]]},
+    {"id":"R1","name":"10 kΩ resistor (DHT pull-up)","img":"resistor.svg","pins":[["1","to DATA"],["2","to 3V3"]]},
+    {"id":"LDR","name":"LDR module","img":"ldr.svg","pins":[["VCC","3.3 V"],["GND","ground"],["AO","analog output"]]},
+    {"id":"OLED","name":"OLED SSD1306 I2C","img":"oled-photo2.jpg","pins":[["VCC","3.3 V"],["GND","ground"],["SDA","I2C data"],["SCL","I2C clock"]]}
+  ],
+  "wires":[["3V3","DHT.VCC","red"],["GPIO4","DHT.DATA","blue"],["DHT.GND","GND","black"],["GPIO4","R1.1","blue"],["R1.2","3V3","red"],["3V3","LDR.VCC","red"],["LDR.GND","GND","black"],["GPIO34","LDR.AO","blue"],["3V3","OLED.VCC","red"],["OLED.GND","GND","black"],["GPIO21","OLED.SDA","yellow"],["GPIO22","OLED.SCL","green"]]
+}</script><figcaption>Diagram 1: inputs and display. All the 3V3 wires meet on the breadboard's positive rail and all the GND wires on the negative rail. If you have the 3-pin DHT22 module, leave R1 out.</figcaption></div>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"R2","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","to GPIO25"],["2","to LED anode"]]},
+    {"id":"LED","name":"Red alarm LED","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−)"]]},
+    {"id":"BZ","name":"Passive piezo buzzer","img":"buzzer.svg","pins":[["+","positive pin"],["-","negative pin"]]},
+    {"id":"SW","name":"Mute button","img":"button.svg","pins":[["1","to GPIO33"],["2","to GND"]]}
+  ],
+  "wires":[["GPIO25","R2.1","orange"],["R2.2","LED.A","orange"],["LED.K","GND","black"],["GPIO26","BZ.+","orange"],["BZ.-","GND","black"],["GPIO33","SW.1","blue"],["SW.2","GND","black"]]
+}</script><figcaption>Diagram 2: alarm outputs and the button. The button uses the internal pull-up, so it needs no external resistor.</figcaption></div>
+
+<h2 id="method">How we build it: small steps, each one tested</h2>
+<p>The biggest beginner mistake: connect every part, write 200 lines of code, upload, and... nothing works. So where's the problem? The sensor? The display? Wi-Fi? The code? You have no idea. We'll take six steps, and we won't move on until the previous step works:</p>
+<ol class="steps">
+  <li><b>Sensors</b> → correct numbers in the Serial Monitor</li>
+  <li><b>Display</b> → the same numbers on the OLED</li>
+  <li><b>Local alarm</b> → LED and buzzer with hysteresis, no delay</li>
+  <li><b>Wi-Fi</b> → connect and reconnect without blocking</li>
+  <li><b>MQTT</b> → a test message in an MQTT client</li>
+  <li><b>Integration and cloud alerts</b> → the final program with millis scheduling</li>
+</ol>
+<div class="callout tip"><div class="ct">Wokwi for every step</div>
+<p>The Wokwi circuit below step 3 (and the same circuit at the end of step 6) has every part of the project. To try any step in Wokwi, keep that same <code>diagram.json</code> and just paste that step's code into <code>sketch.ino</code>; parts the step's code doesn't use simply sit idle. Add the libraries you need in Wokwi's own Library Manager tab.</p></div>
+<div class="callout analogy"><div class="ct">Like cooking a meal</div>
+<p>A good cook tastes each ingredient separately: is there enough salt? Is the meat cooked? Only then does it all go together. If you throw everything into the pot at once and it tastes bad at the end, you won't know which ingredient was to blame.</p></div>
+
+<h2 id="m1">Step 1: the sensors</h2>
+<div class="code" data-file="Step1_Sensors.ino" id="m1code"><pre>
+// Step 1: sensors only; output in the Serial Monitor
+#include &lt;DHT.h&gt;
+
+const int PIN_DHT = 4;
+const int PIN_LDR = 34;                  // ADC1: works with Wi-Fi too
+DHT dht(PIN_DHT, DHT22);
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  analogReadResolution(12);              // output 0 to 4095
+}
+
+void loop() {
+  float t = dht.readTemperature();       // Celsius
+  float h = dht.readHumidity();          // percent
+  int raw = analogRead(PIN_LDR);
+  int lightPct = map(raw, 4095, 0, 0, 100);   // more light = lower voltage
+  if (isnan(t) || isnan(h)) Serial.println("DHT22 error!");
+  else Serial.printf("T=%.1f C  H=%.0f %%  LDR raw=%d  light=%d %%\n", t, h, raw, lightPct);
+  delay(2000);                           // delay is fine in this test step
+}
+</pre></div>
+<ol class="walk" data-for="m1code">
+  <li data-lines="4-6"><b class="what">Pins and the sensor object.</b> The DHT22 on GPIO4 and the LDR on GPIO34, exactly as in the pin table.
+    <span class="why">We use the final pins right from step 1. If you use a temporary pin now, you've created one more place for a mistake during the final integration.</span></li>
+  <li data-lines="11"><b class="what">ADC resolution.</b> 12 bits means numbers from 0 to 4095.
+    <span class="why">This is already the ESP32 default, but writing it out shows which range we rely on, and we use that range later in <code>map</code>.</span></li>
+  <li data-lines="15-16"><b class="what">Reading the DHT22.</b> Temperature in Celsius and humidity in percent. If a reading fails, it returns <code>NaN</code> ("Not a Number").
+    <span class="why">The DHT22 is slow: it gives fresh data at most once every 2 seconds. That's why the whole system is designed around a 2-second cycle.</span></li>
+  <li data-lines="17-18"><b class="what">Light as a percentage.</b> <code>map(raw, 4095, 0, 0, 100)</code> converts the range <b>in reverse</b>: 4095 (dark) → 0 percent, 0 (bright) → 100 percent.
+    <span class="why">On common LDR modules (and the Wokwi module), the AO voltage drops as the light increases. If your module works the other way round (covering the sensor makes the percentage go up), just swap the order: <code>map(raw, 0, 4095, 0, 100)</code>. This number is a "relative percentage", not real lux.</span></li>
+  <li data-lines="19-20"><b class="what">Printing with an error check.</b> If either value is NaN, print an error; otherwise print every value on one line.
+    <span class="why">Printing <code>raw</code> next to the percentage helps with troubleshooting: if raw is always 0 or 4095, the problem is the LDR wiring, not the formula.</span></li>
+</ol>
+<div class="callout tip"><div class="ct">Step 1 pass test</div>
+<p>Temperature and humidity should show sensible numbers (for example 20 to 30 degrees and 20 to 60 percent); holding the sensor in your hand should slowly raise the temperature; covering the LDR should lower the light percentage. Pull out the DATA wire: you should see "DHT22 error!". All good? On to step 2.</p></div>
+
+<h2 id="m2">Step 2: the OLED display</h2>
+<div class="code" data-file="Step2_Display.ino" id="m2code"><pre>
+// Step 2: show values on the OLED
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+
+DHT dht(4, DHT22);
+Adafruit_SSD1306 oled(128, 64, &amp;Wire, -1);   // -1: no reset pin
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  Wire.begin(21, 22);                          // SDA, SCL
+  if (!oled.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found! check wiring/address");
+    while (true) delay(1000);                  // without a display, this step is pointless
+  }
+  oled.setTextColor(SSD1306_WHITE);
+}
+
+void loop() {
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  oled.clearDisplay();
+  oled.setTextSize(2);
+  oled.setCursor(0, 0);
+  if (isnan(t)) oled.print("T: ERR"); else { oled.print(t, 1); oled.print(" C"); }
+  oled.setCursor(0, 24);
+  if (isnan(h)) oled.print("H: ERR"); else { oled.print(h, 0); oled.print(" %"); }
+  oled.display();                              // nothing appears on screen until this line
+  delay(2000);
+}
+</pre></div>
+<ol class="walk" data-for="m2code">
+  <li data-lines="2-5"><b class="what">Libraries.</b> <code>Wire</code> for I2C (part of the core), <code>Adafruit GFX</code> for drawing text and shapes, <code>Adafruit SSD1306</code> for the display itself.
+    <span class="why">GFX is the shared "drawing language" of Adafruit displays; SSD1306 translates it for this particular display. Install both from the Library Manager.</span></li>
+  <li data-lines="8"><b class="what">Creating the display object.</b> Width 128, height 64, on the <code>Wire</code> bus, with no reset pin.
+    <span class="why">Four-pin modules have no reset pin; <code>-1</code> means "do the reset in software".</span></li>
+  <li data-lines="13-17"><b class="what">Starting I2C and the display.</b> The usual address is <code>0x3C</code>. If <code>begin</code> fails, we print a message and stop.
+    <span class="why">In this test step, stopping is the right call: we want to see a display problem right away. In the final program we do <b>not</b> do this, because a broken display must not also stop the alarm and the uploads (R8). If it isn't found, try address <code>0x3D</code>, or find the address with the I2C scanner program from lesson 3.3.</span></li>
+  <li data-lines="24-30"><b class="what">Drawing.</b> Clear the buffer, set text size 2 (12×16-pixel characters), move to a position, print, and finally call <code>display()</code>.
+    <span class="why">All drawing commands only write into a buffer in RAM; <code>display()</code> sends the whole buffer over I2C in one go. That's what keeps the screen from flickering. <code>print(t, 1)</code> means one decimal place.</span></li>
+</ol>
+
+<h2 id="m3">Step 3: a local alarm with hysteresis (no delay)</h2>
+<p>Before the code, two key ideas:</p>
+<div class="callout analogy"><div class="ct">Hysteresis: like a heater's thermostat</div>
+<p>If you turn the alarm on at one number (35 degrees) and off at <b>the same</b> number, then when the temperature hovers around 35 (34.9, 35.1, 34.9...) the alarm keeps switching on and off and the buzzer drives you crazy. A heater's thermostat solves the same problem: it turns on at 20 degrees but doesn't turn off until it reaches 22. This "safety gap" is called hysteresis. We turn the alarm on above 35 and off below 33.</p></div>
+
+<figure><div class="frame"><svg viewBox="0 0 720 260" style="direction:ltr" role="img" aria-label="Hysteresis chart of temperature and alarm state">
+  <rect width="720" height="260" fill="#fff"/>
+  <line x1="60" y1="200" x2="700" y2="200" stroke="#152033" stroke-width="2"/>
+  <line x1="60" y1="200" x2="60" y2="20" stroke="#152033" stroke-width="2"/>
+  <line x1="60" y1="70" x2="700" y2="70" stroke="#d6457a" stroke-dasharray="6 4"/>
+  <text x="54" y="74" font-size="12" fill="#d6457a" text-anchor="end">35°</text>
+  <line x1="60" y1="110" x2="700" y2="110" stroke="#12a37f" stroke-dasharray="6 4"/>
+  <text x="54" y="114" font-size="12" fill="#12a37f" text-anchor="end">33°</text>
+  <text x="695" y="64" font-size="12" fill="#d6457a" text-anchor="end">turn-on threshold</text>
+  <text x="695" y="126" font-size="12" fill="#12a37f" text-anchor="end">turn-off threshold</text>
+  <path d="M60 160 C120 150 150 100 190 80 C210 72 220 62 240 66 C260 72 270 58 290 64 C310 72 320 60 340 70 C360 80 380 76 400 90 C420 104 440 100 460 112 C480 122 520 140 560 150 C600 158 650 160 700 160" fill="none" stroke="#2f7af0" stroke-width="3"/>
+  <text x="70" y="182" font-size="12" fill="#2f7af0">temperature</text>
+  <rect x="232" y="215" width="226" height="16" fill="#d6457a" opacity=".85"/>
+  <text x="345" y="227" font-size="12" fill="#fff" text-anchor="middle">alarm ON</text>
+  <text x="140" y="227" font-size="12" fill="#4d5b70" text-anchor="middle">off</text>
+  <text x="580" y="227" font-size="12" fill="#4d5b70" text-anchor="middle">off</text>
+  <line x1="232" y1="66" x2="232" y2="215" stroke="#d6457a" stroke-width="1" stroke-dasharray="2 3"/>
+  <line x1="458" y1="112" x2="458" y2="215" stroke="#12a37f" stroke-width="1" stroke-dasharray="2 3"/>
+  <text x="380" y="250" font-size="12" fill="#152033" text-anchor="middle">The temperature went up and down around 35 several times, but the alarm turned on once and off once.</text>
+</svg></div>
+<figcaption>Hysteresis: the alarm turns on when the temperature crosses 35 degrees, and only turns off when it drops below 33 degrees. <span class="src">Image: drawn for this lesson</span></figcaption></figure>
+
+<p>The second idea: <b>timing without delay</b> (lesson <a href="3-1.html">3.1</a>). The LED has to blink, the buzzer has to beep and the button has to be read, all at the same time, so we can't freeze the program with <code>delay(2000)</code>. Instead, we run each job by asking "is it time yet?" (<code>millis()</code>).</p>
+
+<div class="code" data-file="Step3_Alarm.ino" id="m3code"><pre>
+// Step 3: local alarm with hysteresis and no delay
+#include &lt;DHT.h&gt;
+
+const int PIN_LED = 25, PIN_BUZ = 26, PIN_BTN = 33;
+const float TEMP_HIGH = 35.0, TEMP_CLEAR = 33.0;
+DHT dht(4, DHT22);
+
+float tempC = NAN;
+bool alarmOn = false, muted = false;
+uint32_t tSensor = 0;
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  pinMode(PIN_LED, OUTPUT);
+  pinMode(PIN_BTN, INPUT_PULLUP);
+  ledcAttach(PIN_BUZ, 2000, 8);           // core 3.x API
+}
+
+void loop() {
+  if (millis() - tSensor &gt;= 2000) {       // every 2 seconds, without stopping the program
+    tSensor = millis();
+    float t = dht.readTemperature();
+    if (!isnan(t)) tempC = t;
+    if (!alarmOn &amp;&amp; tempC &gt; TEMP_HIGH) { alarmOn = true;  muted = false; Serial.println("ALARM ON"); }
+    if (alarmOn &amp;&amp; tempC &lt; TEMP_CLEAR) { alarmOn = false; Serial.println("ALARM OFF"); }
+  }
+  if (alarmOn &amp;&amp; digitalRead(PIN_BTN) == LOW) muted = true;   // button = mute
+
+  bool blink = (millis() / 250) % 2;      // flips between 0 and 1 every 250 ms
+  digitalWrite(PIN_LED, alarmOn &amp;&amp; blink);
+  static bool buzzing = false;
+  bool wantBuzz = alarmOn &amp;&amp; !muted &amp;&amp; blink;
+  if (wantBuzz != buzzing) {              // only touch LEDC when something changes
+    ledcWriteTone(PIN_BUZ, wantBuzz ? 2000 : 0);
+    buzzing = wantBuzz;
+  }
+}
+</pre></div>
+<ol class="walk" data-for="m3code">
+  <li data-lines="5"><b class="what">Two thresholds.</b> 35 to turn on and 33 to turn off.
+    <span class="why">A 2-degree gap is bigger than the DHT22's natural reading jitter (about half a degree) and the short swings in room temperature. Too small a gap = flickering; too large a gap = the alarm turns off late.</span></li>
+  <li data-lines="8-10"><b class="what">Program state.</b> The last valid temperature (NaN at first), whether the alarm is on, whether it's muted, and the time of the last reading.
+    <span class="why">These variables are the program's "memory". Because loop runs thousands of times a second, every decision has to be based on stored state, not on waiting.</span></li>
+  <li data-lines="17"><b class="what">ledcAttach for the buzzer.</b> Connects pin 26 to PWM with a starting frequency of 2000 Hz and 8-bit resolution.
+    <span class="why">A passive buzzer makes no sound by itself; it has to be vibrated by a square wave at an audio frequency. This is the core 3.x API; on 2.x you had to write <code>ledcSetup</code> and <code>ledcAttachPin</code> (lesson <a href="3-2.html">3.2</a>).</span></li>
+  <li data-lines="21-27"><b class="what">Scheduled reading and the hysteresis logic.</b> The temperature is read every 2 seconds and only replaces the old value if it's valid. Alarm off + temperature above 35 → on (and mute is cleared). Alarm on + temperature below 33 → off.
+    <span class="why">The conditions also check the "current state", so the "ALARM ON" message is printed only once, at the moment of change. We'll use this same pattern later for cloud messages without spam. If the temperature is NaN, every comparison with it is false and the state doesn't change.</span></li>
+  <li data-lines="28"><b class="what">The mute button.</b> If the button is pressed during an alarm, the buzzer goes quiet; the LED keeps blinking.
+    <span class="why">Muting only silences the sound, not the alarm itself; the danger is still there and must stay visible. When the next alarm starts, muted becomes false again (line 25).</span></li>
+  <li data-lines="30-31"><b class="what">Blinking without delay.</b> <code>millis() / 250</code> goes up by one every 250 ms; the remainder after dividing by 2 alternates between 0 and 1.
+    <span class="why">A one-line trick for blinking without any extra variables. The LED is on only when the alarm is on and blink is 1.</span></li>
+  <li data-lines="32-37"><b class="what">Only change the buzzer when needed.</b> <code>ledcWriteTone(pin, 2000)</code> is a 2 kHz beep, <code>ledcWriteTone(pin, 0)</code> is silence. But we only call it when what we want differs from the current state.
+    <span class="why">loop spins thousands of times a second. Setting up PWM again on every pass is pointless and can make the buzzer sound scratchy. The <code>static</code> variable remembers the previous state between passes.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="m3code">
+<p>The complete station circuit (the same circuit as step 6). In Wokwi's own Library Manager tab, add <code>DHT sensor library</code>, press ▶ and work through the pass test below one step at a time. Wokwi even plays the buzzer sound.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -110, "left": 170, "attrs": { "temperature": "28", "humidity": "45" } },
+    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": 250, "left": 170, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled1", "top": 60, "left": 260, "attrs": { "i2cAddress": "0x3c" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": -130, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 40, "left": -60, "attrs": { "color": "red" } },
+    { "type": "wokwi-buzzer", "id": "bz1", "top": 170, "left": -160, "attrs": { "volume": "0.2" } },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 280, "left": -170, "attrs": { "color": "yellow", "label": "Mute" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:4", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:AO", "esp:34", "blue", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "r1:1", "esp:25", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ],
+    [ "bz1:2", "esp:26", "orange", [] ],
+    [ "bz1:1", "esp:GND.1", "black", [] ],
+    [ "btn1:1.l", "esp:33", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+<div class="callout tip"><div class="ct">Step 3 pass test</div>
+<p>In Wokwi, click the DHT22 and raise the temperature to 36: the LED should blink and the buzzer should beep. Press the button: the buzzer goes quiet, the LED keeps blinking. Bring the temperature down to 34: the alarm should <b>not</b> turn off (hysteresis!). Bring it to 32: off. On a real board, hold the sensor near (not touching) a hair dryer on a gentle setting for a few seconds, or temporarily set <code>TEMP_HIGH</code> a little above room temperature.</p></div>
+
+<h2 id="m4">Step 4: Wi-Fi without blocking</h2>
+<p>In lesson <a href="4-1.html">4.1</a> you learned how to connect and reconnect. The point of this step: <b>never</b> wait for Wi-Fi inside loop with a <code>while</code>, because the local alarm doesn't work while you wait (R8).</p>
+<div class="code" data-file="Step4_WiFi.ino" id="m4code"><pre>
+// Step 4: non-blocking Wi-Fi
+#include &lt;WiFi.h&gt;
+
+const char* WIFI_SSID = "Wokwi-GUEST";
+const char* WIFI_PASS = "";
+uint32_t tWifi = 0;
+bool wasConnected = false;
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);        // start connecting; we don't wait
+}
+
+void loop() {
+  bool ok = (WiFi.status() == WL_CONNECTED);
+  if (ok &amp;&amp; !wasConnected) {
+    Serial.print("WiFi connected, IP = ");
+    Serial.println(WiFi.localIP());
+  }
+  if (!ok &amp;&amp; wasConnected) Serial.println("WiFi lost!");
+  if (!ok &amp;&amp; millis() - tWifi &gt;= 15000) {  // one retry every 15 seconds
+    tWifi = millis();
+    Serial.println("WiFi not connected, retrying...");
+    WiFi.reconnect();
+  }
+  wasConnected = ok;
+  // ... everything else runs here without waiting ...
+}
+</pre></div>
+<ol class="walk" data-for="m4code">
+  <li data-lines="12"><b class="what">Start connecting and move on.</b> <code>WiFi.begin</code> only <b>starts</b> the connection and returns immediately.
+    <span class="why">The connection happens in the background (handled by the FreeRTOS operating system inside the ESP32). We just check the status whenever we need to.</span></li>
+  <li data-lines="16-21"><b class="what">Detecting a change of state.</b> By comparing the current state with the previous one (<code>wasConnected</code>), we print a message only at the moment of connecting and the moment of disconnecting.
+    <span class="why">This is the same "edge" pattern you saw in the alarm: do the work at the moment of change, not on every pass of loop.</span></li>
+  <li data-lines="22-26"><b class="what">Periodic retries.</b> If we're not connected, call <code>WiFi.reconnect()</code> once every 15 seconds.
+    <span class="why">By default the ESP32 core also tries to reconnect on its own; this manual retry is an extra layer of safety. The 15-second gap stops us from "hammering" the router with back-to-back requests.</span></li>
+</ol>
+
+<h2 id="m5">Step 5: MQTT</h2>
+<p>The public broker <code>broker.hivemq.com</code> on port 1883 works without signing up (lesson <a href="5-1.html">5.1</a>). Because it's <b>public</b>, anyone can see your messages; so build your topic with a unique prefix (for example your name and a random number) and never send private data.</p>
+<div class="code" data-file="Step5_MQTT.ino" id="m5code"><pre>
+// Step 5: send a test message over MQTT
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+
+const char* MQTT_HOST = "broker.hivemq.com";
+const char* BASE = "esp32fa/station-42/";      // make this unique!
+WiFiClient net;
+PubSubClient mqtt(net);
+uint32_t tMqtt = 0, tPub = 0;
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin("Wokwi-GUEST", "");
+  mqtt.setServer(MQTT_HOST, 1883);
+}
+
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) return;   // no Wi-Fi: do nothing
+  if (!mqtt.connected()) {
+    if (millis() - tMqtt &lt; 5000) return;      // at most one attempt every 5 seconds
+    tMqtt = millis();
+    String id = "esp32-station-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+    Serial.println(mqtt.connect(id.c_str()) ? "MQTT connected" : "MQTT failed");
+    return;
+  }
+  mqtt.loop();                                 // keep the connection alive
+  if (millis() - tPub &gt;= 10000) {
+    tPub = millis();
+    String topic = String(BASE) + "test";
+    String msg = String(millis() / 1000);
+    mqtt.publish(topic.c_str(), msg.c_str());
+    Serial.println("Published " + topic + " = " + msg);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="m5code">
+  <li data-lines="6"><b class="what">The topic prefix.</b> Every topic in this project starts with <code>esp32fa/station-42/</code>.
+    <span class="why">One prefix means you can see all of the station's messages at once in a client with <code>esp32fa/station-42/#</code>. And if you switch to Adafruit IO, you only change this one line.</span></li>
+  <li data-lines="18-25"><b class="what">Connecting with a gap between attempts.</b> If there's no Wi-Fi, we return from loop right away. If MQTT isn't connected, we try at most once every 5 seconds. The client ID is built from the MAC address.
+    <span class="why">The ID must be unique; if two devices connect with the same ID, the broker kicks out the first one and they keep knocking each other off. Note: <code>mqtt.connect</code> itself can take a few seconds when the server can't be reached; this is the only place where we block a little.</span></li>
+  <li data-lines="26"><b class="what">mqtt.loop().</b> Must be called regularly.
+    <span class="why">It sends "I'm alive" (keep-alive) messages to the broker and processes incoming messages. If loop gets stuck in a long delay, the broker decides the device is dead and drops the connection.</span></li>
+  <li data-lines="27-33"><b class="what">Publishing every 10 seconds.</b> Sends the board's uptime (in seconds) to the <code>.../test</code> topic.
+    <span class="why">A simple test message that is always changing; if the number keeps going up in your client, the whole chain (Wi-Fi, DNS, TCP, MQTT) is healthy.</span></li>
+</ol>
+<div class="callout tip"><div class="ct">Where do I see the messages?</div>
+<p>In an MQTT client (for example the HiveMQ web client, or the app you used in lesson 5.1), connect to <code>broker.hivemq.com</code> and subscribe to the topic <code>esp32fa/station-42/#</code> (<code>#</code> means "every sub-topic"). Step 5 pass test: you see a new number every 10 seconds.</p></div>
+
+<h2 id="final">Step 6: the final integrated program</h2>
+<p>Now we put all the steps together in one cleanly structured program. The structure:</p>
+<ul>
+  <li><b>All settings at the top</b>; to change the behavior, you don't have to hunt through the code.</li>
+  <li><b>One function per responsibility</b>: reading the sensors, alarm logic, outputs, display, network, uploading.</li>
+  <li><b>loop only schedules</b>: "Is it time to read? Is it time to send?" and hands everything else to the functions.</li>
+</ul>
+
+<div class="code" data-file="EnvStation.ino" id="finalCode"><pre>
+// Environment monitoring station with cloud alerts — lesson 6.3
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+
+// ================== 1. Settings ==================
+const char* WIFI_SSID = "Wokwi-GUEST";
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const uint16_t MQTT_PORT = 1883;
+const char* MQTT_USER = nullptr;               // Adafruit IO: username
+const char* MQTT_KEY  = nullptr;               // Adafruit IO: AIO Key
+const char* BASE      = "esp32fa/station-42/"; // unique topic prefix
+
+const float TEMP_HIGH  = 35.0;                 // above this: alarm
+const float TEMP_CLEAR = 33.0;                 // below this: alarm ends
+const uint32_t SENSOR_MS  = 2000;              // read every 2 seconds
+const uint32_t PUBLISH_MS = 30000;             // send every 30 seconds
+const uint32_t REMIND_MS  = 600000;            // alarm reminder: at most every 10 minutes
+
+// ================== 2. Pins ==================
+const int PIN_DHT = 4;
+const int PIN_LDR = 34;                        // ADC1: works with Wi-Fi
+const int PIN_LED = 25;
+const int PIN_BUZ = 26;
+const int PIN_BTN = 33;                        // mute button
+
+// ================== 3. Objects and state ==================
+DHT dht(PIN_DHT, DHT22);
+Adafruit_SSD1306 oled(128, 64, &amp;Wire, -1);
+WiFiClient net;
+PubSubClient mqtt(net);
+
+float tempC = NAN, hum = NAN;
+int lightPct = 0;
+bool alarmOn = false, muted = false, oledOk = false;
+uint32_t tSensor = 0, tPublish = 0, tAlert = 0, tWifi = 0, tMqtt = 0;
+
+// ================== 4. Sensors ==================
+void readSensors() {
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (!isnan(t) &amp;&amp; !isnan(h)) { tempC = t; hum = h; }
+  else Serial.println("DHT22 read failed, keeping last value");
+  int raw = analogRead(PIN_LDR);               // 0..4095
+  lightPct = map(raw, 4095, 0, 0, 100);        // more light = lower voltage
+}
+
+// ================== 5. Sending to the cloud ==================
+void publishValue(const char* name, float v, int decimals) {
+  char topic[64], payload[16];
+  snprintf(topic, sizeof(topic), "%s%s", BASE, name);
+  snprintf(payload, sizeof(payload), "%.*f", decimals, v);
+  mqtt.publish(topic, payload);
+}
+
+void publishAll() {
+  if (!mqtt.connected() || isnan(tempC)) return;
+  publishValue("temp", tempC, 1);
+  publishValue("hum", hum, 0);
+  publishValue("light", lightPct, 0);
+  Serial.println("Published to MQTT");
+}
+
+void publishAlert(const char* msg) {
+  tAlert = millis();                           // restart the reminder timer
+  Serial.println(msg);
+  if (!mqtt.connected()) return;
+  char topic[64];
+  snprintf(topic, sizeof(topic), "%salert", BASE);
+  mqtt.publish(topic, msg);
+}
+
+// ================== 6. Alarm logic (hysteresis + rate limiting) ==================
+void updateAlarm() {
+  if (isnan(tempC)) return;
+  if (!alarmOn &amp;&amp; tempC &gt; TEMP_HIGH) {
+    alarmOn = true;
+    muted = false;
+    publishAlert("ALERT: temperature high");
+  } else if (alarmOn &amp;&amp; tempC &lt; TEMP_CLEAR) {
+    alarmOn = false;
+    publishAlert("OK: temperature back to normal");
+  } else if (alarmOn &amp;&amp; millis() - tAlert &gt;= REMIND_MS) {
+    publishAlert("ALERT: still high");         // a reminder, not spam
+  }
+}
+
+void driveOutputs() {
+  if (alarmOn &amp;&amp; digitalRead(PIN_BTN) == LOW) muted = true;
+  bool blink = (millis() / 250) % 2;
+  digitalWrite(PIN_LED, alarmOn &amp;&amp; blink);
+  static bool buzzing = false;
+  bool wantBuzz = alarmOn &amp;&amp; !muted &amp;&amp; blink;
+  if (wantBuzz != buzzing) {
+    ledcWriteTone(PIN_BUZ, wantBuzz ? 2000 : 0);
+    buzzing = wantBuzz;
+  }
+}
+
+// ================== 7. Display ==================
+void drawDisplay() {
+  if (!oledOk) return;                         // no display? everything else keeps going
+  oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setCursor(0, 0);
+  oled.print(WiFi.status() == WL_CONNECTED ? "WiFi OK  " : "WiFi --  ");
+  oled.print(mqtt.connected() ? "MQTT OK" : "MQTT --");
+  oled.setTextSize(2);
+  oled.setCursor(0, 14);
+  if (isnan(tempC)) oled.print("T: ERR");
+  else { oled.print(tempC, 1); oled.print(" C"); }
+  oled.setCursor(0, 34);
+  if (isnan(hum)) oled.print("H: ERR");
+  else { oled.print(hum, 0); oled.print(" %"); }
+  oled.setTextSize(1);
+  oled.setCursor(0, 56);
+  oled.printf("Light %d%%  %s", lightPct, alarmOn ? (muted ? "ALARM(m)" : "ALARM!") : "normal");
+  oled.display();
+}
+
+// ================== 8. Network (non-blocking) ==================
+void keepWiFi() {
+  if (WiFi.status() == WL_CONNECTED) return;
+  if (millis() - tWifi &lt; 15000) return;        // one attempt every 15 seconds
+  tWifi = millis();
+  Serial.println("WiFi: reconnecting...");
+  WiFi.reconnect();
+}
+
+void keepMqtt() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (mqtt.connected()) { mqtt.loop(); return; }
+  if (millis() - tMqtt &lt; 5000) return;         // one attempt every 5 seconds
+  tMqtt = millis();
+  String id = "esp32-station-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+  String will = String(BASE) + "status";
+  if (mqtt.connect(id.c_str(), MQTT_USER, MQTT_KEY, will.c_str(), 0, true, "offline")) {
+    mqtt.publish(will.c_str(), "online", true);
+    Serial.println("MQTT connected");
+  } else {
+    Serial.printf("MQTT failed, state=%d\n", mqtt.state());
+  }
+}
+
+// ================== 9. setup and loop ==================
+void setup() {
+  Serial.begin(115200);
+  pinMode(PIN_LED, OUTPUT);
+  pinMode(PIN_BTN, INPUT_PULLUP);
+  ledcAttach(PIN_BUZ, 2000, 8);                // core 3.x API
+  analogReadResolution(12);
+  dht.begin();
+  Wire.begin(21, 22);
+  oledOk = oled.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  if (oledOk) oled.setTextColor(SSD1306_WHITE);
+  else Serial.println("OLED not found, continuing without display");
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  tWifi = millis();
+}
+
+void loop() {
+  uint32_t now = millis();
+  if (now - tSensor &gt;= SENSOR_MS) {
+    tSensor = now;
+    readSensors();
+    updateAlarm();
+    drawDisplay();
+  }
+  if (now - tPublish &gt;= PUBLISH_MS) {
+    tPublish = now;
+    publishAll();
+  }
+  keepWiFi();
+  keepMqtt();
+  driveOutputs();
+}
+</pre></div>
+<p>Let's go through the program section by section. Click any card to highlight its lines in the code above.</p>
+<ol class="walk" data-for="finalCode">
+  <li data-lines="9-22"><b class="what">Section 1: settings.</b> Network, broker, username and key (for public HiveMQ, <code>nullptr</code> means "none"), topic prefix, thresholds and time intervals.
+    <span class="why">Any number you might want to change one day should have a name and live at the top of the program. Nobody will understand a "magic number" 600000 in the middle of the code six months from now; everyone understands <code>REMIND_MS</code>. In a real project, move the passwords into a <code>secrets.h</code> file (lesson <a href="6-2.html#privacy">6.2</a>).</span></li>
+  <li data-lines="24-29"><b class="what">Section 2: pins.</b> Exactly as in the pin table and the wiring diagrams.
+    <span class="why">A single source of truth: if you move a wire, this is the only place you change.</span></li>
+  <li data-lines="31-40"><b class="what">Section 3: objects and state.</b> The sensor, the display, the network client and MQTT; then the latest values, the alarm state, whether the display is working, and a "last time" for each scheduled job.
+    <span class="why">The five <code>t...</code> variables are five independent "clocks": each job has its own clock and never holds up the others. This is the heart of scheduling without delay.</span></li>
+  <li data-lines="42-50"><b class="what">Section 4: reading the sensors.</b> Like step 1, with one difference: if the DHT22 returns an error, the last valid value is kept.
+    <span class="why">The DHT22 occasionally misses a reading. Wiping the number on every single error would make "ERR" flash on the display and cut the cloud data. Until the first successful reading the value is NaN and the display shows ERR (R1). In exercise 2 you'll make this smarter.</span></li>
+  <li data-lines="52-58"><b class="what">Section 5 (a): one function to send any number.</b> The topic name is built with <code>BASE</code>, and the number is turned into text with however many decimal places you ask for (<code>%.*f</code>).
+    <span class="why">Repeating the same code three times means three places for bugs. A small function means one. We used <code>snprintf</code> with a fixed-size array instead of <code>String</code> so we don't fragment memory; that matters in a program that stays on for months.</span></li>
+  <li data-lines="60-66"><b class="what">Section 5 (b): sending all values.</b> Nothing is sent if MQTT isn't connected or we don't have any valid temperature yet.
+    <span class="why">Sending "nan" to a dashboard breaks its charts. Three separate topics (<code>temp</code>, <code>hum</code>, <code>light</code>) suit Adafruit IO, where each feed expects one number. With 3 values every 30 seconds, that's 6 messages a minute, which keeps us under the Adafruit IO free tier's rate limit (about 30 data points per minute).</span></li>
+  <li data-lines="68-75"><b class="what">Section 5 (c): the alert message.</b> Records the time, prints the message to Serial and, if we're connected, sends it to <code>.../alert</code>.
+    <span class="why"><code>tAlert</code> is updated even if the send fails; that way a network outage doesn't cause repeated retries and a flood of messages the moment we reconnect. A deliberate weakness: if the network is down at the moment the alarm starts, the first message is lost, and the reminder 10 minutes later makes up for it (exercise 1 improves this).</span></li>
+  <li data-lines="77-90"><b class="what">Section 6 (a): hysteresis and rate limiting.</b> Three cases: the alarm starts (above 35 and previously off), the alarm ends (below 33 and previously on), a reminder (still on and 10 minutes since the last message).
+    <span class="why">These three branches implement R5 and R7 exactly. Without the third branch, a user who missed the first message would never know the problem is still going on. Without the time limit, a message would arrive every 2 seconds: 1800 messages an hour! You'd end up muting your phone, and when it really mattered, you'd never see the alert.</span></li>
+  <li data-lines="92-102"><b class="what">Section 6 (b): local outputs.</b> The same logic as step 3: mute button, blinking LED, and changing the buzzer only when needed.
+    <span class="why">This function runs on <b>every</b> pass of loop so the blinking and the button stay smooth, unlike reading the sensors, which happens only every 2 seconds. Light jobs often; heavy jobs rarely.</span></li>
+  <li data-lines="104-123"><b class="what">Section 7: the display.</b> Network status on the top line; temperature and humidity in big letters in the middle; light and alarm state at the bottom (<code>ALARM(m)</code> means muted). If the display wasn't found, the function returns right away.
+    <span class="why">Showing the Wi-Fi and MQTT status on screen lets you troubleshoot on site without a laptop. <code>oledOk</code> means a display failure (a loose wire, say) doesn't stop the alarm and the uploads, unlike step 2, which stopped on purpose.</span></li>
+  <li data-lines="125-132"><b class="what">Section 8 (a): keeping Wi-Fi alive.</b> Just like step 4.
+    <span class="why">If we're connected, the function returns almost instantly, so calling it on every pass of loop costs nothing.</span></li>
+  <li data-lines="134-147"><b class="what">Section 8 (b): keeping MQTT alive, with a "last will" (LWT).</b> When we connect, we tell the broker: "If I disconnect without saying goodbye, publish the message <code>offline</code> with retain on <code>.../status</code> on my behalf." Right after connecting, we send <code>online</code> with retain ourselves.
+    <span class="why">With this trick, the dashboard always knows whether the station is alive, even if the station loses power and never gets a chance to say goodbye. Retain means anyone who subscribes later gets the latest status immediately. If the connection fails, <code>mqtt.state()</code> gives you an error code (for example, negative means a network problem, and 4 or 5 means a wrong username or key). Adafruit IO doesn't support the retain flag (lesson <a href="5-1.html#adafruit">5.1</a>); but because every feed stores its own latest value, the dashboard still shows the last status. If you're on Adafruit IO and the connection keeps dropping and reconnecting, change <code>true</code> (retain) to <code>false</code> on lines 141 and 142 to rule this out.
+    <br>An honest limitation: <code>mqtt.connect</code> itself waits for a few seconds when the server doesn't answer (for example when the broker can't be reached from your internet connection), and during that time the LED blinking and the beeping stop too. That's why we spaced the attempts 5 seconds apart. The more professional approach is to put the whole network part in a separate FreeRTOS task so the local outputs are never held up; exactly what you learned in lesson <a href="5-4.html#rtos">5.4</a> (optional exercise).</span></li>
+  <li data-lines="149-165"><b class="what">Section 9 (a): setup.</b> Pins, the buzzer with the core 3.x API, the ADC, the sensor, I2C and the display (without stopping if it fails), starting the Wi-Fi connection (without waiting) and setting the broker.
+    <span class="why">setup has no waiting loops, which means the device reaches loop in a fraction of a second and the local alarm works from the very start, even if the router is off (R8).</span></li>
+  <li data-lines="167-182"><b class="what">Section 9 (b): loop, the central scheduler.</b> Every 2 seconds: read, decide on the alarm, update the display. Every 30 seconds: send. On every pass: keep Wi-Fi and MQTT alive and drive the outputs.
+    <span class="why">The whole program logic fits in about 15 readable lines. If tomorrow you want a new feature (say, saving to an SD card every 5 minutes), you just add one more time variable and one more <code>if</code>. <code>now - tX &gt;= interval</code> keeps working correctly even after millis overflows (about 49 days).</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="finalCode">
+<p>The whole station in Wokwi: in the Library Manager tab, add these libraries: <code>DHT sensor library</code>, <code>Adafruit SSD1306</code>, <code>Adafruit GFX Library</code> and <code>PubSubClient</code>. The virtual <code>Wokwi-GUEST</code> Wi-Fi is connected to the real internet, so the messages really do reach broker.hivemq.com and you can see them in your own MQTT client. Click the DHT22 and push the temperature above 35; click the light sensor and change its lux value. <b>Be sure</b> to change <code>BASE</code> to a prefix of your own.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -110, "left": 170, "attrs": { "temperature": "28", "humidity": "45" } },
+    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": 250, "left": 170, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled1", "top": 60, "left": 260, "attrs": { "i2cAddress": "0x3c" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": -130, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 40, "left": -60, "attrs": { "color": "red" } },
+    { "type": "wokwi-buzzer", "id": "bz1", "top": 170, "left": -160, "attrs": { "volume": "0.2" } },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 280, "left": -170, "attrs": { "color": "yellow", "label": "Mute" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:4", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:AO", "esp:34", "blue", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "r1:1", "esp:25", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ],
+    [ "bz1:2", "esp:26", "orange", [] ],
+    [ "bz1:1", "esp:GND.1", "black", [] ],
+    [ "btn1:1.l", "esp:33", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<div class="serial">WiFi: reconnecting...
+MQTT connected
+Published to MQTT
+ALERT: temperature high
+Published to MQTT
+OK: temperature back to normal</div>
+<p>(The first line may not appear; it depends on how long the first connection takes.)</p>
+
+<h2 id="dashboard">Dashboard: HiveMQ or Adafruit IO</h2>
+<div class="table-wrap"><table>
+<tr><th></th><th>Public HiveMQ</th><th>Adafruit IO</th></tr>
+<tr><td>Sign-up</td><td>Not needed</td><td>Needed (free account)</td></tr>
+<tr><td>Program settings</td><td><code>MQTT_HOST = "broker.hivemq.com"</code>, USER and KEY set to <code>nullptr</code></td><td><code>MQTT_HOST = "io.adafruit.com"</code>, <code>MQTT_USER</code> = your username, <code>MQTT_KEY</code> = your AIO Key, <code>BASE = "username/feeds/"</code></td></tr>
+<tr><td>Display</td><td>Any MQTT client; you have to build charts and a dashboard yourself (for example with Node-RED)</td><td>A ready-made dashboard: number widgets, charts, gauges; the feeds (temp, hum, light, alert, status) are created automatically with the first message (5 of the free plan's 10 feeds). Then, as in lesson <a href="5-1.html#adafruit">5.1</a>, create a Dashboard and connect Gauge and Line Chart blocks to them</td></tr>
+<tr><td>Privacy</td><td>Everyone can see the messages</td><td>Only with your key (never publish the key in public code)</td></tr>
+<tr><td>Limits</td><td>A test broker; no availability guarantee</td><td>The free tier limits the number of feeds and allows about 30 data points per minute (check the current numbers on their website)</td></tr>
+</table></div>
+<div class="callout warn"><div class="ct">Security warning</div>
+<p>Never control anything through a public broker (for example a "turn off the heater" topic): anyone can send messages to that topic. This project only <b>sends</b>, so on a public broker there's no risk beyond other people seeing your data.</p></div>
+
+<h2 id="battery">Battery mode (optional): combining with lesson 6.1</h2>
+<p>The program above is always on and draws about 100 mA; on a battery it lasts only a day or two. For battery mode (R9) you have to change the design, not just add a line:</p>
+<ul>
+  <li>Do all the work in <code>setup()</code>: wake up, read the sensor, send a message if needed, go to sleep (say, for 5 minutes). loop stays empty.</li>
+  <li>Keep the alarm state and the time of the last message in <code>RTC_DATA_ATTR</code>; because <code>millis()</code> starts from zero after every wake-up, count "wake-ups" instead of time for the rate limiting.</li>
+  <li>The buzzer and the blinking LED don't work during sleep; the local alarm effectively becomes one short beep per wake-up. That's a trade-off you should write into the PRD.</li>
+  <li>Turn the OLED off before sleeping (<code>oled.ssd1306_command(SSD1306_DISPLAYOFF)</code>), otherwise it stays on and drains the battery.</li>
+  <li>Let the button on GPIO33 (an RTC pin) wake the board with EXT0 for an instant reading.</li>
+</ul>
+<p>You saw the battery hardware (a protected charger, a low-power regulator, the dev board's sleep current) in <a href="6-1.html#battery">6.1</a> and <a href="1-4.html#power">1.4</a>; read those sections again. Fully implementing this mode is exercise 3.</p>
+
+<h2 id="test">Test plan and acceptance checklist</h2>
+<p>Before you say "done", run these tests one by one and tick them off. Each one traces back to a PRD requirement:</p>
+<div class="table-wrap"><table>
+<tr><th>Test</th><th>What to do</th><th>Expected result</th><th>Requirement</th></tr>
+<tr><td>T1</td><td>Normal power-up</td><td>Within a few seconds, temperature and humidity on the OLED; "WiFi OK" and "MQTT OK"</td><td>R1, R3</td></tr>
+<tr><td>T2</td><td>Disconnect the DHT22's DATA wire before powering up</td><td>The OLED shows "T: ERR"; no "nan" is sent over MQTT</td><td>R1</td></tr>
+<tr><td>T3</td><td>Cover the LDR with your hand, then shine a flashlight on it</td><td>The light percentage goes down, then up</td><td>R2</td></tr>
+<tr><td>T4</td><td>Bring the temperature to 36</td><td>LED blinks, beeping, one "ALERT" message on MQTT</td><td>R4, R7</td></tr>
+<tr><td>T5</td><td>Press the button</td><td>Buzzer quiet, LED still blinking, OLED shows "ALARM(m)"</td><td>R4</td></tr>
+<tr><td>T6</td><td>Bring the temperature down to 34</td><td>The alarm <b>stays on</b></td><td>R5</td></tr>
+<tr><td>T7</td><td>Keep the temperature above 35 for 12 minutes</td><td>Exactly one "still high" message (not hundreds)</td><td>R7</td></tr>
+<tr><td>T8</td><td>Bring the temperature down to 32</td><td>Alarm off and one "OK" message</td><td>R5, R7</td></tr>
+<tr><td>T9</td><td>Turn off the router (or in Wokwi, misspell the SSID)</td><td>The display and local alarm carry on without a pause; "WiFi --" on the OLED</td><td>R8</td></tr>
+<tr><td>T10</td><td>Turn the router back on</td><td>Without a reset, "MQTT OK" and sending resumes in under a minute</td><td>R8</td></tr>
+<tr><td>T11</td><td>Cut the station's power suddenly</td><td>After a while (about 1.5 times the keep-alive), "offline" appears on <code>.../status</code></td><td>R6</td></tr>
+<tr><td>T12</td><td>Leave it running for 24 hours</td><td>No resets and no freezes; a continuous dashboard chart</td><td>All</td></tr>
+</table></div>
+
+<h2 id="enclosure">Enclosure and placement</h2>
+<ul>
+  <li><b>Keep the sensor away from the ESP32.</b> The ESP32 and the board's regulator get warm, especially with Wi-Fi on. A DHT22 right next to the board reads several degrees higher than the real room temperature. Leave at least a few centimeters of space, or put the sensor outside the box on a cable.</li>
+  <li><b>Air has to flow.</b> In a sealed box, the sensor measures the humidity and temperature of the box itself. Give the sensor ventilation holes.</li>
+  <li><b>No direct sunlight.</b> With direct sun on it, the DHT22 measures the temperature of "the sensor itself", not the air. The LDR, on the other hand, has to go where it can see the ambient light.</li>
+  <li><b>Away from sources of heat and moisture</b> (heaters, kettles, the kitchen), unless that's exactly what you want to monitor.</li>
+  <li><b>Outdoors</b> you need a waterproof box and a "radiation shield" (like the stacked-plate housings on weather stations); and keep the ESP32 away from water and condensation.</li>
+  <li><b>Don't cover the Wi-Fi antenna.</b> The antenna on the WROOM module (the wavy trace at the end of the module) shouldn't be near metal or under wires.</li>
+</ul>
+
+<h2 id="ideas">Ideas for going further</h2>
+<ul>
+  <li><b>Log to an SD card</b> every 5 minutes, so no data is lost when the internet is down (lesson <a href="3-3.html">3.3</a>).</li>
+  <li><b>A local web page</b> that shows the values on your home network (lesson <a href="4-2.html">4.2</a>).</li>
+  <li><b>Satellite sensors with ESP-NOW</b>: several small battery-powered ESP32s in different rooms sending their data to this station (lesson <a href="5-2.html">5.2</a>).</li>
+  <li><b>A Telegram bot</b> to send alerts to your phone (note that the Telegram API is usually not reachable from inside Iran; one workaround is to send the alert over MQTT to a server outside Iran).</li>
+  <li><b>Set the thresholds remotely</b> by subscribing to a topic (on a private, secured broker!).</li>
+  <li><b>Over-the-air updates (OTA) and storing settings in LittleFS</b> so you can change the program without opening the box (lesson <a href="5-4.html">5.4</a>).</li>
+</ul>
+<p>Dozens more ideas, sorted from easy to hard, are in <a href="6-4.html#ladder">the project ladder in lesson 6.4</a>.</p>
+
+<h2 id="video">Helpful video</h2>
+<div class="video" data-yt="9G-nMGcELG8" data-title="#48 Connect ESP8266 with the world (and IFTT) through MQTT and Adafruit.io (Tutorial)" data-channel="Andreas Spiess" data-lang="English">
+  <div class="sum"><ul>
+    <li>This video is old and uses the ESP8266, not the ESP32; but the ideas behind MQTT and Adafruit IO are the same. Watch it to <b>understand the architecture</b>, not to copy code.</li>
+    <li>Notice how feeds and dashboards are created in Adafruit IO and where the username and key are used. The website looks different now.</li>
+    <li>See how messages travel from the device to the broker, and from the broker to other services (like IFTTT and Node-RED); that's the "cloud" box in our architecture diagram.</li>
+  </ul></div>
+</div>
+
+<h2 id="debug">When it doesn't work: troubleshooting</h2>
+<div class="table-wrap"><table>
+<tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+<tr><td>Light is always 0 or 100, or goes strange once Wi-Fi turns on</td><td>The LDR is on an ADC2 pin, or the AO wire is loose</td><td>Put the LDR only on GPIO32 to 39 (ADC1). Print the raw value (step 1).</td></tr>
+<tr><td>The OLED shows nothing and Serial says "OLED not found"</td><td>SDA and SCL swapped, address 0x3D, or VCC not connected</td><td>Read the pin order printed on the display board; run the I2C scanner from lesson 3.3.</td></tr>
+<tr><td>The temperature reads several degrees too high</td><td>Heat from the ESP32, or sunlight</td><td>Move the sensor further away (see "Enclosure and placement"). Compare with a reference thermometer.</td></tr>
+<tr><td>The alarm keeps switching on and off</td><td>The hysteresis is too small or has been removed</td><td>Keep at least 1 to 2 degrees between TEMP_HIGH and TEMP_CLEAR.</td></tr>
+<tr><td><code>MQTT failed, state=-2</code></td><td>The network connection to the broker couldn't be made (DNS, internet, blocked port)</td><td>Check the internet; on restricted networks port 1883 may be blocked.</td></tr>
+<tr><td><code>MQTT failed, state=4</code> or <code>5</code> (Adafruit IO)</td><td>Wrong username or AIO Key</td><td>Copy the key again; the username is case-sensitive.</td></tr>
+<tr><td>MQTT keeps connecting and disconnecting</td><td>A duplicate client ID (two devices or two simulators), or loop is stuck somewhere in a long delay</td><td>Use a unique ID; never put a long delay in loop.</td></tr>
+<tr><td>The buzzer makes no sound</td><td>An active buzzer instead of a passive one, or reversed polarity</td><td>Use a passive buzzer; the + pin goes to GPIO26.</td></tr>
+<tr><td>Compile error <code>'ledcAttach' was not declared</code></td><td>Core 2.x is installed</td><td>Update the core to 3.x in the Boards Manager (lesson <a href="6-2.html#ex2">6.2</a>).</td></tr>
+<tr><td>The board resets when Wi-Fi connects (brownout)</td><td>A long, thin USB cable or a weak USB port</td><td>A short, good-quality cable, or a powered USB hub.</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">A word from your coach</div>
+<p>If you built this project step by step and passed all twelve acceptance tests, congratulations; I mean it. But a warning: you'll be tempted to copy the final program straight away and skip the steps. Don't. The value of this lesson isn't the final program (any AI can write that); it's the <b>method</b>: clear requirements, pins chosen for a reason, small steps, testing before moving on, and designing for the day the internet is down. Repeat this method on every project from now on until it becomes a habit. A good engineer isn't someone who never has bugs; it's someone who knows exactly which step the bug is in.</p></div>
+
+<h2 id="quiz">Lesson quiz</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">Why did we connect the LDR to GPIO34 and not, say, to GPIO26?</p>
+  <ol><li data-why="GPIO26 can be both an output and an input; the problem is something else.">GPIO26 is output-only</li><li>GPIO34 is on ADC1; ADC2 (like GPIO26) doesn't work while Wi-Fi is on</li><li data-why="ADC1 and ADC2 both have 12-bit resolution.">GPIO34 is more accurate</li><li data-why="An LDR doesn't need any special protocol.">GPIO34 is the only I2C pin</li></ol>
+  <div class="fb">ADC2 is shared with the Wi-Fi radio. In a project that uses Wi-Fi, analog inputs go only on ADC1 (GPIO32 to 39).</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">The alarm is on with TEMP_HIGH=35 and TEMP_CLEAR=33. The temperature drops to 34 degrees. What happens?</p>
+  <ol><li data-why="To turn off, the temperature has to drop below 33.">The alarm turns off</li><li data-why="The end message is sent only when the alarm turns off.">An "OK" message is sent</li><li>The alarm stays on</li><li data-why="Hysteresis exists to prevent exactly this flickering.">The alarm flickers on and off quickly</li></ol>
+  <div class="fb">This is hysteresis: between 33 and 35, the previous state is kept.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">If we remove the "reminder" branch and the <code>tAlert</code> variable and send an alert message on every reading where the temperature is above 35, how many messages are sent during one hour of alarm?</p>
+  <ol><li>About 1800 messages (one every 2 seconds)</li><li data-why="Without rate limiting, a message is sent on every reading.">6 messages</li><li data-why="The normal send interval is 30 seconds, but the alert message would be sent on every reading (2 seconds).">120 messages</li><li data-why="Exactly one is only possible with the &quot;edge&quot; logic.">1 message</li></ol>
+  <div class="fb">3600 ÷ 2 = 1800. Rate limiting brings this down to 1 start message + at most 6 reminders per hour.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">Why doesn't the final program's setup use a <code>while</code> to wait for Wi-Fi to connect?</p>
+  <ol><li data-why="while is allowed in setup; this is a design question.">Because while in setup causes a compile error</li><li data-why="WiFi.begin completes the connection even without waiting.">Because without while, Wi-Fi never connects</li><li data-why="Power consumption isn't the main reason for this decision.">Because while increases power consumption</li><li>Because if the router is off, the local alarm would never start working either</li></ol>
+  <div class="fb">R8: local jobs never wait for the network. The connection happens in the background.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">When is the "last will" (LWT) message with the value <code>offline</code> published on the status topic?</p>
+  <ol><li data-why="On connecting, the program itself sends &quot;online&quot;.">Every time the device connects</li><li>When the broker notices the device disconnected without saying goodbye (for example, a power cut)</li><li data-why="LWT has nothing to do with high temperature.">When the temperature goes above 35</li><li data-why="The broker publishes the LWT on the device's behalf; the device doesn't send it on a schedule.">Every 30 seconds</li></ol>
+  <div class="fb">The device hands the LWT to the broker when it connects, and the broker publishes it only if the connection drops unexpectedly.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">The station reads 4 degrees higher than the wall thermometer. What's the first thing you check?</p>
+  <ol><li data-why="The threshold numbers have no effect on the measurement.">The TEMP_HIGH value</li><li data-why="The DHT22 is factory-calibrated; check the environment first.">Switch to a different DHT library</li><li>How far the sensor is from the ESP32, sources of heat, and sunlight</li><li data-why="Wi-Fi doesn't affect the DHT22's digital reading; its heat does.">Turn off Wi-Fi to avoid radio interference</li></ol>
+  <div class="fb">Heat from the ESP32 itself and its regulator is the most common cause. The sensor should feel the room's free air, not the board's heat.</div>
+</div>
+
+<h2 id="practice">Exercises</h2>
+<div class="exercise"><div class="ct">Exercise 1: an alert that never gets lost</div>
+<p>In the current program, if the network is down at the moment the alarm starts, the "ALERT" message is lost. Change the program so the alert message waits in a "pending" variable and is sent as soon as MQTT connects.</p>
+<details><summary>Hint</summary><p>Create a variable <code>const char* pendingAlert = nullptr;</code>. In <code>publishAlert</code>, if you're not connected, store the message in it. In <code>keepMqtt</code>, right after a successful connection, if <code>pendingAlert</code> isn't empty, send it and clear it. Because the messages are constant strings, keeping a pointer to them is safe.</p></details>
+</div>
+<div class="exercise"><div class="ct">Exercise 2: a dead sensor</div>
+<p>If the DHT22 gets disconnected for good, the current program shows and sends the last valid temperature forever; that's a lie. Change it so that after 5 failed readings in a row, <code>tempC</code> and <code>hum</code> go back to NaN and an <code>"ERROR: sensor"</code> message is sent (just once) to the alert topic.</p>
+<details><summary>Hint</summary><p>Add a <code>failStreak</code> counter in <code>readSensors</code>: reset to zero on success, add one on failure. When it reaches exactly 5 (not greater-than-or-equal, so the message goes out only once), set the values to NaN and call <code>publishAlert</code>. <code>publishAll</code> already sends nothing when the value is NaN, and the display shows "ERR".</p></details>
+<details><summary>Answer</summary>
+<div class="code" data-file="readSensors_v2_part.ino" id="exFail"><pre>
+// Replacement for readSensors in the final program (part of a program)
+int failStreak = 0;
+
+void readSensors() {
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (!isnan(t) &amp;&amp; !isnan(h)) {
+    tempC = t; hum = h;
+    failStreak = 0;
+  } else {
+    failStreak++;
+    if (failStreak == 5) {                   // exactly once
+      tempC = NAN; hum = NAN;
+      publishAlert("ERROR: sensor");
+    }
+  }
+  int raw = analogRead(PIN_LDR);
+  lightPct = map(raw, 4095, 0, 0, 100);
+}
+</pre></div>
+<ol class="walk" data-for="exFail">
+  <li data-lines="7-9"><b class="what">Success resets the counter.</b>
+    <span class="why">That means only failures <b>in a row</b> are counted; an occasional single error is normal.</span></li>
+  <li data-lines="11-15"><b class="what">On the fifth failure, report the fault.</b> The values become NaN and one error message goes out.
+    <span class="why">The condition <code>== 5</code> instead of <code>&gt;= 5</code> means the message goes out only once, not on every reading after that; the same "no spam" principle. Five readings means 10 seconds, which can't be mistaken for a random glitch. <code>publishAlert</code> must be defined before this function (as in the final program, where section 5 comes before it's used, or with a forward declaration).</span></li>
+</ol>
+</details>
+</div>
+<div class="exercise"><div class="ct">Exercise 3: battery mode</div>
+<p>Build the battery version of the station (see the "Battery mode" section): wake every 5 minutes, take a reading, show it on the OLED for 3 seconds, send a message if an alarm started or ended, send the values once every 6 wake-ups, and go back to sleep. The GPIO33 button should wake the board for an instant reading. Then use the formula from lesson 6.1 to estimate how long a 2000 mAh battery would last.</p>
+<details><summary>Hint</summary><p>Use the variables <code>RTC_DATA_ATTR bool alarmOn</code> and <code>RTC_DATA_ATTR uint32_t wakeCount</code>. Condition for sending values: <code>wakeCount % 6 == 0</code>. Alarm reminder: every 2 wake-ups (10 minutes). For Wi-Fi, use <code>connectWiFiFast()</code> from lesson 6.1 with a timeout, and only turn Wi-Fi on when you have something to send. Before sleeping, turn the OLED off with <code>SSD1306_DISPLAYOFF</code> and set up EXT0 on GPIO33 with a LOW level and the RTC pull-up. When the button caused the wake-up, skip sending and just show the reading.</p></details>
+</div>
+
+<h2 id="certificate">🎓 You can now...</h2>
+<div class="callout info"><div class="ct">Your report card so far</div>
+<p>If you've read the lessons and built their projects yourself, you can now:</p>
+<ul>
+  <li>Recognize ESP32 boards, choose the right pin for a reason, and avoid the dangerous pins</li>
+  <li>Write programs, upload them, and debug with the Serial Monitor and Wokwi</li>
+  <li>Use digital and analog input and output, PWM, and the I2C, SPI and UART protocols</li>
+  <li>Connect your device to Wi-Fi, build a web server, and talk over Bluetooth</li>
+  <li>Build Internet of Things devices with MQTT and ESP-NOW</li>
+  <li>Calculate and measure power consumption and design a battery-powered device</li>
+  <li>Use AI like an engineer: ask precisely and review strictly</li>
+  <li>Build a complete project step by step, from requirements to acceptance tests</li>
+</ul>
+<p>This "report card" isn't on paper; it's in the project working on your desk. Take a photo of it and keep it.</p></div>
+
+<h2 id="next">Next step: lesson 6.4, now it's your turn</h2>
+<p>Up to now we've built every project together: I chose the pins, the libraries and the code. The course isn't over yet; one more lesson is left, and it teaches the most important skill of all: building <b>your own</b> project, without a teacher, on <b>any</b> ESP32 model. In <a href="6-4.html">lesson 6.4</a> you'll learn to:</p>
+<ul>
+  <li>Repeat the method you saw in this lesson (PRD, pins chosen for a reason, tested steps) for any new idea (<a href="6-4.html#method">section 1</a>)</li>
+  <li>Choose between the ESP32, S2, S3, C3, C6, H2 and P4 for technical reasons, and port this very station to another model (<a href="6-4.html#chip">sections 2</a> and <a href="6-4.html#porting">3</a>)</li>
+  <li>Bring up a part you've never seen before from its datasheet, and debug with a systematic method (<a href="6-4.html#newpart">sections 4</a> and <a href="6-4.html#debugging">5</a>)</li>
+  <li>Pick your next project from the "project ladder" and know where to go after this course (<a href="6-4.html#ladder">sections 6</a> and <a href="6-4.html#next">7</a>)</li>
+</ul>
+<p>The course completion certificate is at the end of that lesson. Until you've passed it, don't count the course as "finished".</p>
+
+<div class="callout info"><div class="ct">The lesson in three lines</div>
+<p>Start a big project with clear requirements (a PRD), an architecture and a pin table with reasons, then build it in small tested steps: sensors, display, alarm, Wi-Fi, MQTT, integration. The final program, with separate functions and <code>millis()</code> scheduling, never waits for the network; the alarm doesn't flicker thanks to hysteresis and doesn't spam thanks to rate limiting. Before you say "done", pass every acceptance test and mount the sensor away from the ESP32's heat.</p></div>
+
+</article>
+</body>
+</html>

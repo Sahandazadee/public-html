@@ -1,0 +1,933 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Now it's your turn: any project on any ESP32 · ESP32 Masterclass</title>
+<meta name="description" content="The graduation lesson: a repeatable method from idea to device, choosing between the ESP32, S2, S3, C3, C6, H2 and P4, porting sketches between models with SOC macros, learning any new part from its datasheet, a troubleshooting map, and 12 project ideas from easy to hard.">
+<link rel="alternate" hreflang="fa" href="../6-4.html"><link rel="alternate" hreflang="en" href="6-4.html">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="../assets/course.js"></script>
+<script defer src="../assets/glossary-en.js"></script>
+<script defer src="../assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="6-4">
+
+<p class="lede">Up to now we've built every project together: I picked the pins, introduced the libraries and explained the code line by line. From this lesson on, <b>you</b> make the decisions. This lesson isn't a new project; it's a "mental toolbox": a method that turns any idea, simple or hard, into a real device on any ESP32 model, without a teacher.</p>
+
+<div class="goals">
+  <div><h4>🎯 After this lesson you can</h4><ul>
+    <li>Turn an idea into a device with a repeatable method (requirements → pins → power → test piece by piece → integrate)</li>
+    <li>Choose between the ESP32, S2, S3, C3, C6, H2 and P4 for a reason</li>
+    <li>Port a sketch from the ESP32 to a C3 or S3 and know exactly what breaks</li>
+    <li>Bring up a part you've never seen before, from its datasheet and the library example</li>
+    <li>Troubleshoot endless resets, Guru Meditation, brownouts and "I2C device not found" methodically</li>
+    <li>Pick your next project from a 12-rung ladder and know your learning path after the course</li>
+  </ul></div>
+  <div><h4>🧰 Prerequisites and parts</h4><ul>
+    <li>All the previous lessons, especially <a href="1-2.html">1.2</a> (board types), <a href="1-3.html">1.3</a> (pins), <a href="6-2.html">6.2</a> (working with AI) and <a href="6-3.html">6.3</a> (the final project)</li>
+    <li>An ESP32 DevKitC board (and, if you have one, an ESP32-C3 or ESP32-S3; not required)</li>
+    <li>A 10 kΩ potentiometer, a button, an LED and a 220 Ω resistor</li>
+    <li>For the new-part section: a BME280 or BMP280 module (optional)</li>
+  </ul></div>
+</div>
+
+<div class="callout coach"><div class="ct">A word from your coach, before we start</div>
+<p>No course covers every part and every project. The difference between someone who "took a course" and an "engineer" isn't that the engineer knows everything in advance; it's that the engineer has a <b>method</b>. Faced with something unfamiliar, they don't panic, they don't copy-paste and pray it works. They go step by step and prove each step. This lesson gives you that method. Read it slowly.</p></div>
+
+<!-- ================= 1. METHOD ================= -->
+<h2 id="method">1. From idea to device: a repeatable method</h2>
+<p>In the <a href="6-3.html">final project</a> we ran through this method once together. Now we'll turn it into a general "recipe" that works for any project, from a simple night light to a robot.</p>
+
+<pre class="mermaid">flowchart TD
+  A["Step 1: the idea in one sentence"] --> B["Step 2: requirements (a small PRD)"]
+  B --> C["Step 3: choose sensors and actuators"]
+  C --> D["Step 4: choose the chip and board"]
+  D --> E["Step 5: pin table with reasons"]
+  E --> F["Step 6: power budget and supply"]
+  F --> G["Step 7: breadboard: each part alone + a test sketch"]
+  G --> H{"Did each part work on its own?"}
+  H -- "No" --> G
+  H -- "Yes" --> I["Step 8: integrate with millis or tasks"]
+  I --> J{"Acceptance tests passed?"}
+  J -- "No" --> I
+  J -- "Yes" --> K["Step 9: enclosure or PCB"]
+</pre>
+
+<div class="callout analogy"><div class="ct">Like building a house</div>
+<p>No builder puts the roof on first. First the plan (requirements), then the materials (parts), then the foundation (power), then the walls <b>one at a time</b>, checking each with a level (testing each part), and finally paint and trim (the enclosure). If a crack shows up, the builder knows which wall it's in, because each was built separately. An electronics project is the same: if you connect everything at once and it doesn't work, you have no idea where the problem is.</p></div>
+
+<h3>Steps 1 and 2: the idea and the requirements (a small PRD)</h3>
+<p>"I want a smart plant pot" isn't a requirement; it's a wish. A requirement has to be <b>measurable</b>, so that at the end you can say "done". Copy this template and fill it in for every project. Half an hour of writing saves you dozens of hours of rework.</p>
+
+<div class="code" data-file="PRD-template.txt" data-lang="text" id="prdTpl"><pre>
+Project: ______________________ (one sentence: what problem does it solve?)
+User: who uses it, where, and how many times a day?
+
+Must do (Must):
+  - M1: ... (measurable: "read the soil moisture every 10 minutes")
+  - M2: ...
+Nice to have (Nice):
+  - N1: ...
+
+Constraints:
+  - Power: USB / battery ___ mAh / adapter ___ V
+  - Target battery life: ___ days
+  - Communication: Wi-Fi / BLE / ESP-NOW / none
+  - Environment: indoors / outdoors / humidity / temperature ___
+  - Size and budget: ___ × ___ mm, at most ___ (your currency)
+
+Acceptance criteria (how do I know it's done?):
+  - A1: ...
+  - A2: ...
+
+Out of scope (this version will NOT do):
+  - ...
+</pre></div>
+<ol class="walk" data-for="prdTpl">
+  <li data-lines="1-2"><b class="what">One sentence and one user.</b> If you can't describe the project in one sentence, you don't know what you want yet.
+    <span class="why">The "user" decides how simple, tough or good-looking the device has to be. A device your grandmother uses needs a big button, not a serial menu.</span></li>
+  <li data-lines="4-8"><b class="what">Must versus Nice.</b> Only things without which the project is pointless go under Must.
+    <span class="why">Beginners make everything a Must (a display, a phone app, Telegram alerts...) and never finish. Finish the Musts first; the Nices are the reward for version 2.</span></li>
+  <li data-lines="10-15"><b class="what">Constraints.</b> Power, battery life, type of communication, environment and budget.
+    <span class="why">These lines choose the chip for you: "6 months on a battery" means deep sleep and a low-power board; "outdoors" means a waterproof box and maybe LoRa instead of Wi-Fi.</span></li>
+  <li data-lines="17-19"><b class="what">Acceptance criteria.</b> The tests you run at the end, such as "if the soil gets dry, the pump runs for at most 5 seconds".
+    <span class="why">Without acceptance criteria, a project either never ends or is declared "done" too early and fails on its first night.</span></li>
+  <li data-lines="21-22"><b class="what">Out of scope.</b> Write down explicitly what you will <b>not</b> do.
+    <span class="why">This line prevents "scope creep": the urge to add "just one more feature" that sets the project back by weeks.</span></li>
+</ol>
+
+<h3>Step 3: choose the sensors and actuators</h3>
+<p>For every Must, ask: "What do I have to measure to know this?" (a sensor) and "What do I have to move or switch on to do this?" (an actuator). Then ask three questions about each one:</p>
+<ol class="steps">
+  <li><b>What voltage does it run on?</b> 3.3 V, 5 V or 12 V? If its output is 5 V, don't connect it straight to an ESP32 pin (the pins aren't 5 V tolerant; lesson <a href="1-3.html">1.3</a>).</li>
+  <li><b>What interface does it speak?</b> Plain digital, analog, I2C, SPI, UART, or a special single-wire protocol (like the DHT22)? This decides how many pins you need, and which ones.</li>
+  <li><b>How much current does it draw?</b> Never power a motor, pump or relay straight from a pin; you need a transistor or MOSFET (lesson <a href="3-4.html">3.4</a>).</li>
+</ol>
+
+<h3>Step 4: the chip and the board</h3>
+<p>This is so important that <a href="#chip">section 2</a> is dedicated to it. For now, a simple rule: if you have no particular reason, <b>a plain ESP32 (DevKitC or DOIT)</b> is a safe choice, because every lesson in this course was written for it.</p>
+
+<h3>Step 5: a pin table with reasons</h3>
+<p>Before you connect even one wire, write the pin table <b>on paper</b>. The "reason" column is mandatory; if you can't write a reason, you don't know the pin well enough yet. Here's an example for a smart plant pot, on two different boards:</p>
+<div class="table-wrap"><table>
+<tr><th>Part</th><th>ESP32 DevKitC</th><th>ESP32-C3</th><th>Reason</th></tr>
+<tr><td>Soil moisture sensor (analog output)</td><td><code>GPIO34</code></td><td><code>GPIO1</code></td><td>Must be on ADC1, because ADC2 doesn't work while Wi-Fi is on. On the C3, the ADC1 channels are on GPIO0 to GPIO4.</td></tr>
+<tr><td>Pump MOSFET gate</td><td><code>GPIO26</code></td><td><code>GPIO10</code></td><td>A normal output, not a strapping pin; so the pump won't switch on by accident when the board powers up.</td></tr>
+<tr><td>Manual watering button</td><td><code>GPIO27</code></td><td><code>GPIO5</code></td><td>Has an internal pull-up; not a strapping pin.</td></tr>
+<tr><td>OLED (I2C)</td><td><code>GPIO21</code> / <code>GPIO22</code></td><td><code>GPIO8</code> / <code>GPIO9</code></td><td>The default I2C pins in the Arduino core. On the C3 these two are strapping pins, but because the I2C bus pull-up resistors hold them HIGH (the state a normal boot needs), there's no problem. Don't connect them to a part that holds them LOW.</td></tr>
+<tr><td>Status LED</td><td><code>GPIO4</code></td><td><code>GPIO6</code></td><td>A safe output pin.</td></tr>
+</table></div>
+
+<h3>Step 6: the power budget</h3>
+<p>A power budget means answering two questions with numbers: <b>(1) How much current must the power supply deliver at the worst moment? (2) How many days will the battery last?</b></p>
+<div class="callout example"><div class="ct">Do the math: a battery-powered smart plant pot</div>
+<p><b>Peak current:</b> while transmitting over Wi-Fi, the ESP32 briefly draws up to about 250 mA, and a small 5 V pump about 200 mA. So the supply must deliver at least <code>250 + 200 ≈ 450mA</code> without the voltage sagging; with a safety margin, a 1 A supply.</p>
+<p><b>Average current:</b> the device wakes every 10 minutes (600 seconds), works for 5 seconds at an average of 120 mA, and spends the remaining 595 seconds in deep sleep at 0.15 mA (on a low-power board; an ordinary DevKit draws several mA because of its regulator and USB chip):</p>
+<p><code>I_avg = (5 × 120 + 595 × 0.15) ÷ 600 ≈ 1.15mA</code></p>
+<p><b>Life of a 2000 mAh battery:</b> <code>2000 ÷ 1.15 ≈ 1740h ≈ 72 days</code>. With a 0.7 safety factor (the battery never fully empties, temperature, aging): about <b>50 days</b>. The details of deep sleep are in lesson <a href="6-1.html">6.1</a>.</p></div>
+
+<h3>Step 7: breadboard, one at a time, each part with a test sketch</h3>
+<p>For each part, write a separate small sketch (or run its library example) that tests only that part. Don't throw these sketches away; keep them in a folder like <code>tests/</code>. Six months later, when the device breaks, they'll tell you in five minutes which part died. You'll find a ready-made template for this in <a href="#newpart">section 4</a>.</p>
+
+<h3>Step 8: integrating without delay</h3>
+<p>Once every part works on its own, add them to the main program <b>one at a time</b>, and test after each addition. Write the scheduling with <code>millis()</code> (lessons <a href="3-1.html">3.1</a> and <a href="6-3.html">6.3</a>), or put slow jobs like networking in a separate task (lesson <a href="5-4.html">5.4</a>). A <code>delay(5000)</code> in the middle of the program means your button is deaf for 5 seconds.</p>
+
+<h3>Step 9: an enclosure or a PCB</h3>
+<p>A breadboard is great for learning and terrible for everyday use: wires work loose, moisture corrodes the contacts and vibration disconnects everything. Solder the final version onto perfboard (lesson <a href="1-4.html">1.4</a>) or design a real PCB. The <a href="../../kicad-9-tutorial/">KiCad 9 PCB design tutorial</a> on this site (in Persian) is the natural next step.</p>
+
+<div class="callout why"><div class="ct">Why so many steps for a simple project?</div>
+<p>For a one-LED project, this method is overkill. But you build the habit on simple projects so that when you reach a project with ten parts, you do it automatically. The experience of workshops is simple: most projects that get abandoned die at the "I wired it all up at once and it didn't work" stage.</p></div>
+
+<!-- ================= 2. CHIP ================= -->
+<h2 id="chip">2. Choosing the right chip: ESP32, S2, S3, C3, C6, H2 and P4</h2>
+<p>In <a href="1-2.html#family">lesson 1.2</a> we introduced the ESP32 family. Now here's a more complete table, built for <b>making decisions</b>. Every cell has been checked against Espressif's official documentation (the <code>soc_caps.h</code> files in ESP-IDF, the GPIO guide and the hardware design guidelines). Cells marked with <b>?</b> depend on the chip revision or module; check that module's datasheet before you buy.</p>
+
+<div class="table-wrap"><table>
+<tr><th>Feature</th><th>ESP32</th><th>ESP32-S2</th><th>ESP32-S3</th><th>ESP32-C3</th><th>ESP32-C6</th><th>ESP32-H2</th><th>ESP32-P4</th></tr>
+<tr><td>Cores and architecture</td><td>2 × Xtensa LX6</td><td>1 × Xtensa LX7</td><td>2 × Xtensa LX7</td><td>1 × RISC-V</td><td>1 × RISC-V + one low-power RISC-V core</td><td>1 × RISC-V</td><td>2 × RISC-V + one low-power core</td></tr>
+<tr><td>Max frequency</td><td>240 MHz</td><td>240 MHz</td><td>240 MHz</td><td>160 MHz</td><td>160 MHz</td><td>96 MHz</td><td>400 MHz (revision v3; older revisions 360)</td></tr>
+<tr><td>Wi-Fi</td><td>Wi-Fi 4 (2.4GHz)</td><td>Wi-Fi 4</td><td>Wi-Fi 4</td><td>Wi-Fi 4</td><td><b>Wi-Fi 6</b> (2.4GHz)</td><td>❌ none</td><td>❌ none (boards usually add a companion C6)</td></tr>
+<tr><td>Bluetooth Classic</td><td>✅</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td></tr>
+<tr><td>BLE</td><td>4.2</td><td>❌ none</td><td>5 (LE)</td><td>5 (LE)</td><td>5 (LE), certified 5.3</td><td>5 (LE)</td><td>❌</td></tr>
+<tr><td>Thread / Zigbee (802.15.4)</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td><td>✅</td><td>✅</td><td>❌</td></tr>
+<tr><td>Built-in USB</td><td>❌ (needs a converter chip like the CP2102)</td><td>USB OTG (no USB-Serial-JTAG)</td><td>USB OTG + USB-Serial-JTAG</td><td>USB-Serial-JTAG only</td><td>USB-Serial-JTAG only</td><td>USB-Serial-JTAG only</td><td>High-speed USB 2.0 OTG + USB-Serial-JTAG</td></tr>
+<tr><td>Chip GPIO count</td><td>34</td><td>43</td><td>45</td><td>22</td><td>31 (22 on versions with in-package flash)</td><td>28 (19 on versions with in-package flash)</td><td>55</td></tr>
+<tr><td>ADC channels</td><td>18 (ADC1: 8, ADC2: 10)</td><td>20</td><td>20</td><td>6 (ADC1: 5, ADC2: 1)</td><td>7</td><td>5</td><td>14</td></tr>
+<tr><td>DAC</td><td>✅ 2 channels</td><td>✅ 2 channels</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td></tr>
+<tr><td>Touch</td><td>✅ 10</td><td>✅ 14</td><td>✅ 14</td><td>❌</td><td>❌</td><td>❌</td><td>✅ 14</td></tr>
+<tr><td>Camera interface</td><td>Parallel (via I2S; as on the ESP32-CAM)</td><td>Parallel (DVP) ?</td><td>✅ Parallel DVP (LCD_CAM)</td><td>❌</td><td>❌</td><td>❌</td><td>✅ MIPI-CSI + DVP</td></tr>
+<tr><td>PSRAM</td><td>✅ (WROVER module)</td><td>✅</td><td>✅ Quad or Octal ?</td><td>❌</td><td>❌</td><td>❌</td><td>✅ (in-package, size depends on the model)</td></tr>
+<tr><td>Common boards</td><td>DevKitC, DOIT DevKit V1, ESP32-CAM, CYD</td><td>S2 Mini (LOLIN), Saola-1</td><td>S3-DevKitC-1, XIAO S3, ESP32-S3 Zero</td><td>C3-DevKitM-1, C3 SuperMini, XIAO C3</td><td>C6-DevKitC-1, XIAO C6</td><td>H2-DevKitM-1</td><td>P4-Function-EV-Board</td></tr>
+</table></div>
+<p>Sources: each chip's <code>soc_caps.h</code> file in the <a href="https://github.com/espressif/esp-idf" target="_blank" rel="noopener">ESP-IDF repository</a>, <a href="https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/peripherals/gpio.html" target="_blank" rel="noopener">the GPIO guide for each chip</a>, <a href="https://docs.espressif.com/projects/esp-hardware-design-guidelines/en/latest/" target="_blank" rel="noopener">Espressif's hardware design guidelines</a> and the <a href="https://products.espressif.com/" target="_blank" rel="noopener">Espressif Product Selector</a>. "GPIO count" is for the chip itself; your board may not break them all out. The C3's ADC channel count is what the hardware has; its ADC2 isn't recommended in practice, so count on the 5 ADC1 channels.</p>
+
+<div class="callout analogy"><div class="ct">The ESP32 family is like cars from one factory</div>
+<p>The plain ESP32 is an all-round family car. The S3 is a powerful SUV with a big trunk (PSRAM) for heavy loads like cameras and audio. The C3 is a small, cheap city car: great for simple trips, but it can't carry heavy loads. The C6 is that same city car with a new radio (Wi-Fi 6 and Thread) for the smart home. The H2 is a delivery scooter: no Wi-Fi, but unbeatable on low-power Thread and Zigbee networks. The P4 is a powerful truck with no radio: image processing and big displays, but it needs a wireless companion to reach the internet.</p></div>
+
+<h3>Decision tree: which chip?</h3>
+<pre class="mermaid">flowchart TD
+  S["What does the project mainly need?"] --> Q1{"A camera, speech recognition<br/>or a big display?"}
+  Q1 -- "Yes, with Wi-Fi" --> S3["ESP32-S3 with PSRAM"]
+  Q1 -- "Heavy image processing,<br/>no built-in radio needed" --> P4["ESP32-P4"]
+  Q1 -- "No" --> Q2{"Bluetooth Classic?<br/>(A2DP audio or SPP serial)"}
+  Q2 -- "Yes" --> E32["Plain ESP32"]
+  Q2 -- "No" --> Q3{"Thread, Zigbee or Matter?"}
+  Q3 -- "Yes + Wi-Fi" --> C6["ESP32-C6"]
+  Q3 -- "Yes, without Wi-Fi" --> H2["ESP32-H2"]
+  Q3 -- "No" --> Q4{"A USB keyboard or mouse<br/>(USB HID)?"}
+  Q4 -- "Yes" --> S3b["ESP32-S3 or S2"]
+  Q4 -- "No" --> Q5{"DAC, touch or<br/>lots of pins?"}
+  Q5 -- "Yes" --> E32b["Plain ESP32"]
+  Q5 -- "No, just simple Wi-Fi or BLE,<br/>cheap and small" --> C3["ESP32-C3"]
+</pre>
+
+<div class="callout tip"><div class="ct">The golden rule of buying</div>
+<p>Walk the decision tree first, then buy the board; not the other way round. And always buy <b>two</b>: one to build with, and one for when you fry the first with a wiring mistake, or want to find out whether the problem is the board or the code. A second board is the cheapest debugging tool in the world.</p></div>
+
+<div class="callout warn"><div class="ct">The trap: "newer = better"</div>
+<p>The S3, C3 and C6 aren't "better ESP32s"; they're "different ESP32s". A project that used <code>BluetoothSerial</code> to connect to an Android Bluetooth terminal app won't compile on any of them. A project that played sound with <code>dacWrite</code> has no DAC on the S3, C3 or C6. Before switching chips, check the capability rows for <b>everything</b> your project needs.</p></div>
+
+<!-- ================= 3. PORTING ================= -->
+<h2 id="porting">3. Porting a sketch between models (hands-on workshop)</h2>
+<p>Say you have a project on a plain ESP32 and want to move it to a small C3 or an S3. The C++ code is the same, and most Arduino functions (<code>digitalWrite</code>, <code>analogRead</code>, <code>WiFi</code>, <code>Wire</code>...) work on all of them. But six things almost always break. One at a time:</p>
+
+<h3>Breakage 1: pin numbers</h3>
+<p>On the ESP32, GPIO34 is an analog input; on the C3 there's no GPIO34 at all (the C3 only has GPIO0 to GPIO21). So the first job: open the pinout of the <b>new</b> board and write the pin table from scratch.</p>
+<div class="gallery">
+  <figure><div class="frame"><img src="../assets/img/c3-pinout.jpg" alt="Pinout of the ESP32-C3-DevKitM-1 board"></div><figcaption>ESP32-C3-DevKitM-1 pinout<span class="src">Image: Espressif Systems, CC BY-SA 4.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="../assets/img/s3-pinout.jpg" alt="Pinout of the ESP32-S3-DevKitC-1 board"></div><figcaption>ESP32-S3-DevKitC-1 pinout<span class="src">Image: Espressif Systems, CC BY-SA 4.0</span></figcaption></figure>
+</div>
+
+<h3>Breakage 2: every chip has different strapping pins</h3>
+<p>In lesson 1.3 you learned that on the ESP32, pins 0, 2, 5, 12 and 15 are read at power-up. On other chips this list is <b>completely</b> different. This table is taken from <a href="https://docs.espressif.com/projects/esp-hardware-design-guidelines/en/latest/esp32c6/schematic-checklist.html" target="_blank" rel="noopener">Espressif's official schematic checklist</a> for each chip:</p>
+<div class="table-wrap"><table>
+<tr><th>Chip</th><th>Strapping pins</th><th>Which pin sets the boot mode</th><th>Flash/PSRAM pins (hands off)</th><th>Built-in USB pins</th></tr>
+<tr><td>ESP32</td><td>0, 2, 5, 12 (MTDI), 15 (MTDO)</td><td>GPIO0 (and GPIO2)</td><td>6 to 11</td><td>none</td></tr>
+<tr><td>ESP32-S2</td><td>0, 45, 46</td><td>GPIO0 (and GPIO46)</td><td>26 to 32</td><td>19, 20 (OTG)</td></tr>
+<tr><td>ESP32-S3</td><td>0, 3, 45, 46</td><td>GPIO0 (and GPIO46)</td><td>26 to 32; on modules with octal (8-bit) flash or PSRAM (such as N16R8), <b>33 to 37</b> as well</td><td>19, 20</td></tr>
+<tr><td>ESP32-C3</td><td>2, 8, 9</td><td>GPIO9 (GPIO8 must be HIGH)</td><td>12 to 17</td><td>18, 19</td></tr>
+<tr><td>ESP32-C6</td><td>8, 9, 15, and MTMS (GPIO4) and MTDI (GPIO5)</td><td>GPIO9 (GPIO8 must be HIGH)</td><td>24 to 30</td><td>12, 13</td></tr>
+<tr><td>ESP32-H2</td><td>8, 9, 25</td><td>GPIO9 (GPIO8 must be HIGH)</td><td>15 to 21</td><td>26, 27</td></tr>
+<tr><td>ESP32-P4</td><td>34 to 38</td><td>GPIO35 (and GPIO36)</td><td>—</td><td>24, 25</td></tr>
+</table></div>
+<p>So if you had a button on GPIO9 on the ESP32, the same button on a C3, if it's pressed at power-up, puts the board into download mode and your program doesn't run. On the C3, the board's BOOT button is wired to exactly this GPIO9.</p>
+
+<h3>Breakage 3: features that don't exist</h3>
+<div class="table-wrap"><table>
+<tr><th>Your code on the ESP32</th><th>On the C3</th><th>On the S3</th><th>On the C6</th><th>Alternative</th></tr>
+<tr><td><code>dacWrite()</code></td><td>❌ doesn't compile</td><td>❌</td><td>❌</td><td>PWM with <code>ledcWrite</code> + an RC filter, or an external I2C DAC such as the MCP4725, or for audio, I2S with a MAX98357A amplifier</td></tr>
+<tr><td><code>touchRead()</code></td><td>❌</td><td>✅ (pins GPIO1 to GPIO14; the values are larger and <b>increase</b> when touched)</td><td>❌</td><td>A TTP223 touch module, which behaves like a digital button</td></tr>
+<tr><td><code>BluetoothSerial</code></td><td>❌</td><td>❌</td><td>❌</td><td>BLE (lesson <a href="4-3.html">4.3</a>) with a UART service such as the Nordic UART Service</td></tr>
+<tr><td><code>analogRead(34)</code></td><td>no such pin</td><td>no such pin</td><td>no such pin</td><td>One of that chip's ADC1 pins (C3: GPIO0 to 4; S3: GPIO1 to 10; C6: GPIO0 to 6)</td></tr>
+</table></div>
+
+<div class="callout warn"><div class="ct">On the S3, touchRead behaves the opposite way</div>
+<p>On a plain ESP32, touching the pin <b>lowers</b> the <code>touchRead</code> value (for example from 60 to 15). On the S2 and S3 the values are much larger (thousands) and <b>rise</b> when touched. So the condition <code>if (touchRead(T) &lt; 30)</code> that worked on the ESP32 will never be true on the S3. Always print the raw value first and set the threshold from the real number.</p></div>
+
+<h3>Breakage 4: the built-in LED and the RGB LED</h3>
+<p>On DOIT boards, the blue LED is on GPIO2. The ESP32-S3-DevKitC-1 has an addressable RGB LED (like a WS2812) instead: on <b>GPIO48</b> on board revision v1.0 and on <b>GPIO38</b> on v1.1. On the ESP32-C3-DevKitM-1 it's on GPIO8. This LED won't light with a plain <code>digitalWrite</code>, because it needs serial data. In core 3.x the ready-made function <code>rgbLedWrite(pin, r, g, b)</code> does this, and the constant <code>RGB_BUILTIN</code> is defined for boards that have such an LED. (The old name of this function was <code>neopixelWrite</code>; it still works but is marked deprecated.)</p>
+<div class="callout warn"><div class="ct">Read the S3 board revision off the board itself</div>
+<p>When you select "ESP32S3 Dev Module", the Arduino core assumes the LED is on GPIO48. If your board is v1.1 and the LED doesn't light, write <code>rgbLedWrite(38, ...)</code> directly instead of using <code>RGB_BUILTIN</code>. Cheap clone boards sometimes change both; check the seller's pinout.</p></div>
+
+<h3>Breakage 5 (trap number 1): the Serial Monitor is empty!</h3>
+<p>This is the most common problem for people moving from the ESP32 to a C3 or S3. The program uploads, the LED blinks, but the Serial Monitor shows nothing. Why?</p>
+<p>On a plain ESP32, the USB cable goes to a converter chip (CP2102 or CH340), and that chip goes to the UART0 pins (GPIO1 and GPIO3). <code>Serial</code> in Arduino is UART0; so everything just works.</p>
+<p>But the C3 and S3 (and the C6 and H2) have a <b>native USB</b> unit built in, called <b>USB-Serial-JTAG</b>. Small boards like the C3 SuperMini or the XIAO wire the USB connector <b>straight</b> to the chip's USB pins, with no converter chip at all. Now the question is: which one is <code>Serial</code> in your program?</p>
+<ul>
+  <li>If <code>Tools › USB CDC On Boot</code> is set to <b>Disabled</b> (the default for "ESP32C3 Dev Module" and "ESP32S3 Dev Module"), <code>Serial</code> is UART0 (C3: GPIO21 and GPIO20; S3: GPIO43 and GPIO44). Your text goes out on those pins, which aren't connected to USB. Result: an empty Serial Monitor.</li>
+  <li>If it's <b>Enabled</b>, <code>Serial</code> is connected to the native USB (this is called USB CDC: the standard USB "virtual serial port" class), and the text shows up in the Serial Monitor.</li>
+</ul>
+<div class="callout analogy"><div class="ct">Two mailboxes</div>
+<p>Imagine your house has two mailboxes: one at the front door (USB) and one around the back (UART0). By default, the mail carrier (your program) leaves the letters in the back mailbox. You're waiting at the front door, thinking no mail came. "USB CDC On Boot: Enabled" means telling the mail carrier "leave the letters at the front door".</p></div>
+<p><b>Boards with a separate converter chip are different:</b> the official ESP32-S3-DevKitC-1 and ESP32-C3-DevKitM-1 have a USB-to-UART converter chip on board. The S3-DevKitC-1 even has <b>two</b> USB connectors, labeled "UART" and "USB" on the board. If you plug the cable into "UART", it works like a plain ESP32 and CDC On Boot should stay Disabled. If you plug into "USB", it must be Enabled. The simple rule: <b>cable in the connector that goes straight to the chip = CDC On Boot: Enabled.</b></p>
+<div class="callout tip"><div class="ct">Losing the first messages from setup?</div>
+<p>With native USB, the computer takes a few hundred milliseconds to recognize the port. If you print on the first line of setup, that message may be lost. That's why the sketch below says: "wait up to 3 seconds for <code>Serial</code> to be ready, then carry on". The 3-second limit is essential; otherwise a device running on a battery with no computer attached would wait forever.</p></div>
+
+<h3>Breakage 6: how to enter upload mode</h3>
+<div class="table-wrap"><table>
+<tr><th>Board</th><th>Selection in the Arduino IDE (<code>Tools › Board › esp32</code>)</th><th>If the upload won't connect</th></tr>
+<tr><td>ESP32 DevKitC / DOIT</td><td>ESP32 Dev Module</td><td>Hold BOOT while <code>Connecting...</code> is shown.</td></tr>
+<tr><td>ESP32-S2 (for example S2 Mini)</td><td>ESP32S2 Dev Module or LOLIN S2 Mini</td><td>Hold BOOT (GPIO0), press RST once, release BOOT. A new port appears; select that one.</td></tr>
+<tr><td>ESP32-S3</td><td>ESP32S3 Dev Module (or the exact board name, such as XIAO_ESP32S3)</td><td>The same: hold BOOT, press RST, release BOOT.</td></tr>
+<tr><td>ESP32-C3</td><td>ESP32C3 Dev Module (or Nologo ESP32C3 Super Mini, XIAO_ESP32C3)</td><td>The same method; on the C3 the BOOT button is wired to GPIO9.</td></tr>
+<tr><td>ESP32-C6 / H2 / P4</td><td>ESP32C6 Dev Module / ESP32H2 Dev Module / ESP32P4 Dev Module</td><td>The same BOOT + RST method.</td></tr>
+</table></div>
+<div class="callout why"><div class="ct">Why does the port "disappear" on native-USB boards?</div>
+<p>On a plain ESP32, the USB converter chip is always powered, and the COM port never goes away, even if your program crashes. But with native USB, the ESP32 itself plays the role of the USB device. If your program crashes, goes into deep sleep, or uses the USB pins (for example GPIO19 and GPIO20 on the S3) for something else, the port disappears from the computer. The BOOT + RST combination takes the chip into the bootloader in ROM, which is always intact, and brings USB back up. After uploading, press RST once to run the new program.</p></div>
+
+<h3>The professional solution: one sketch for every chip</h3>
+<p>Instead of keeping three separate copies of the program, we use <b>preprocessor directives</b> (<code>#if</code>). Before compiling the code, the compiler keeps only the parts that match the chip you selected in the Board menu. There are two kinds of "flags":</p>
+<ul>
+  <li><code>CONFIG_IDF_TARGET_ESP32</code>, <code>CONFIG_IDF_TARGET_ESP32S3</code>, <code>CONFIG_IDF_TARGET_ESP32C3</code> and so on: these tell you <b>which chip</b> it is. They're good for pin numbers.</li>
+  <li><b>SOC capability macros</b> such as <code>SOC_DAC_SUPPORTED</code>, <code>SOC_TOUCH_SENSOR_SUPPORTED</code> and <code>SOC_BT_CLASSIC_SUPPORTED</code>: these tell you <b>what the chip has</b>. They're better, because if a new chip with a DAC comes out tomorrow, your code works correctly without any changes.</li>
+</ul>
+
+<p>The circuit for the ESP32 DevKitC version (on the S3 and C3 only the pin numbers change, as in the code):</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"POT","name":"10 kΩ potentiometer","img":"pot.svg","pins":[["VCC","first outer leg"],["SIG","middle leg (wiper)"],["GND","second outer leg"]]},
+    {"id":"BTN","name":"Push button","img":"button.svg","pins":[["1","one side of the button"],["2","other side (diagonal)"]]},
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","first end"],["2","second end"]]},
+    {"id":"LED1","name":"LED","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−)"]]}
+  ],
+  "wires":[["3V3","POT.VCC","red"],["POT.GND","GND","black"],["POT.SIG","GPIO34","blue"],["GPIO27","BTN.1","blue"],["BTN.2","GND","black"],["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>The potentiometer on GPIO34 (ADC1), the button on GPIO27 with the internal pull-up, the LED on GPIO4. For touch, plug a loose jumper wire into GPIO32 and touch its tip; measure the DAC voltage on GPIO25 with a multimeter.</figcaption></div>
+
+<div class="code" data-file="PortableDemo.ino" id="portable"><pre>
+// PortableDemo.ino — one sketch, three chips: ESP32, ESP32-S3, ESP32-C3
+#include &lt;Arduino.h&gt;
+#include "soc/soc_caps.h"   // SOC_… macros (each chip's hardware capabilities)
+
+// ---------- 1) Pins: only this part differs per chip ----------
+#if CONFIG_IDF_TARGET_ESP32
+  const int LED_PIN    = 4;    // PWM output
+  const int BUTTON_PIN = 27;
+  const int POT_PIN    = 34;   // ADC1_CH6
+  const int TOUCH_PIN  = 32;   // T9
+  const int DAC_PIN    = 25;   // DAC1
+#elif CONFIG_IDF_TARGET_ESP32S3
+  const int LED_PIN    = 5;
+  const int BUTTON_PIN = 4;
+  const int POT_PIN    = 1;    // ADC1_CH0
+  const int TOUCH_PIN  = 7;    // T7
+#elif CONFIG_IDF_TARGET_ESP32C3
+  const int LED_PIN    = 6;
+  const int BUTTON_PIN = 7;
+  const int POT_PIN    = 3;    // ADC1_CH3
+#else
+  #error "This sketch supports ESP32, ESP32-S3 and ESP32-C3 only"
+#endif
+
+// ---------- 2) Capability report ----------
+void printChipInfo() {
+  Serial.printf("Chip: %s rev %d, %d core(s) @ %lu MHz\n",
+                ESP.getChipModel(), ESP.getChipRevision(),
+                ESP.getChipCores(), (unsigned long)ESP.getCpuFreqMHz());
+  Serial.printf("Flash: %lu KB, PSRAM: %lu KB\n",
+                (unsigned long)(ESP.getFlashChipSize() / 1024),
+                (unsigned long)(ESP.getPsramSize() / 1024));
+#if SOC_DAC_SUPPORTED
+  Serial.println("DAC: yes");
+#else
+  Serial.println("DAC: no  -&gt; PWM only");
+#endif
+#if SOC_TOUCH_SENSOR_SUPPORTED
+  Serial.println("Touch: yes");
+#else
+  Serial.println("Touch: no");
+#endif
+#if SOC_BT_CLASSIC_SUPPORTED
+  Serial.println("Bluetooth Classic: yes (BluetoothSerial OK)");
+#else
+  Serial.println("Bluetooth Classic: no  -&gt; use BLE");
+#endif
+#if ARDUINO_USB_CDC_ON_BOOT
+  Serial.println("Serial = native USB (CDC)");
+#else
+  Serial.println("Serial = UART0");
+#endif
+}
+
+// ---------- 3) setup ----------
+void setup() {
+  Serial.begin(115200);
+  unsigned long t0 = millis();
+  while (!Serial &amp;&amp; millis() - t0 &lt; 3000) delay(10);  // wait for USB, at most 3 seconds
+
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  ledcAttach(LED_PIN, 5000, 8);        // core 3.x: pin, frequency, resolution
+  printChipInfo();
+}
+
+// ---------- 4) loop ----------
+void loop() {
+  int raw  = analogRead(POT_PIN);      // 0..4095
+  int duty = raw &gt;&gt; 4;                 // 0..255
+  bool pressed = (digitalRead(BUTTON_PIN) == LOW);
+  ledcWrite(LED_PIN, duty);
+
+#if SOC_DAC_SUPPORTED
+  dacWrite(DAC_PIN, duty);             // a real analog voltage, 0 to 3.3V
+#endif
+
+  Serial.printf("pot=%4d  button=%s", raw, pressed ? "DOWN" : "up  ");
+#if SOC_TOUCH_SENSOR_SUPPORTED
+  Serial.printf("  touch=%lu", (unsigned long)touchRead(TOUCH_PIN));
+#endif
+#ifdef RGB_BUILTIN
+  if (pressed) rgbLedWrite(RGB_BUILTIN, 40, 0, 0);  // red
+  else         rgbLedWrite(RGB_BUILTIN, 0, 40, 0);  // green
+#endif
+  Serial.println();
+  delay(200);
+}
+</pre></div>
+<ol class="walk" data-for="portable">
+  <li data-lines="2-3"><b class="what">Including soc_caps.h.</b> This file from ESP-IDF defines each chip's list of capabilities as macros.
+    <span class="why">A dangerous trap: in C++, if you use a name in <code>#if</code> that isn't defined, you get no error; the compiler silently treats it as zero. If this file isn't included, <code>#if SOC_DAC_SUPPORTED</code> comes out as "no" even on the ESP32, and you'll never figure out why the DAC doesn't work. Including it explicitly closes this trap.</span></li>
+  <li data-lines="6-11"><b class="what">Pins for the plain ESP32.</b> If "ESP32 Dev Module" is selected in the Board menu, only these five lines are compiled.
+    <span class="why">Every pin was chosen by the rules from lesson 1.3: GPIO34 is on ADC1 (no problem with Wi-Fi), GPIO32 is touch pin T9, and GPIO25 is the DAC1 output. None of them is a strapping pin.</span></li>
+  <li data-lines="12-16"><b class="what">Pins for the S3.</b> GPIO1 is on ADC1_CH0 and GPIO7 is touch pin T7. <code>DAC_PIN</code> isn't defined, because the S3 has no DAC.
+    <span class="why">We avoided GPIO3, 45 and 46 (strapping), 19 and 20 (USB), and 26 to 37 (flash and PSRAM). Pins 1 to 18 are the safest choices on the S3.</span></li>
+  <li data-lines="17-20"><b class="what">Pins for the C3.</b> GPIO3 is on ADC1_CH3. No touch pin or DAC is defined, because the C3 has neither.
+    <span class="why">We avoided GPIO2, 8 and 9 (strapping), 12 to 17 (flash), and 18 and 19 (USB). GPIO6 and GPIO7 are also external JTAG pins on the C3, but as long as you don't use external JTAG, they're ordinary GPIOs.</span></li>
+  <li data-lines="21-23"><b class="what">#error for an unknown chip.</b> If someone compiles this code for a C6, compilation stops with a clear message.
+    <span class="why">A compile error is better than a program that compiles and then runs on the board with the wrong pins. "Fail early and loudly" is an engineering principle.</span></li>
+  <li data-lines="26-32"><b class="what">Printing the chip's specs.</b> <code>ESP.getChipModel()</code> gives the chip name, <code>getChipCores()</code> the number of cores, <code>getFlashChipSize()</code> the flash size and <code>getPsramSize()</code> the PSRAM size.
+    <span class="why">When you buy an unknown board online, these lines tell you in one second what you actually bought. If PSRAM is zero but the seller promised 8 megabytes, either the board is fake or you haven't enabled the <code>Tools › PSRAM</code> option.</span></li>
+  <li data-lines="33-47"><b class="what">Capability macros.</b> Each <code>#if SOC_...</code> block is compiled only if the chip has that capability.
+    <span class="why">These lines both report to you and show the main pattern: always put feature-specific code inside that feature's macro, not inside a chip name.</span></li>
+  <li data-lines="48-52"><b class="what">Where does Serial go?</b> The Arduino IDE itself creates the <code>ARDUINO_USB_CDC_ON_BOOT</code> macro from the "USB CDC On Boot" option.
+    <span class="why">If this line printed "UART0" and you saw it in the Serial Monitor, your cable is connected to a converter chip. If you saw nothing at all, go back to trap number 1.</span></li>
+  <li data-lines="57-59"><b class="what">A limited wait for Serial.</b> While <code>Serial</code> isn't ready and less than 3 seconds have passed, wait 10 ms at a time.
+    <span class="why">On native USB, <code>!Serial</code> means "no computer has opened the port yet". On a plain ESP32 this condition passes almost immediately, so it does no harm. The time limit keeps a device with no computer from getting stuck.</span></li>
+  <li data-lines="61-62"><b class="what">Button and PWM.</b> <code>INPUT_PULLUP</code> for the button and <code>ledcAttach(pin, 5000, 8)</code> for PWM at 5 kHz with 8 bits (0 to 255).
+    <span class="why">LEDC exists on all of these chips, so PWM is the most portable way to get a "pseudo-analog output". This is the core 3.x syntax; on 2.x you had to write <code>ledcSetup</code> and <code>ledcAttachPin</code>.</span></li>
+  <li data-lines="68-71"><b class="what">Shared reading and writing.</b> <code>analogRead</code> is 12-bit on all three chips (0 to 4095). <code>raw &gt;&gt; 4</code> means dividing by 16 to get down to the 0 to 255 range.
+    <span class="why">These lines have no <code>#if</code> at all, because they're the same on every chip. That's the goal: keep most of the code shared and fence off only the differences.</span></li>
+  <li data-lines="73-75"><b class="what">DAC only where it exists.</b> On the ESP32, the voltage on GPIO25 follows the potentiometer from 0 to about 3.3 V.
+    <span class="why">On the C3 and S3 this line isn't compiled at all, so you don't get a "dacWrite was not declared" error either.</span></li>
+  <li data-lines="78-80"><b class="what">Touch only where it exists.</b> On the ESP32 and S3, the touch value is printed.
+    <span class="why"><code>touchRead</code> returns a 16-bit type on the ESP32 and a 32-bit type on the S3. Casting to <code>unsigned long</code> makes a single <code>printf</code> correct for both.</span></li>
+  <li data-lines="81-84"><b class="what">The built-in RGB LED, if there is one.</b> <code>#ifdef RGB_BUILTIN</code> compiles only on boards whose board definition file (variant) declares this LED.
+    <span class="why">Here we used <code>#ifdef</code> (is it defined?) instead of <code>#if</code>, because <code>RGB_BUILTIN</code> is a pin number, not a 0-or-1 flag.</span></li>
+</ol>
+
+<p>Output on an ESP32 DevKitC (your numbers will differ a little):</p>
+<div class="serial">Chip: ESP32-D0WD-V3 rev 301, 2 core(s) @ 240 MHz
+Flash: 4096 KB, PSRAM: 0 KB
+DAC: yes
+Touch: yes
+Bluetooth Classic: yes (BluetoothSerial OK)
+Serial = UART0
+pot=2048  button=up    touch=58
+pot=2051  button=DOWN  touch=12</div>
+<p>And on an ESP32-C3 with CDC On Boot enabled:</p>
+<div class="serial">Chip: ESP32-C3 rev 4, 1 core(s) @ 160 MHz
+Flash: 4096 KB, PSRAM: 0 KB
+DAC: no  -> PWM only
+Touch: no
+Bluetooth Classic: no  -> use BLE
+Serial = native USB (CDC)
+pot=1780  button=up  </div>
+
+<div class="callout info"><div class="ct">We proved it, not just claimed it</div>
+<p>This sketch really was compiled for all three chips with Arduino-ESP32 core version <b>3.3.12</b> and the <code>arduino-cli</code> tool, with CDC On Boot both off and on:</p>
+<div class="code" data-file="compile.sh" data-lang="bash" id="cliCompile"><pre>
+arduino-cli compile -b esp32:esp32:esp32   PortableDemo   # OK, 301871 bytes
+arduino-cli compile -b esp32:esp32:esp32c3 PortableDemo   # OK, 320668 bytes
+arduino-cli compile -b esp32:esp32:esp32s3 PortableDemo   # OK, 334865 bytes
+arduino-cli compile -b esp32:esp32:esp32s3:CDCOnBoot=cdc PortableDemo  # OK
+</pre></div>
+<ol class="walk" data-for="cliCompile">
+  <li data-lines="1-3"><b class="what">One codebase, three FQBNs.</b> <code>esp32:esp32:esp32c3</code> is exactly the same as picking "ESP32C3 Dev Module" in the Board menu.
+    <span class="why">The byte counts differ per chip because the base libraries and the processor instructions (Xtensa or RISC-V) are different; your code is the same.</span></li>
+  <li data-lines="4"><b class="what">A menu option from the command line.</b> <code>:CDCOnBoot=cdc</code> is the same as "USB CDC On Boot: Enabled".
+    <span class="why">This way you can make sure your code compiles for a new chip before you even buy the board. In the Arduino IDE, just switch the Board and press only the Verify (✓) button; no board needed.</span></li>
+</ol></div>
+
+<div class="wokwi" data-board="esp32" data-code-from="portable">
+<p>Try the ESP32 version in Wokwi. Turn the potentiometer and press the button. (Wokwi doesn't simulate touch pins, so the touch number stays constant.) Wokwi also has ESP32-C3 and ESP32-S3 boards; as an exercise, build the project on them and see which parts of the output change.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": -90, "left": -170, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 150, "left": -170, "attrs": { "color": "green" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 130, "left": 190, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 40, "left": 220, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "btn1:1.l", "esp:27", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<!-- ================= 4. NEW PART ================= -->
+<h2 id="newpart">4. Learning any part you've never seen (the core skill)</h2>
+<p>Tomorrow you'll reach for a part that wasn't in this course: a gas sensor, a motor driver, an e-ink display. No lesson is waiting for you. This five-step path always works:</p>
+<pre class="mermaid">flowchart LR
+  A["Step 1: datasheet and module page"] --> B["Step 2: minimal wiring"]
+  B --> C["Step 3: check-up: does the part respond?"]
+  C --> D["Step 4: the library example, unchanged"]
+  D --> E["Step 5: change things, one at a time"]
+</pre>
+
+<h3>Step 1: read the datasheet (without fear)</h3>
+<p>The BME280 datasheet is sixty pages long. You don't need to read all of it. It's like a restaurant menu: you look for a few specific sections. This "guided tour" works for any part; our example is Bosch's <b>BME280</b> temperature, humidity and pressure sensor:</p>
+<div class="table-wrap"><table>
+<tr><th>Where in the datasheet</th><th>What it says (BME280)</th><th>What it means for you</th></tr>
+<tr><td>Electrical specification: Supply voltage</td><td>VDD: 1.71 to 3.6 V</td><td>The bare chip burns out at 5 V. Modules with a regulator also accept 5 V; look for a small three-legged part (the regulator) on the module. With the ESP32, always power it from <b>3V3</b>.</td></tr>
+<tr><td>Interfaces</td><td>I2C (up to 3.4 MHz) and SPI</td><td>With I2C you need only two data wires (SDA and SCL). SPI is faster but needs four wires.</td></tr>
+<tr><td>I2C address</td><td><code>0x76</code> if the SDO pin goes to GND, <code>0x77</code> if it goes to VDDIO</td><td>If the library says "sensor not found", check the address first. With two sensors on one bus, set one to 0x76 and the other to 0x77.</td></tr>
+<tr><td>Register map: chip_id (0xD0)</td><td>Value <code>0x60</code></td><td>A way to find out whether the part <b>really</b> is a BME280. A BMP280 (no humidity, and cheaper) returns <code>0x58</code>; lots of modules sold as "BME280" are actually BMP280s.</td></tr>
+<tr><td>Current consumption</td><td>About 3.6 µA at one measurement per second; about 0.1 µA in sleep</td><td>Excellent for a battery-powered project. But note: the red LED and the regulator on the module draw far more than the chip itself.</td></tr>
+<tr><td>Operating range / Accuracy</td><td>Temperature ±1 degree, humidity ±3%, pressure ±1 hPa</td><td>If your number is 2 degrees off from your home thermometer, blame the ESP32's own heat first (lesson 6.3), then the sensor.</td></tr>
+<tr><td>Timing / Measurement time</td><td>A measurement takes a few milliseconds</td><td>After "start measurement" you have to wait a little. The library handles this for you; if you write low-level code yourself, this number matters.</td></tr>
+</table></div>
+<p>For a sensor like the DHT22 you ask the same questions: voltage (3.3 to 6 V), interface (one wire with a special protocol), timing (at least 2 seconds between two measurements), and the pull-up resistor (usually 10 kΩ; usually already on 3-pin modules). You saw these in lesson <a href="3-3.html">3.3</a>.</p>
+<div class="callout tip"><div class="ct">Chip datasheet versus module page</div>
+<p>The datasheet is for the small <b>chip</b> in the middle of the module. But what you buy is the <b>module</b>, which has a regulator, pull-up resistors and an LED. So always look at two documents: the chip's datasheet (for registers and limits) and the module's page or schematic on its maker's website (Adafruit, SparkFun, Waveshare...) to find out what was added on the board.</p></div>
+
+<h3>Steps 2 and 3: minimal wiring and a "check-up"</h3>
+<p>Only four wires: power, ground and two data wires. Before installing any library, prove with a small sketch that the part is alive and is what you think it is. You can use this template for any I2C part; just change the addresses, the ID register and the expected value from the datasheet.</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"BME","name":"BME280 or BMP280 module","img":"bme280.svg","pins":[["VCC","3.3 V power"],["GND","ground"],["SCL","I2C clock"],["SDA","I2C data"]]}
+  ],
+  "wires":[["3V3","BME.VCC","red"],["GND","BME.GND","black"],["GPIO22","BME.SCL","green"],["GPIO21","BME.SDA","yellow"]]
+}</script><figcaption>Minimal wiring for an I2C part: just four wires. On 6-pin modules, leave CSB and SDO unconnected (or tie SDO to GND for address 0x76).</figcaption></div>
+
+<div class="code" data-file="PartBringUp.ino" id="bringup"><pre>
+// PartBringUp.ino — bring-up template for any new I2C part (example: BME280)
+#include &lt;Wire.h&gt;
+
+const int SDA_PIN = 21;          // ESP32 DevKitC; change on S3/C3
+const int SCL_PIN = 22;
+const uint8_t ID_REG      = 0xD0;  // from the datasheet: chip ID register
+const uint8_t EXPECTED_ID = 0x60;  // BME280 = 0x60 , BMP280 = 0x58
+
+uint8_t partAddr = 0;            // the address the scanner finds
+
+// Step 1: search the whole bus
+int scanBus() {
+  int found = 0;
+  for (uint8_t a = 1; a &lt; 127; a++) {
+    Wire.beginTransmission(a);
+    if (Wire.endTransmission() == 0) {
+      Serial.printf("  device at 0x%02X\n", a);
+      if (a == 0x76 || a == 0x77) partAddr = a;   // possible BME280 addresses
+      found++;
+    }
+  }
+  return found;
+}
+
+// Step 2: read one byte from a register
+bool readReg(uint8_t addr, uint8_t reg, uint8_t &amp;val) {
+  Wire.beginTransmission(addr);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) return false;   // false = Repeated Start
+  if (Wire.requestFrom(addr, (uint8_t)1) != 1) return false;
+  val = Wire.read();
+  return true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1500);
+  Wire.begin(SDA_PIN, SCL_PIN);
+  Serial.println("\n[1] I2C scan:");
+  if (scanBus() == 0) {
+    Serial.println("  nothing found -&gt; check VCC, GND, SDA/SCL swap, pull-ups");
+    return;
+  }
+  if (partAddr == 0) { Serial.println("  part not at 0x76/0x77"); return; }
+
+  uint8_t id;
+  Serial.printf("[2] Reading ID register 0x%02X at 0x%02X...\n", ID_REG, partAddr);
+  if (!readReg(partAddr, ID_REG, id)) { Serial.println("  read failed"); return; }
+  Serial.printf("  ID = 0x%02X (expected 0x%02X) -&gt; %s\n", id, EXPECTED_ID,
+                id == EXPECTED_ID ? "OK, this is the right chip" : "DIFFERENT chip!");
+  Serial.println("[3] Now install the library and run its example.");
+}
+
+void loop() {
+  // empty on purpose: this program does a one-time "check-up"
+}
+</pre></div>
+<ol class="walk" data-for="bringup">
+  <li data-lines="4-7"><b class="what">Everything from the datasheet at the top of the program.</b> The pins, the ID register address and the value you expect.
+    <span class="why">For the next part (say, a BH1750 light sensor or an MPU6050 accelerometer) you only change these four lines. A good template keeps everything that varies in one place.</span></li>
+  <li data-lines="12-23"><b class="what">The I2C scanner.</b> It says "hello" to every address from 1 to 126. If a part answers (ACK), <code>endTransmission()</code> returns zero and the address is printed.
+    <span class="why">This separates the question "are the wiring and power right?" from "is the library right?". If the scanner finds nothing, no library can help you; it's a hardware problem.</span></li>
+  <li data-lines="26-33"><b class="what">Reading a register.</b> First it writes the register number, then, without releasing the bus (<code>endTransmission(false)</code> means a Repeated Start), it requests one byte.
+    <span class="why">Almost every I2C part in the world uses this same "write the register number, then read" pattern. Once you understand this function, you can test any datasheet directly.</span></li>
+  <li data-lines="38"><b class="what">Wire.begin with explicit pins.</b> <code>Wire.begin(SDA_PIN, SCL_PIN)</code>.
+    <span class="why">The default I2C pins differ on each chip (ESP32: 21 and 22; S3 and C3: 8 and 9). Writing the pins out means that when you switch boards, you only change lines 4 and 5.</span></li>
+  <li data-lines="40-44"><b class="what">Fail early, with a clear message.</b> If nothing is found, it tells you exactly what to check, and stops.
+    <span class="why">A bare "nothing found" message is useless; "check VCC, GND, an SDA/SCL swap, pull-ups" is a checklist. Give your future self a checklist, not a riddle.</span></li>
+  <li data-lines="46-51"><b class="what">Comparing the ID with the datasheet.</b> 0x60 means you have a genuine BME280; 0x58 means you bought a BMP280 (no humidity).
+    <span class="why">These two lines save dozens of hours of confusion: "Why does the library give NaN for humidity?" Answer: because your sensor has no humidity sensor at all.</span></li>
+  <li data-lines="54-56"><b class="what">An empty loop.</b> This program does its check-up just once.
+    <span class="why">To run the check-up again, press the EN (reset) button. Keeping a test sketch simple means that if something fails, you know it's the part and not complicated program logic.</span></li>
+</ol>
+<div class="serial">[1] I2C scan:
+  device at 0x76
+[2] Reading ID register 0xD0 at 0x76...
+  ID = 0x58 (expected 0x60) -> DIFFERENT chip!
+[3] Now install the library and run its example.</div>
+<p>In the output above, the seller sent a BMP280 instead of a BME280. Now you know you need to install a BMP280 library, and you won't get humidity.</p>
+
+<h3>Step 4: find and evaluate a library</h3>
+<ol class="steps">
+  <li><b>Search in the Library Manager.</b> In the Arduino IDE, open the library (books) icon in the sidebar (<code>Sketch › Include Library › Manage Libraries...</code>) and type the chip's name, for example <code>BME280</code>. For this part, <b>Adafruit BME280 Library by Adafruit</b> is a good choice. During installation it asks whether to also install the dependencies (Adafruit Unified Sensor and Adafruit BusIO); click <b>Install All</b>.</li>
+  <li><b>Look at its GitHub repository.</b> Follow the "More info" link to GitHub and check four things: the date of the last commit (less than a year or two ago?), the number of stars, the open issues (has anyone said it doesn't work on the ESP32?) and the <code>examples</code> folder.</li>
+  <li><b>When choosing between several libraries, prefer:</b> the module maker's library (Adafruit, SparkFun, DFRobot), or a library recommended in the chip's official documentation, or a library that explicitly supports the ESP32.</li>
+</ol>
+<div class="callout warn"><div class="ct">Signs of a risky library</div>
+<p>The last change was 6 years ago; it uses removed functions like <code>ledcSetup</code> (which no longer exists in core 3.x); unanswered issues titled "does not compile on ESP32"; no examples folder. These mean you should either look for another library or be ready to fix it yourself.</p></div>
+
+<h3>Step 5: run the library example unchanged first, then change things "one at a time"</h3>
+<p>At the bottom of the <code>File › Examples</code> list, find the library's name (for example <code>Adafruit BME280 Library › bme280test</code>). Change only the pins or the address if needed, and run it. If the example works, you now have a "safe point". From here on, follow <b>the one-change rule</b>:</p>
+<div class="callout analogy"><div class="ct">The one-change rule, like cooking a new recipe</div>
+<p>If you change the salt, the cooking time and the type of oil all at once and the food turns out badly, you don't know which one was to blame. If you change only one thing each time and taste, you always know. In code: one change, compile, upload, test. If it breaks, undo just that last change.</p></div>
+
+<h3>When you're stuck: ask the right way</h3>
+<p>On forums (esp32.com, Reddit, the Arduino Forum) or with an AI (lesson <a href="6-2.html">6.2</a>), the quality of the answer depends exactly on the quality of the question. Fill in this template:</p>
+<div class="code" data-file="question-template.txt" data-lang="text" id="askTpl"><pre>
+Board: ESP32-C3 SuperMini (Board in the IDE: Nologo ESP32C3 Super Mini)
+Core: arduino-esp32 3.3.x , Arduino IDE 2.3.x , OS: Windows 11
+Part: 6-pin BME280 module (shop link or photo)
+Wiring: VCC→3V3 , GND→GND , SDA→GPIO8 , SCL→GPIO9
+Goal: read the temperature every 2 seconds
+Observed behavior: begin() returns false
+I2C scanner output: "device at 0x76"
+What I tried: addresses 0x77 and 0x76 , another cable, a second board
+Code: (the shortest complete code that shows the problem)
+</pre></div>
+<ol class="walk" data-for="askTpl">
+  <li data-lines="1-3"><b class="what">The exact environment.</b> Board model, core version and IDE version.
+    <span class="why">Half the wrong answers on the internet are for core version 2.x. When you state the version, whoever answers (human or AI) gives you the right code.</span></li>
+  <li data-lines="4"><b class="what">The wiring as text.</b> Not "I wired it like in the photo".
+    <span class="why">Most problems are found on this very line; sometimes you spot the mistake yourself while writing it.</span></li>
+  <li data-lines="6-8"><b class="what">Observations, evidence and what you've already tried.</b>
+    <span class="why">It shows you've made an effort, and the person answering won't waste time suggesting things you've already tried.</span></li>
+  <li data-lines="9"><b class="what">Minimal code.</b> The shortest complete program that shows the problem, not a thousand-line project.
+    <span class="why">In 50% of cases, building this short code finds the problem by itself. That's a debugging technique in its own right.</span></li>
+</ol>
+
+<!-- ================= 5. DEBUG ================= -->
+<h2 id="debugging">5. The troubleshooting handbook</h2>
+<p>Troubleshooting isn't guessing. It's a process: <b>look at the symptom → list the likely causes → rule one in or out with a simple test</b>. This map covers the most common symptoms:</p>
+<pre class="mermaid">flowchart TD
+  S{"What's the symptom?"} --> U["Won't upload"]
+  S --> R["Keeps resetting"]
+  S --> B["Works on the cable,<br/>not on the battery"]
+  S --> N["Sensor gives wrong numbers<br/>(NaN, zero, 4095)"]
+  S --> I["I2C device not found"]
+  S --> W["Unstable Wi-Fi"]
+  U --> U1["Data cable and correct port<br/>BOOT and RST method<br/>nothing on a strapping pin"]
+  R --> R1{"What did Serial print?"}
+  R1 -- "Guru Meditation" --> R2["Read the Backtrace with<br/>the Exception Decoder"]
+  R1 -- "Brownout detector" --> R3["Weak power supply<br/>cable, supply, capacitor"]
+  R1 -- "task_wdt" --> R4["A long loop with no pause<br/>or an endless wait"]
+  B --> B1["Measure the voltage under load<br/>regulator dropout"]
+  N --> N1["Pin on ADC1<br/>sensor power<br/>pull-up resistor and floating pin"]
+  I --> I1["Run the I2C scanner<br/>SDA and SCL swapped<br/>address and voltage"]
+  W --> W1["Signal strength (RSSI)<br/>2.4GHz band only<br/>power supply and reconnecting"]
+</pre>
+
+<h3>Endless resets: read the reset reason first</h3>
+<p>Every time the ESP32 resets, it stores the reason in a register. This "black box" is like an airplane's: after a crash, the first job is to read it. This sketch prints the reset reason, shows the different log levels, and lets you trigger a crash on purpose so you can practice reading a Guru Meditation.</p>
+
+<div class="code" data-file="DebugStart.ino" id="debugSk"><pre>
+// DebugStart.ino — reset reason + leveled logging + a deliberate crash for practice
+#include &lt;Arduino.h&gt;
+#include "esp_system.h"
+
+RTC_NOINIT_ATTR uint32_t crashCount;   // not cleared by a software reset
+
+const char *resetReasonText(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON:   return "POWERON  (power was applied)";
+    case ESP_RST_EXT:       return "EXT      (external reset pin)";
+    case ESP_RST_SW:        return "SW       (ESP.restart() was called)";
+    case ESP_RST_PANIC:     return "PANIC    (crash / Guru Meditation)";
+    case ESP_RST_INT_WDT:   return "INT_WDT  (interrupt watchdog)";
+    case ESP_RST_TASK_WDT:  return "TASK_WDT (a task blocked too long)";
+    case ESP_RST_WDT:       return "WDT      (other watchdog)";
+    case ESP_RST_DEEPSLEEP: return "DEEPSLEEP (woke up from deep sleep)";
+    case ESP_RST_BROWNOUT:  return "BROWNOUT (supply voltage dropped!)";
+    default:                return "OTHER/UNKNOWN";
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1500);                          // time for the Serial Monitor to open
+  Serial.setDebugOutput(true);          // send log_x messages to this Serial too
+
+  esp_reset_reason_t why = esp_reset_reason();
+  if (why == ESP_RST_POWERON) crashCount = 0;   // after a power cut its value is random
+  if (why == ESP_RST_PANIC || why == ESP_RST_TASK_WDT ||
+      why == ESP_RST_INT_WDT || why == ESP_RST_BROWNOUT) crashCount++;
+
+  Serial.printf("\n=== Boot. Reset reason: %s\n", resetReasonText(why));
+  Serial.printf("=== Abnormal resets since power-on: %lu\n", (unsigned long)crashCount);
+  Serial.printf("=== Chip: %s, free heap: %lu bytes\n",
+                ESP.getChipModel(), (unsigned long)ESP.getFreeHeap());
+
+  log_e("ERROR level: shown if Core Debug Level &gt;= Error");
+  log_w("WARN  level: shown if Core Debug Level &gt;= Warn");
+  log_i("INFO  level: shown if Core Debug Level &gt;= Info");
+  log_d("DEBUG level: shown if Core Debug Level &gt;= Debug");
+  log_v("VERBOSE level: shown only at Verbose");
+
+  Serial.println("Send 'c' = crash, 'r' = restart, 'h' = heap");
+}
+
+void loop() {
+  static unsigned long last = 0;
+  if (millis() - last &gt;= 5000) {        // a "heartbeat" every 5 seconds
+    last = millis();
+    uint32_t heap = ESP.getFreeHeap();
+    log_i("alive, uptime=%lus heap=%lu", millis() / 1000, (unsigned long)heap);
+    if (heap &lt; 20000) log_w("heap is getting low!");
+  }
+
+  if (Serial.available()) {
+    char cmd = Serial.read();
+    if (cmd == 'c') {
+      Serial.println("Crashing on purpose (null pointer write)...");
+      Serial.flush();
+      volatile int *p = nullptr;
+      *p = 42;                          // write to address zero → Guru Meditation
+    } else if (cmd == 'r') {
+      ESP.restart();
+    } else if (cmd == 'h') {
+      Serial.printf("heap now=%lu, lowest ever=%lu\n",
+                    (unsigned long)ESP.getFreeHeap(),
+                    (unsigned long)ESP.getMinFreeHeap());
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="debugSk">
+  <li data-lines="5"><b class="what">A variable that survives a software reset.</b> <code>RTC_NOINIT_ATTR</code> puts the variable in RTC memory and doesn't zero it at boot.
+    <span class="why">An ordinary variable is zeroed on every reset, so you couldn't count crashes with it. This variable keeps its value after a crash or <code>ESP.restart()</code>; only after a power cut does it hold a random value, which is why we zero it on line 28.</span></li>
+  <li data-lines="7-20"><b class="what">Turning the reset code into text.</b> <code>esp_reset_reason()</code> returns one of the <code>ESP_RST_...</code> values.
+    <span class="why">The most important ones: <code>PANIC</code> means the program crashed; <code>BROWNOUT</code> means the voltage dropped (a hardware problem!); <code>TASK_WDT</code> means a job took too long; <code>POWERON</code> means power was just connected. That single word settles half of the troubleshooting.</span></li>
+  <li data-lines="23-25"><b class="what">Serial and setDebugOutput.</b> <code>Serial.setDebugOutput(true)</code> also sends the internal logs and <code>log_x</code> messages to this same Serial.
+    <span class="why">On a plain ESP32 the logs go to UART0 anyway. On a C3 or S3 with CDC On Boot enabled, without this line the logs may go to UART0 and you won't see them in the Serial Monitor.</span></li>
+  <li data-lines="27-30"><b class="what">Counting abnormal resets.</b> Zero after power-up, and one more with every crash, watchdog or brownout.
+    <span class="why">This number gives away a wall-mounted device that "sometimes" resets. You can also send it over MQTT (lesson 5.1) to see it remotely.</span></li>
+  <li data-lines="37-41"><b class="what">Five log levels.</b> <code>log_e</code> (error), <code>log_w</code> (warning), <code>log_i</code> (info), <code>log_d</code> (debug) and <code>log_v</code> (verbose).
+    <span class="why">These are printed only if <code>Tools › Core Debug Level</code> is set to that level or higher. The default is None, so none of them print. The big advantage: in the final version you set the level to None and these lines <b>aren't compiled at all</b>; they take neither space nor time. You can't do that with <code>Serial.println</code>. Each log line also shows the file name, line number and function name.</span></li>
+  <li data-lines="47-53"><b class="what">The heartbeat.</b> Every 5 seconds it logs the uptime and the free memory (heap), without delay.
+    <span class="why">If the heap slowly shrinks, you have a "memory leak" (for example a big String that keeps getting built). A device that crashes after 3 days usually has exactly this problem.</span></li>
+  <li data-lines="57-61"><b class="what">A deliberate crash.</b> Sending the letter <code>c</code> from the Serial Monitor makes it write to address zero (a null pointer).
+    <span class="why">The best time to learn to read a Guru Meditation is when you already know the cause. <code>volatile</code> stops the compiler from removing this "silly" line. <code>Serial.flush()</code> makes sure the message is fully sent before the crash.</span></li>
+  <li data-lines="62-67"><b class="what">Software reset and memory report.</b> <code>r</code> does a clean reset (the reset reason is then <code>SW</code>); <code>h</code> shows the current free memory and the lowest free memory ever.
+    <span class="why"><code>getMinFreeHeap()</code> shows the worst moment; if it has dropped to a few kilobytes, your device is on the edge of a cliff, even if it looks fine right now.</span></li>
+</ol>
+
+<p>After sending <code>c</code> on a plain ESP32 you'll see something like this (with Core Debug Level set to Info):</p>
+<div class="serial">Crashing on purpose (null pointer write)...
+Guru Meditation Error: Core  1 panic'ed (StoreProhibited). Exception was unhandled.
+
+Core  1 register dump:
+PC      : 0x400d1f2e  PS      : 0x00060830  A0      : 0x800d4b10  A1      : 0x3ffb2260
+...
+EXCVADDR: 0x00000000  LBEG    : 0x4008a5e1  LEND    : 0x4008a5f1  LCOUNT  : 0x00000000
+
+Backtrace: 0x400d1f2b:0x3ffb2260 0x400d4b0d:0x3ffb2290 0x4008d1e2:0x3ffb22b0
+
+Rebooting...
+...
+=== Boot. Reset reason: PANIC    (crash / Guru Meditation)
+=== Abnormal resets since power-on: 1</div>
+<p>Here's how to read this text:</p>
+<ul>
+  <li><b>Guru Meditation Error</b>: Espressif's playful name for "the program crashed" (borrowed from the error message of old Amiga computers).</li>
+  <li><b>StoreProhibited</b>: the type of error. It means "writing to an address you're not allowed to write to". <code>EXCVADDR: 0x00000000</code> says that address was zero: a null pointer. <code>LoadProhibited</code> means reading from a forbidden address. On RISC-V chips (C3, C6, H2) the names are different: <code>Store access fault</code> and <code>Load access fault</code>.</li>
+  <li><b>Backtrace</b>: the list of addresses of the functions that had been called, in order; like footprints in the snow. These addresses mean nothing to a human, so they have to be "translated".</li>
+</ul>
+
+<h3>Translating the Backtrace with ESP Exception Decoder</h3>
+<p>Arduino IDE 1.x had a tool called EspExceptionDecoder. For <b>Arduino IDE 2.x</b> its replacement is the <a href="https://github.com/dankeboy36/esp-exception-decoder" target="_blank" rel="noopener">esp-exception-decoder extension by dankeboy36</a>:</p>
+<ol class="steps">
+  <li><b>Download.</b> From that GitHub repository's Releases page, get the latest <code>.vsix</code> file from the <b>1.x line</b>. According to the project's own README, the 2.x versions are built for VS Code and won't run in the Arduino IDE (they may even stop the IDE from starting).</li>
+  <li><b>Install.</b> Put the file in the <code>plugins</code> folder inside the <code>.arduinoIDE</code> folder in your user folder (Windows: <code>C:\Users\username\.arduinoIDE\plugins</code>; Linux and macOS: <code>~/.arduinoIDE/plugins</code>). If the folder doesn't exist, create it. Close the IDE completely and reopen it.</li>
+  <li><b>Use it.</b> Keep the sketch that crashed open, with the same board selected (the decoder needs this sketch's compiled file). Press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>, run <code>ESP Exception Decoder: Show Decoder Terminal</code>, and paste the crash text from the Serial Monitor into it.</li>
+  <li><b>The result.</b> Instead of addresses, you see function names and line numbers, for example <code>loop() at DebugStart.ino:61</code>. That's exactly our crash line.</li>
+</ol>
+<div class="callout warn"><div class="ct">Check the tool version</div>
+<p>This extension is a community project, not an official Arduino or Espressif product, and the way to install it may change in the future. Always read that repository's README for your IDE version. On RISC-V chips, the crash output has a long "Stack memory" dump instead of a simple one-line Backtrace; copy all of it.</p></div>
+
+<h3>Brownout, and "works on USB but not on the battery"</h3>
+<p>The message <code>Brownout detector was triggered</code> means the chip's supply voltage briefly dropped below the allowed limit and the ESP32 reset itself for protection. It almost always happens when Wi-Fi turns on, because at that moment the current suddenly jumps to about 250 mA.</p>
+<ul>
+  <li><b>A long, thin USB cable</b>: the resistance of the wires drops the voltage under load. Try a short, thick cable.</li>
+  <li><b>A weak USB port, or a hub without its own power adapter</b>.</li>
+  <li><b>A battery with an unsuitable regulator</b>: the AMS1117 regulator found on many boards drops about 1 volt. A 3.7 V lithium cell that has fallen to 3.6 V gives only about 2.6 V after the regulator: less than needed. (Lessons <a href="6-1.html">6.1</a> and <a href="1-4.html">1.4</a>)</li>
+  <li><b>A temporary helper fix</b>: a 100 to 470 µF electrolytic capacitor between 3V3 and GND, close to the board, smooths out short spikes.</li>
+</ul>
+<div class="callout warn"><div class="ct">Don't turn off the brownout detector</div>
+<p>Online you'll find code that disables the brownout detector by writing to a register. That's like pulling the battery out of a smoke alarm because it keeps going off. A chip running on too little voltage can behave strangely or even write garbage to the flash. Fix the power problem, not the message.</p></div>
+
+<h3>Measuring tools</h3>
+<p><b>Multimeter</b> (lesson <a href="1-4.html">1.4</a>): three measurements that find 80% of hardware problems: (1) the 3V3 voltage relative to GND <b>while Wi-Fi is on</b> (it should stay above 3.1 V); (2) the voltage on the sensor's power pin, <b>measured at the sensor itself</b>, not at the board; (3) continuity (the beep) of every suspicious wire.</p>
+<p><b>Logic analyzer</b>: when the question is "is anything going over the I2C, SPI or UART wire at all?", a multimeter can't help, because the signal changes millions of times a second. A cheap "24MHz 8-channel" logic analyzer (clones based on the CY7C68013A chip) together with the free <a href="https://sigrok.org/wiki/PulseView" target="_blank" rel="noopener">PulseView</a> software records the signals and even decodes the protocol: "the ESP32 wrote to address 0x76, the sensor didn't ACK". The sampling rule: at least 4 times the signal speed; for I2C at 400 kHz, that means sampling at 2 to 4 MHz or more. This tool's inputs are for 3.3 V and 5 V logic levels; never connect it to a higher voltage, and always connect its GND to the circuit's GND.</p>
+<div class="callout analogy"><div class="ct">Multimeter versus logic analyzer</div>
+<p>A multimeter is like taking a photo of a street: it tells you what's happening "right now". A logic analyzer is like a slow-motion video camera: it records every car that passes, with its exact time. For the high-speed traffic of protocols, you need the video.</p></div>
+
+<!-- ================= 6. PROJECTS ================= -->
+<h2 id="ladder">6. The project ladder: 12 rungs from easy to hard</h2>
+<p>Each rung teaches you something new and builds on the rungs below it. The "new for you" column honestly says what was <b>not</b> in this course and what you'll need to learn yourself with the method from section 4.</p>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Project</th><th>Difficulty</th><th>Suggested chip</th><th>Foundation lessons</th><th>New for you</th></tr>
+<tr><td>1</td><td><b>Automatic plant watering</b>: a capacitive soil moisture sensor + a small pump driven by a MOSFET</td><td>⭐</td><td>ESP32 or C3</td><td><a href="3-1.html">3.1</a>, <a href="3-4.html">3.4</a>, <a href="6-1.html">6.1</a></td><td>Calibrating the sensor (dry and wet soil readings), the pump's flyback diode</td></tr>
+<tr><td>2</td><td><b>Presence detection with BLE</b>: a light turns on when your phone or fitness band arrives home</td><td>⭐⭐</td><td>C3 or ESP32</td><td><a href="4-3.html">4.3</a></td><td>BLE scanning, unstable RSSI and averaging, the random addresses of newer phones</td></tr>
+<tr><td>3</td><td><b>Multi-room sensors with ESP-NOW</b>: several battery-powered C3 nodes and one central receiver</td><td>⭐⭐</td><td>C3 for the nodes, ESP32 for the hub</td><td><a href="5-2.html">5.2</a>, <a href="6-1.html">6.1</a>, <a href="5-1.html">5.1</a></td><td>Designing the message structure, sharing the Wi-Fi channel when the hub is also connected to the router</td></tr>
+<tr><td>4</td><td><b>An e-paper weather display</b> that wakes up a few times a day</td><td>⭐⭐</td><td>ESP32 or C3</td><td><a href="4-1.html">4.1</a>, <a href="5-4.html">5.4</a>, <a href="6-1.html">6.1</a></td><td>An SPI e-paper display (the GxEPD2 library), a weather API and JSON</td></tr>
+<tr><td>5</td><td><b>A smart doorbell</b>: pressing the button takes a photo and sends a notification to your phone (for example with the ntfy service)</td><td>⭐⭐⭐</td><td>ESP32-CAM or an S3 with a camera</td><td><a href="5-3.html">5.3</a>, <a href="5-4.html">5.4</a></td><td>Sending a file with HTTP POST, managing photo memory, a stable power supply for the camera</td></tr>
+<tr><td>6</td><td><b>A USB macro keyboard</b>: a few buttons that send keyboard shortcuts to the computer</td><td>⭐⭐</td><td><b>S3</b> (or S2)</td><td><a href="3-1.html">3.1</a></td><td>USB HID; you must select <code>USB Mode: USB-OTG (TinyUSB)</code> in the menu. Examples: <code>File › Examples › USB</code></td></tr>
+<tr><td>7</td><td><b>A touch dashboard with LVGL</b> on the cheap ESP32-2432S028R board (the "Cheap Yellow Display": a 2.8-inch screen)</td><td>⭐⭐⭐</td><td>ESP32 (on the board itself)</td><td><a href="3-3.html">3.3</a>, <a href="5-1.html">5.1</a></td><td>The LVGL graphics library, display and touch drivers, setting up the library's configuration file</td></tr>
+<tr><td>8</td><td><b>An internet radio with I2S</b>: playing a stream through a MAX98357A amplifier</td><td>⭐⭐⭐</td><td>An ESP32 with PSRAM, or an S3</td><td><a href="4-1.html">4.1</a>, <a href="5-4.html">5.4</a></td><td>The I2S audio protocol, buffering and PSRAM, MP3/AAC playback libraries</td></tr>
+<tr><td>9</td><td><b>Long-range communication with LoRa</b> (SX1276 or SX1262 modules): a farm sensor several kilometers away</td><td>⭐⭐⭐</td><td>ESP32 or S3 (ready-made LoRa boards exist too)</td><td><a href="3-3.html">3.3</a> (SPI), <a href="6-1.html">6.1</a></td><td>The RadioLib library, antennas, the frequency band allowed in your country (be sure to check before buying)</td></tr>
+<tr><td>10</td><td><b>A Zigbee or Thread sensor</b> for the smart home (for example Home Assistant)</td><td>⭐⭐⭐⭐</td><td><b>C6</b> or <b>H2</b></td><td><a href="6-1.html">6.1</a></td><td>The core 3.x Zigbee library (<code>File › Examples › Zigbee</code>), the Zigbee Mode and Partition Scheme menu options, the need for a coordinator or a border router</td></tr>
+<tr><td>11</td><td><b>A small plotter or CNC</b> with stepper motors</td><td>⭐⭐⭐⭐</td><td>ESP32</td><td><a href="3-4.html">3.4</a>, <a href="5-4.html">5.4</a></td><td>A4988/TMC drivers, mechanics and calibration, G-code and ready-made firmware such as FluidNC</td></tr>
+<tr><td>12</td><td><b>Offline voice commands</b>: "turn on the light" with no internet</td><td>⭐⭐⭐⭐⭐</td><td><b>S3</b> with PSRAM and 16 MB of flash</td><td><a href="5-4.html">5.4</a></td><td>The ESP_SR library (Espressif's ESP-SR engine; <code>File › Examples › ESP_SR</code>), an I2S microphone, a special partition for the speech model. The commands are usually in English or Chinese.</td></tr>
+</table></div>
+<div class="callout coach"><div class="ct">A word from your coach about choosing a project</div>
+<p>Don't start at rung 5 or 12 because it's "cooler". Pick a project with <b>one</b> new thing in it, not five. One project you finish teaches you more than ten half-finished ones. And take every project all the way to an enclosure and real use; the real lessons (power, moisture, a reset after a week) are there.</p></div>
+
+<!-- ================= 7. NEXT ================= -->
+<h2 id="next">7. Where to go after this course?</h2>
+<h3>Arduino, PlatformIO or ESP-IDF?</h3>
+<div class="table-wrap"><table>
+<tr><th></th><th>Arduino IDE (this course)</th><th>PlatformIO (a VS Code extension)</th><th>ESP-IDF (Espressif's official framework)</th></tr>
+<tr><td>Who it's for</td><td>Getting started, small and medium projects</td><td>Bigger projects with the same Arduino code</td><td>Professional products, full control</td></tr>
+<tr><td>Strengths</td><td>Simple, lots of examples</td><td>A powerful editor, library versions pinned in the <code>platformio.ini</code> file, several environments for several boards</td><td>Every feature of the chip, advanced power management, security (Secure Boot, flash encryption), the <code>idf.py</code> and <code>menuconfig</code> tools</td></tr>
+<tr><td>Weaknesses</td><td>A basic editor, weak version management</td><td>Its official platform lagged behind core 3.x for a while; many people use the community-maintained project called pioarduino</td><td>A steeper learning curve; it doesn't accept Arduino code directly (unless you use Arduino as a component)</td></tr>
+</table></div>
+<p>The suggested path: build a few more projects with Arduino, then open your next project in PlatformIO. When you hit a limit Arduino can't solve (for example very precise power consumption, or product security), it's time for ESP-IDF. Nothing you've learned goes to waste: the Arduino core is itself built on ESP-IDF, and FreeRTOS, Wi-Fi and the drivers are all the same.</p>
+
+<h3>Official and community resources</h3>
+<ul>
+  <li><a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/" target="_blank" rel="noopener">The official Arduino-ESP32 documentation</a>: the core 3.x API reference and the migration guide from 2.x.</li>
+  <li><a href="https://docs.espressif.com/projects/esp-idf/en/stable/" target="_blank" rel="noopener">The ESP-IDF Programming Guide</a>: pick your chip at the top of the page; the GPIO and Peripherals sections are separate for each chip.</li>
+  <li><a href="https://github.com/espressif/arduino-esp32" target="_blank" rel="noopener">The arduino-esp32 repository on GitHub</a>: the <code>libraries/*/examples</code> folder is a treasure trove of official examples; search the issues before reporting a bug.</li>
+  <li><a href="https://www.esp32.com/" target="_blank" rel="noopener">The official esp32.com forum</a> and <a href="https://www.reddit.com/r/esp32/" target="_blank" rel="noopener">r/esp32 on Reddit</a>: ask using the question template from section 4.</li>
+  <li><a href="https://products.espressif.com/" target="_blank" rel="noopener">Espressif Product Selector</a>: the official comparison of chips and modules.</li>
+  <li>PCB design: the <a href="../../kicad-9-tutorial/">KiCad 9 tutorial</a> on this site (in Persian).</li>
+</ul>
+
+<h2 id="video">Helpful video</h2>
+<div class="video" data-yt="CfIjInYch7U" data-title="ESP32 Guide 2026" data-channel="DroneBot Workshop" data-lang="English">
+  <div class="sum"><ul>
+    <li>This video is a guide to choosing between about eleven chips in the ESP32 family. Watch it alongside the table in section 2, and whenever it quotes a number, compare it with the table.</li>
+    <li>Notice which "main use" it suggests for each chip, and compare that with this lesson's decision tree. Where do we agree, and where do we differ?</li>
+    <li>Note down chips like the C5 and H4 that aren't covered in this lesson; with the method from section 4 (datasheet first) you can research them yourself.</li>
+  </ul></div>
+</div>
+
+<h2 id="debug">When it doesn't work: troubleshooting</h2>
+<div class="table-wrap"><table>
+<tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+<tr><td>On a C3 or S3 the upload succeeds but the Serial Monitor is empty</td><td>USB CDC On Boot is off and the cable is connected to the native USB</td><td>Set <code>Tools › USB CDC On Boot › Enabled</code> and upload again. Or plug the cable into the board's "UART" connector (if it has one).</td></tr>
+<tr><td>The S3 or C3 board's port disappeared after uploading</td><td>The program crashed, went to sleep, or took over the USB pins</td><td>Hold BOOT, press RST, release BOOT; select the new port and upload a simple program.</td></tr>
+<tr><td><code>'dacWrite' was not declared in this scope</code></td><td>The selected chip has no DAC</td><td>Move the code inside <code>#if SOC_DAC_SUPPORTED</code> and add a PWM or external DAC alternative.</td></tr>
+<tr><td><code>BluetoothSerial.h</code> gives a compile error on the S3/C3/C6</td><td>These chips don't have Bluetooth Classic</td><td>Migrate to BLE (lesson 4.3).</td></tr>
+<tr><td>On a C3, the board doesn't run its program at power-up and stays in download mode</td><td>Something is holding GPIO9 (or GPIO8) LOW at boot</td><td>Move that part to another pin; see the strapping table in section 3.</td></tr>
+<tr><td>The RGB LED on the S3-DevKitC-1 won't light with <code>RGB_BUILTIN</code></td><td>The board is revision v1.1 (LED on GPIO38)</td><td>Try <code>rgbLedWrite(38, 0, 40, 0)</code>.</td></tr>
+<tr><td>With a BME280, humidity is always NaN or 0</td><td>The module is actually a BMP280</td><td>Read the ID register 0xD0 with the check-up sketch: 0x58 means BMP280.</td></tr>
+<tr><td>No <code>log_i</code> messages are printed</td><td>Core Debug Level is set to None, or on native USB the logs go to UART0</td><td>Set the level to Info and add <code>Serial.setDebugOutput(true)</code> after <code>Serial.begin</code>.</td></tr>
+<tr><td>Periodic resets with the message <code>Brownout detector was triggered</code></td><td>The voltage sags when Wi-Fi turns on</td><td>A short, thick cable, a stronger supply, a 100 to 470 µF capacitor. Don't disable the detector.</td></tr>
+<tr><td>The Exception Decoder shows only addresses, or won't open at all</td><td>The selected sketch or board doesn't match the program that crashed, or version 2.x of the extension is installed</td><td>Select the same sketch and the same board and press Verify once; install the 1.x extension.</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">A word from your coach: the last words</div>
+<p>From this moment on, nobody is standing next to your desk telling you which pin to use. That's scary, and it's supposed to be. Never forget three rules: <b>(1)</b> Before connecting anything, write it on paper: requirements, a pin table with reasons, a power budget. <b>(2)</b> Change only one thing at a time, and prove it works. <b>(3)</b> When something breaks, don't guess; measure: the reset reason, the logs, the multimeter, the scanner. Anyone who follows these three will finish any project sooner or later. Anyone who doesn't will get stuck even with the best board in the world. I believe in you. Now go build.</p></div>
+
+<h2 id="quiz">Lesson quiz</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="3">
+  <p class="q">On an ESP32-C3 SuperMini (no USB converter chip) the program uploads, but the Serial Monitor shows nothing. What's the most likely cause?</p>
+  <ol><li data-why="With the wrong speed you'd see scrambled characters, not nothing.">The Serial Monitor speed is wrong</li><li data-why="The C3 certainly has Serial; the question is where Serial is connected.">The C3 has no Serial at all</li><li>The USB CDC On Boot option is off, so Serial goes to UART0, not USB</li><li data-why="The CP2102 driver is irrelevant; this board has no CP2102 at all.">The CP2102 driver isn't installed</li></ol>
+  <div class="fb">On native-USB boards, <code>Serial</code> is connected to USB only when USB CDC On Boot is Enabled.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">Your project needs a camera, Wi-Fi and lots of memory for image processing. Which is the best choice?</p>
+  <ol><li data-why="The C3 has neither a camera interface nor PSRAM.">ESP32-C3</li><li>ESP32-S3 with PSRAM</li><li data-why="The H2 has no Wi-Fi at all.">ESP32-H2</li><li data-why="The C6 is for Wi-Fi 6 and Thread; it has no camera interface or PSRAM.">ESP32-C6</li></ol>
+  <div class="fb">The S3 has a camera interface (LCD_CAM), PSRAM and two 240 MHz cores. The P4 is more powerful but has no built-in Wi-Fi.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">Why is <code>#if SOC_DAC_SUPPORTED</code> better than <code>#if CONFIG_IDF_TARGET_ESP32</code> for guarding <code>dacWrite</code>?</p>
+  <ol><li data-why="Run speed makes no difference; both are decided at compile time.">Because the program runs faster</li><li data-why="Both are defined on a plain ESP32.">Because CONFIG_IDF_TARGET_ESP32 isn't defined on the ESP32</li><li data-why="#if is evaluated at compile time in both cases, not at run time.">Because SOC_ is checked at run time</li><li>Because it asks about the "capability"; if another chip (like the S2) also has a DAC, it automatically works correctly</li></ol>
+  <div class="fb">The ESP32-S2 also has a DAC. With the capability macro, your code uses the DAC on the S2 too, without any changes.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">In Serial you see this line: <code>Guru Meditation Error: Core 1 panic'ed (LoadProhibited)</code> and <code>EXCVADDR: 0x00000000</code>. What does it mean?</p>
+  <ol><li>The program read from a null pointer (address zero)</li><li data-why="A brownout has its own separate message.">The supply voltage dropped</li><li data-why="A watchdog is reported as task_wdt or Interrupt wdt.">An endless loop triggered the watchdog</li><li data-why="The crash happens at run time; the compile succeeded.">The compiled file is corrupt</li></ol>
+  <div class="fb">Load means reading, and EXCVADDR of zero means the faulting address was zero: a pointer or object that was never initialized. Find the exact line with the Exception Decoder.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">A module you bought as a "BME280" shows up on 0x76 in the scanner, but the library gives NaN for humidity. What's the logical next step?</p>
+  <ol><li data-why="If there's no humidity sensor, no library can conjure humidity out of thin air.">Install a different library</li><li data-why="The address is right; the scanner found it.">Change the address to 0x77</li><li>Read the chip ID register (0xD0) to see whether it's 0x60 or 0x58</li><li data-why="The wiring is fine; the part answered on the bus.">Swap the wires</li></ol>
+  <div class="fb">0x58 means a BMP280, which has no humidity sensor at all. The datasheet + one register settles the question for certain.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">On an ESP32-C3 you've connected a button with an external pull-down to GPIO9. What happens?</p>
+  <ol><li data-why="GPIO9 is a strapping pin on the C3, so &quot;nothing&quot; isn't right.">Nothing; GPIO9 is an ordinary pin</li><li>At power-up GPIO9 is LOW and the board goes into download mode; the program doesn't run</li><li data-why="GPIO9 isn't a flash pin on the C3; the C3's flash is on GPIO12 to 17.">The flash gets damaged</li><li data-why="This has nothing to do with USB; USB is on GPIO18 and 19.">USB disconnects</li></ol>
+  <div class="fb">GPIO9 is the C3's boot pin (the BOOT button itself). If it's LOW at reset, that means download mode. Move the button to another pin, or wire it with a pull-up as active-LOW and don't press it while powering up.</div>
+</div>
+
+<h2 id="practice">Exercises</h2>
+<div class="exercise"><div class="ct">Exercise 1: a PRD and pin table for your own project</div>
+<p>Pick one of the projects from the ladder (suggestion: rung 1 or 3). Fill in the PRD template completely, list the sensors and actuators with their voltages and interfaces, choose the chip with the decision tree, and write a pin table with a "reason" column. Calculate the power budget with numbers, too.</p>
+<details><summary>Hint</summary><p>Ask three questions for every pin: Is it a strapping pin? Is it on ADC1 (if it's analog)? Is it connected to the flash, PSRAM or USB? Give the PRD to an AI and ask it to "find the problems in it", not to write it for you (lesson 6.2).</p></details>
+<details><summary>Answer</summary><p>There's no single answer. To pass: every Must is measurable; at least two acceptance criteria; no pin without a reason; no analog input on ADC2 when Wi-Fi is used; peak and average current as numbers. If you pass all of these, start the project.</p></details>
+</div>
+<div class="exercise"><div class="ct">Exercise 2: adding the ESP32-C6 to the portable sketch</div>
+<p>Change the <code>PortableDemo</code> sketch so it also compiles for the ESP32-C6. Choose safe pins using the tables in sections 2 and 3. Then set the Board to "ESP32C6 Dev Module" and press only Verify (✓); no board needed.</p>
+<details><summary>Hint</summary><p>Add an <code>#elif CONFIG_IDF_TARGET_ESP32C6</code> branch. On the C6, the ADC1 channels are on GPIO0 to GPIO6; avoid 4, 5, 8, 9 and 15 (strapping), 12 and 13 (USB), and 24 to 30 (flash). Thanks to the SOC macros, the rest of the code needs no changes.</p></details>
+<details><summary>Answer</summary>
+<div class="code" data-file="PortableDemo-C6-branch.ino" id="c6branch"><pre>
+#elif CONFIG_IDF_TARGET_ESP32C6
+  const int LED_PIN    = 18;
+  const int BUTTON_PIN = 19;
+  const int POT_PIN    = 2;    // ADC1_CH2
+</pre></div>
+<ol class="walk" data-for="c6branch">
+  <li data-lines="1"><b class="what">The new branch.</b> Add these lines before the <code>#else</code>.
+    <span class="why">The order of the branches doesn't matter, because only one of the CONFIG_IDF_TARGET_ flags is defined in any compile.</span></li>
+  <li data-lines="2-4"><b class="what">Safe C6 pins.</b> GPIO18 and 19 are ordinary outputs and inputs; GPIO2 is channel ADC1_CH2.
+    <span class="why">Not strapping, not flash, not USB. We didn't define a touch pin or a DAC because the C6 has neither, and the SOC macros remove those parts automatically. If your board (for example the XIAO C6) doesn't break these pins out, pick replacements from that board's pinout using the same rules.</span></li>
+</ol></details>
+</div>
+<div class="exercise"><div class="ct">Exercise 3: crash hunting</div>
+<p>Upload the <code>DebugStart</code> sketch and set Core Debug Level to Info. (a) Send the letter <code>c</code> and translate the full crash text with the Exception Decoder; note the line number it shows. (b) After the reset, what is the "Abnormal resets" number? (c) Send the letter <code>r</code>; now what are the reset reason and the counter value, and why didn't the counter go up?</p>
+<details><summary>Hint</summary><p>Look at the condition on lines 29 and 30 of the code: which reset reasons are counted?</p></details>
+<details><summary>Answer</summary><p>(a) The decoder points to the line <code>*p = 42;</code> in <code>loop()</code> (line 61 of the sketch). (b) 1, with reason PANIC. (c) The reason is SW and the counter stays at 1, because a software reset isn't "abnormal" and isn't in the counting condition. <code>RTC_NOINIT_ATTR</code> kept the value 1 through both resets.</p></details>
+</div>
+
+<h2 id="certificate">🎓 Course completion certificate</h2>
+<div class="callout info"><div class="ct">ESP32 Masterclass completion certificate: "Independent Maker"</div>
+<p>You've finished this course. From today you can:</p>
+<ul>
+  <li>Turn any idea into a PRD, a pin table with reasons, and a power budget</li>
+  <li>Choose between the ESP32, S2, S3, C3, C6, H2 and P4 for technical reasons</li>
+  <li>Write code that compiles on several chips using SOC macros</li>
+  <li>Bring up any unfamiliar part from its datasheet with a check-up sketch</li>
+  <li>Troubleshoot crashes, brownouts, and I2C and Wi-Fi problems with evidence, not guesses</li>
+  <li>Know your next path: PlatformIO, ESP-IDF, PCBs and the worldwide maker community</li>
+</ul>
+<p>This certificate has no stamp or signature. Its signature is the first project you build <b>yourself, alone</b>, from idea to enclosure. When you've built it, keep a photo of it next to this page. Welcome to the makers.</p></div>
+
+<div class="callout info"><div class="ct">The lesson in three lines</div>
+<p>Build every project with a fixed method: a PRD, choosing parts and chip for a reason, a pin table, a power budget, testing piece by piece, and integrating without delay. The chips have different capabilities; when porting, check pins, strapping, DAC and touch, Bluetooth Classic, the built-in LED and USB CDC On Boot, and fence off the differences with <code>#if SOC_...</code>. For a new part: datasheet and check-up first, then the library example, then change things one at a time; and when troubleshooting, always measure: the reset reason, logs, the Backtrace, a multimeter and a logic analyzer.</p></div>
+
+</article>
+</body>
+</html>
