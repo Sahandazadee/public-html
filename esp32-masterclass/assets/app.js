@@ -8,6 +8,8 @@
   /* زبان صفحه از ویژگی lang تگ html خوانده می‌شود؛ صفحه‌های انگلیسی در پوشه en/ هستند */
   var LANG = (document.documentElement.getAttribute("lang") || "fa").slice(0, 2) === "en" ? "en" : "fa";
   var EN = LANG === "en";
+  /* متن‌های داخل SVG سیم‌کشی: در فارسی راست‌به‌چپ، در انگلیسی چپ‌به‌راست؛ نقطه لنگر در هر دو زبان ثابت می‌ماند */
+  var RIGHT_ALIGN = EN ? 'direction="ltr" text-anchor="end"' : 'direction="rtl" text-anchor="start"', LEFT_ALIGN = EN ? 'direction="ltr" text-anchor="start"' : 'direction="rtl" text-anchor="end"';
   var G = (EN ? window.GLOSSARY_EN : window.GLOSSARY) || {};
   /* مسیر پوشه assets از آدرس همین اسکریپت به دست می‌آید تا در en/ هم درست کار کند */
   var BASE = (function () { var sc = document.currentScript || document.querySelector('script[src$="app.js"]'); return sc ? sc.getAttribute("src").replace(/app\.js.*$/, "") : "assets/"; })();
@@ -517,14 +519,14 @@
     spec.parts.forEach(function (pt) {
       var n = pt.pins.length, ph = Math.max(n * pitch + 26, 120);
       partsSvg += '<rect x="' + px + '" y="' + y + '" width="' + pw + '" height="' + ph + '" rx="14" fill="#fff" stroke="#cfd6e2" stroke-width="1.5"/>';
-      partsSvg += '<text x="' + (px + pw - 12) + '" y="' + (y + 24) + '" text-anchor="start" font-size="14" font-weight="800" fill="#152033" direction="rtl">' + esc(pt.name) + '</text>';
+      partsSvg += '<text x="' + (px + pw - 12) + '" y="' + (y + 24) + '" ' + RIGHT_ALIGN + ' font-size="14" font-weight="800" fill="#152033">' + esc(pt.name) + '</text>';
       if (pt.img) partsSvg += '<image href="' + BASE + 'img/' + pt.img + '" x="' + (px + pw - 118) + '" y="' + (y + 32) + '" width="106" height="' + (ph - 42) + '" preserveAspectRatio="xMidYMid meet"/>';
       pt.pins.forEach(function (pp, k) {
         var yy = y + 30 + k * pitch + (ph - 30 - n * pitch) / 2 + pitch / 2;
         pos[pt.id + "." + pp[0]] = [px, yy];
         partsSvg += '<circle cx="' + px + '" cy="' + yy + '" r="5" fill="#e8c35a" stroke="#8a6d1c"/>';
         partsSvg += '<text x="' + (px + 12) + '" y="' + (yy + 4) + '" font-size="12.5" font-weight="700" fill="#152033" font-family="JetBrains Mono,monospace">' + esc(pp[0]) + '</text>';
-        if (pp[1]) partsSvg += '<text x="' + (px + pw - 124) + '" y="' + (yy + 4) + '" text-anchor="start" font-size="12" fill="#4d5b70" direction="rtl">' + esc(pp[1]) + '</text>';
+        if (pp[1]) partsSvg += '<text x="' + (px + pw - 124) + '" y="' + (yy + 4) + '" ' + RIGHT_ALIGN + ' font-size="12" fill="#4d5b70">' + esc(pp[1]) + '</text>';
       });
       y += ph + 18;
     });
@@ -532,7 +534,7 @@
     var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + t("wiringAria") + '">';
     s += '<rect x="' + bx + '" y="' + by + '" width="' + bw + '" height="' + bh + '" rx="14" fill="#1b1f2a"/>';
     s += '<rect x="' + (bx + 20) + '" y="' + (by + 16) + '" width="110" height="80" rx="6" fill="#c9ced8"/><text x="' + (bx + 75) + '" y="' + (by + 52) + '" text-anchor="middle" font-size="13" font-weight="800" fill="#333">ESP32</text><text x="' + (bx + 75) + '" y="' + (by + 70) + '" text-anchor="middle" font-size="10" fill="#555">WROOM-32</text>';
-    s += '<text x="' + (bx + 20) + '" y="' + (by + bh - 16) + '" font-size="13" font-weight="700" fill="#e8eef8" direction="rtl" text-anchor="end">' + esc(spec.board || "ESP32 DevKitC") + '</text>';
+    s += '<text x="' + (bx + 20) + '" y="' + (by + bh - 16) + '" font-size="13" font-weight="700" fill="#e8eef8" ' + LEFT_ALIGN + '>' + esc(spec.board || "ESP32 DevKitC") + '</text>';
     bpins.forEach(function (p) {
       var q = pos[p];
       s += '<rect x="' + (q[0] - 96) + '" y="' + (q[1] - 12) + '" width="84" height="24" rx="6" fill="#2a3244"/><text x="' + (q[0] - 54) + '" y="' + (q[1] + 5) + '" text-anchor="middle" font-size="13" font-weight="700" fill="#ffd166" font-family="JetBrains Mono,monospace">' + esc(p) + '</text>';

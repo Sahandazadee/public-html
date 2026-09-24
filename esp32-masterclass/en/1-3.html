@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The pinout without fear · ESP32 Masterclass</title>
+<meta name="description" content="The most important safety lesson for the ESP32: power pins, input-only pins, ADC1 and ADC2, DAC, touch, strapping, flash, the default UART, I2C and SPI pins, a traffic-light table of pins and a pin-selection checklist.">
+<link rel="alternate" hreflang="fa" href="../1-3.html"><link rel="alternate" hreflang="en" href="1-3.html">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="../assets/course.js"></script>
+<script defer src="../assets/glossary-en.js"></script>
+<script defer src="../assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="1-3">
+
+<p class="lede">If you read only one lesson in chapter 1 carefully, make it this one. Most of the strange problems beginners run into ("the board won't boot", "it won't upload", "my analog sensor reads zero once Wi-Fi is on", "the relay clicks for a moment at power-up") come from <b>picking the wrong pin</b>, not from the code. In this lesson you'll learn what each ESP32 pin can and can't do, and you'll get a checklist you can use for every project for the rest of your life.</p>
+
+<div class="goals">
+  <div><h4>🎯 After this lesson you can</h4><ul>
+    <li>Tell apart a pin's GPIO number, its physical position and its printed label</li>
+    <li>Use the power pins safely and work out a current budget</li>
+    <li>Recognize the input-only, ADC1, ADC2, DAC and touch pins</li>
+    <li>Explain what strapping means and why pins 0, 2, 5, 12 and 15 are risky</li>
+    <li>Assign pins correctly for any project with the "pin-selection checklist"</li>
+  </ul></div>
+  <div><h4>🧰 Prerequisites and parts</h4><ul>
+    <li>Lessons <a href="1-1.html">1.1</a> and <a href="1-2.html">1.2</a></li>
+    <li>An ESP32 board (for the code section), a 10 kΩ potentiometer, one jumper wire and a piece of aluminum foil</li>
+    <li>Or the Wokwi simulator (for the potentiometer part)</li>
+    <li>Patience: this lesson is long, but it's essential</li>
+    <li>For now, just read the code section or run it in Wokwi. Installing the Arduino IDE is covered in <a href="2-1.html">lesson 2.1</a> and the breadboard in <a href="1-4.html">lesson 1.4</a>. Come back after lesson 2.3 and try the experiment on a real board.</li>
+  </ul></div>
+</div>
+
+<h2 id="what">What is a pin?</h2>
+<p>Every metal leg along the edge of the board is a <b>pin</b>: a point where an outside wire connects to the ESP32's internal circuitry. Most pins are <b>GPIO</b> (General Purpose Input/Output): your program decides whether the pin "talks" (output: it supplies a voltage) or "listens" (input: it reads a voltage). The remaining pins are for power (3V3, 5V, GND) or control (EN).</p>
+
+<div class="callout analogy"><div class="ct">An everyday example: the doors of a building</div>
+<p>Think of the ESP32 as an office building with 38 doors. Some doors work both ways for everyone (the safe GPIOs). Some are entrance-only and can't be opened from the inside (34 to 39). Some are emergency doors: if someone happens to be standing in front of them when the building opens in the morning, the whole building opens in the wrong mode (strapping). And six doors belong to a private storeroom that is locked and must never be touched (flash). Knowing the pinout means knowing which kind each door is.</p></div>
+
+<h2 id="map">Interactive map: look first, then read</h2>
+<p>This is a map of the 38-pin ESP32-DevKitC board. Here's how to use it:</p>
+<ol class="steps">
+  <li><b>Click any pin</b> to see its full description, capability tags and warnings below the map.</li>
+  <li><b>Press the filter buttons above the map</b> (for example "ADC1" or "Strapping"). Pins without that capability fade out, so you instantly see which pins fit.</li>
+  <li><b>Remember the colors:</b> green means safe and general-purpose; pink means strapping; gray means flash and off-limits.</li>
+  <li>Throughout this lesson, whenever a pin is mentioned, find it on the map. Repetition burns the map into your memory.</li>
+</ol>
+<div class="pinout"></div>
+
+<p>Here is Espressif's official pinout for the same board. It's busier, but it shows every role of every pin. Pins marked with an arrow (<code>→</code>) are input-only, and the wave symbol next to a GPIO means it can output PWM:</p>
+<figure><div class="frame"><img src="../assets/img/devkitc-pinout.jpg" alt="Official ESP32-DevKitC pinout"></div>
+<figcaption>The official ESP32-DevKitC pinout. The pink STRAP label (for example next to GPIO0, named BOOT) marks a strapping pin, and the red exclamation mark next to GPIO6 to GPIO11 means "shared with flash, not usable". Click the image to see the details.<span class="src">Image: Espressif Systems, CC BY-SA 4.0</span></figcaption></figure>
+
+<h2 id="numbering">One pin, three names: the biggest source of confusion</h2>
+<p>A pin can be referred to in three different ways, and mixing them up is beginners' number-one mistake:</p>
+<div class="table-wrap"><table>
+<tr><th>Naming scheme</th><th>Example</th><th>Where you see it</th><th>Used in code?</th></tr>
+<tr><td><b>GPIO number</b> (the chip's real internal name)</td><td>GPIO4</td><td>Datasheets, official pinouts, this course</td><td>✅ <b>Always</b>: <code>pinMode(4, OUTPUT)</code></td></tr>
+<tr><td><b>Physical position</b> (pin number on the board)</td><td>"The 13th pin from the top in the right-hand row"</td><td>Wiring instructions</td><td>❌ Never</td></tr>
+<tr><td><b>Printed label (silkscreen)</b></td><td><code>4</code>, <code>D4</code>, <code>IO4</code>, <code>G4</code></td><td>The white text on the board itself</td><td>⚠️ Only if you're sure it matches the GPIO number</td></tr>
+</table></div>
+
+<div class="callout warn"><div class="ct">The "D2" trap: one name, two completely different pins</div>
+<p>On the <b>DOIT DevKit V1</b> board (30 pins), the pin labeled <code>D2</code> is <b>GPIO2</b>; on that board "D" is just a prefix and the number after it is the GPIO number.</p>
+<p>But on the <b>DevKitC</b> board (38 pins), the pin labeled <code>D2</code> at the bottom of the left row is <b>SD2 = GPIO9</b>, one of the flash memory pins! If someone follows a DOIT tutorial and connects a wire to "D2" on a DevKitC, the board crashes. In the same way, <code>D3</code> on the DevKitC means GPIO10, <code>D0</code> means GPIO7 and <code>D1</code> means GPIO8.</p>
+<p>(To complete the confusion: on ESP8266 boards such as the NodeMCU, <code>D2</code> means GPIO4! Now you see why you should always think in <b>GPIO numbers</b>.)</p></div>
+
+<div class="callout tip"><div class="ct">The golden rule of pin numbering</div>
+<p>In code, write <b>only the GPIO number</b>: <code>digitalWrite(4, HIGH)</code>. Don't use constants like <code>D4</code> in ESP32 code; on most ESP32 boards they either aren't defined at all or mean something different. Before wiring, match the printed label against the official pinout of your own board.</p></div>
+
+<h2 id="power">Power pins: 3V3, 5V, GND and EN</h2>
+<div class="table-wrap"><table>
+<tr><th>Pin</th><th>What it is</th><th>Rule of use</th></tr>
+<tr><td><code>3V3</code></td><td>Output of the board's 3.3 V regulator</td><td>Powers 3.3 V sensors and modules (OLED, DHT22, BME280). The regulator's capacity is limited (usually a few hundred milliamps), and the ESP32 itself takes up to about 250 mA of that in bursts when Wi-Fi is active.</td></tr>
+<tr><td><code>5V</code> (on DOIT: <code>VIN</code>)</td><td>Connected directly to the USB 5 V (usually through a diode)</td><td>Powers 5 V parts such as a servo or a relay module. Or the other way round: when USB isn't connected, you can feed 5 V into the board through this pin (from a regulated supply). <b>Never</b> connect it to any GPIO.</td></tr>
+<tr><td><code>GND</code></td><td>Ground, the 0 V reference</td><td>The board has several GND pins, all connected together inside. Every external part's GND must be connected to the board's GND; otherwise the voltages have no common reference and nothing works properly.</td></tr>
+<tr><td><code>EN</code></td><td>Enable / reset</td><td>Normally pulled up to 3.3 V through a resistor. If it's pulled to GND, the chip shuts off, and when released it resets. The EN button does exactly this. It can't be used as a GPIO.</td></tr>
+</table></div>
+
+<div class="callout example"><div class="ct">Do the math: the 3V3 current budget</div>
+<p>Suppose your board's regulator can supply about 600 mA (the common AMS1117 regulator, under good conditions and if it stays cool). With Wi-Fi on, the ESP32 draws up to about <b>250</b> mA during transmit bursts. That leaves about 350 mA for everything else:</p>
+<p>OLED about 20 mA + DHT22 about 1.5 mA + three LEDs at 6 mA each (18) ≈ <b>40 mA</b>. Perfectly safe.</p>
+<p>But an SG90 servo draws a few hundred milliamps while moving, and even more when it stalls, and a 30-LED color strip can draw up to about 1800 mA. <b>These must never be powered from 3V3.</b> If they are, the voltage sags, the ESP32 prints <code>Brownout detector was triggered</code> and keeps resetting.</p></div>
+
+<div class="callout warn"><div class="ct">No two power sources at once</div>
+<p>While the USB cable is plugged in, don't connect another external supply to the 5V or 3V3 pin (unless you have a dedicated protection circuit). Two supplies at slightly different voltages can "fight", and current can flow back into your computer's USB port. Simple rule: <b>one board, one supply</b>. Only the GNDs must always be shared. (The right ways to power a circuit from a battery or an external supply are in <a href="1-4.html#power">lesson 1.4</a>.)</p></div>
+
+<h2 id="digital">Digital input and output, pull-up and pull-down</h2>
+<p>Every ordinary GPIO has two modes:</p>
+<ul>
+  <li><b>Output (OUTPUT):</b> with <code>digitalWrite</code> you set the pin <code>HIGH</code> (about 3.3 V) or <code>LOW</code> (0 V).</li>
+  <li><b>Input (INPUT):</b> with <code>digitalRead</code> you ask whether the voltage on the pin is high (HIGH) or low (LOW). Rough thresholds: above about 2.5 V reads as HIGH and below about 0.8 V reads as LOW (75% and 25% of 3.3 V).</li>
+</ul>
+
+<h3>Floating pins and the pull-up resistor</h3>
+<p>An input pin that isn't connected to anything is <b>floating</b>: like a tiny antenna, it picks up mains noise and the electric charge from your hand, and reads randomly HIGH and LOW. If you put a button between the pin and GND, the pin floats whenever the button isn't pressed. The fix is a <b>pull-up resistor</b>: a large resistor (usually 10 kΩ) between the pin and 3.3 V that gently "pulls" the pin HIGH by default. When the button is pressed, the direct connection to GND wins and the pin goes LOW.</p>
+
+<div class="callout analogy"><div class="ct">An everyday example: a door spring</div>
+<p>A pull-up is like a <b>door spring</b> that always keeps the door closed. If someone pushes the door (the button), it opens; when they let go, the spring closes it again. Without the spring, the door swings with every breeze and you never know whether it's open or closed. A pull-down is the same spring pulling in the opposite direction (toward GND).</p></div>
+
+<p>Luckily, most ESP32 GPIOs have <b>internal</b> pull-up and pull-down resistors of about 45 kΩ that you switch on with a single word: <code>pinMode(27, INPUT_PULLUP)</code> or <code>pinMode(27, INPUT_PULLDOWN)</code>. The exception: pins 34 to 39 (next section).</p>
+
+<h3>The current limit of each pin</h3>
+<div class="callout warn"><div class="ct">Numbers to memorize</div>
+<p>The <b>absolute maximum</b> current a GPIO can supply is about <b>40 mA</b>; that's the "burn-out line", not the "everyday limit". <b>Our recommendation: at most 20 mA per pin</b> (and the total across all pins is limited too). An LED with a 220 Ω resistor draws about 6 mA, which is perfect. But <b>never</b> connect a motor, relay, coil, large buzzer or LED strip directly to a GPIO. The pin only gives the "command"; a transistor or driver module draws the real current from the power supply.</p></div>
+
+<h2 id="input-only">Input-only pins: 34, 35, 36 (VP), 39 (VN)</h2>
+<p>These four pins are input-only <b>in hardware</b>. They have no output circuitry, so:</p>
+<ul>
+  <li>They can't light an LED or output a PWM signal. <code>pinMode(34, OUTPUT)</code> doesn't cause a compile error, but it does nothing.</li>
+  <li><b>They have no internal pull-up or pull-down.</b> <code>pinMode(35, INPUT_PULLUP)</code> doesn't connect any resistor and the pin keeps floating. If you connect a button to one of them, <b>always</b> add an external 10 kΩ resistor.</li>
+  <li>They are all on <b>ADC1</b>, so they're <b>excellent</b> for reading analog sensors (potentiometer, LDR, soil moisture sensor), even with Wi-Fi on.</li>
+</ul>
+<div class="callout why"><div class="ct">Why this limitation is a blessing</div>
+<p>Because these pins aren't good for anything else, they're the best home for analog sensors and they keep the general-purpose pins free for outputs. Good habit: <b>put your analog sensors on 34, 35, 36 and 39 first</b>, then spread out the rest. The names VP and VN come from "Sensor Voltage Positive/Negative"; for you they're simply GPIO36 and GPIO39.</p></div>
+
+<h2 id="adc">ADC1 and ADC2: why Wi-Fi breaks analog input</h2>
+<p>An ADC (analog-to-digital converter) turns a voltage from 0 to about 3.3 V into a number from <b>0 to 4095</b> (12 bits). The ESP32 has two separate ADCs:</p>
+<div class="table-wrap"><table>
+<tr><th>Converter</th><th>Pins (on the DevKitC)</th><th>With Wi-Fi on</th></tr>
+<tr><td><b>ADC1</b></td><td>32, 33, 34, 35, 36, 39</td><td>✅ Works</td></tr>
+<tr><td><b>ADC2</b></td><td>0, 2, 4, 12, 13, 14, 15, 25, 26, 27</td><td>❌ Doesn't work (error or meaningless number)</td></tr>
+</table></div>
+<div class="callout analogy"><div class="ct">Why? A shared kitchen</div>
+<p>ADC2 is like a kitchen you share with your roommate. Your roommate (the Wi-Fi driver) has set a rule: "Whenever I'm home, the kitchen is mine." The Wi-Fi driver uses the ADC2 hardware for its own work and won't lend it to your program as long as Wi-Fi is on. ADC1 is your private kitchen and is always available to you.</p></div>
+<div class="callout example"><div class="ct">A common true story</div>
+<p>Someone connects a potentiometer to GPIO4, and in a simple program the readings are perfect. Then they add Wi-Fi so they can see the number on their phone, and suddenly <code>analogRead</code> always returns zero or a fixed number. There's nothing wrong with the code; GPIO4 is simply on ADC2. Moving one wire to GPIO34 and changing one number in the code fixes the problem.</p></div>
+<div class="callout tip"><div class="ct">Two more things about the ADC</div>
+<p>1) The ESP32's ADC isn't perfectly linear: it's inaccurate near 0 V and near the top of its range (above about 3.1 V). For a more accurate number, use <code>analogReadMilliVolts(pin)</code> instead of converting by hand; it applies the factory calibration. 2) Never feed more than 3.3 V straight into an ADC input; bring it down with a voltage divider. Full details are in <a href="3-1.html">lesson 3.1</a>.</p></div>
+
+<h2 id="dac">DAC: only GPIO25 and GPIO26</h2>
+<p>A DAC is the opposite of an ADC: it turns a number into a real voltage. The ESP32 has two 8-bit DACs: <b>GPIO25</b> (DAC1) and <b>GPIO26</b> (DAC2). With <code>dacWrite(25, 128)</code>, about half of 3.3 V (about 1.65 V) appears on the pin; the number ranges from 0 to 255. It's handy for simple sound and reference voltages. (Remember that the S3 and C3 have no DAC at all?)</p>
+<div class="callout why"><div class="ct">DAC versus PWM</div>
+<p>PWM (lesson 3.2) switches a pin on and off very fast and raises or lowers the "average" voltage; it works on any output pin. A DAC produces a <b>truly steady</b> in-between voltage, but only on two pins. For dimming an LED or driving a servo, PWM is enough and the better choice.</p></div>
+
+<h2 id="touch">Touch pins: T0 to T9</h2>
+<p>Ten GPIOs can sense <b>the touch of a finger</b> without any extra parts: you just connect a wire or a piece of foil to the pin. Your body acts like a small capacitor, and when you touch the wire, the pin's capacitance changes. The <code>touchRead(pin)</code> function returns a number that, on the original ESP32, <b>gets smaller when touched</b>.</p>
+<div class="table-wrap"><table>
+<tr><th>Touch channel</th><th>T0</th><th>T1</th><th>T2</th><th>T3</th><th>T4</th><th>T5</th><th>T6</th><th>T7</th><th>T8</th><th>T9</th></tr>
+<tr><td>GPIO</td><td><b>4</b></td><td>0</td><td>2</td><td>15</td><td><b>13</b></td><td>12</td><td>14</td><td><b>27</b></td><td><b>33</b></td><td><b>32</b></td></tr>
+</table></div>
+<p>The bold pins (4, 13, 27, 32, 33) are both touch-capable and safe; reach for these first when you need touch. Note the odd order: T8 is on 33 and T9 is on 32. In code you can write either <code>touchRead(4)</code> or <code>touchRead(T0)</code>; they're the same.</p>
+
+<h2 id="strapping">Strapping pins: settings read at power-up</h2>
+<p>At the moment the ESP32 powers up or resets, before running even a single line of your program, it <b>looks once</b> at the voltage on five pins and makes important decisions based on them: "Should I run the program, or wait for a new one?", "What voltage should I power the flash memory with?". These are called <b>strapping pins</b>. After boot they work like ordinary GPIOs; the problem is only <b>at the moment of power-up</b>.</p>
+<div class="callout analogy"><div class="ct">An everyday example: switches under the desk</div>
+<p>Imagine an office worker who, every morning on arrival, glances at a few switches under the desk to decide what to do that day: "If the first switch is down, today I only answer the phone." After that first glance, they forget about the switches. If you accidentally left your bag on one of those switches the night before, their whole day starts out wrong. A part you connect to a strapping pin is that "bag on the switch".</p></div>
+
+<div class="table-wrap"><table>
+<tr><th>Pin</th><th>Internal default</th><th>What it decides at boot</th><th>What breaks it</th></tr>
+<tr><td><code>GPIO0</code></td><td>Pull-up (HIGH)</td><td>HIGH: run the program. <b>LOW: download mode</b> (waits for an upload). The BOOT button pulls this very pin LOW.</td><td>Any part that pulls it LOW at power-up; instead of running the program, the board waits for an upload.</td></tr>
+<tr><td><code>GPIO2</code></td><td>Pull-down (LOW)</td><td>Must be LOW or floating to enter download mode.</td><td>A part that holds it HIGH during upload; the upload stops with a <code>Failed to connect</code> error.</td></tr>
+<tr><td><code>GPIO5</code></td><td>Pull-up</td><td>SDIO interface timing (not important for you). Outputs a PWM signal during boot.</td><td>Usually no problem; it's commonly used as the SD card's CS.</td></tr>
+<tr><td><code>GPIO12</code> (MTDI)</td><td>Pull-down</td><td><b>Flash memory voltage</b>: LOW = 3.3 V (correct for WROOM); HIGH = 1.8 V.</td><td>Anything that pulls it HIGH at power-up: the flash gets the wrong voltage and <b>the board doesn't boot at all</b>.</td></tr>
+<tr><td><code>GPIO15</code> (MTDO)</td><td>Pull-up</td><td>LOW: boot messages aren't printed on Serial. Outputs PWM during boot.</td><td>Usually it only silences the boot log; not dangerous, but confusing.</td></tr>
+</table></div>
+
+<h3>Three real failure stories</h3>
+<div class="callout example"><div class="ct">Story 1: "My board won't boot with the sensor, but boots without it" (GPIO12)</div>
+<p>A module with a built-in pull-up resistor (for example a button module or some sensor modules) is connected to GPIO12. At power-up it pulls GPIO12 HIGH; the ESP32 thinks the flash is a 1.8 V part and powers it with the wrong voltage. The Serial Monitor repeatedly shows messages such as <code>flash read err, 1000</code>. Disconnect the wire and everything works again. <b>Fix:</b> move the part to a green pin.</p></div>
+<div class="callout example"><div class="ct">Story 2: "The program doesn't run, it just says waiting for download" (GPIO0)</div>
+<p>A relay module, or a button connected to GND, sits on GPIO0 and holds it LOW at power-up. In the Serial Monitor you see <code>boot:0x3 (DOWNLOAD_BOOT...)</code> and <code>waiting for download</code>. The board is fine; it's just waiting for a new program. <b>Fix:</b> leave GPIO0 free for the BOOT button.</p></div>
+<div class="callout example"><div class="ct">Story 3: "Uploading fails with an LED on GPIO2" (GPIO2)</div>
+<p>On some boards and circuits, whatever is connected to GPIO2 holds it high when the upload starts, and the upload tool fails with <code>A fatal error occurred: Failed to connect to ESP32</code>. The board's own built-in blue LED on GPIO2 is designed so that it causes no trouble; the problem comes from external parts with a pull-up. <b>Fix:</b> disconnect the GPIO2 wire while uploading, or move the part.</p></div>
+
+<div class="callout tip"><div class="ct">For pros: GPIO12 can be "neutralized", but don't</div>
+<p>With the <code>espefuse</code> tool you can permanently lock the flash voltage to 3.3 V so that GPIO12 no longer matters. This is <b>irreversible</b> (a one-time-programmable fuse), and if your module has a 1.8 V flash, the board is ruined for good. For a beginner the simplest approach is: don't use GPIO12.</p></div>
+
+<h2 id="flash">Forbidden pins: GPIO6 to GPIO11 (flash)</h2>
+<p>These six pins are connected inside the module to the <b>flash memory</b>, the place where your program is stored and from which the processor reads instructions <b>all the time</b>. On the DevKitC they are printed as <code>CLK</code>, <code>D0</code>, <code>D1</code>, <code>D2</code>, <code>D3</code>, <code>CMD</code> (or SD0 to SD3). If you connect anything to them or use them in code, the processor's link to the flash is disrupted and the board immediately crashes or resets.</p>
+<div class="callout warn"><div class="ct">An absolute rule</div>
+<p>Connect <b>no</b> wire at all to GPIO6, 7, 8, 9, 10 and 11, and don't use them in code either. Not even for "just one quick test". On the 30-pin DOIT board these pins aren't brought out at all, which is itself a safety bonus.</p></div>
+
+<h2 id="uart">UART0: GPIO1 (TX) and GPIO3 (RX)</h2>
+<p>These two pins are connected to the USB converter; every <code>Serial.print</code> message and the program upload itself go through them. If you connect a part to them, either the Serial Monitor breaks, or uploads fail, or your part receives the boot messages and behaves strangely. GPIO1 also sends data out during boot, and GPIO3 is HIGH during boot. <b>Use them only when you've truly run out of pins</b> and no longer need Serial. If you need a second serial port, use <code>Serial2</code> on GPIO16 and GPIO17 and write the pins explicitly: <code>Serial2.begin(9600, SERIAL_8N1, 16, 17)</code>. If you write only <code>Serial2.begin(9600)</code>, core version 3 uses GPIO4 and GPIO25 by default, not 16 and 17.</p>
+
+<h2 id="buses">Default pins for the protocols</h2>
+<p>The ESP32 has a "pin matrix" that can route almost any protocol to almost any pin. But when you don't specify pins, libraries use the <b>default</b> pins, so it's best to keep these pins for these jobs:</p>
+<div class="table-wrap"><table>
+<tr><th>Protocol</th><th>Signal</th><th>Default GPIO</th><th>Used in the course</th></tr>
+<tr><td rowspan="2"><b>I2C</b> (<code>Wire</code>)</td><td>SDA (data)</td><td><b>21</b></td><td rowspan="2">OLED, BME280 sensor (lesson 3.3)</td></tr>
+<tr><td>SCL (clock)</td><td><b>22</b></td></tr>
+<tr><td rowspan="4"><b>SPI</b> (VSPI, the default <code>SPI</code>)</td><td>MOSI</td><td><b>23</b></td><td rowspan="4">microSD card (lesson 3.3)</td></tr>
+<tr><td>MISO</td><td><b>19</b></td></tr>
+<tr><td>SCK</td><td><b>18</b></td></tr>
+<tr><td>CS / SS</td><td><b>5</b></td></tr>
+<tr><td>Second SPI (HSPI)</td><td>MOSI / MISO / SCK / CS</td><td>13 / 12 / 14 / 15</td><td>Used less often; full of strapping pins</td></tr>
+<tr><td><b>UART2</b> (<code>Serial2</code>)</td><td>RX / TX</td><td><b>16 / 17</b></td><td>GPS module (lesson 3.3). Write the pins explicitly in <code>Serial2.begin</code>; core version 3 defaults to pins 4 and 25.</td></tr>
+</table></div>
+<div class="callout why"><div class="ct">Why stick to the defaults?</div>
+<p>Because every library example and every tutorial on the internet assumes these pins. Put the OLED on 21 and 22 and the example code works unchanged. Put it on other pins and you have to write <code>Wire.begin(SDA, SCL)</code> with your own pins; that's possible, but it's one more place to make a mistake.</p></div>
+
+<h2 id="rtc">RTC pins: waking up from deep sleep</h2>
+<p>In <b>deep sleep</b>, most of the chip switches off and only the small, low-power <b>RTC</b> section stays awake. Only the pins connected to this section can wake the ESP32 with a button or a sensor:</p>
+<p><code>0, 2, 4, 12, 13, 14, 15, 25, 26, 27, 32, 33, 34, 35, 36, 39</code></p>
+<p>So if you want a battery-powered project to wake up at the press of a button, put the button on one of these pins (preferably the safe ones: <b>4, 13, 25, 26, 27, 32, 33</b>, or the input-only pins with an external resistor). Pins such as 16, 17, 18, 19, 21, 22 and 23 are not RTC pins and can't wake the board from deep sleep. Details in <a href="6-1.html">lesson 6.1</a>.</p>
+
+<h2 id="bootglitch">Pins that "glitch" at boot</h2>
+<p>Some pins, in that fraction of a second at power-up and before your program runs, automatically go HIGH or output a PWM signal:</p>
+<ul>
+  <li><b>GPIO1</b> (sends the boot messages) and <b>GPIO3</b> (HIGH during boot)</li>
+  <li><b>GPIO5</b>, <b>GPIO14</b> and <b>GPIO15</b> (PWM signal during boot)</li>
+  <li><b>GPIO6 to GPIO11</b> (flash activity; they're off-limits anyway)</li>
+</ul>
+<div class="callout warn"><div class="ct">Relay danger: the garage door opens for a moment!</div>
+<p>Imagine a relay that controls a garage door motor or a water pump is connected to GPIO14. Every time the power drops and comes back, or the board resets, GPIO14's brief PWM burst switches the relay on for an instant, and the motor gets a kick. On an LED you'd never notice this glitch, but on a power device it can be dangerous. <b>Rule:</b> put anything that "moves" or "switches heavy power" (relay, motor, solenoid valve, MOSFET) on a green pin, and preferably add an external 10 kΩ pull-down resistor on its driver's input so it's guaranteed to stay off at power-up.</p></div>
+
+<h2 id="traffic">The traffic-light table of pins</h2>
+<p>This table sums up all the sections above. Print it and stick it next to your workbench:</p>
+<div class="table-wrap"><table>
+<tr><th>Color</th><th>GPIOs</th><th>What it means</th></tr>
+<tr><td>🟢 <b>Green: safe for anything</b></td><td><code>4, 13, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33</code></td><td>Input, output, PWM, with internal pull-up. Always pick from these first. (Notes: 16 and 17 aren't free on WROVER modules; 4, 13, 25, 26 and 27 are on ADC2; 18, 19, 21, 22, 23 are the I2C and SPI defaults.)</td></tr>
+<tr><td>🟡 <b>Yellow: with caution</b></td><td><code>0, 2, 5, 12, 15</code> (strapping)<br><code>14</code> (PWM during boot)<br><code>34, 35, 36, 39</code> (input-only, no pull-up)<br><code>1, 3</code> (UART0 and USB)</td><td>Usable, as long as you know what you're doing: don't drive the strapping pins at boot; don't use 14, 15 or 5 for a relay; use 34 to 39 only as inputs (preferably analog); keep 1 and 3 free for Serial.</td></tr>
+<tr><td>🔴 <b>Red: never</b></td><td><code>6, 7, 8, 9, 10, 11</code></td><td>Connected to the flash memory. Using them = a crash.</td></tr>
+</table></div>
+
+<h2 id="doit">How is the 30-pin DOIT board different?</h2>
+<p>The GPIO numbers and their capabilities are <b>exactly the same</b>, because the module is the same WROOM-32. The board simply doesn't bring out eight of the pins:</p>
+<ul>
+  <li><b>GPIO6 to GPIO11</b> are missing (great: it saves you from the red mistake).</li>
+  <li><b>GPIO0</b> isn't brought out as a pin; you reach it only through the BOOT button.</li>
+  <li>It has <b>one fewer GND</b>.</li>
+</ul>
+<p>The usual pin order on the DOIT (with the USB port facing down; the printing on your own board always has the final say): first column <code>EN, VP, VN, D34, D35, D32, D33, D25, D26, D27, D14, D12, D13, GND, VIN</code> and second column <code>D23, D22, TX0, RX0, D21, D19, D18, D5, TX2, RX2, D4, D2, D15, GND, 3V3</code>. Remember: <code>TX2</code> = GPIO17, <code>RX2</code> = GPIO16, <code>TX0</code> = GPIO1, <code>RX0</code> = GPIO3, and <code>VIN</code> is the same as 5V.</p>
+
+<h2 id="code">Experiment: touch and an input-only pin</h2>
+<p>Now let's try out what you've learned, hands-on: a touch wire on <b>GPIO4 (T0)</b>, which is both touch-capable and safe, and a potentiometer on <b>GPIO34</b>, which is input-only and on ADC1.</p>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"POT","name":"10 kΩ potentiometer","img":"pot.svg","pins":[["VCC","outer leg: to 3.3 V"],["SIG","middle leg: variable voltage"],["GND","other outer leg: ground"]]},
+    {"id":"PAD","name":"Touch pad (wire + foil)","pins":[["1","free end of the wire, to the foil"]]}
+  ],
+  "wires":[["3V3","POT.VCC","red"],["GPIO34","POT.SIG","blue"],["GND","POT.GND","black"],["GPIO4","PAD.1","purple","T0"]]
+}</script><figcaption>The potentiometer sits between 3V3 and GND, with its middle leg going to GPIO34. One jumper wire runs from GPIO4 to a piece of aluminum foil (or just the bare end of the wire). Note: connect the potentiometer to 3V3, <b>not to 5V</b>; otherwise the middle leg can reach 5 V and damage GPIO34.</figcaption></div>
+
+<div class="code" data-file="Touch_And_InputOnly.ino" id="c13touch"><pre>
+// Touch on GPIO4 and a potentiometer on the input-only pin GPIO34
+const int TOUCH_PIN = 4;           // T0: touch-capable and safe
+const int POT_PIN   = 34;          // input-only, ADC1 (works with Wi-Fi too)
+int touchThreshold;                // touch threshold; worked out on your own board in setup
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  // no pinMode needed: touchRead and analogRead set up the pin themselves
+  int idle = touchRead(TOUCH_PIN);   // the "untouched" value (don't touch the wire at power-up!)
+  touchThreshold = idle * 2 / 3;     // about two thirds of it = the touch boundary
+  Serial.printf("Touch + input-only pin test (idle=%d, threshold=%d)\n", idle, touchThreshold);
+}
+
+void loop() {
+  int touchValue = touchRead(TOUCH_PIN);           // smaller number = touched
+  int potRaw     = analogRead(POT_PIN);            // 0 to 4095
+  int potMv      = analogReadMilliVolts(POT_PIN);  // calibrated millivolts
+
+  Serial.printf("touch=%d  pot=%d  (%d mV)\n", touchValue, potRaw, potMv);
+
+  if (touchValue &lt; touchThreshold) {
+    Serial.println("&gt;&gt; touched!");
+  }
+  delay(300);
+}
+</pre></div>
+<ol class="walk" data-for="c13touch">
+  <li data-lines="2-3"><b class="what">Choosing pins for a reason.</b> GPIO4 is touch channel T0 and in the green table; GPIO34 is input-only and on ADC1.
+    <span class="why">This is exactly the "pin-selection checklist" in action: we spent the input-only pin on an analog input (it can't do anything else anyway) and chose ADC1 so the readings won't break if Wi-Fi is added later.</span></li>
+  <li data-lines="4"><b class="what">The touch threshold variable.</b> The number below which a reading counts as a "touch". Here we only create the variable; its value is filled in during setup.
+    <span class="why">The touchRead value depends on the wire length, the size of the foil, the humidity, the board itself and even <b>the version of the Arduino-ESP32 core</b> (it might be about 60 on one board and several hundred on another). A fixed number like 30 that you saw in some tutorial might never detect a touch on your board.</span></li>
+  <li data-lines="6-9"><b class="what">setup without pinMode.</b> We open Serial and wait half a second. Line 9 is just a comment.
+    <span class="why"><code>touchRead</code> and <code>analogRead</code> put the pin into the right mode (touch or analog) on their own. If you had written <code>pinMode(34, INPUT_PULLUP)</code>, no pull-up would be connected, because pins 34 to 39 have no internal pull-up at all.</span></li>
+  <li data-lines="10-12"><b class="what">Automatic calibration.</b> We read the touch value once "hands off", set the threshold to two thirds of it, and print both numbers.
+    <span class="why">Because a touch lowers the number on the original ESP32, anything below about two thirds of the resting value means a touch. This way the program works on any board and any core version without tweaking. The only condition is that you don't touch the wire at power-up or when you press EN.</span></li>
+  <li data-lines="16"><b class="what">Reading touch.</b> <code>touchRead</code> measures the pin's capacitance. When your finger touches the wire, the number drops.
+    <span class="why">On the original ESP32, "lower means touched". (On the S2 and S3 it's the other way round: touching makes the number bigger. If you ever move this code to an S3, flip the condition.)</span></li>
+  <li data-lines="17-18"><b class="what">Two ways to read the potentiometer.</b> <code>analogRead</code> gives a raw number from 0 to 4095; <code>analogReadMilliVolts</code> gives the voltage in millivolts with the factory calibration applied.
+    <span class="why">The raw number is fine for relative comparisons (for example "the knob is turned halfway"). When you need the real voltage, the millivolt version is more accurate, because the ESP32's ADC isn't perfectly linear.</span></li>
+  <li data-lines="20"><b class="what">Printing one complete line.</b> <code>printf</code> prints three numbers neatly on one line.
+    <span class="why">One line per pass of loop keeps the Serial Monitor (and the Serial Plotter) readable, so you can easily follow the changes.</span></li>
+  <li data-lines="22-24"><b class="what">Deciding with if.</b> If the touch value is below the threshold, the touched message is printed.
+    <span class="why">This is the simplest form of "sensor → decision → action". Later, instead of a message, you can switch on an LED or a relay (on a green pin!).</span></li>
+  <li data-lines="25"><b class="what">A 300 ms pause.</b> We measure about three times per second.
+    <span class="why">Any faster and the Serial Monitor fills up with numbers you can't read; any slower and the reaction to a touch feels sluggish.</span></li>
+</ol>
+
+<p>Sample output (the touch numbers on your board will differ; depending on the board and the core version they may be in the hundreds. All that matters is the <b>drop</b> in the number when you touch):</p>
+<div class="serial">Touch + input-only pin test (idle=58, threshold=38)
+touch=58  pot=0  (142 mV)
+touch=57  pot=2047  (1650 mV)
+touch=11  pot=2049  (1651 mV)
+&gt;&gt; touched!
+touch=56  pot=4095  (3150 mV)</div>
+<p>Look closely at the last line: the potentiometer is turned all the way, the raw number is 4095, but the millivolt reading is about 3150, not 3300. That's the ADC's "non-linear ceiling" we mentioned earlier. Likewise, at the bottom of the range (potentiometer at zero), the millivolt reading may not be exactly zero.</p>
+
+<div class="wokwi" data-board="esp32" data-code-from="c13touch">
+<p>In Wokwi you can fully test the potentiometer part: turn the knob with your mouse and watch the numbers. Try the touch part on a real board; the simulator has no real finger, and its touch number has no physical meaning.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": 20, "left": 200, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="checklist">The pin-selection checklist (for all your future projects)</h2>
+<p>Every time you start a new project, before connecting even one wire, go through these 8 steps on paper, <b>in order</b>:</p>
+<ol class="steps">
+  <li><b>Cross out the reds.</b> Remove GPIO6 to GPIO11 from the list. Set GPIO1 and GPIO3 aside for Serial as well.</li>
+  <li><b>Place the protocols first.</b> I2C on 21 and 22, SPI on 23, 19, 18 and 5, Serial2 on 16 and 17 with the pins written explicitly (if you need it). Don't spend these pins on anything else.</li>
+  <li><b>Put analog inputs on ADC1.</b> First 34, 35, 36 and 39 (input-only), then 32 and 33. If the project uses Wi-Fi, never ADC2.</li>
+  <li><b>Put power outputs (relay, motor, MOSFET) on green pins with no boot glitch</b>: for example 4, 13, 25, 26, 27, 32, 33. Never 1, 3, 5, 14 or 15.</li>
+  <li><b>Buttons:</b> on green pins with <code>INPUT_PULLUP</code>. If you put one on 34 to 39, add an external 10 kΩ resistor. If it has to wake the board from sleep, pick an RTC pin.</li>
+  <li><b>Touch:</b> 4, 13, 27, 32, 33. <b>DAC:</b> only 25 and 26.</li>
+  <li><b>Strapping pins are the last resort.</b> If you must use one, use it only for a simple output such as an LED (GPIO2 is fine for an LED), and never for something that sets its voltage at power-up. Leave GPIO12 free whenever you can.</li>
+  <li><b>Work out power and current.</b> At most 20 mA per pin; power-hungry parts get their power from 5V or a separate supply (with a shared GND); never more than 3.3 V on any GPIO.</li>
+</ol>
+<div class="callout coach"><div class="ct">Coach's advice</div>
+<p>I ask my students to write a "pin table" before every circuit: first column the part, second column the GPIO, third column "why this pin?". If your only answer for the third column is "because it was free", you're not ready to wire yet. Write this table at the top of your code as a comment, too. Six months from now, when you open the project again, you'll thank yourself. And one more thing: never say "I'll just test 5 V for a second". ESP32 pins don't know what "a second" is.</p></div>
+
+<div class="video" data-yt="u5unB24lhC4" data-title="ESP32 Guide 2024 | Choosing and Using an ESP32 Board" data-channel="DroneBot Workshop" data-lang="English">
+  <div class="sum"><ul>
+    <li>If you watched this video in lesson 1.2, watch it now with new eyes: whenever a board's pinout is on screen, pause and find the strapping, input-only and flash pins on it.</li>
+    <li>Notice which capabilities stay the same across boards (original ESP32, S3, C3) and which change. The rules in this lesson apply only to the original ESP32; the S3 and C3 have different strapping maps.</li>
+    <li>Recommended further reading: the <a href="https://randomnerdtutorials.com/esp32-pinout-reference-gpios/" target="_blank" rel="noopener">ESP32 Pinout Reference on Random Nerd Tutorials</a> and the <a href="https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/peripherals/gpio.html" target="_blank" rel="noopener">official GPIO page in the ESP-IDF documentation</a>.</li>
+  </ul></div>
+</div>
+
+<h2 id="debug">Troubleshooting pin problems</h2>
+<div class="table-wrap"><table>
+<tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+<tr><td>The board won't boot with the circuit attached but boots without it; <code>flash read err</code> on Serial</td><td>Something pulls GPIO12 HIGH at power-up</td><td>Move the part from GPIO12 to a green pin.</td></tr>
+<tr><td>Serial only shows <code>waiting for download</code></td><td>GPIO0 is LOW at power-up</td><td>Disconnect everything from GPIO0, and don't hold the BOOT button while resetting.</td></tr>
+<tr><td>Upload fails with <code>Failed to connect</code>, but only when the circuit is connected</td><td>A part on GPIO2 or GPIO0, or on GPIO1/3</td><td>Disconnect that wire while uploading; pick a different pin in your next design.</td></tr>
+<tr><td><code>analogRead</code> is always zero or stuck after adding Wi-Fi</td><td>The pin is on ADC2</td><td>Move it to 32 to 39 (ADC1).</td></tr>
+<tr><td>A button on GPIO35 randomly reads as pressed</td><td>34 to 39 have no internal pull-up; the pin is floating</td><td>Add an external 10 kΩ resistor between the pin and 3V3.</td></tr>
+<tr><td>An LED on GPIO34 won't light</td><td>It's an input-only pin</td><td>Move the LED to a green pin such as 4 or 25.</td></tr>
+<tr><td>The board crashes as soon as GPIO9 or "D2" on the DevKitC is used</td><td>A flash pin</td><td>Never use 6 to 11; match the printed label against the GPIO number.</td></tr>
+<tr><td>The relay clicks for a moment when the board powers up</td><td>A pin with a boot glitch (1, 3, 5, 14, 15)</td><td>Move the relay to a green pin and add an external pull-down.</td></tr>
+<tr><td>The board resets when the servo moves (<code>Brownout</code>)</td><td>The servo is powered from 3V3, or the supply is weak</td><td>Power the servo from 5V or a separate supply, with a shared GND.</td></tr>
+</table></div>
+
+<h2 id="quiz">Lesson quiz (important: get them all right)</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">You want to read a potentiometer and show its value on your phone over Wi-Fi. Which pin is best?</p>
+  <ol><li data-why="GPIO4 is on ADC2 and doesn't work while Wi-Fi is on.">GPIO4</li><li>GPIO34</li><li data-why="GPIO25 is on ADC2; it has trouble with Wi-Fi.">GPIO25</li><li data-why="GPIO12 is both ADC2 and a strapping pin; the worst choice.">GPIO12</li></ol>
+  <div class="fb">GPIO34 is on ADC1 (it works with Wi-Fi), and because it's input-only it isn't useful for anything else, so this is its best use.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">You've connected a button between GPIO36 and GND and written <code>pinMode(36, INPUT_PULLUP)</code>. The button randomly reads as "pressed". Why?</p>
+  <ol><li data-why="GPIO36 is on ADC1, and the ADC has nothing to do with digitalRead.">Because GPIO36 is on ADC2</li><li data-why="GPIO36 isn't one of the strapping pins.">Because GPIO36 is a strapping pin</li><li data-why="It isn't a flash pin; 6 to 11 are the flash pins.">Because GPIO36 is connected to the flash</li><li>Because GPIO36 has no internal pull-up resistor and the pin is floating</li></ol>
+  <div class="fb">Pins 34, 35, 36 and 39 have no internal pull-up or pull-down. INPUT_PULLUP does nothing on them; you need an external 10 kΩ resistor.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">You've connected a sensor module whose output has a pull-up to GPIO12, and now the board won't boot. What happened?</p>
+  <ol><li>GPIO12 was HIGH at boot, so the ESP32 powered the flash with 1.8 V (the wrong voltage)</li><li data-why="Download mode is selected by GPIO0, not GPIO12.">The board went into download mode</li><li data-why="GPIO12 isn't connected to the flash; it only sets the flash voltage at the moment of boot.">The sensor erased the flash memory</li><li data-why="ADC2 only has trouble with Wi-Fi and has nothing to do with booting.">ADC2 is clashing with the sensor</li></ol>
+  <div class="fb">GPIO12 (MTDI) is the strapping pin for the flash voltage. HIGH at boot = 1.8 V, but the WROOM module has a 3.3 V flash, so the flash can't be read.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">On the 38-pin DevKitC board, which GPIO is the pin labeled <code>D2</code>?</p>
+  <ol><li data-why="That's true on the DOIT board, not the DevKitC.">GPIO2</li><li data-why="That's on ESP8266 NodeMCU boards.">GPIO4</li><li>GPIO9 (a flash pin; forbidden)</li><li data-why="GPIO22 is the default SCL and is printed as 22 on the board.">GPIO22</li></ol>
+  <div class="fb">On the DevKitC, D2 means SD2 = GPIO9, which is connected to the flash. That's why you should always work with GPIO numbers, in your code and in your head, and match the printed label against your own board's pinout.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">You want to control a water pump relay. Which pin is <b>more suitable</b>?</p>
+  <ol><li data-why="GPIO14 outputs PWM during boot, so the relay may switch on for an instant.">GPIO14</li><li>GPIO26</li><li data-why="GPIO15 also outputs PWM during boot and is a strapping pin.">GPIO15</li><li data-why="GPIO1 sends the boot and Serial messages; the relay would twitch with every message.">GPIO1</li></ol>
+  <div class="fb">GPIO26 is green and doesn't glitch at boot. For power outputs, always pick the quiet green pins and add an external pull-down.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">Which group of pins should you <b>never</b> use?</p>
+  <ol><li data-why="These are input-only, but perfectly usable as inputs.">34, 35, 36, 39</li><li data-why="These are strapping pins; usable with caution.">0, 2, 5, 12, 15</li><li data-why="These are the I2C defaults and completely safe.">21 and 22</li><li>6, 7, 8, 9, 10, 11</li></ol>
+  <div class="fb">GPIO6 to GPIO11 are connected to the flash memory. The processor reads the program from the flash all the time; any interference = a crash.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">You have a battery-powered project that sits in deep sleep and must wake up at the press of a button. Which pin do you connect the button to?</p>
+  <ol><li data-why="GPIO18 isn't an RTC pin and can't wake the board from deep sleep.">GPIO18</li><li data-why="GPIO22 isn't an RTC pin (and it's the default SCL).">GPIO22</li><li>GPIO33</li><li data-why="GPIO23 isn't an RTC pin.">GPIO23</li></ol>
+  <div class="fb">Only RTC pins (such as 4, 13, 25 to 27, 32, 33, 34 to 39) can wake the board from deep sleep. GPIO33 is both an RTC pin and green.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">An LED with a 68 Ω resistor is connected to GPIO4 (LED voltage drop about 2 V). Is it safe?</p>
+  <ol><li>No; about 19 mA, right at the recommended 20 mA limit with no safety margin; a larger resistor (for example 220 Ω) is better</li><li data-why="Do the math: (3.3−2)÷68.">Yes, it's only about 2 mA</li><li data-why="48 mA means you put the full 3.3 V across the resistor; don't forget the LED's voltage drop.">No, it's 48 mA and the pin burns out instantly</li><li data-why="GPIO4 is a perfectly ordinary output.">No, because GPIO4 can't be an output</li></ol>
+  <div class="fb"><code>(3.3 − 2) ÷ 68 ≈ 0.019A = 19mA</code>. That's below the absolute limit of 40 mA, but right at the recommended 20 mA. With 220 Ω you get about 6 mA: completely safe and still bright.</div>
+</div>
+
+<h2 id="practice">Exercises</h2>
+<div class="exercise"><div class="ct">Exercise 1: assigning pins for a real project</div>
+<p>Your project has these parts: one LED, one button, one potentiometer, one OLED display (I2C) and one SG90 servo. The project also uses Wi-Fi. Pick a GPIO for each part and give your reason in one sentence. Also say how each part is powered.</p>
+<details><summary>Hint</summary><p>Go through the 8-step checklist in order: first the protocol (OLED), then analog on ADC1 (we have Wi-Fi!), then outputs on green pins, then the button with INPUT_PULLUP. Where will you power the servo from?</p></details>
+<details><summary>Answer</summary>
+<div class="table-wrap"><table>
+<tr><th>Part</th><th>GPIO</th><th>Why</th><th>Power</th></tr>
+<tr><td>OLED</td><td>SDA=21, SCL=22</td><td>The I2C defaults; the library's example code works unchanged</td><td>3V3 and GND</td></tr>
+<tr><td>Potentiometer</td><td>34</td><td>ADC1 (works with Wi-Fi) and input-only, so no general-purpose pin is wasted</td><td>3V3 and GND (not 5V!)</td></tr>
+<tr><td>LED</td><td>4 (with 220 Ω)</td><td>Green; being on ADC2 doesn't matter because it's a digital output</td><td>From the pin itself</td></tr>
+<tr><td>Button</td><td>27 with <code>INPUT_PULLUP</code></td><td>Green, has an internal pull-up, and is also an RTC pin (if you want deep sleep later)</td><td>Between the pin and GND</td></tr>
+<tr><td>Servo (signal)</td><td>25 (or 26)</td><td>Green with no boot glitch, so the servo won't twitch unexpectedly at power-up</td><td>V+ from 5V, shared GND</td></tr>
+</table></div>
+<p>Other answers are also correct as long as they have a reason; for example the potentiometer on 32 or 35, or the button on 13 or 33. <b>Wrong</b> answers: the potentiometer on 4, 25 or 26 (ADC2 with Wi-Fi), the servo on 14 or 15 (boot glitch), anything on 6 to 11 or on 12, and a servo powered from 3V3.</p></details>
+</div>
+<div class="exercise"><div class="ct">Exercise 2: calibrating touch</div>
+<p>Run the Touch_And_InputOnly program on a real board. Write down ten touch readings without touching and ten while touching, and work out the average of each. Where does the program's automatic threshold (<code>threshold</code> in the first line of output) fall between those two numbers? If a touch is sometimes missed, change the <code>2 / 3</code> factor (for example to <code>3 / 4</code>). Then make the foil bigger (say, the size of your palm), press the EN button and repeat the experiment. What changes?</p>
+<details><summary>Hint</summary><p>Usually the untouched number is a few dozen, and a touch brings it down to less than half. Bigger foil has more capacitance, so the untouched number also drops; in other words, the threshold needs to be set again. A very long wire also increases noise.</p></details>
+</div>
+<div class="exercise"><div class="ct">Exercise 3: pin detective (no code)</div>
+<p>Your friend built this circuit and says "nothing works right". Find every mistake and suggest a replacement pin for each: an analog soil moisture sensor on GPIO26 (with Wi-Fi), a pump relay on GPIO15, a button on GPIO39 with <code>INPUT_PULLUP</code>, an LED on GPIO35, and a module with a pull-up output on GPIO12.</p>
+<details><summary>Answer</summary><p>1) GPIO26 is on ADC2; it doesn't work with Wi-Fi → GPIO34 or 32. 2) GPIO15 outputs PWM during boot and is a strapping pin; the pump switches on for an instant → GPIO25 or 27 with a pull-down. 3) GPIO39 has no internal pull-up → either an external 10 kΩ resistor, or move the button to GPIO13 with INPUT_PULLUP. 4) GPIO35 is input-only, so the LED won't light → GPIO4. 5) GPIO12 HIGH at boot = the board doesn't boot → GPIO33.</p></details>
+</div>
+
+<div class="callout info"><div class="ct">The lesson in three lines</div>
+<p>In code, always work with <b>GPIO numbers</b> and match your board's printed labels against the pinout; never touch 6 to 11, keep 1 and 3 free for Serial, and never give any pin more than 3.3 V or more than 20 mA. Analog inputs go on ADC1 (32 to 39), because ADC2 stops working with Wi-Fi; 34 to 39 are input-only and have no pull-up. Leave the strapping pins (0, 2, 5, 12, 15) free at boot, put power parts on green pins with no boot glitch, and run the 8-step checklist on paper before every project.</p></div>
+
+<p>In the next lesson (<a href="1-4.html">1.4</a>) we move from paper to the workbench: the breadboard, the multimeter, soldering pin headers, and safely bringing a 5 V signal to these same pins.</p>
+
+</article>
+</body>
+</html>
