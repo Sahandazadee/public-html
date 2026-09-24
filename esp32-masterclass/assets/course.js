@@ -46,6 +46,7 @@ window.COURSE = {
     { id: "index", title: "خانه و نقشه راه", title_en: "Home & roadmap" },
     { id: "pinout", title: "نقشه پایه‌های تعاملی", title_en: "Interactive pinout" },
     { id: "glossary", title: "واژه‌نامه", title_en: "Glossary" },
+    { id: "troubleshooting", title: "عیب‌یابی: همه مشکل‌ها یک‌جا", title_en: "Troubleshooting: all problems" },
     { id: "tools", title: "جعبه‌ابزار", title_en: "Toolbox" },
     { id: "cheatsheet", title: "برگه خلاصه قابل چاپ", title_en: "Printable cheat sheet" },
     { id: "credits", title: "منابع و مجوز تصاویر", title_en: "Sources & image licenses" }

@@ -10,6 +10,8 @@
   var EN = LANG === "en";
   /* متن‌های داخل SVG سیم‌کشی: در فارسی راست‌به‌چپ، در انگلیسی چپ‌به‌راست؛ نقطه لنگر در هر دو زبان ثابت می‌ماند */
   var RIGHT_ALIGN = EN ? 'direction="ltr" text-anchor="end"' : 'direction="rtl" text-anchor="start"', LEFT_ALIGN = EN ? 'direction="ltr" text-anchor="start"' : 'direction="rtl" text-anchor="end"';
+  /* در فارسی نقطه وسط (·) کنار رقم فارسی شبیه صفر (۰) دیده می‌شود؛ پس جداکننده | است */
+  var SEP = EN ? ' · ' : ' | ';
   var G = (EN ? window.GLOSSARY_EN : window.GLOSSARY) || {};
   /* مسیر پوشه assets از آدرس همین اسکریپت به دست می‌آید تا در en/ هم درست کار کند */
   var BASE = (function () { var sc = document.currentScript || document.querySelector('script[src$="app.js"]'); return sc ? sc.getAttribute("src").replace(/app\.js.*$/, "") : "assets/"; })();
@@ -40,7 +42,21 @@
       wiringErr: "خطا در JSON نقشه سیم‌کشی", wiringAria: "نقشه سیم‌کشی",
       lgPower: "تغذیه (3V3 یا 5V)", lgGnd: "زمین GND", lgOut: "سیگنال خروجی", lgIn: "سیگنال ورودی / داده", lgClk: "ساعت / SCL / SCK", lgSda: "داده I2C (SDA) / TX",
       wTable: "جدول اتصال‌ها (برای چک کردن سیم به سیم)", wFrom: "از", wTo: "به", wColor: "رنگ پیشنهادی سیم",
-      langBtn: "EN", langTitle: "Read this page in English", langAria: "تغییر زبان به انگلیسی"
+      langBtn: "EN", langTitle: "Read this page in English", langAria: "تغییر زبان به انگلیسی",
+      skip: "پرش به متن اصلی", darkMode: "حالت تاریک",
+      progressOf: "%n از %t", progressAria: "پیشرفت تو: %n درس از %t درس تمام شده",
+      search: "جستجو", searchKey: "جستجو (کلید /)", searchPh: "جستجو در درس‌ها: مثلا PWM، ولتاژ، brownout", searchClose: "بستن",
+      searchLoading: "در حال بارگذاری نمایه جستجو…", searchErr: "نمایه جستجو بارگذاری نشد. اتصال را بررسی کن و دوباره امتحان کن.",
+      searchNone: "چیزی پیدا نشد. واژه دیگری امتحان کن (فارسی یا انگلیسی).", searchCount: "%n نتیجه",
+      searchHelp: "↑ ↓ برای رفتن بین نتیجه‌ها، Enter برای باز کردن، Esc برای بستن",
+      kindFile: "فایل کد", kindGloss: "واژه‌نامه", kindPage: "صفحه",
+      report: "گزارش اشتباه", reportLesson: "اشتباهی در این درس دیدی؟ گزارش بده ↗",
+      reportTitle: "اشتباه در: %s", reportBody: "صفحه: %u\nبخش: %h\n\nچه چیزی اشتباه است:\n",
+      dlIno: "دانلود فایل ino", dlDiagram: "دانلود diagram.json",
+      ppTitle: "پیشرفت تو", ppText: "%n درس از %t درس را تمام کرده‌ای. پیشرفت فقط در همین مرورگر ذخیره می‌شود؛ برای پشتیبان یا بردن به دستگاه دیگر، فایلش را بگیر.",
+      ppSave: "دانلود فایل پیشرفت", ppLoad: "بارگذاری فایل پیشرفت",
+      ppOk: "پیشرفت بارگذاری شد: %n درس تمام‌شده. صفحه دوباره باز می‌شود…", ppBad: "این فایل، فایل پیشرفت این دوره نیست.",
+      pinList: "فهرست پایه‌ها (برای لمس روی گوشی)", pinLeft: "ردیف چپ برد (از بالا به پایین)", pinRight: "ردیف راست برد (از بالا به پایین)"
     },
     en: {
       sub: "From absolute zero to real IoT projects", menu: "Menu", progress: "Your progress", theme: "Light or dark mode",
@@ -65,7 +81,21 @@
       wiringErr: "Error in the wiring diagram JSON", wiringAria: "Wiring diagram",
       lgPower: "Power (3V3 or 5V)", lgGnd: "Ground (GND)", lgOut: "Output signal", lgIn: "Input / data", lgClk: "Clock / SCL / SCK", lgSda: "I2C data (SDA) / TX",
       wTable: "Connection table (check it wire by wire)", wFrom: "From", wTo: "To", wColor: "Suggested wire color",
-      langBtn: "فا", langTitle: "این صفحه را فارسی بخوان", langAria: "Switch to Persian"
+      langBtn: "فا", langTitle: "این صفحه را فارسی بخوان", langAria: "Switch to Persian",
+      skip: "Skip to main content", darkMode: "Dark mode",
+      progressOf: "%n/%t", progressAria: "Your progress: %n of %t lessons done",
+      search: "Search", searchKey: "Search (press /)", searchPh: "Search the lessons: e.g. PWM, voltage, brownout", searchClose: "Close",
+      searchLoading: "Loading the search index…", searchErr: "The search index could not be loaded. Check your connection and try again.",
+      searchNone: "Nothing found. Try another word.", searchCount: "%n results",
+      searchHelp: "↑ ↓ to move between results, Enter to open, Esc to close",
+      kindFile: "Code file", kindGloss: "Glossary", kindPage: "Page",
+      report: "Report a mistake", reportLesson: "Spotted a mistake in this lesson? Report it ↗",
+      reportTitle: "Mistake in %s", reportBody: "Page: %u\nSection: %h\n\nWhat is wrong:\n",
+      dlIno: "Download .ino", dlDiagram: "Download diagram.json",
+      ppTitle: "Your progress", ppText: "You have finished %n of %t lessons. Progress is stored only in this browser; download the file as a backup or to move it to another device.",
+      ppSave: "Download progress file", ppLoad: "Load progress file",
+      ppOk: "Progress loaded: %n lessons done. Reloading the page…", ppBad: "This is not a progress file from this course.",
+      pinList: "Pin list (easy to tap on a phone)", pinLeft: "Left edge of the board (top to bottom)", pinRight: "Right edge of the board (top to bottom)"
     }
   };
   function t(k) { return I18N[LANG][k]; }
@@ -104,13 +134,22 @@
   if (lesson) article.style.setProperty("--chap", lesson.ch.color);
 
   var logo = '<svg viewBox="0 0 40 40"><rect x="3" y="3" width="34" height="34" rx="9" fill="#2f7af0"/><rect x="11" y="10" width="18" height="20" rx="3" fill="#0f1729"/><path d="M13 13h14" stroke="#9ecbff" stroke-width="2"/><g stroke="#ffd166" stroke-width="2"><path d="M7 14h4M7 19h4M7 24h4M29 14h4M29 19h4M29 24h4"/></g><circle cx="20" cy="22" r="3" fill="#3cc9a0"/></svg>';
+  /* آیکون‌های حالت روشن و تاریک: آیکون همیشه حالت فعلی را نشان می‌دهد */
+  var SUN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/></svg>';
+  var MOON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>';
   var top = el("header", { "class": "topbar" },
     '<button class="btn icon-btn menu-toggle" data-act="nav" aria-label="' + t("menu") + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>' +
     '<a class="brand" href="index.html">' + logo + '<span><b>' + LX(C, "title") + '</b><small>' + t("sub") + '</small></span></a>' +
     '<span class="spacer"></span>' +
-    '<span class="progress-pill" title="' + t("progress") + '"><span class="bar"><i></i></span><span class="pct"></span></span>' +
+    '<button class="btn icon-btn search-btn" type="button" data-act="search" aria-label="' + t("search") + '" title="' + t("searchKey") + '" aria-haspopup="dialog" aria-keyshortcuts="/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><kbd aria-hidden="true">/</kbd></button>' +
+    '<a class="progress-pill" href="index.html#chapters" title="' + t("progress") + '"><span class="bar" aria-hidden="true"><i></i></span><span class="pct"></span></a>' +
     (HAS_TWIN ? '<a class="btn lang-btn" data-act="lang" href="' + TWIN + '" hreflang="' + (EN ? "fa" : "en") + '" lang="' + (EN ? "fa" : "en") + '" title="' + t("langTitle") + '" aria-label="' + t("langAria") + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span>' + t("langBtn") + '</span></a>' : '') +
-    '<button class="btn icon-btn" data-act="theme" aria-label="' + t("theme") + '" title="' + t("theme") + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/></svg></button>');
+    '<button class="btn icon-btn theme-btn" type="button" data-act="theme" aria-label="' + t("darkMode") + '" title="' + t("theme") + '" aria-pressed="false"></button>');
+  var themeBtn = top.querySelector(".theme-btn"), darkMQ = matchMedia("(prefers-color-scheme: dark)");
+  function isDark() { var a = document.documentElement.getAttribute("data-theme"); return a ? a === "dark" : darkMQ.matches; }
+  function paintTheme() { var d = isDark(); themeBtn.innerHTML = d ? MOON : SUN; themeBtn.setAttribute("aria-pressed", d ? "true" : "false"); }
+  paintTheme();
+  if (darkMQ.addEventListener) darkMQ.addEventListener("change", paintTheme);
 
   var side = el("aside", { "class": "sidebar", "aria-label": t("lessonsNav") });
   var sh = '<h4>' + t("extras") + '</h4>';
@@ -131,6 +170,9 @@
   shell.appendChild(main);
   main.appendChild(article);
   document.body.insertBefore(top, document.body.firstChild);
+  /* پیوند «پرش به متن اصلی»: اولین چیزی که با Tab فوکوس می‌گیرد */
+  main.id = main.id || "main"; main.setAttribute("tabindex", "-1");
+  document.body.insertBefore(el("a", { "class": "skip-link", href: "#" + main.id }, t("skip")), document.body.firstChild);
   document.body.appendChild(el("div", { "class": "backdrop", "data-act": "nav" }));
   /* نوار پیشرفت خواندن و دکمه بازگشت به بالا */
   var rb = el("div", { "class": "read-bar", "aria-hidden": "true" }, "<i></i>");
@@ -147,19 +189,44 @@
   /* سرصفحه خودکار درس */
   if (lesson && !article.querySelector("h1")) {
     var head = el("header", { "class": "lesson-head" },
-      '<span class="eyebrow">' + t("chapter") + ' ' + fa(lesson.ch.n) + ' · ' + LX(lesson.ch, "title") + ' · ' + t("lesson") + ' ' + fa(lesson.id.replace("-", ".")) + '</span>' +
+      '<span class="eyebrow">' + t("chapter") + ' ' + fa(lesson.ch.n) + SEP + LX(lesson.ch, "title") + SEP + t("lesson") + ' ' + fa(lesson.id.replace("-", ".")) + '</span>' +
       '<h1>' + LX(lesson, "title") + '</h1>' +
       '<div class="meta"><span>⏱ ' + t("about") + ' ' + fa(lesson.min) + ' ' + t("minutes") + '</span><span>📶 ' + t("level") + ': ' + LX(lesson, "level") + '</span><span>🧭 ' + t("lesson") + ' ' + fa(idx + 1) + ' ' + t("of") + ' ' + fa(lessons.length) + '</span></div>');
     article.insertBefore(head, article.firstChild);
     document.title = LX(lesson, "title") + " · " + LX(C, "title");
   }
 
+  /* ---------- گزارش اشتباه: یک Issue تازه در گیت‌هاب با نام صفحه، نشانی و نزدیک‌ترین عنوان ---------- */
+  var REPORT = "https://github.com/Sahandazadee/public-html/issues/new";
+  function nearestHeading() {
+    /* آخرین عنوانی که از بالای صفحه رد شده، یعنی بخشی که خواننده الان در آن است */
+    var hs = article.querySelectorAll("h1, h2, h3"), best = null, lim = innerHeight * 0.35;
+    for (var i = 0; i < hs.length; i++) if (hs[i].getBoundingClientRect().top < lim) best = hs[i];
+    return best;
+  }
+  function reportHref() {
+    var h = nearestHeading(), sec = h && h.tagName !== "H1" ? h : null;
+    var parts = document.title.split(" · "), title = parts.length > 1 ? parts.slice(0, -1).join(" · ") : document.title;
+    var url = location.href.split("#")[0] + (sec && sec.id ? "#" + sec.id : "");
+    var body = t("reportBody").replace("%u", url).replace("%h", sec ? sec.textContent.trim() : "-");
+    return REPORT + "?title=" + encodeURIComponent(t("reportTitle").replace("%s", title)) + "&body=" + encodeURIComponent(body);
+  }
+  /* نشانی درست پیش از باز شدن ساخته می‌شود (کلیک، کلیک وسط یا منوی راست‌کلیک) */
+  ["mousedown", "focusin", "contextmenu"].forEach(function (ev) {
+    document.addEventListener(ev, function (e) { var a = e.target.closest && e.target.closest('[data-act="report"]'); if (a) a.href = reportHref(); });
+  });
+
   /* ---------- پیشرفت ---------- */
+  function doneCount() { return done.filter(function (d) { return lessons.some(function (l) { return l.id === d; }); }).length; }
+  function fmtN(str, n) { return str.replace("%n", fa(n)).replace("%t", fa(lessons.length)); }
   function refreshProgress() {
-    var p = Math.round(done.filter(function (d) { return lessons.some(function (l) { return l.id === d; }); }).length / lessons.length * 100);
+    var n = doneCount(), p = Math.round(n / lessons.length * 100), pill = top.querySelector(".progress-pill");
     top.querySelector(".bar i").style.width = p + "%";
-    top.querySelector(".pct").textContent = fa(p) + (EN ? "%" : "٪");
+    /* شمارنده «چند درس از ۲۴» در همه عرض‌ها، با برچسب کامل برای صفحه‌خوان */
+    top.querySelector(".pct").textContent = fmtN(t("progressOf"), n);
+    pill.setAttribute("aria-label", fmtN(t("progressAria"), n));
     side.querySelectorAll("a.l").forEach(function (a) { a.classList.toggle("done", done.indexOf(a.getAttribute("data-id")) > -1); });
+    document.dispatchEvent(new CustomEvent("esp32mc-progress"));
     document.querySelectorAll("[data-lesson-link]").forEach(function (li) { li.classList.toggle("done", done.indexOf(li.getAttribute("data-lesson-link")) > -1); });
     /* شمارنده «چند درس از این فصل تمام شده» کنار عنوان هر فصل */
     C.chapters.forEach(function (ch) {
@@ -181,6 +248,7 @@
       b.classList.toggle("done", isDone());
     };
     paint();
+    box.insertAdjacentHTML("beforeend", '<a class="report-link" data-act="report" target="_blank" rel="noopener" href="' + REPORT + '">' + t("reportLesson") + '</a>');
     box.querySelector("button").addEventListener("click", function () {
       if (isDone()) done.splice(done.indexOf(lesson.id), 1); else if (quizLeft() === 0) done.push(lesson.id); else return;
       store("esp32mc-done", done); paint(); refreshProgress();
@@ -193,14 +261,62 @@
       (next ? '<a class="next" href="' + next.id + '.html"><small>' + t("next") + '</small>' + LX(next, "title") + '</a>' : '<a class="next" href="index.html"><small>' + t("end") + '</small>' + t("backHome") + '</a>'));
     article.appendChild(pg);
   }
-  main.appendChild(el("footer", { "class": "footer" }, t("footer")));
+  main.appendChild(el("footer", { "class": "footer" }, t("footer") + ' · <a class="report" data-act="report" target="_blank" rel="noopener" href="' + REPORT + '">' + t("report") + ' ↗</a>'));
   refreshProgress();
+
+  /* ---------- صفحه خانه: پشتیبان‌گیری و بازگرداندن پیشرفت (فایل JSON) ----------
+     کلیدهای localStorage همان قبلی‌ها هستند: esp32mc-done، esp32mc-quiz، esp32mc-lang، esp32mc-theme */
+  function download(name, text, type) {
+    var url = URL.createObjectURL(new Blob([text], { type: type || "text/plain;charset=utf-8" }));
+    var a = el("a", { href: url, download: name }); document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+  }
+  if (pageId === "index") {
+    var pp = el("section", { "class": "progress-panel no-print", "aria-labelledby": "pp-title" },
+      '<h3 id="pp-title">📦 ' + t("ppTitle") + '</h3><p class="pp-text"></p><div class="pp-actions">' +
+      '<button type="button" class="btn" data-pp="save">⬇ ' + t("ppSave") + '</button>' +
+      '<label class="btn pp-load">⬆ ' + t("ppLoad") + '<input type="file" accept="application/json,.json" class="vh"></label></div>' +
+      '<p class="pp-msg" role="status" aria-live="polite"></p>');
+    var ppText = function () { pp.querySelector(".pp-text").textContent = fmtN(t("ppText"), doneCount()); };
+    ppText(); document.addEventListener("esp32mc-progress", ppText);
+    var anchorEl = document.getElementById("chapters");
+    if (anchorEl && article.contains(anchorEl)) anchorEl.parentNode.insertBefore(pp, anchorEl.nextSibling); else article.appendChild(pp);
+    pp.querySelector('[data-pp="save"]').addEventListener("click", function () {
+      var data = { app: "esp32mc", v: 1, saved: new Date().toISOString(), done: store("esp32mc-done") || [], quiz: store("esp32mc-quiz") || {}, lang: store("esp32mc-lang"), theme: store("esp32mc-theme") };
+      download("esp32-masterclass-progress-" + new Date().toISOString().slice(0, 10) + ".json", JSON.stringify(data, null, 2), "application/json");
+    });
+    pp.querySelector("input[type=file]").addEventListener("change", function () {
+      var file = this.files && this.files[0], msg = pp.querySelector(".pp-msg"), inp = this;
+      if (!file) return;
+      var rd = new FileReader();
+      rd.onload = function () {
+        var d; try { d = JSON.parse(rd.result); } catch (e) { d = null; }
+        if (!d || d.app !== "esp32mc" || !Array.isArray(d.done)) { msg.textContent = t("ppBad"); msg.className = "pp-msg bad"; inp.value = ""; return; }
+        /* ادغام، نه جایگزینی: درس‌ها و آزمون‌های حل‌شده این مرورگر از دست نمی‌روند */
+        var ids = lessons.map(function (l) { return l.id; });
+        d.done.forEach(function (id) { if (ids.indexOf(id) > -1 && done.indexOf(id) < 0) done.push(id); });
+        var q = store("esp32mc-quiz") || {};
+        if (d.quiz && typeof d.quiz === "object") Object.keys(d.quiz).forEach(function (k) {
+          if (ids.indexOf(k) < 0 || !Array.isArray(d.quiz[k])) return;
+          q[k] = (q[k] || []).concat(d.quiz[k].filter(function (n) { return typeof n === "number" && (q[k] || []).indexOf(n) < 0; }));
+        });
+        store("esp32mc-done", done); store("esp32mc-quiz", q);
+        if (d.lang === "fa" || d.lang === "en") store("esp32mc-lang", d.lang);
+        if (d.theme === "light" || d.theme === "dark") store("esp32mc-theme", d.theme);
+        msg.textContent = fmtN(t("ppOk"), doneCount()); msg.className = "pp-msg ok";
+        refreshProgress();
+        setTimeout(function () { location.reload(); }, 1200);
+      };
+      rd.readAsText(file);
+    });
+  }
 
   /* فهرست «روی این صفحه» */
   var h2s = article.querySelectorAll("h2");
   if (h2s.length > 1) {
     var toc = '<h4>' + t("onPage") + '</h4>';
-    h2s.forEach(function (h, i) { if (!h.id) h.id = "s" + (i + 1); toc += '<a class="x" href="#' + h.id + '">' + h.textContent + '</a>'; });
+    /* عنوان‌های کارت «اهداف و پیش‌نیاز» شناسه می‌گیرند ولی در فهرست نمی‌آیند */
+    h2s.forEach(function (h, i) { if (!h.id) h.id = "s" + (i + 1); if (!h.closest(".goals")) toc += '<a class="x" href="#' + h.id + '">' + esc(h.textContent) + '</a>'; });
     side.insertAdjacentHTML("afterbegin", toc);
   }
 
@@ -210,11 +326,12 @@
     if (t) {
       var a = t.getAttribute("data-act");
       if (a === "nav") document.body.classList.toggle("nav-open");
+      if (a === "report") t.href = reportHref();
+      if (a === "search") { openSearch(); return; }
       if (a === "lang") { e.preventDefault(); store("esp32mc-lang", EN ? "fa" : "en"); location.href = TWIN + location.hash; return; }
       if (a === "theme") {
-        var cur = document.documentElement.getAttribute("data-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-        var nt = cur === "dark" ? "light" : "dark";
-        document.documentElement.setAttribute("data-theme", nt); store("esp32mc-theme", nt);
+        var nt = isDark() ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", nt); store("esp32mc-theme", nt); paintTheme();
       }
     }
     if (e.target.closest(".sidebar a")) document.body.classList.remove("nav-open");
@@ -285,9 +402,14 @@
       });
     });
     pre.innerHTML = lines.map(function (l) { return '<span class="ln">' + (l || " ") + '</span>'; }).join("");
-    var bar = el("div", { "class": "bar" }, '<span class="dots"><i></i><i></i><i></i></span><span class="fname">' + esc(block.getAttribute("data-file") || lang) + '</span><button type="button">' + t("copy") + '</button>');
+    /* برنامه کامل (setup و loop دارد) دکمه دانلود ‎.ino هم می‌گیرد؛ نام فایل از data-file یا sketch.ino */
+    var df = block.getAttribute("data-file") || "", full = lang === "cpp" && /\bsetup\s*\(/.test(raw) && /\bloop\s*\(/.test(raw);
+    var ino = /^[\w.-]+\.(ino|cpp)$/.test(df) ? df : "sketch.ino";
+    var bar = el("div", { "class": "bar" }, '<span class="dots"><i></i><i></i><i></i></span><span class="fname">' + esc(df || lang) + '</span>' +
+      (full ? '<button type="button" class="dl" aria-label="' + esc(t("dlIno") + ": " + ino) + '">⬇ ' + t("dlIno") + '</button>' : '') + '<button type="button" class="cp">' + t("copy") + '</button>');
     block.insertBefore(bar, pre);
-    bar.querySelector("button").addEventListener("click", function () {
+    if (full) bar.querySelector(".dl").addEventListener("click", function () { download(ino, raw + "\n"); });
+    bar.querySelector(".cp").addEventListener("click", function () {
       var b = this;
       var done = function () { b.textContent = t("copied"); setTimeout(function () { b.textContent = t("copy"); }, 1500); };
       if (navigator.clipboard) navigator.clipboard.writeText(raw).then(done, function () { fallbackCopy(raw); done(); });
@@ -304,13 +426,16 @@
     ol.querySelectorAll("li[data-lines]").forEach(function (li) {
       var r = li.getAttribute("data-lines");
       li.insertAdjacentHTML("afterbegin", '<span class="lines">L' + r + '</span>');
-      li.addEventListener("click", function () {
-        if (!code) return;
+      /* مثل گزینه‌های آزمون با صفحه‌کلید هم کار می‌کند: Tab، سپس Enter یا فاصله */
+      li.setAttribute("tabindex", "0"); li.setAttribute("role", "button"); li.setAttribute("aria-pressed", "false");
+      li.addEventListener("keydown", function (e) { if ((e.key === "Enter" || e.key === " ") && e.target === li) { e.preventDefault(); li.click(); } });
+      li.addEventListener("click", function (e) {
+        if (!code || (e.target.closest && e.target.closest("a"))) return;
         var lns = code.querySelectorAll(".ln"), on = !li.classList.contains("on");
-        ol.querySelectorAll("li").forEach(function (x) { x.classList.remove("on"); });
+        ol.querySelectorAll("li").forEach(function (x) { x.classList.remove("on"); if (x.hasAttribute("aria-pressed")) x.setAttribute("aria-pressed", "false"); });
         lns.forEach(function (x) { x.classList.remove("hl"); });
         if (!on) return;
-        li.classList.add("on");
+        li.classList.add("on"); li.setAttribute("aria-pressed", "true");
         r.split(",").forEach(function (seg) {
           var ab = seg.split("-"), a = +ab[0], b = +(ab[1] || ab[0]);
           for (var i = a; i <= b; i++) if (lns[i - 1]) lns[i - 1].classList.add("hl");
@@ -378,10 +503,12 @@
     var url = w.getAttribute("data-url") || "https://wokwi.com/projects/new/" + board;
     w.innerHTML = '<div class="wh"><b>' + (w.getAttribute("data-title") || t("wokwiTitle")) + '</b>' +
       '<a class="btn" target="_blank" rel="noopener" href="' + url + '">' + t("wokwiOpen") + '</a>' +
-      (diagram ? '<button class="btn" data-copy="d">' + t("copyDiagram") + '</button>' : '') +
+      (diagram ? '<button class="btn" data-copy="d">' + t("copyDiagram") + '</button><button class="btn" data-dl="d">⬇ ' + t("dlDiagram") + '</button>' : '') +
       (code ? '<button class="btn" data-copy="c">' + t("copySketch") + '</button>' : '') + '</div>' +
       '<div class="wb">' + body + (diagram ? '<details><summary>' + t("diagramSum") + '</summary><div class="code" data-lang="json" data-file="diagram.json"><pre>' + esc(diagram) + '</pre></div></details>' : '') + '</div>';
     w.querySelectorAll(".code").forEach(renderCode);
+    var dlb = w.querySelector("[data-dl]");
+    if (dlb) dlb.addEventListener("click", function () { download("diagram.json", diagram + "\n", "application/json"); });
     w.querySelectorAll("[data-copy]").forEach(function (b) {
       b.addEventListener("click", function () {
         var txt = b.getAttribute("data-copy") === "d" ? diagram : code.querySelector("pre").innerText;
@@ -398,7 +525,7 @@
     var stamps = v.querySelectorAll("[data-t]");
     var sum = v.querySelector(".sum");
     var html = '<div class="ratio"><div class="poster"><div><div class="play"></div><div>' + esc(v.getAttribute("data-title") || "") + '</div><small style="opacity:.7">' + t("play") + '</small></div></div></div>' +
-      '<div class="vb"><h4>🎬 ' + esc(v.getAttribute("data-title") || "") + '</h4><div class="chan">' + t("channel") + ': ' + esc(v.getAttribute("data-channel") || "") + ' · ' + t("vlang") + ': ' + esc(v.getAttribute("data-lang") || t("vdefault")) + ' · <a target="_blank" rel="noopener" href="https://www.youtube.com/watch?v=' + id + '">' + t("openYT") + '</a></div>';
+      '<div class="vb"><h3>🎬 ' + esc(v.getAttribute("data-title") || "") + '</h3><div class="chan">' + t("channel") + ': ' + esc(v.getAttribute("data-channel") || "") + ' · ' + t("vlang") + ': ' + esc(v.getAttribute("data-lang") || t("vdefault")) + ' · <a target="_blank" rel="noopener" href="https://www.youtube.com/watch?v=' + id + '">' + t("openYT") + '</a></div>';
     if (stamps.length) {
       html += '<div class="stamps">';
       stamps.forEach(function (s) { html += '<button data-s="' + tsec(s.getAttribute("data-t")) + '"><span>' + s.getAttribute("data-t") + '</span>' + s.innerHTML + '</button>'; });
@@ -466,12 +593,20 @@
   var L_EN = ["Regulated 3.3 V output for 3.3 V sensors. Roughly 500 mA for the whole board.", "Enable / reset. Pulling it to GND resets the board; the EN button does exactly this.", "Also called VP or SENSOR_VP. Input only, no internal pull-up. Great for an analog sensor (ADC1_CH0).", "Also called VN. Input only, no internal pull-up. ADC1_CH3.", "Input only, no internal pull-up. A good choice for a potentiometer (ADC1_CH6). It cannot drive an LED.", "Input only, no internal pull-up. ADC1_CH7.", "General purpose and safe. ADC1_CH4 and touch T9. Good for analog sensors even with Wi-Fi on.", "General purpose and safe. ADC1_CH5 and touch T8.", "DAC1 output (a real analog voltage). It is on ADC2, so no analog reads while Wi-Fi is on.", "DAC2 output. ADC2_CH9.", "General purpose. Touch T7.", "Outputs a PWM signal during boot, so be careful with relays or motors. Touch T6.", "Strapping pin (MTDI): if it is HIGH at power-up the flash voltage is set wrong and the board won't boot. Avoid it when you can.", "Ground. Every part must share this common GND.", "General purpose and safe. Touch T4. MOSI of the second SPI bus (HSPI).", "Connected to the internal flash (SD2). Never use it; the program will crash.", "Connected to the internal flash (SD3). Do not use.", "Connected to the internal flash (CMD). Do not use.", "5 V straight from USB (or the board's 5 V input). For servos and 5 V modules. Never feed 5 V into a GPIO."];
   var R_EN = ["Ground.", "General purpose. Default MOSI of VSPI (SD cards and SPI displays).", "Default I2C SCL (clock line for the OLED and sensors).", "TX0: Serial.print output goes to USB through this pin. Using it breaks the Serial Monitor.", "RX0: receives from USB and is used during upload. Leave it unconnected.", "Default I2C SDA (data line).", "Ground.", "Default MISO of VSPI.", "Default SCK (clock) of VSPI.", "Strapping pin and default VSPI CS. Outputs PWM during boot. Commonly and safely used as the SD card CS.", "General purpose. Printed TX2 on many boards and a common choice for Serial2, but on core 3.x pass the pins explicitly: Serial2.begin(9600, SERIAL_8N1, 16, 17). Used by PSRAM on WROVER modules.", "General purpose. Printed RX2; pass it explicitly to Serial2 (core 3.x defaults are GPIO4 and GPIO25). Used by PSRAM on WROVER modules.", "General purpose and safe. Touch T0.", "The BOOT button is wired here. If it is LOW at power-up the board enters download mode. Be careful.", "Many boards have a blue LED here. It is a strapping pin but fine for an LED. Touch T2.", "Strapping pin (MTDO): controls boot log output and outputs PWM during boot. Touch T3.", "Connected to the flash (SD1). Do not use.", "Connected to the flash (SD0). Do not use.", "Connected to the flash (CLK). Do not use."];
   function tagName(k) { return EN ? TAGS[k][2] : TAGS[k][0]; }
+  /* رنگ متن روی برچسب: سفید یا سرمه‌ای، هر کدام که کنتراست بیشتری با رنگ برچسب دارد */
+  function textOn(hex) {
+    var h = hex.replace("#", ""); if (h.length === 3) h = h.replace(/./g, "$&$&");
+    var c = [0, 2, 4].map(function (i) { var v = parseInt(h.substr(i, 2), 16) / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+    var L = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    return (1.05 / (L + 0.05)) >= ((L + 0.05) / (0.0137 + 0.05)) ? "#fff" : "#152033";
+  }
   /* نقش ثابت هر پایه در نقشه پایه‌های این دوره (درس ۱.۳، بخش plan) */
   var ROLE = { 4: ["LED وضعیت", "status LED"], 27: ["دکمه ۱", "button 1"], 33: ["دکمه ۲", "button 2"], 34: ["پتانسیومتر", "potentiometer"], 35: ["LDR", "LDR"], 13: ["سنسور DHT22", "DHT22 sensor"], 25: ["بازر", "buzzer"], 21: ["SDA در I2C (نمایشگر OLED)", "I2C SDA (OLED)"], 22: ["SCL در I2C (نمایشگر OLED)", "I2C SCL (OLED)"], 5: ["CS کارت SD", "SD card CS"], 18: ["SCK کارت SD", "SD card SCK"], 19: ["MISO کارت SD", "SD card MISO"], 23: ["MOSI کارت SD", "SD card MOSI"], 16: ["RX در UART2 (GPS)", "UART2 RX (GPS)"], 17: ["TX در UART2 (GPS)", "UART2 TX (GPS)"], 32: ["سروو یا NeoPixel", "servo or NeoPixel"], 26: ["رله، موتور یا ماسفت", "relay, motor or MOSFET"], 14: ["ورودی دوم موتور", "second motor input"] };
   function pinNote(side, i) {
     var n = (side ? R : L)[i][1], r = ROLE[n], base = EN ? (side ? R_EN : L_EN)[i] : (side ? R : L)[i][3];
     return r ? base + (EN ? " In this course: " + r[1] + "." : " در این دوره: " + r[0] + ".") : base;
   }
+  var pinoutN = 0;
   function buildPinout(box) {
     var W = 860, pitch = 34, y0 = 300, H = y0 + pitch * 19 + 110, bx = 330, bw = 200;
     var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + t("pinAria") + '">';
@@ -495,32 +630,57 @@
       extra.forEach(function (t, k) {
         var w = 58, ex = side ? lx + 124 + k * (w + 4) : lx - 4 - (k + 1) * (w) - k * 4;
         var short = { touch: "TOUCH", dac: "DAC", i2c: p[1] === 21 ? "SDA" : "SCL", spi: { 23: "MOSI", 19: "MISO", 18: "SCK", 5: "CS" }[p[1]], adc1: "ADC1", input: "IN only" }[t];
-        g += '<rect x="' + ex + '" y="' + (y - 11) + '" width="' + w + '" height="22" rx="6" fill="' + TAGS[t][1] + '" opacity=".9"/><text x="' + (ex + w / 2) + '" y="' + (y + 4) + '" text-anchor="middle" font-size="11" fill="#fff" font-family="JetBrains Mono,monospace">' + short + '</text>';
+        g += '<rect x="' + ex + '" y="' + (y - 11) + '" width="' + w + '" height="22" rx="6" fill="' + TAGS[t][1] + '" opacity=".9"/><text x="' + (ex + w / 2) + '" y="' + (y + 4) + '" text-anchor="middle" font-size="11" fill="' + textOn(TAGS[t][1]) + '" font-family="JetBrains Mono,monospace">' + short + '</text>';
       });
       return g + '</g>';
     }
     L.forEach(function (p, i) { s += pin(p, i, 0); });
     R.forEach(function (p, i) { s += pin(p, i, 1); });
     s += '</svg>';
-    var f = '<div class="filters"><button class="on" data-f="">' + t("all") + '</button>';
-    ["safe", "input", "adc1", "adc2", "touch", "dac", "strap", "flash", "i2c", "spi", "uart", "rtc", "power"].forEach(function (t) { f += '<button data-f="' + t + '">' + tagName(t) + '</button>'; });
+    var f = '<div class="filters"><button type="button" class="on" aria-pressed="true" data-f="">' + t("all") + '</button>';
+    ["safe", "input", "adc1", "adc2", "touch", "dac", "strap", "flash", "i2c", "spi", "uart", "rtc", "power"].forEach(function (t) { f += '<button type="button" aria-pressed="false" data-f="' + t + '">' + tagName(t) + '</button>'; });
     f += '</div>';
-    box.innerHTML = f + '<div class="grid"><div>' + s + '</div><div class="info"><h4>' + t("pinPick") + '</h4><p>' + t("pinHelp") + '</p><p>' + t("pinGold") + '</p></div></div>';
+    /* روی گوشی (زیر ۸۰۰ پیکسل) یک فهرست لمسی هم زیر نقشه می‌آید؛ همان داده و همان pinNote() */
+    function tagChips(p) { return p[2].map(function (t) { return '<span style="background:' + TAGS[t][1] + ';color:' + textOn(TAGS[t][1]) + '">' + tagName(t) + '</span>'; }).join(""); }
+    function pinDetail(p, sd, i) {
+      return '<p>' + pinNote(sd, i) + '</p>' + (p[1] != null ? '<p style="direction:ltr;text-align:start"><code>pinMode(' + p[1] + ', ' + (p[2].indexOf("input") > -1 ? "INPUT" : "OUTPUT") + ');</code></p>' : '');
+    }
+    var list = '<div class="pin-list" aria-label="' + t("pinList") + '" role="group">';
+    [L, R].forEach(function (arr, sd) {
+      list += '<p class="pl-h">' + t(sd ? "pinRight" : "pinLeft") + '</p><ul>';
+      arr.forEach(function (p, i) {
+        var id = "pl-" + pinoutN + "-" + sd + "-" + i;
+        list += '<li data-tags="' + p[2].join(" ") + '"><button type="button" aria-expanded="false" aria-controls="' + id + '" data-side="' + sd + '" data-i="' + i + '"><b>' + p[0] + '</b><span class="tags">' + tagChips(p) + '</span></button><div class="pl-note" id="' + id + '" hidden>' + pinDetail(p, sd, i) + '</div></li>';
+      });
+      list += '</ul>';
+    });
+    list += '</div>';
+    pinoutN++;
+    box.innerHTML = f + '<div class="grid"><div>' + s + '</div><div class="info"><h4 dir="auto">' + t("pinPick") + '</h4><p>' + t("pinHelp") + '</p><p>' + t("pinGold") + '</p></div></div>' + list;
     var info = box.querySelector(".info");
     box.querySelectorAll(".pin").forEach(function (g) {
       g.addEventListener("click", function () {
-        var p = (+g.getAttribute("data-side") ? R : L)[+g.getAttribute("data-i")];
+        var sd = +g.getAttribute("data-side"), i = +g.getAttribute("data-i"), p = (sd ? R : L)[i];
         box.querySelectorAll(".pin").forEach(function (x) { x.classList.remove("sel"); });
         g.classList.add("sel");
-        info.innerHTML = '<h4>' + p[0] + '</h4><div class="tags">' + p[2].map(function (t) { return '<span style="background:' + TAGS[t][1] + '">' + tagName(t) + '</span>'; }).join("") + '</div><p>' + pinNote(+g.getAttribute("data-side"), +g.getAttribute("data-i")) + '</p>' +
-          (p[1] != null ? '<p style="direction:ltr;text-align:start"><code>pinMode(' + p[1] + ', ' + (p[2].indexOf("input") > -1 ? "INPUT" : "OUTPUT") + ');</code></p>' : '');
+        info.innerHTML = '<h4 dir="ltr">' + p[0] + '</h4><div class="tags">' + tagChips(p) + '</div>' + pinDetail(p, sd, i);
+      });
+    });
+    box.querySelectorAll(".pin-list button").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var open = b.getAttribute("aria-expanded") !== "true";
+        b.setAttribute("aria-expanded", open ? "true" : "false");
+        document.getElementById(b.getAttribute("aria-controls")).hidden = !open;
+        /* همان پایه در نقشه بالا هم علامت می‌خورد */
+        box.querySelectorAll(".pin").forEach(function (x) { x.classList.toggle("sel", open && x.getAttribute("data-side") === b.getAttribute("data-side") && x.getAttribute("data-i") === b.getAttribute("data-i")); });
       });
     });
     box.querySelectorAll("[data-f]").forEach(function (b) {
       b.addEventListener("click", function () {
         var f = b.getAttribute("data-f");
-        box.querySelectorAll("[data-f]").forEach(function (x) { x.classList.toggle("on", x === b); });
+        box.querySelectorAll("[data-f]").forEach(function (x) { x.classList.toggle("on", x === b); x.setAttribute("aria-pressed", x === b ? "true" : "false"); });
         box.querySelectorAll(".pin").forEach(function (g) { g.classList.toggle("dim", !!f && g.getAttribute("data-tags").split(" ").indexOf(f) < 0); });
+        box.querySelectorAll(".pin-list li").forEach(function (li) { li.hidden = !!f && li.getAttribute("data-tags").split(" ").indexOf(f) < 0; });
       });
     });
   }
@@ -588,13 +748,30 @@
   }
   article.querySelectorAll(".wiring").forEach(buildWiring);
 
+  /* ---------- جدول‌های پهن: سایه محو در لبه‌ای که هنوز جا برای اسکرول دارد ---------- */
+  article.querySelectorAll(".table-wrap").forEach(function (w) {
+    if (w.parentNode.classList.contains("tw")) return;
+    var o = el("div", { "class": "tw" }); w.parentNode.insertBefore(o, w); o.appendChild(w);
+    var upd = function () {
+      /* در راست‌به‌چپ scrollLeft منفی است؛ قدر مطلقش فاصله از ابتدای جدول است */
+      var max = w.scrollWidth - w.clientWidth, x = Math.abs(w.scrollLeft), sc = max > 2;
+      o.classList.toggle("more-start", sc && x > 2); o.classList.toggle("more-end", sc && x < max - 2);
+      if (sc) w.setAttribute("tabindex", "0"); else w.removeAttribute("tabindex");
+    };
+    w.addEventListener("scroll", upd, { passive: true });
+    if (window.ResizeObserver) new ResizeObserver(upd).observe(w); else addEventListener("resize", upd);
+    upd();
+  });
+
   /* ---------- واژه‌نامه شناور ---------- */
   var pop = null;
   function showTip(t) {
     var d = G[t.getAttribute("data-t")];
     if (!d) return;
     hideTip();
-    pop = el("div", { "class": "tip-pop" }, "<b>" + esc(d[0]) + "</b>" + esc(d[1]));
+    /* فرمول‌های لاتین (مثل V = I × R) در متن فارسی به‌هم می‌ریزند؛ آن‌ها را چپ‌به‌راست جدا می‌کنیم */
+    var ltr = function (h) { return h.replace(/[A-Za-z][A-Za-z0-9]*\s*=\s*[A-Za-z0-9 ×\/+\-().]*[A-Za-z0-9)]/g, function (m) { return '<bdi dir="ltr" style="white-space:nowrap">' + m + '</bdi>'; }); };
+    pop = el("div", { "class": "tip-pop" }, "<b>" + esc(d[0]) + "</b>" + ltr(esc(d[1])));
     document.body.appendChild(pop);
     var r = t.getBoundingClientRect(), pw = pop.offsetWidth;
     var left = Math.min(Math.max(8, r.left + r.width / 2 - pw / 2 + scrollX), scrollX + innerWidth - pw - 8);
@@ -644,16 +821,115 @@
   document.addEventListener("touchstart", function (e) { var t = e.target.closest && e.target.closest(".term"); if (t) showTip(t); else hideTip(); }, { passive: true });
   addEventListener("scroll", hideTip, { passive: true });
 
-  /* ---------- Mermaid (در صورت نیاز) ---------- */
-  if (article.querySelector(".mermaid")) {
-    var sc = el("script", { src: BASE + "vendor/mermaid.min.js" });
-    sc.onload = function () {
-      var dark = (document.documentElement.getAttribute("data-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")) === "dark";
-      window.mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default", fontFamily: "Vazirmatn, Tahoma, sans-serif" });
-      window.mermaid.run({ querySelector: ".mermaid" });
-    };
-    document.head.appendChild(sc);
+
+  /* ---------- جستجوی سایت ----------
+     نمایه با assets/tools/build-search.py ساخته می‌شود و فقط بار اول که جستجو باز شد دریافت می‌شود.
+     تطبیق ساده واژه به واژه، بدون حساسیت به حروف بزرگ و کوچک؛ امتیاز: عنوان بخش > عنوان صفحه > متن.
+     در فارسی ي و ك عربی به ی و ک فارسی تبدیل و نیم‌فاصله حذف می‌شود؛ رقم‌های فارسی هم انگلیسی می‌شوند. */
+  var sIndex = null, sLoading = null, sDlg = null;
+  function norm(x) {
+    return String(x || "").toLowerCase().replace(/ي/g, "ی").replace(/ى/g, "ی").replace(/ك/g, "ک").replace(/[‌‍‎‏ً-ٟ]/g, "")
+      .replace(/[۰-۹]/g, function (d) { return "۰۱۲۳۴۵۶۷۸۹".indexOf(d); }).replace(/[٠-٩]/g, function (d) { return "٠١٢٣٤٥٦٧٨٩".indexOf(d); });
   }
+  function loadIndex() {
+    if (!sLoading) sLoading = fetch(BASE + "search-" + LANG + ".json").then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); }).then(function (d) {
+      sIndex = d.map(function (r) { return { r: r, t: norm(r.t), h: norm(r.t.split(/ \(| — /)[0]), p: norm(r.p), x: norm(r.x), k: norm(r.k) }; });
+      return sIndex;
+    }, function (e) { sLoading = null; throw e; });
+    return sLoading;
+  }
+  function searchIndex(q) {
+    var toks = norm(q).split(/[\s,،؛;:!?؟()«»"']+/).filter(Boolean), whole = toks.join(" ");
+    if (!toks.length) return [];
+    var res = [];
+    sIndex.forEach(function (e) {
+      var score = 0, inTitle = 0;
+      for (var i = 0; i < toks.length; i++) {
+        var k = toks[i], sc = 0, at = e.t.indexOf(k);
+        if (at > -1) { sc = 12 + (at === 0 || !/[\w\u0600-\u06ff]/.test(e.t[at - 1]) ? 6 : 0); inTitle++; }
+        else if (e.p.indexOf(k) > -1) sc = 5;
+        else if (e.x.indexOf(k) > -1) sc = 3;
+        else if (e.k.indexOf(k) > -1) sc = 1;
+        if (!sc) return;      /* همه واژه‌ها باید پیدا شوند */
+        score += sc;
+      }
+      if (e.h === whole) score += 14;                       /* عنوان دقیقا همان عبارت (مثل اصطلاح واژه‌نامه) */
+      if (inTitle === toks.length && e.r.y === "p") score += 4; /* عنوان خود صفحه */
+      if (e.r.y === "f") score -= 2;
+      res.push([score, e.r]);
+    });
+    res.sort(function (a, b) { return b[0] - a[0]; });
+    var seen = {}, out = [];
+    for (var j = 0; j < res.length && out.length < 40; j++) { var key = res[j][1].u + "|" + res[j][1].t; if (!seen[key]) { seen[key] = 1; out.push(res[j][1]); } }
+    return out;
+  }
+  function hiRe(q) {
+    /* الگوی پررنگ کردن: نیم‌فاصله اختیاری بین حرف‌ها و هر دو شکل ی و ک */
+    var toks = norm(q).split(/[\s,،؛;:!?؟()«»"']+/).filter(function (x) { return x.length > 1; });
+    if (!toks.length) return null;
+    return new RegExp("(" + toks.map(function (k) {
+      return k.split("").map(function (c) { return c === "ی" ? "[یيى]" : c === "ک" ? "[کك]" : c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }).join("‌?");
+    }).join("|") + ")", "gi");
+  }
+  function hi(text, re) { return re ? esc(text).replace(re, "<mark>$1</mark>") : esc(text); }
+  function snippet(r, q) {
+    var x = r.x || "", tk = norm(q).split(/\s+/).filter(Boolean)[0], at = tk ? norm(x).indexOf(tk) : -1;
+    if (at > 60) x = "…" + x.slice(at - 40);
+    return x.length > 170 ? x.slice(0, 170) + "…" : x;
+  }
+  function openSearch() {
+    if (!sDlg) {
+      sDlg = el("dialog", { "class": "search-dlg", "aria-labelledby": "sd-title" },
+        '<div class="sd-box"><form method="dialog" class="sd-head" role="search"><h2 id="sd-title" class="vh">' + t("search") + '</h2>' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>' +
+        '<input type="search" autocomplete="off" spellcheck="false" aria-label="' + t("search") + '" placeholder="' + t("searchPh") + '" aria-describedby="sd-help" aria-controls="sd-list">' +
+        '<button type="button" class="btn sd-close" data-sd="close">' + t("searchClose") + ' <kbd>Esc</kbd></button></form>' +
+        '<p class="sd-status" role="status" aria-live="polite"></p><ul class="sd-list" id="sd-list"></ul><p class="sd-help" id="sd-help">' + t("searchHelp") + '</p></div>');
+      document.body.appendChild(sDlg);
+      var inp = sDlg.querySelector("input"), list = sDlg.querySelector(".sd-list"), st = sDlg.querySelector(".sd-status"), timer = 0;
+      var render = function () {
+        var q = inp.value.trim();
+        if (!sIndex) { st.textContent = t("searchLoading"); return; }
+        if (!q) { list.innerHTML = ""; st.textContent = ""; return; }
+        var rs = searchIndex(q), re = hiRe(q);
+        st.textContent = rs.length ? t("searchCount").replace("%n", fa(rs.length)) : t("searchNone");
+        list.innerHTML = rs.map(function (r) {
+          var kind = r.y === "f" ? "📄 " + t("kindFile") : r.y === "g" ? "📖 " + t("kindGloss") : r.y === "p" ? "📘 " + t("kindPage") : "§";
+          return '<li><a href="' + esc(r.u) + '"><span class="sd-t"><bdi>' + hi(r.t, re) + '</bdi></span><span class="sd-p"><span class="sd-k">' + kind + '</span> ' + esc(r.p) + '</span><span class="sd-x">' + hi(snippet(r, q), re) + '</span></a></li>';
+        }).join("");
+      };
+      inp.addEventListener("input", function () { clearTimeout(timer); timer = setTimeout(render, 90); });
+      sDlg.addEventListener("keydown", function (e) {
+        var links = [].slice.call(list.querySelectorAll("a")), i = links.indexOf(document.activeElement);
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          if (!links.length) return;
+          e.preventDefault();
+          var n = e.key === "ArrowDown" ? (i < 0 ? 0 : Math.min(i + 1, links.length - 1)) : i - 1;
+          if (n < 0) inp.focus(); else links[n].focus();
+        } else if (e.key === "Enter" && e.target === inp) {
+          e.preventDefault(); clearTimeout(timer); render();
+          var first = list.querySelector("a"); if (first) first.click();
+        } else if (e.key === "Home" && i > -1) { e.preventDefault(); links[0].focus(); }
+        else if (e.key === "End" && i > -1) { e.preventDefault(); links[links.length - 1].focus(); }
+        else if (i > -1 && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) inp.focus();
+      });
+      /* رفتن به بخشی از همین صفحه: پنجره بسته شود تا پرش دیده شود */
+      list.addEventListener("click", function (e) { if (e.target.closest("a")) sDlg.close(); });
+      sDlg.addEventListener("click", function (e) { if (e.target === sDlg || e.target.closest('[data-sd="close"]')) sDlg.close(); });
+      sDlg.addEventListener("close", function () { var b = top.querySelector(".search-btn"); if (b && document.activeElement !== b) b.focus({ preventScroll: true }); document.documentElement.classList.remove("sd-open"); });
+      sDlg._render = render;
+    }
+    if (!sDlg.open) { if (sDlg.showModal) sDlg.showModal(); else sDlg.setAttribute("open", ""); }
+    document.documentElement.classList.add("sd-open");
+    var input = sDlg.querySelector("input"); input.focus(); input.select();
+    loadIndex().then(function () { sDlg._render(); }, function () { sDlg.querySelector(".sd-status").textContent = t("searchErr"); });
+    sDlg._render();
+  }
+  /* میان‌بر «/» (و Ctrl+K) برای باز کردن جستجو، وقتی در یک فیلد متنی نیستی */
+  document.addEventListener("keydown", function (e) {
+    var tg = e.target, typing = tg && (tg.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(tg.tagName));
+    if ((e.key === "/" && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) || ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K"))) { e.preventDefault(); openSearch(); }
+  });
 
   /* قابلیت‌های صفحه خانه و واژه‌نامه */
   window.ESP32MC = { fa: fa, esc: esc, lessons: lessons, done: done, refresh: refreshProgress, L: LX, t: t, EN: EN };
