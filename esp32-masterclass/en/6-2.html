@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Programming with AI help: Claude and ChatGPT · ESP32 Masterclass</title>
+<meta name="description" content="Using AI the right way to program the ESP32: a prompt template for embedded systems, generating code, fixing compile errors, explaining unfamiliar code, and a checklist for reviewing generated code.">
+<link rel="alternate" hreflang="fa" href="../6-2.html"><link rel="alternate" hreflang="en" href="6-2.html">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="../assets/course.js"></script>
+<script defer src="../assets/glossary-en.js"></script>
+<script defer src="../assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="6-2">
+
+<p class="lede">AI can write a hundred lines of ESP32 code in a few seconds. The problem is that it writes that code with the same confidence whether it's right or wrong. In this lesson you learn how to use Claude, ChatGPT and similar tools like a skilled assistant, how to ask them the right questions, and, most important of all, how to <b>review</b> their answers before anything goes near a real board.</p>
+
+<div class="goals">
+  <div><h4>🎯 After this lesson you can</h4><ul>
+    <li>Explain why AI is no substitute for your own basic knowledge</li>
+    <li>Write a complete <span class="term" data-t="Prompt">prompt</span> for an ESP32 project using a fixed template</li>
+    <li>Solve a compile error with AI's help and your own reasoning</li>
+    <li>Ask AI to explain unfamiliar code line by line, and judge its explanation</li>
+    <li>Review any generated code with a 10-step checklist</li>
+    <li>Keep sensitive information (Wi-Fi passwords, API keys) out of your AI conversations</li>
+  </ul></div>
+  <div><h4>🧰 Prerequisites and parts</h4><ul>
+    <li>All the earlier chapters, especially <a href="1-3.html">1.3</a> (pins), <a href="3-2.html">3.2</a> (PWM) and <a href="4-1.html">4.1</a> (Wi-Fi)</li>
+    <li>Access to an AI assistant (whichever one you can use)</li>
+    <li>The Arduino IDE or Wokwi for testing code</li>
+    <li>An ESP32 board and the parts from one of the earlier projects</li>
+  </ul></div>
+</div>
+
+<h2 id="philosophy">The philosophy: an assistant, not a replacement</h2>
+<p>You might ask: "If AI writes the code, why did we read all these chapters?" The short answer: <b>because you have to be the judge</b>. AI produces text that "sounds likely and correct". Most of the time it really is correct, but sometimes it invents something that doesn't exist, or that is wrong for your board, and its tone is equally confident either way. This is called <b>hallucination</b>.</p>
+
+<div class="callout analogy"><div class="ct">An everyday example: a car's GPS</div>
+<p>The navigation app on your phone is incredibly useful. But you've heard all the stories about someone who followed the GPS into a dead-end alley or onto a dirt track. A driver who can drive and read road signs puts the GPS aside when they see it's wrong. A driver who can't just goes wherever it says. This course has made you a driver; now you can use the GPS.</p></div>
+
+<h3>Common AI mistakes in ESP32 code</h3>
+<p>These are the kinds of mistakes that show up again and again in generated code. You can spot every one of them with what you've learned in this course:</p>
+<div class="table-wrap"><table>
+<tr><th>Type of mistake</th><th>Example</th><th>Which lesson saves you</th></tr>
+<tr><td><b>Wrong pin</b></td><td>Using GPIO6 to 11 (wired to the flash), trying to use GPIO34 to 39 as outputs (they are input-only), or using an ADC2 pin while Wi-Fi is on</td><td><a href="1-3.html">1.3</a> and the <a href="pinout.html">pinout page</a></td></tr>
+<tr><td><b>Old API (core 2.x)</b></td><td><code>ledcSetup</code> and <code>ledcAttachPin</code>, which were removed in core 3.x; the old ESP-NOW callback signature</td><td><a href="3-2.html">3.2</a> and <a href="5-2.html">5.2</a></td></tr>
+<tr><td><b>5 volts</b></td><td>Connecting the ECHO output of an HC-SR04 sensor (5 V) straight to an ESP32 pin, which accepts at most 3.3 V</td><td><a href="1-4.html#levels">1.4</a>, <a href="3-1.html">3.1</a> and <a href="1-3.html">1.3</a></td></tr>
+<tr><td><b>Imaginary function</b></td><td>Calling a function that doesn't exist in the library, or mixing up two libraries with similar names</td><td>The habit of reading library documentation</td></tr>
+<tr><td><b>delay and endless waiting</b></td><td><code>delay(10000)</code> in loop alongside MQTT, or <code>while (WiFi.status() != WL_CONNECTED)</code> with no time limit</td><td><a href="4-1.html">4.1</a> and <a href="5-1.html">5.1</a></td></tr>
+<tr><td><b>Security</b></td><td>The Wi-Fi password and API key written straight into the code, or a public MQTT broker used to control things at home without any protection</td><td>This lesson</td></tr>
+</table></div>
+
+<div class="callout why"><div class="ct">Why is AI so fond of the old API?</div>
+<p>Language models learned from text on the internet. Arduino core 2.x was the standard for years, and thousands of tutorials were written for it; core 3.x is newer and there is less text about it. So the "most likely" code, from the model's point of view, is often old code. The model also can't see your board, can't see your wiring, and (unless it has special tools) doesn't run the code. All it knows is what you wrote in your prompt.</p></div>
+
+<h2 id="loop">The AI workflow loop</h2>
+<p>Working well with AI isn't a single "question and answer"; it's a <b>loop</b>. No answer goes straight onto the board; everything passes through the filter of your understanding and review.</p>
+<pre class="mermaid">flowchart TD
+  A["A clear need: what exactly do I want?"] --> B["Write the prompt with the template"]
+  B --> C["The AI's answer"]
+  C --> D{"Do I understand every line?"}
+  D -- "No" --> E["Explanation prompt: what does this line do?"]
+  E --> D
+  D -- "Yes" --> F["Review checklist: pins, voltage, API"]
+  F --> G["Compile and run in Wokwi"]
+  G --> H{"Did it work?"}
+  H -- "No" --> I["Troubleshooting prompt: full error + code + what I tried"]
+  I --> C
+  H -- "Yes" --> J["Test on a real board, step by step"]
+  J --> K["Keep the code in the project and note what you learned"]</pre>
+
+<div class="callout tip"><div class="ct">The golden rule</div>
+<p>Never run code on a real board if there is even one line you don't understand. Ask first, understand, then run it.</p></div>
+
+<h2 id="template">A prompt template for embedded projects</h2>
+<p>The quality of an AI's answer depends directly on the quality of your prompt. In desktop programming, "write a program that adds two numbers" is almost enough. But in embedded work, the code is connected to <b>real hardware</b>: which board? which pin? which library version? If you don't say, the AI guesses, and its guesses are exactly the mistakes in the table above.</p>
+<p>Save this template and fill it in every time. It's in English because the technical names, pins and code are all in English and that makes it easy to copy. If you prefer, you can write the same structure in your own language; today's models understand many languages well (Persian included). Just keep pin names, function names and error messages exactly as they are, in English.</p>
+
+<div class="code" data-lang="text" data-file="prompt-template.txt" id="tpl"><pre>
+ROLE: You are an experienced embedded engineer helping a beginner.
+
+HARDWARE
+- Board: ESP32 DevKitC V4 (ESP32-WROOM-32E module)
+- Core: Arduino-ESP32 core 3.x (exact: 3.x.x) in Arduino IDE 2
+- Parts and wiring:
+  * DHT22: DATA -> GPIO4, VCC -> 3V3, GND -> GND (10k pull-up present)
+  * OLED SSD1306 I2C 128x64: SDA -> GPIO21, SCL -> GPIO22, address 0x3C
+
+LIBRARIES (installed)
+- DHT sensor library (Adafruit) 1.4.x
+- Adafruit SSD1306 2.5.x + Adafruit GFX
+
+GOAL
+Read temperature and humidity every 2 s and show them on the OLED.
+
+CONSTRAINTS
+- No delay() in loop(); use millis() scheduling.
+- Use only core 3.x APIs (e.g. ledcAttach, not ledcSetup).
+- If a sensor read fails (NaN), show "ERR" instead of a number.
+- Do not put real Wi-Fi passwords or API keys in the code; use placeholders.
+
+OUTPUT I WANT
+1) Complete, compilable sketch with short comments.
+2) A wiring table (part pin -> ESP32 pin) so I can check it.
+3) A step-by-step test plan (what to test first, in isolation).
+4) If you are unsure about anything, say so and state your assumption.
+</pre></div>
+<ol class="walk" data-for="tpl">
+  <li data-lines="1"><b class="what">ROLE.</b> Tells the model what angle to answer from: an experienced engineer helping a beginner.
+    <span class="why">This sentence makes the answers explain more, and stops the model from assuming you already know everything. It isn't magic, but it improves the tone and depth of the answer.</span></li>
+  <li data-lines="3-5"><b class="what">The board and the core version.</b> Write the exact board name and the <b>exact version</b> of the Arduino core. You can find the version under <code>Tools › Board › Boards Manager</code>.
+    <span class="why">This is the most important line in the whole template. "ESP32" on its own covers dozens of boards and two completely different API versions. Writing "core 3.x" prevents a large share of old-API mistakes.</span></li>
+  <li data-lines="6-8"><b class="what">Your actual wiring.</b> Every part, every pin, and which ESP32 pin it goes to; plus the I2C address and the resistors.
+    <span class="why">If you don't say the DHT22 is on GPIO4, the model picks a "typical" pin that may not match your wiring, or may even be an unsuitable pin. You decide the wiring, not the model.</span></li>
+  <li data-lines="10-12"><b class="what">Libraries and versions.</b> Exactly which libraries you have installed.
+    <span class="why">There are several libraries with similar names for the same sensor, and their functions differ. Without this line, the model may write code for a library you don't have, and you get a "not declared" error.</span></li>
+  <li data-lines="14-15"><b class="what">GOAL.</b> One or two clear sentences: what, how often, and where it's shown.
+    <span class="why">A vague goal like "build a weather station" makes the model add ten features you never asked for (a web server, Wi-Fi, an SD card), and the code gets three times bigger and riskier.</span></li>
+  <li data-lines="17-21"><b class="what">CONSTRAINTS.</b> Rules the code <b>must</b> follow: no delay, core 3.x APIs only, what to do when a sensor fails, no real passwords.
+    <span class="why">These are the very lessons you learned in this course. By writing them down, you "inject" your own knowledge into the model. Without them, the model usually picks the simplest way, not the best one.</span></li>
+  <li data-lines="23-27"><b class="what">The output you expect.</b> Complete code, a wiring table, a test plan, and an admission of uncertainty.
+    <span class="why">You want the wiring table so you can compare it with your own wiring: if the model wrote a different pin, it didn't read your prompt properly. The test plan makes you move forward step by step. The last line encourages the model to tell you where it isn't sure, instead of making a confident-sounding guess.</span></li>
+</ol>
+
+<h2 id="ex1">Example 1: generating code (bad prompt versus good prompt)</h2>
+<div class="callout warn"><div class="ct">Note: these examples are made up for teaching</div>
+<p>We wrote the texts and code in this section ourselves to show the <b>kind</b> of differences you'll see; they are not real transcripts of a conversation with any particular model. A real model's answer can be different every time.</p></div>
+
+<p><b>Bad prompt:</b> "write code so the esp32 reads the temperature and controls a fan"</p>
+<p>What does this prompt leave out? Which sensor (DHT11? DHT22? DS18B20?), which pins, how the fan is connected (directly? through a transistor? a relay?), on/off control or speed control with PWM, and which core version. The model has to guess all of it. The result might look something like this:</p>
+
+<div class="code" data-file="ai_answer_bad_prompt.ino" id="badAns"><pre>
+// Made-up example: the kind of answer a vague prompt might get (it has problems!)
+#include &lt;WiFi.h&gt;
+#include "DHT.h"
+
+#define DHTPIN 2
+DHT dht(DHTPIN, DHT11);
+const char* ssid = "MyHomeWiFi";
+const char* password = "12345678";
+
+void setup() {
+  Serial.begin(9600);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  dht.begin();
+  ledcSetup(0, 25000, 8);
+  ledcAttachPin(35, 0);
+}
+
+void loop() {
+  float t = dht.readTemperature();
+  if (t &gt; 30) ledcWrite(0, 255);
+  else ledcWrite(0, 0);
+  delay(5000);
+}
+</pre></div>
+<ol class="walk" data-for="badAns">
+  <li data-lines="2,7-8"><b class="what">Wi-Fi and a password nobody asked for.</b> The model added Wi-Fi and put a sample password straight into the code.
+    <span class="why">The prompt never mentioned the internet. Extra code means extra bugs. And the habit of putting passwords in code will one day make you publish your real password on GitHub or in a chat.</span></li>
+  <li data-lines="5-6"><b class="what">A guessed sensor and pin.</b> A DHT11 on GPIO2.
+    <span class="why">If your sensor is a DHT22, the numbers come out wrong or NaN. GPIO2 is a strapping pin, and on many boards it also has an LED; it's not a good choice for a sensor.</span></li>
+  <li data-lines="11,13"><b class="what">An unusual serial speed and endless waiting.</b> <code>9600</code> instead of <code>115200</code>; and a loop that spins forever if Wi-Fi never connects.
+    <span class="why">9600 isn't wrong, but with your Serial Monitor setting (which has always been 115200 in this course) you'll see garbled characters. A loop with no time limit means that if the router is off, the fan is never controlled either.</span></li>
+  <li data-lines="15-16"><b class="what">An old API and an input-only pin.</b> <code>ledcSetup</code> and <code>ledcAttachPin</code> don't exist in core 3.x; and GPIO35 is input-only, so it can't produce PWM at all.
+    <span class="why">These two lines are two completely different mistakes: the first gives a compile error (that's good; you find out quickly). The second, even if it compiled, would never work, and would cost you hours.</span></li>
+  <li data-lines="20-23"><b class="what">NaN ignored, a long delay.</b> If the reading fails, <code>t</code> is NaN, and comparing it always gives false; the fan silently stays off. <code>delay(5000)</code> also freezes the program.
+    <span class="why">Code that quietly does the wrong thing when something fails is the most dangerous kind of code. And the fan itself: you can't connect a 12 V fan straight to an ESP32 pin; you need a transistor or a MOSFET (lesson <a href="3-4.html#mosfet">3.4</a>). The model didn't give any warning about the hardware!</span></li>
+</ol>
+
+<p>A <b>good prompt</b> is the template above with these changes: "DHT22 on GPIO4; a two-wire 12 V DC fan, driven through a logic-level MOSFET whose gate is connected to GPIO25, with a flyback diode; speed control with 25 kHz PWM; off below 28 degrees, full speed above 35 degrees, linear in between; core 3.x." Now the model has nothing left to guess. In the answer to a prompt like this you should usually see the following (and if you don't, ask): <code>ledcAttach(25, 25000, 8)</code>, <code>ledcWrite(25, duty)</code>, an <code>isnan</code> check, timing with <code>millis()</code>, and a wiring table that matches what you said.</p>
+
+<div class="callout example"><div class="ct">A trick: follow-up questions</div>
+<p>The first answer isn't the end of the job. A few follow-up questions that are always worth asking:</p>
+<ul>
+  <li>"In which situations might this code not work correctly?"</li>
+  <li>"Which parts depend on the core or library version?"</li>
+  <li>"If the sensor gets disconnected, what exactly does this program do?"</li>
+  <li>"Compare the wiring again with the pins I gave you."</li>
+</ul></div>
+
+<h2 id="ex2">Example 2: troubleshooting a compile error</h2>
+<p>Say you took some code from an old tutorial on the internet, and the Arduino IDE gives you this error:</p>
+<div class="code" data-lang="text" data-file="Output (Arduino IDE)" id="errMsg"><pre>
+/home/me/Arduino/fan/fan.ino: In function 'void setup()':
+/home/me/Arduino/fan/fan.ino:5:3: error: 'ledcSetup' was not declared in this scope
+    5 |   ledcSetup(CH, 5000, 8);
+      |   ^~~~~~~~~
+/home/me/Arduino/fan/fan.ino:6:3: error: 'ledcAttachPin' was not declared in this scope
+    6 |   ledcAttachPin(FAN_PIN, CH);
+      |   ^~~~~~~~~~~~~
+exit status 1
+</pre></div>
+<ol class="walk" data-for="errMsg">
+  <li data-lines="1"><b class="what">Where?</b> The error is in the <code>setup()</code> function.
+    <span class="why">Compiler messages are read from top to bottom. The <b>first</b> error is the most important; later errors are sometimes just side effects of the first one.</span></li>
+  <li data-lines="2-4"><b class="what">What?</b> <code>fan.ino:5:3</code> means the file fan.ino, line 5, column 3. <code>was not declared in this scope</code> means the compiler doesn't know anything by this name at all.
+    <span class="why">"Not declared" means one of three things: you mistyped the name, the file or library that defines it isn't included, or the function doesn't exist in <b>the version you have installed</b>. Three cases, three different fixes.</span></li>
+  <li data-lines="5-7"><b class="what">A pattern.</b> Two functions from the same family (LEDC) are both unknown.
+    <span class="why">The names are spelled correctly and they belong to the core (not a separate library), so the most likely case is the third one: these functions aren't in the version you have installed. That means you've solved half the problem yourself before even asking the AI.</span></li>
+</ol>
+
+<h3>A good troubleshooting prompt</h3>
+<p>To troubleshoot, give three things <b>in full</b>: the complete error message (not a summary), the complete code (or at least the relevant part), and what you've already tried plus your own guess.</p>
+<div class="code" data-lang="text" data-file="debug-prompt.txt" id="dbgPrompt"><pre>
+Board: ESP32 DevKitC V4, Arduino-ESP32 core 3.x (Boards Manager shows 3.x.x).
+This code is from an older tutorial. Full compiler output:
+[paste the full error output here]
+
+Full code:
+[paste the code here]
+
+What I checked: spelling is correct, it compiled for the tutorial author.
+My guess: these LEDC functions changed between core 2.x and 3.x.
+Please: 1) confirm or reject my guess and explain why,
+2) rewrite only the LEDC part for core 3.x,
+3) tell me what else in this code might be 2.x-only.
+</pre></div>
+<ol class="walk" data-for="dbgPrompt">
+  <li data-lines="1"><b class="what">The exact version.</b>
+    <span class="why">Without this line, the model might tell you to "install the ESP32 library", or even suggest the old function again.</span></li>
+  <li data-lines="2-6"><b class="what">The full error and the full code.</b> Copy the error text in full (the Arduino IDE has a Copy error messages button).
+    <span class="why">Summarizing the error ("it gives some LEDC error") throws away vital information such as the line number and the exact wording.</span></li>
+  <li data-lines="8-9"><b class="what">What you tried and your guess.</b>
+    <span class="why">This saves the model from useless suggestions ("check your spelling"), and, more importantly, it makes you think before you ask. If the model rejects your guess, ask it why instead of accepting it straight away.</span></li>
+  <li data-lines="10-12"><b class="what">A specific request.</b> Confirm or reject with a reason, rewrite only the relevant part, and list the other risks.
+    <span class="why">"Only the LEDC part" stops it from rewriting the whole program, which could bring in new bugs. Item 3 prepares you for the next error.</span></li>
+</ol>
+
+<p>The correct answer (which you should be able to confirm yourself with the <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/migration_guides/2.x_to_3.0.html" target="_blank" rel="noopener">official 2.x to 3.0 migration guide</a>): in core 3.x the idea of a "channel" was removed from the main API, and everything works with the <b>pin</b> number. Look at the old and new code side by side:</p>
+
+<div class="code" data-file="fan_core2x_OLD.ino" id="old2x"><pre>
+// Core 2.x (old) — does not compile on 3.x
+const int FAN_PIN = 25;
+const int CH = 0;
+
+void setup() {
+  ledcSetup(CH, 5000, 8);        // channel 0, 5 kHz frequency, 8-bit resolution
+  ledcAttachPin(FAN_PIN, CH);    // connect the pin to the channel
+}
+
+void loop() {
+  ledcWrite(CH, 128);            // in 2.x: first number = channel
+}
+</pre></div>
+<ol class="walk" data-for="old2x">
+  <li data-lines="6-7"><b class="what">Two steps in 2.x.</b> First you set up a PWM channel, then you connected the pin to that channel.
+    <span class="why">This approach was flexible but confusing for beginners: two numbers (channel and pin) that had to be kept in step with each other.</span></li>
+  <li data-lines="11"><b class="what">ledcWrite with a channel.</b> The first number was the channel.
+    <span class="why">This line still <b>compiles</b> on 3.x, but its meaning has changed: now it means "pin 0". Since pin 0 isn't attached to LEDC, the function silently returns <code>false</code> and nothing happens. A silent trap; read on.</span></li>
+</ol>
+
+<div class="code" data-file="fan_core3x.ino" id="new3x"><pre>
+// Core 3.x (current)
+const int FAN_PIN = 25;
+
+void setup() {
+  ledcAttach(FAN_PIN, 5000, 8);  // pin, frequency, resolution; the channel is picked automatically
+}
+
+void loop() {
+  ledcWrite(FAN_PIN, 128);       // in 3.x: first number = pin
+}
+</pre></div>
+<ol class="walk" data-for="new3x">
+  <li data-lines="5"><b class="what">ledcAttach.</b> One line instead of two: pin, frequency and bit resolution.
+    <span class="why">The core finds a free channel by itself. Fewer numbers, fewer mistakes.</span></li>
+  <li data-lines="9"><b class="what">ledcWrite with a pin.</b> Now the first number is the pin number.
+    <span class="why">If you fix only <code>ledcSetup</code> but keep the old <code>ledcWrite(0, 128)</code>, the code compiles without a single error and the fan never runs. That's why we put item 3 in the troubleshooting prompt: "what else is 2.x?"</span></li>
+</ol>
+
+<div class="callout tip"><div class="ct">Ask the board itself for your core version</div>
+<p>If you're not sure which version is installed, run this small program. Put the number it prints into your prompts:</p></div>
+<div class="code" data-file="CoreVersion.ino" id="ver"><pre>
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  Serial.printf("Arduino-ESP32 core %d.%d.%d\n",
+                ESP_ARDUINO_VERSION_MAJOR,
+                ESP_ARDUINO_VERSION_MINOR,
+                ESP_ARDUINO_VERSION_PATCH);
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="ver">
+  <li data-lines="4-7"><b class="what">Version macros.</b> <code>ESP_ARDUINO_VERSION_MAJOR</code> and the two macros after it hold the version number of the core the code was compiled with.
+    <span class="why">This number comes from the build itself, so it's no longer a guess. With <code>#if ESP_ARDUINO_VERSION_MAJOR &gt;= 3</code> you can even write code that compiles on both versions.</span></li>
+</ol>
+
+<h2 id="ex3">Example 3: explaining unfamiliar code, line by line</h2>
+<p>One of the best uses of AI is as a "private tutor": you give it some code you found on the internet and don't understand, and ask it to explain it line by line. A suggested prompt:</p>
+<div class="code" data-lang="text" data-file="explain-prompt.txt" id="explPrompt"><pre>
+I am a beginner (Arduino-ESP32 core 3.x). Explain this code line by line:
+what each line does, WHY it is needed, and what would break if I removed it.
+Mark clearly anything you are not sure about.
+Then give me 3 small experiments to verify your explanation on a real board.
+
+[paste code here]
+</pre></div>
+<ol class="walk" data-for="explPrompt">
+  <li data-lines="1-3"><b class="what">What, why, and what if I remove it?</b> Three questions for every line.
+    <span class="why">You can often guess the "what" yourself. The "why" and "what if I remove it" build deep understanding; it's the same structure the explanation cards in this course use.</span></li>
+  <li data-lines="4"><b class="what">Experiments to check the answer.</b>
+    <span class="why">The AI's explanation can be wrong too. A test on the board is the final judge, not how confident the text sounds.</span></li>
+</ol>
+
+<p>For example, take this pulse-counting code (for pulses from a water-flow sensor or a button, say). Below it we've written the kind of explanation you'd expect from a good answer; you can use it to judge the quality of the AI's answer:</p>
+<div class="code" data-file="PulseCounter.ino" id="pulse"><pre>
+volatile uint32_t pulses = 0;
+portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+
+void IRAM_ATTR onPulse() {
+  portENTER_CRITICAL_ISR(&amp;mux);
+  pulses++;
+  portEXIT_CRITICAL_ISR(&amp;mux);
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(27, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(27), onPulse, FALLING);
+}
+
+void loop() {
+  static uint32_t last = 0;
+  if (millis() - last &gt;= 1000) {
+    last = millis();
+    portENTER_CRITICAL(&amp;mux);
+    uint32_t n = pulses;
+    pulses = 0;
+    portEXIT_CRITICAL(&amp;mux);
+    Serial.printf("pulses/s: %lu\n", n);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="pulse">
+  <li data-lines="1"><b class="what">volatile.</b> Tells the compiler this variable may be changed "from outside" (in an interrupt), so it must read it from memory every time.
+    <span class="why">Without volatile, the compiler might keep the value in a register for speed, and loop would never see the changes made by the interrupt. If you remove it: sometimes it works, sometimes it doesn't; the worst kind of bug.</span></li>
+  <li data-lines="2"><b class="what">A lock (mux).</b> A small lock so the interrupt and loop don't touch <code>pulses</code> at the same time.
+    <span class="why">The ESP32 has two cores, and reading a variable and then zeroing it are two separate operations. Without the lock, a pulse might arrive exactly between the read and the reset and get lost.</span></li>
+  <li data-lines="4-8"><b class="what">The interrupt function (ISR).</b> <code>IRAM_ATTR</code> puts the function in the fast internal RAM. It does only one short job inside: increase the counter.
+    <span class="why">An interrupt must finish within a few microseconds. Serial.print or delay inside an ISR is forbidden. The <code>_ISR</code> in the macro names means the special version for use inside an interrupt.</span></li>
+  <li data-lines="12-13"><b class="what">Setting up the interrupt.</b> GPIO27 is an input with a pull-up; every falling edge (<code>FALLING</code>, meaning from HIGH to LOW) calls the onPulse function.
+    <span class="why">With the internal pull-up, a button or a sensor's open-collector output between the pin and GND is all you need. A mechanical button bounces, so one press can count as several pulses; for a button you need to add debouncing.</span></li>
+  <li data-lines="17-19"><b class="what">Timing without delay.</b> Once every 1000 milliseconds.
+    <span class="why"><code>static</code> means the value of last is kept between runs of loop, without a global variable. The subtraction <code>millis() - last</code> still works correctly even when millis overflows after about 49 days.</span></li>
+  <li data-lines="20-24"><b class="what">Grab the count safely, then print.</b> Under the lock, we copy the value and reset it to zero; after releasing the lock, we print.
+    <span class="why">Work done under a lock must be kept to a minimum; Serial.printf is slow and must not be inside the lock. The result: the number of pulses per second.</span></li>
+</ol>
+<p>Now try it yourself: remove <code>volatile</code>, or move the print inside the ISR. What happens? Did it match what the AI predicted?</p>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"SW1","name":"Push button (or a sensor's pulse output)","img":"button.svg","pins":[["1","to GPIO27"],["2","to GND"]]}
+  ],
+  "wires":[["GPIO27","SW1.1","blue"],["SW1.2","GND","black"]]
+}</script><figcaption>Pulse counter: a button between GPIO27 and ground; the internal pull-up resistor is enabled.</figcaption></div>
+<div class="wokwi" data-board="esp32" data-code-from="pulse">
+<p>One button between GPIO27 and GND. Press the button each time and see how many pulses per second are counted. You'll very likely sometimes see more than one pulse for a single press, because Wokwi simulates button bounce too; that's exactly what bouncing is.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 60, "left": 180, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "btn1:1.l", "esp:27", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="checklist">A review checklist for any generated ESP32 code</h2>
+<p>Print this checklist and stick it by your desk. Any code an AI (or any internet tutorial) gives you must pass these ten steps before it runs on a real board:</p>
+<ol class="steps">
+  <li><b>I understand every line.</b> If not, ask first. Code you don't understand doesn't get run.</li>
+  <li><b>Pins.</b> Check every pin against the <a href="pinout.html">pinout page</a>: no GPIO6 to 11; no outputs on 34 to 39; no ADC2 with Wi-Fi; strapping pins (0, 2, 5, 12, 15) only with care.</li>
+  <li><b>It matches my wiring.</b> Compare the answer's wiring table with your real circuit, wire by wire.</li>
+  <li><b>Voltage and current.</b> No 5 V signal goes straight into an ESP32 pin. No heavy load (motor, fan, relay, LED strip) is powered straight from a pin. A pin can supply a few tens of milliamps at most.</li>
+  <li><b>API version.</b> Look for signs of 2.x: <code>ledcSetup</code>, <code>ledcAttachPin</code>, the old ESP-NOW callback signature. Not sure? Check the <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/migration_guides/2.x_to_3.0.html" target="_blank" rel="noopener">migration guide</a>.</li>
+  <li><b>The libraries are real.</b> Find every <code>#include</code> in the Library Manager or on GitHub. Are the functions it calls actually in that library's documentation?</li>
+  <li><b>No endless waiting.</b> A long <code>delay</code> in loop? A <code>while</code> with no time limit? What happens if Wi-Fi or the sensor isn't there?</li>
+  <li><b>Error handling.</b> A NaN from the sensor, Wi-Fi dropping, MQTT failing, a missing display: how does the code behave in each case?</li>
+  <li><b>Security.</b> No real password or key in the code; no public MQTT topic used to control important things at home.</li>
+  <li><b>Wokwi first, then the board.</b> Test the code in Wokwi first, or at least compile it in the Arduino IDE; then on the real board, one part at a time (sensor first, then the display, then the network).</li>
+</ol>
+
+<h2 id="tools">Tools: what to use for what</h2>
+<p>Tools change fast, so instead of a feature list that may be out of date next month, learn the role of each category. None of these is a sponsored recommendation; the method in this lesson works with any of them.</p>
+<div class="table-wrap"><table>
+<tr><th>Tool</th><th>What it is</th><th>How it helps in this course</th></tr>
+<tr><td><b>Claude</b> (claude.ai and the apps)</td><td>A chat assistant made by Anthropic</td><td>Writing and explaining code, troubleshooting with the full error, reviewing a long program</td></tr>
+<tr><td><b>Claude Code</b></td><td>Anthropic's coding assistant that works on your project folder in the terminal (and some editors)</td><td>It can read your project files, suggest changes and, with your permission, run commands such as compiling (for example with <code>arduino-cli</code> or PlatformIO). Useful for multi-file projects; but you still have to review the changes</td></tr>
+<tr><td><b>ChatGPT</b> (chatgpt.com)</td><td>A chat assistant made by OpenAI</td><td>The same chat uses; it also has custom "GPTs" that users have set up for particular topics (their quality varies a lot; know who made them)</td></tr>
+<tr><td><b>GitHub Copilot</b></td><td>An assistant inside your editor (such as VS Code) that suggests code as you type and also has a chat panel</td><td>For people who work with PlatformIO in VS Code (lesson <a href="2-1.html">2.1</a>). Autocomplete is fast, but it will happily autocomplete the same old-API mistakes too!</td></tr>
+<tr><td><b>Wokwi</b> and AI</td><td>Wokwi's official documentation announces "MCP" support in its <code>wokwi-cli</code> command-line tool (labeled experimental)</td><td>This means assistants such as Claude Code or Copilot can use it to run a Wokwi simulation and read the serial output. A beginner doesn't need it; it's enough to know it exists</td></tr>
+<tr><td><b>Local models</b></td><td>Open models that run on your own computer (for example with tools such as Ollama)</td><td>No internet needed and your code isn't sent anywhere. They are usually weaker at coding than the big online models and need a powerful computer</td></tr>
+</table></div>
+
+<div class="callout info"><div class="ct">A note for users in Iran</div>
+<p>Many of these services (including Claude and ChatGPT) do not list Iran among their supported countries, and paying for a subscription is usually not possible either. Before using any service, read its terms of use; getting around the restrictions may get your account blocked. The good news: the core skill of this lesson, the prompt template and the review checklist, doesn't depend on any particular tool, and works with whatever model you have access to (even local models).</p></div>
+
+<h2 id="privacy">Privacy and security: what you must never paste</h2>
+<p>Everything you type into an AI conversation goes to another company's servers and may be stored. So:</p>
+<ul>
+  <li><b>Never</b> paste a real Wi-Fi password, an API key (such as the AIO Key in Adafruit IO), a Telegram bot token, or account passwords into a prompt.</li>
+  <li>Before pasting code, replace these values with placeholders such as <code>"YOUR_WIFI_PASSWORD"</code>.</li>
+  <li>Keep other people's personal information (addresses, phone numbers) out of your code and logs.</li>
+  <li>Don't paste an employer's confidential code into public services without permission.</li>
+</ul>
+<p>The best habit: keep passwords in a separate file from the very start, and never share that file. In the Arduino IDE, create a new tab called <code>secrets.h</code>:</p>
+<div class="code" data-file="secrets.h" id="secrets"><pre>
+// secrets.h — don't share this file with anyone and don't put it on GitHub
+#pragma once
+#define WIFI_SSID  "MyHome"
+#define WIFI_PASS  "put-your-real-password-here"
+</pre></div>
+<ol class="walk" data-for="secrets">
+  <li data-lines="2"><b class="what">#pragma once.</b> If this file is included more than once, it is only read once.
+    <span class="why">It prevents "redefinition" errors in multi-file projects.</span></li>
+  <li data-lines="3-4"><b class="what">Defining the passwords.</b> Two macros for the network name and password.
+    <span class="why">Now your main <code>.ino</code> file only has <code>#include "secrets.h"</code> and <code>WiFi.begin(WIFI_SSID, WIFI_PASS)</code>. You can show that file to an AI or a friend without worry. If you use git, add <code>secrets.h</code> to <code>.gitignore</code>.</span></li>
+</ol>
+
+<h2 id="video">Helpful video</h2>
+<div class="video" data-yt="UpwsQrc2Jls" data-title="ChatGPT with Arduino and ESP32 | C++ and MicroPython coding" data-channel="DroneBot Workshop" data-lang="English">
+  <div class="sum"><ul>
+    <li>This video is from early 2023; the models have improved a lot since then. Watch it for the <b>way of working</b>, not for the quality of the answers.</li>
+    <li>Notice how precisely the presenter writes his prompts, and where he does or doesn't give hardware details.</li>
+    <li>Whenever code is generated, run this lesson's checklist on it yourself: pins, API (core 2.x was the norm back then), delay and error handling.</li>
+    <li>Watch whether the presenter reads and understands the code before running it.</li>
+  </ul></div>
+</div>
+
+<h2 id="debug">When it doesn't work: troubleshooting your work with AI</h2>
+<div class="table-wrap"><table>
+<tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+<tr><td>The generated code won't compile, with a <code>was not declared in this scope</code> error</td><td>An old (2.x) API, a different library from the one you have installed, or an imaginary function</td><td>Put the core and library versions in your prompt; search for the function in the library's documentation; check the migration guide.</td></tr>
+<tr><td>It compiles but nothing happens</td><td>An unsuitable pin (such as an output on GPIO35), ledcWrite with a channel number instead of a pin, wiring that doesn't match the code</td><td>Checklist steps 2, 3 and 5. Use Serial.print to see how far the program gets.</td></tr>
+<tr><td>The AI gives a different wrong fix every time</td><td>The prompt doesn't have enough information, or the conversation has become too long and muddled</td><td>Start a fresh conversation and ask again from the start with the full template. Give the full error and the full code.</td></tr>
+<tr><td>The answer confidently says something that doesn't match the datasheet or the documentation</td><td>The model is hallucinating</td><td>The official documentation wins. Ask the model "where is the source for this?" and open the source yourself.</td></tr>
+<tr><td>You got long, complicated code you don't understand</td><td>A big, vague request</td><td>Break the job into small steps (as in lesson <a href="6-3.html">6.3</a>; the full "from idea to device" method is in <a href="6-4.html#method">6.4</a>): first just the sensor, then the display, then the network. Ask for and test each step separately.</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">Coach's advice</div>
+<p>AI makes you faster, as long as you know what you're doing. If you don't, it just helps you make mistakes faster. My rule for my students is simple: for any code you got from an AI, you must be able to explain it to someone else without looking at the answer. Can't do it? Then it isn't your code yet; it's the AI's. And one serious warning: a burned-out circuit, an overheated battery or a leaked password is your responsibility, not the AI's.</p></div>
+
+<h2 id="quiz">Quiz for this lesson</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="3">
+  <p class="q">What is the most important information to include in an ESP32 programming prompt?</p>
+  <ol><li data-why="Politeness is nice, but it doesn't decide the quality of the code.">"Please" and "thank you"</li><li data-why="The language of the prompt matters less; models understand many languages well, Persian included.">Making sure the prompt is in English</li><li>The exact board name, the core version, and the exact wiring of the parts</li><li data-why="Length on its own doesn't matter; precise information does.">Making the prompt very long</li></ol>
+  <div class="fb">Without the board, the core version and the wiring, the model has to guess, and its guesses are often a wrong pin and an old API.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">An AI gave you code containing <code>ledcWrite(0, 128);</code> and you compiled it on core 3.x. It compiled without errors. What could be wrong?</p>
+  <ol><li data-why="The build succeeded, so this isn't a compile problem.">Nothing; if it compiled, it's correct</li><li>In 3.x the first number is the "pin"; this line addresses pin 0 (not channel 0), and since pin 0 isn't attached to LEDC, it silently does nothing</li><li data-why="128 is a valid value for 8-bit resolution.">128 isn't an allowed PWM value</li><li data-why="ledcWrite still exists in 3.x.">ledcWrite was removed in 3.x</li></ol>
+  <div class="fb">This is the silent trap: the same function name with a different meaning. A successful compile means "correct as a language", not "correct in its logic".</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">Which prompt is better for troubleshooting a compile error with AI?</p>
+  <ol><li data-why="Without the error text, the model can only guess.">"my code doesnt work, fix it"</li><li data-why="A summary of the error throws away important information.">"it gives some LEDC error"</li><li data-why="The code without the error isn't enough; the model doesn't know where you're stuck.">Just pasting the complete code</li><li>Core version + the full error text + the code + what you've tried and your guess</li></ol>
+  <div class="fb">The more precise the information, the more precise the answer. And making your own guess forces you to think.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">An AI suggested connecting the ECHO output of an HC-SR04 sensor (which runs on 5 V) straight to GPIO18. What do you do?</p>
+  <ol><li>I don't accept it; I bring the voltage down to 3.3 V with a voltage divider or a level shifter</li><li data-why="The AI isn't responsible for your hardware; your own knowledge is.">I accept it, because the AI said so</li><li data-why="Any other pin has the same 3.3 V limit.">I just move it to GPIO19</li><li data-why="A pull-up resistor doesn't lower a 5 V signal.">I enable the internal pull-up resistor</li></ol>
+  <div class="fb">ESP32 pins are designed for 3.3 V (ways to convert levels are in lesson <a href="1-4.html#levels">1.4</a>). This is exactly where your basic knowledge is ahead of the AI.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">Which of these is the right thing to do in a conversation with an AI assistant?</p>
+  <ol><li data-why="A real password should never be in any conversation.">Paste the complete code with the real Wi-Fi password so the model can test it</li><li data-why="An API key is like a password; if it leaks, others get access to your account.">Paste the API key so the model can fix the connection</li><li>Replace the passwords with placeholder text and keep the real ones in a separate file</li><li data-why="Models usually can't connect to your home network directly, and doing this is pointless and dangerous.">Give it your router's IP address and admin password to troubleshoot the network</li></ol>
+  <div class="fb">Sensitive information never goes into a conversation. A separate <code>secrets.h</code> file makes that easy.</div>
+</div>
+
+<h2 id="practice">Exercises</h2>
+<div class="exercise"><div class="ct">Exercise 1: extend an earlier project with AI and review it</div>
+<p>Pick one of the earlier projects (for example the battery-powered logger from lesson <a href="6-1.html">6.1</a> or the DHT22 display from lesson <a href="3-3.html">3.3</a>). Using the prompt template, ask an AI to add a feature to it; for example "if humidity goes above 70 percent, blink an LED on GPIO25, without delay". Then:</p>
+<ol>
+  <li>Write down your full prompt.</li>
+  <li>Run the ten-step checklist on the answer and, for each step, write "pass" or "fail" and why.</li>
+  <li>Ask at least one follow-up question ("in which situations does this code not work?").</li>
+  <li>Run the code in Wokwi first, then on the board.</li>
+</ol>
+<details><summary>Hint</summary><p>Put the project's current code into the prompt in full and say clearly "add only this feature and don't change the rest of the code". Then compare the changes with the previous code line by line. If the model changed things you didn't ask for (the pins or the sleep time, for example), that's an important review finding in itself.</p></details>
+</div>
+<div class="exercise"><div class="ct">Exercise 2: bug hunt</div>
+<p>Read the made-up "bad prompt" code from Example 1 again. Without looking at the explanation cards, list all its problems (at least 7). Then ask an AI for a correct version using the prompt template, and compare.</p>
+<details><summary>Answer (list of problems)</summary><p>(1) Wi-Fi nobody asked for; (2) a password in the code; (3) a DHT11 when the sensor wasn't specified; (4) GPIO2 for a sensor (a strapping pin); (5) endless waiting for Wi-Fi; (6) <code>ledcSetup</code>/<code>ledcAttachPin</code> don't exist in 3.x; (7) GPIO35 is input-only; (8) NaN isn't checked; (9) <code>delay(5000)</code>; (10) the fan wired straight to a pin with no transistor or MOSFET; (11) a serial speed of 9600, which doesn't match the course's habit (a minor issue).</p></details>
+</div>
+<div class="exercise"><div class="ct">Exercise 3: the private tutor</div>
+<p>Give the pulse counter code (Example 3) to an AI assistant without our explanations, and use the "explanation prompt" to ask it to explain the code line by line. Compare its answer with the explanation cards on this page. Where did they agree? Where did it say something we didn't? Did it get anything wrong? Run one of the three experiments it suggested in Wokwi.</p>
+</div>
+
+<div class="callout info"><div class="ct">The lesson in three lines</div>
+<p>AI is an assistant, not a replacement, because it writes right and wrong code with the same full confidence (unsuitable pins, core 2.x APIs, 5 V signals). Get better answers with the prompt template (board, core version, wiring, libraries, goal, constraints, output), and for troubleshooting give the full error and the full code. Review every piece of code with the ten-step checklist, run it in Wokwi first, and never paste a real password or key into a conversation.</p></div>
+
+</article>
+</body>
+</html>

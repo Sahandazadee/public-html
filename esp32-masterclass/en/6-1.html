@@ -1,0 +1,886 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Deep sleep and light sleep for battery-powered devices · ESP32 Masterclass</title>
+<meta name="description" content="ESP32 power management from zero: milliamp-hours, battery-life math, deep and light sleep, waking up with a timer, a button or touch, measuring current with a multimeter, and building a battery-powered DHT22 data logger.">
+<link rel="alternate" hreflang="fa" href="../6-1.html"><link rel="alternate" hreflang="en" href="6-1.html">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="../assets/course.js"></script>
+<script defer src="../assets/glossary-en.js"></script>
+<script defer src="../assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="6-1">
+
+<p class="lede">So far your ESP32 has always been plugged into a computer over USB, with unlimited power. But a sensor in the garden, a thermometer in a storeroom or a wireless doorbell has to run for months on one battery. In this lesson you learn to work out energy with real numbers, put the ESP32 to sleep and wake it up again, and measure the actual current with a multimeter, so you don't put your trust in numbers that only exist on paper.</p>
+
+<div class="goals">
+  <div><h4>🎯 After this lesson you can</h4><ul>
+    <li>Explain what milliamps, milliamp-hours and average current mean</li>
+    <li>Work out a project's battery life before you build it</li>
+    <li>Wake the ESP32 from deep sleep with a timer, a button, several buttons, or touch</li>
+    <li>Tell deep sleep and light sleep apart and use each one correctly</li>
+    <li>Measure your board's current draw safely with a multimeter</li>
+    <li>Build a DHT22 data logger that wakes up every 10 minutes, sends its reading and goes back to sleep</li>
+  </ul></div>
+  <div><h4>🧰 Prerequisites and parts</h4><ul>
+    <li>Lessons <a href="3-1.html">3.1</a> (buttons and inputs), <a href="3-3.html">3.3</a> (DHT22), <a href="4-1.html">4.1</a> (Wi-Fi) and <a href="5-1.html">5.1</a> (MQTT)</li>
+    <li>An ESP32 DevKitC board, two push buttons, two 10 kΩ resistors</li>
+    <li>A DHT22 sensor (or a DHT22 module)</li>
+    <li>A digital multimeter (for the measuring section)</li>
+    <li>Optional: a lithium battery, a TP4056 charger module with protection, a low-power regulator such as the HT7833</li>
+  </ul></div>
+</div>
+
+<h2 id="energy">Energy from zero: current, milliamps and milliamp-hours</h2>
+<p>Before any code, we need to understand how a battery "runs out". There are two important numbers:</p>
+<ul>
+  <li><b>Current</b>: how much electricity the circuit is drawing right now. It is measured in amps (A). The ESP32 uses far less than one amp, so we usually talk in <b>milliamps</b> (mA, a thousandth of an amp) and <b>microamps</b> (µA, a millionth of an amp). So <code>1 mA = 1000 µA</code>.</li>
+  <li><b>Battery capacity</b>: how much "stored electricity" the battery holds in total. It is measured in <b>milliamp-hours</b> (mAh). A 2000 mAh battery can supply 2000 mA for one hour, or 100 mA for 20 hours, or 1 mA for 2000 hours.</li>
+</ul>
+
+<div class="callout analogy"><div class="ct">An everyday example: a water tank</div>
+<p>Picture the battery as a 2000-liter water tank. Current is how much water flows out of the tap each hour. Open the tap all the way (100 liters per hour) and the tank is empty in 20 hours. Leave only a drip open (1 liter per hour) and the tank lasts 2000 hours, which is almost 3 months. The whole art of this lesson is keeping the ESP32's tap on "drip" most of the time.</p></div>
+
+<div class="callout example"><div class="ct">Work it out: an ESP32 that is always on</div>
+<p>A simple formula: <code>life (hours) = capacity (mAh) ÷ current (mA)</code></p>
+<p>With Wi-Fi on and doing work, the ESP32 draws somewhere around 80 to 240 mA on average, depending on the job. If we call the average 120 mA and use a 2000 mAh battery:</p>
+<p><code>2000 ÷ 120 ≈ 16.7 h</code>, which is less than a day! 😬</p>
+<p>In practice it is even less, because a battery never runs all the way down to zero (the circuit shuts off before that) and the regulator wastes a little as well. A cautious rule of thumb: count only about <b>70 to 80 percent</b> of the capacity on the label as usable.</p></div>
+
+<h3 id="duty">Average current and duty cycle</h3>
+<p>The solution is to let the ESP32 sleep most of the time and wake up for just a few seconds. Then there is no longer a single constant current; we have to take a <b>weighted average</b>. The formula:</p>
+<div class="callout info"><div class="ct">The average-current formula</div>
+<p><code>I_avg = (I_awake × t_awake + I_sleep × t_sleep) ÷ (t_awake + t_sleep)</code></p>
+<p>In words: awake current times awake time, plus sleep current times sleep time, divided by the length of one full cycle. The ratio <code>t_awake ÷ (t_awake + t_sleep)</code> is called the <span class="term" data-t="Duty Cycle">duty cycle</span>: the percentage of time the device is awake.</p></div>
+
+<div class="callout example"><div class="ct">Three scenarios with a 2000 mAh battery (waking once every 10 minutes)</div>
+<p>One cycle = 10 minutes = 600 seconds.</p>
+<p><b>Scenario A: bare chip, 5 seconds awake at 120 mA, deep sleep the rest of the time at 0.01 mA (10 µA):</b><br>
+<code>(120 × 5 + 0.01 × 595) ÷ 600 = (600 + 5.95) ÷ 600 ≈ 1.01 mA</code><br>
+<code>2000 ÷ 1.01 ≈ 1980 h ≈ 82 days</code></p>
+<p><b>Scenario B: the same code, but on an ordinary development board that still draws about 8 mA while asleep:</b><br>
+<code>(120 × 5 + 8 × 595) ÷ 600 = (600 + 4760) ÷ 600 ≈ 8.9 mA</code><br>
+<code>2000 ÷ 8.9 ≈ 224 h ≈ 9 days</code>, not 82 days!</p>
+<p><b>Scenario C: bare chip, but we've cut the awake time to 1.5 seconds with the tricks from this lesson:</b><br>
+<code>(120 × 1.5 + 0.01 × 598.5) ÷ 600 = (180 + 5.99) ÷ 600 ≈ 0.31 mA</code><br>
+<code>2000 ÷ 0.31 ≈ 6450 h ≈ 269 days</code></p>
+<p>Two big lessons from these three lines: (1) the board's <b>sleep current</b> can ruin everything; (2) once the sleep current is low, the <b>awake time</b> is the most important number. (These calculations ignore the battery's self-discharge and the capacity it loses in the cold, so the real numbers are lower.)</p></div>
+
+<figure><div class="frame"><svg viewBox="0 0 760 320" style="direction:ltr" role="img" aria-label="Graph of current over time for an ESP32 using deep sleep">
+  <rect x="0" y="0" width="760" height="320" fill="#fff"/>
+  <line x1="70" y1="260" x2="740" y2="260" stroke="#152033" stroke-width="2"/>
+  <line x1="70" y1="260" x2="70" y2="30" stroke="#152033" stroke-width="2"/>
+  <polygon points="740,260 730,255 730,265" fill="#152033"/>
+  <polygon points="70,30 65,40 75,40" fill="#152033"/>
+  <text x="740" y="290" font-size="13" fill="#152033" text-anchor="end">Time →</text>
+  <text x="20" y="40" font-size="13" fill="#152033" transform="rotate(-90 20 40)" text-anchor="end">Current (mA)</text>
+  <text x="62" y="264" font-size="12" fill="#4d5b70" text-anchor="end">0</text>
+  <text x="62" y="124" font-size="12" fill="#4d5b70" text-anchor="end">120</text>
+  <text x="62" y="64" font-size="12" fill="#4d5b70" text-anchor="end">240</text>
+  <line x1="66" y1="120" x2="740" y2="120" stroke="#dbe2ec" stroke-dasharray="4 4"/>
+  <line x1="66" y1="60" x2="740" y2="60" stroke="#dbe2ec" stroke-dasharray="4 4"/>
+  <!-- development board while asleep -->
+  <path d="M70 250 H740" stroke="#e0781f" stroke-width="2" stroke-dasharray="7 5" fill="none"/>
+  <text x="736" y="228" font-size="12" fill="#e0781f" text-anchor="end">Dev board asleep:</text>
+  <text x="736" y="243" font-size="12" fill="#e0781f" text-anchor="end">a few mA (e.g. 8)</text>
+  <!-- chip current -->
+  <path d="M70 259 H110 V120 H118 V60 H124 V120 H132 V70 H137 V120 H150 V259 H350 V120 H358 V60 H364 V120 H372 V70 H377 V120 H390 V259 H590 V120 H598 V60 H604 V120 H612 V70 H617 V120 H630 V259 H740" fill="none" stroke="#2f7af0" stroke-width="3" stroke-linejoin="round"/>
+  <text x="140" y="48" font-size="12" fill="#d6457a" text-anchor="start">Wi-Fi transmit peak</text>
+  <text x="130" y="140" font-size="11" fill="#2f7af0" text-anchor="middle">Awake</text>
+  <text x="250" y="280" font-size="12" fill="#2f7af0" text-anchor="middle">Chip in deep sleep: about 0.01 mA</text>
+  <text x="250" y="302" font-size="12" fill="#4d5b70" text-anchor="middle">(looks like zero at this scale)</text>
+  <line x1="110" y1="200" x2="350" y2="200" stroke="#12a37f" stroke-width="1.5"/>
+  <polygon points="110,200 118,196 118,204" fill="#12a37f"/><polygon points="350,200 342,196 342,204" fill="#12a37f"/>
+  <text x="230" y="194" font-size="12" fill="#12a37f" text-anchor="middle">One full cycle (e.g. 10 minutes)</text>
+</svg></div>
+<figcaption>A simplified picture of the current drawn by a device that sleeps: short awake peaks (with brief Wi-Fi transmit spikes) and long stretches of sleep. The area under the graph is the energy used. The orange line shows how much a development board wastes while asleep. <span class="src">Image: drawn for this lesson</span></figcaption></figure>
+
+<div class="callout why"><div class="ct">Why "the area under the graph"?</div>
+<p>The peaks are tall but very narrow. Sleep is short (in height) but very wide. Energy = height × width. That is why, in scenario B, the low but wide orange line ate more battery than all the peaks put together.</p></div>
+
+<h2 id="modes">The ESP32's power modes (with official numbers)</h2>
+<p>The ESP32 has several power modes. The lower you go, the more parts are switched off and the more limited the ways to wake up become. The numbers in the table come from the "Power Consumption by Power Modes" table and the RF current table in the <a href="https://www.espressif.com/sites/default/files/documentation/esp32_datasheet_en.pdf" target="_blank" rel="noopener">official ESP32 datasheet (Espressif)</a>. They are for <b>the chip itself</b>, not a development board:</p>
+<div class="table-wrap"><table>
+<tr><th>Mode</th><th>What stays on</th><th>Approximate current (chip)</th><th>After waking up</th></tr>
+<tr><td><b>Active</b> with Wi-Fi transmitting</td><td>Everything, radio transmitting</td><td>Spikes of about 160 to 240 mA while transmitting (depending on the transmit type and power), and about 100 mA while receiving</td><td>—</td></tr>
+<tr><td><b>Modem-sleep</b></td><td>CPU on, radio off (or off between packets)</td><td>About 20 to 68 mA depending on CPU frequency (80 to 240 MHz)</td><td>The program never stopped</td></tr>
+<tr><td><b>Light-sleep</b></td><td>RAM and CPU state are kept, clocks are paused</td><td>About 0.8 mA</td><td>Carries on from <b>the same line</b></td></tr>
+<tr><td><b>Deep-sleep</b></td><td>Only the RTC part: the RTC timer and RTC memory</td><td>About 10 µA (with the ULP coprocessor running: about 150 µA)</td><td>The program starts <b>from the beginning</b> (setup)</td></tr>
+<tr><td><b>Hibernation</b></td><td>Only the RTC timer and a few RTC pins; even RTC memory is off</td><td>About 5 µA</td><td>From the beginning; RTC variables are wiped too</td></tr>
+</table></div>
+
+<div class="callout analogy"><div class="ct">An everyday example: an office worker taking a break</div>
+<p><b>Modem-sleep</b>: the worker is at the desk but has hung up the phone. <b>Light sleep</b>: head down on the desk, taking a nap; all the papers are still open in front of them, and when they wake up they carry on from exactly the same sentence. <b>Deep sleep</b>: they went home to bed; the desk has been cleared and tomorrow they must start the job from scratch, with only a small note left in their pocket (RTC memory). <b>Hibernation</b>: even the note in their pocket has been thrown away; only the alarm clock is still running.</p></div>
+
+<h2 id="devboard">The hard truth: a dev board does not draw "10 microamps" asleep</h2>
+<p>The 10 µA figure is for <b>the ESP32 chip itself</b>. But you have a development board, and it carries other parts that never go to sleep:</p>
+<ul>
+  <li><b>The voltage regulator</b>: most cheap boards use an AMS1117 regulator, which, according to its datasheet, typically uses about 5 mA (and up to 10 mA) just to keep itself running. This is called its quiescent current.</li>
+  <li><b>The USB-to-serial chip</b> (CP2102 or CH340): on many boards it is powered from the same supply rail even when no USB cable is plugged in.</li>
+  <li><b>The power LED</b>: that little red LED alone can draw one to several milliamps.</li>
+</ul>
+<p>The result: a typical development board in deep sleep draws anywhere from about one to more than ten milliamps, depending on the model. That is hundreds of times the datasheet number. The only way to know the figure for <b>your</b> board is to measure it. For a real battery-powered product, either use boards designed for batteries (a low-power regulator, no always-on LED) or put an ESP32 module on your own board with a suitable regulator (see the PCB design lessons in the <a href="../../kicad-9-tutorial/">KiCad tutorial</a>).</p>
+
+<div class="callout warn"><div class="ct">Don't be fooled by the code alone</div>
+<p>Your sleep code can be completely correct and the battery can still be dead in a week. That doesn't mean the code has a problem; it means the <b>hardware</b> does. Until you have measured, make no promises about battery life.</p></div>
+
+<h3 id="measure">Measuring current with a multimeter (safely)</h3>
+<p>If you're not yet comfortable with your multimeter's sockets and selector dial, first review the <a href="1-4.html#multimeter">multimeter section in lesson 1.4</a>; here we only add current measurement.</p>
+<figure><div class="frame"><img src="../assets/img/multimeter.jpg" alt="Measuring a lithium battery with a digital multimeter"></div>
+<figcaption>A digital multimeter. For voltage you place the two leads <b>in parallel</b> (across the two ends of the battery); for current, the multimeter must sit <b>in series</b>, in the path of the current. <span class="src">Image: Arduino (arduino/docs-content), CC BY-SA 4.0</span></figcaption></figure>
+
+<div class="callout analogy"><div class="ct">Why in series? A water meter</div>
+<p>A water meter is fitted in the middle of the pipe so that all the water flows through it and gets counted. An ammeter works the same way: you have to cut the pipe (the wire) and put the ammeter in the middle. If you put the ammeter "beside" the battery (in parallel), it's like connecting the pipe straight to the drain: the ammeter has almost zero resistance, so you are effectively short-circuiting the battery. The result: the multimeter's fuse blows and a lithium battery may get hot.</p></div>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC (powered through the 3V3 pin)",
+  "parts":[
+    {"id":"BAT","name":"3.7 V lithium battery (with protection)","pins":[["+","positive terminal (red wire)"],["-","negative terminal (black wire)"]]},
+    {"id":"MM","name":"Multimeter set to DC current","img":"multimeter.jpg","pins":[["mA","mA or 10A input"],["COM","common input (black)"]]},
+    {"id":"LDO","name":"HT7833 low-power regulator","pins":[["VIN","input (from the battery, 3 to 4.2 V)"],["VOUT","3.3 V output"],["GND","ground"]]}
+  ],
+  "wires":[["BAT.+","MM.mA","red","red probe lead"],["MM.COM","LDO.VIN","red"],["LDO.VOUT","3V3","red"],["LDO.GND","GND","black"],["BAT.-","GND","black"]]
+}</script><figcaption>The multimeter in series with the battery's positive lead: all the current flows through it. The USB cable must be unplugged for this test; otherwise the board takes its power from USB and your reading means nothing. (Check the regulator's real pinout in the datasheet for the exact package you have; the pin order differs between packages.)</figcaption></div>
+
+<ol class="steps">
+  <li><b>Unplug the board from USB.</b> Only the battery or the power supply should be powering it.</li>
+  <li><b>Move the multimeter's red lead to the current socket.</b> Start with the <code>10A</code> socket (or the largest range) and turn the selector to DC current (the A with a straight line). Always start with the largest range, then go down.</li>
+  <li><b>Open the circuit and put the multimeter in the gap:</b> battery positive → red probe, black probe (COM) → regulator input.</li>
+  <li><b>Read the awake current</b> (tens of milliamps, with brief jumps). Most multimeters are far too slow to catch the short Wi-Fi peaks; the number on the display is only an approximation.</li>
+  <li><b>Once the board is asleep</b>, lower the range to mA and then µA for a more precise reading.</li>
+  <li><b>Finished?</b> <b>Always</b> move the red lead back to the voltage (V) socket. Otherwise your next mistake will be measuring the battery voltage with the lead still in the current socket, which is a short circuit.</li>
+</ol>
+
+<div class="callout warn"><div class="ct">The "burden voltage" trap on the microamp range</div>
+<p>To measure current, the multimeter puts a small resistor in the path. On the µA range that resistor is fairly large. When the ESP32 wakes up and suddenly draws tens of milliamps, the voltage across that resistor rises, and the board may reset (<span class="term" data-t="Brownout">brownout</span>) and get stuck in an endless loop of waking up and resetting. If you see this, the problem is the multimeter, not your code: read the sleep current on the µA range and switch back to the mA range before the next wake-up, or use a dedicated current-measuring tool (a power profiler).</p></div>
+
+<h2 id="deep">Deep sleep with a timer wake-up</h2>
+<p>The simplest and most common method: "go to sleep and wake up in 10 seconds". The most important point, one to remember forever: <b>after deep sleep, the program starts over from the beginning</b>, just as if you had pressed the EN button. So in this kind of program <code>loop()</code> never runs at all, and all the work happens in <code>setup()</code>.</p>
+
+<div class="code" data-file="DeepSleep_Timer.ino" id="dsTimer"><pre>
+// Deep sleep with a timer wake-up
+const uint64_t uS_PER_SEC = 1000000ULL;   // microseconds in one second
+const uint64_t SLEEP_SEC  = 10;           // wake up every 10 seconds
+
+RTC_DATA_ATTR int bootCount = 0;          // in RTC memory: survives sleep
+int normalCount = 0;                      // in normal RAM: reset to zero every time
+
+void printWakeReason() {
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  switch (cause) {
+    case ESP_SLEEP_WAKEUP_TIMER:    Serial.println("Wake: timer"); break;
+    case ESP_SLEEP_WAKEUP_EXT0:     Serial.println("Wake: EXT0 (one pin)"); break;
+    case ESP_SLEEP_WAKEUP_EXT1:     Serial.println("Wake: EXT1 (several pins)"); break;
+    case ESP_SLEEP_WAKEUP_TOUCHPAD: Serial.println("Wake: touch"); break;
+    default: Serial.println("Wake: power-on or reset (not from sleep)"); break;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);                             // time for the Serial Monitor to open
+  bootCount++;
+  normalCount++;
+  Serial.printf("bootCount=%d  normalCount=%d\n", bootCount, normalCount);
+  printWakeReason();
+
+  // ... the real work goes here: read sensors, send data ...
+
+  esp_sleep_enable_timer_wakeup(SLEEP_SEC * uS_PER_SEC);
+  Serial.println("Going to deep sleep for 10 s...");
+  Serial.flush();                         // wait until all the text has been sent
+  esp_deep_sleep_start();                 // nothing after this runs
+  Serial.println("This line never runs");
+}
+
+void loop() {
+  // never runs: after waking up, the program starts from setup
+}
+</pre></div>
+<ol class="walk" data-for="dsTimer">
+  <li data-lines="2-3"><b class="what">Sleep time in microseconds.</b> The sleep timer function takes its time in <b>microseconds</b>. 10 seconds is 10 million microseconds. The <code>ULL</code> suffix means "unsigned 64-bit number" (unsigned long long).
+    <span class="why">A 32-bit number tops out at about 4.29 billion, which is only about 71 minutes in microseconds. If you write <code>3600 * 1000000</code> (one hour) without ULL, the multiplication overflows in 32 bits and the board sleeps for a completely wrong time. <code>uint64_t</code> and <code>ULL</code> remove that danger.</span></li>
+  <li data-lines="5"><b class="what">RTC_DATA_ATTR.</b> This tag tells the compiler to put the variable in the <b>small RTC memory</b> (about 8 KB), which stays powered during deep sleep, instead of in normal RAM.
+    <span class="why">Because the main RAM is switched off in deep sleep, this is the only simple way to "remember" a number between two wake-ups: a counter, the last temperature, an alarm state. But a power cut or the EN button wipes it too.</span></li>
+  <li data-lines="6"><b class="what">A normal variable for comparison.</b> <code>normalCount</code> lives in ordinary RAM.
+    <span class="why">In the output you'll see that bootCount goes up every time, but normalCount is always 1. This experiment proves the "starts from the beginning" idea with your own eyes.</span></li>
+  <li data-lines="8-17"><b class="what">Why did I wake up?</b> <code>esp_sleep_get_wakeup_cause()</code> returns the wake-up cause: the timer, a pin (EXT0 or EXT1), touch, or none of them (meaning the power was just connected or the board was reset).
+    <span class="why">Since every wake-up starts from setup, this is the only way for the program to tell "this is the normal timer wake-up" from "the user pressed the button" and behave differently in each case.</span></li>
+  <li data-lines="20-25"><b class="what">The awake work.</b> The counters go up and get printed. The <code>delay(500)</code> is only for testing.
+    <span class="why">Remove this delay in a real project; you saw in the scenarios above how expensive every extra half second awake is.</span></li>
+  <li data-lines="29"><b class="what">Setting the wake-up source.</b> <code>esp_sleep_enable_timer_wakeup(time)</code> sets the RTC timer's alarm.
+    <span class="why">Without any wake-up source, <code>esp_deep_sleep_start()</code> puts the board to sleep forever (until a reset or power cut). Note that the RTC timer runs from an internal oscillator and can be off by a few percent; that is fine for "every 10 minutes", but not for an accurate clock.</span></li>
+  <li data-lines="31"><b class="what">Serial.flush().</b> Waits until every character in the queue has actually left the TX pin.
+    <span class="why">Without it, the board may fall asleep in the middle of sending the last line, and you see it cut off or garbled in the Serial Monitor.</span></li>
+  <li data-lines="32-33"><b class="what">Going to sleep.</b> After <code>esp_deep_sleep_start()</code> no line runs; line 33 is there on purpose and should never be printed.
+    <span class="why">If one day you do see this line in the output, sleep never started (for example because a wake-up source was set up wrongly). A small trap for troubleshooting.</span></li>
+  <li data-lines="36-38"><b class="what">An empty loop.</b> It has to exist because Arduino requires it, but we never reach it.
+    <span class="why">This is the standard pattern for every "wake up, work, sleep" program.</span></li>
+</ol>
+<div class="serial">bootCount=1  normalCount=1
+Wake: power-on or reset (not from sleep)
+Going to deep sleep for 10 s...
+ets Jun  8 2016 00:22:57
+rst:0x5 (DEEPSLEEP_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+...
+bootCount=2  normalCount=1
+Wake: timer
+Going to deep sleep for 10 s...</div>
+<p>The line <code>rst:0x5 (DEEPSLEEP_RESET)</code> is the ESP32's own message when it wakes up, and it proves the board really came back from deep sleep and booted from the beginning.</p>
+
+<div class="wokwi" data-board="esp32" data-code-from="dsTimer">
+<p>This circuit has no wiring; it's just the board. Open an empty ESP32 project in Wokwi, paste the code and run it. Deep sleep with a timer works in Wokwi, and you'll see the repeated boots in the Serial Monitor. But remember that Wokwi <b>does not show current draw</b>; you only see the real savings with a multimeter on a real board.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="ext0">Waking up with a button (EXT0)</h2>
+<p>Sometimes you don't want the board to wake up every few minutes; you want it to wake up only when someone presses a button (like a doorbell or a remote control). For that we use <b>EXT0</b>: one specific pin at one specific level (LOW or HIGH) wakes the board.</p>
+<div class="callout warn"><div class="ct">Only RTC pins can wake the board</div>
+<p>In deep sleep only the RTC part has power, so only pins connected to the RTC (RTC GPIOs) can wake the board. On the ESP32 these are: <code>0, 2, 4, 12–15, 25–27, 32–39</code>. We chose <b>GPIO33</b> because it is an RTC pin, it is not a strapping pin, and it has internal pull-up and pull-down resistors. (GPIO34 to 39 have no internal resistors, and GPIO0, 2, 12 and 15 are strapping pins.)</p></div>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"SW1","name":"Wake-up push button","img":"button.svg","pins":[["1","one side of the button"],["2","the other side of the button"]]}
+  ],
+  "wires":[["GPIO33","SW1.1","blue"],["SW1.2","GND","black"]]
+}</script><figcaption>The button goes between GPIO33 and ground. The internal RTC pull-up resistor normally holds the pin HIGH; pressing the button pulls it LOW and the board wakes up.</figcaption></div>
+
+<div class="code" data-file="DeepSleep_Button.ino" id="dsExt0"><pre>
+// Waking up with a button (EXT0) on GPIO33
+#include "driver/rtc_io.h"
+
+const gpio_num_t WAKE_PIN = GPIO_NUM_33;     // must be an RTC pin
+RTC_DATA_ATTR int bootCount = 0;
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  bootCount++;
+  Serial.printf("Boot #%d\n", bootCount);
+
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
+    Serial.println("Woken up by the button!");
+  }
+
+  // the button is between GPIO33 and GND: pressed = LOW
+  esp_sleep_enable_ext0_wakeup(WAKE_PIN, 0);   // 0 means wake up on LOW
+  rtc_gpio_pullup_en(WAKE_PIN);                // internal RTC pull-up on
+  rtc_gpio_pulldown_dis(WAKE_PIN);             // pull-down off
+
+  Serial.println("Sleeping until button press...");
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="dsExt0">
+  <li data-lines="2"><b class="what">The rtc_io header.</b> The <code>rtc_gpio_...</code> functions are defined in this ESP-IDF header file.
+    <span class="why">In deep sleep the pins are no longer controlled by <code>pinMode</code> (that part is switched off); the RTC part controls them. So the pull-up resistor has to be switched on through the RTC as well.</span></li>
+  <li data-lines="4"><b class="what">The gpio_num_t type.</b> The sleep functions want a <code>gpio_num_t</code> instead of a plain number; <code>GPIO_NUM_33</code> is simply pin 33.
+    <span class="why">The compiler won't accept a plain number (an int) in its place, so you can't accidentally pass some unrelated number or variable where a pin belongs.</span></li>
+  <li data-lines="13-15"><b class="what">Detecting a button wake-up.</b> If the wake-up cause was EXT0, a special message is printed.
+    <span class="why">In a real project this is where the main work happens: for example, sending a "someone rang the doorbell" message.</span></li>
+  <li data-lines="18"><b class="what">esp_sleep_enable_ext0_wakeup(pin, level).</b> Level <code>0</code> means "wake up when the pin goes LOW"; <code>1</code> means HIGH.
+    <span class="why">The button is connected to GND, so pressing it pulls the pin LOW. If you connect the button to 3V3 instead, set the level to 1 and switch on the pull-down instead of the pull-up.</span></li>
+  <li data-lines="19-20"><b class="what">The RTC pull-up.</b> The pin is normally held HIGH and the pull-down is switched off.
+    <span class="why">Without a resistor the pin is <span class="term" data-t="Floating">floating</span>, and nearby electrical noise might pull it LOW and wake the board for no reason. In EXT0 mode, the part that powers these resistors automatically stays on.</span></li>
+  <li data-lines="22-24"><b class="what">Sleep.</b> Just like before: message, flush, sleep.
+    <span class="why">If the button is still held down when this line runs, the board wakes up again immediately. In a real project, wait until the button is released before sleeping.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="dsExt0">
+<p>In Wokwi, press the button after the <code>Sleeping until button press...</code> message. Wokwi simulates the RTC pull-up and pull-down resistors. If the simulator ever behaves differently from what you expect, the real board has the final say.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 60, "left": -160, "attrs": { "color": "green" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "btn1:1.r", "esp:33", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="ext1">Waking up with several buttons (EXT1)</h2>
+<p>EXT0 watches only one pin. If you have two or more buttons (for example "button A: send now" and "button B: settings mode"), use <b>EXT1</b>. EXT1 takes a <b>bit mask</b> of pins, and after waking up it also tells you which pin caused the wake-up.</p>
+
+<div class="callout warn"><div class="ct">An important trap: the original ESP32 has only two EXT1 modes</div>
+<p>On the original ESP32 chip (the one on this DevKitC) there are only two modes: <code>ESP_EXT1_WAKEUP_ANY_HIGH</code> (any of the pins goes HIGH) and <code>ESP_EXT1_WAKEUP_ALL_LOW</code> (all the pins are LOW at the same time). The <code>ESP_EXT1_WAKEUP_ANY_LOW</code> mode is defined only for newer chips such as the ESP32-S2, S3, C6 and H2; we checked this directly in the <code>esp_sleep.h</code> file of ESP-IDF version 5 (the base of core 3.x). If you see <code>ANY_LOW</code> used for a plain ESP32 in a tutorial or an AI answer, you'll hit a "was not declared in this scope" error. That's why in this example we connect the buttons to <b>3V3</b> and watch for "any of them goes HIGH".</p></div>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"SWA","name":"Button A","img":"button.svg","pins":[["1","to 3V3"],["2","to GPIO32"]]},
+    {"id":"R1","name":"10 kΩ resistor (pull-down for A)","img":"resistor.svg","pins":[["1","to GPIO32"],["2","to GND"]]},
+    {"id":"SWB","name":"Button B","img":"button.svg","pins":[["1","to 3V3"],["2","to GPIO33"]]},
+    {"id":"R2","name":"10 kΩ resistor (pull-down for B)","img":"resistor.svg","pins":[["1","to GPIO33"],["2","to GND"]]}
+  ],
+  "wires":[["3V3","SWA.1","red"],["SWA.2","GPIO32","blue"],["GPIO32","R1.1","blue"],["R1.2","GND","black"],["3V3","SWB.1","red"],["SWB.2","GPIO33","blue"],["GPIO33","R2.1","blue"],["R2.2","GND","black"]]
+}</script><figcaption>Each button has one side on 3V3 and the other side on an RTC pin. A 10 kΩ resistor normally holds each pin LOW. Pressing a button pulls its own pin HIGH.</figcaption></div>
+
+<div class="code" data-file="DeepSleep_TwoButtons.ino" id="dsExt1"><pre>
+// Waking up with either of two buttons (EXT1)
+const int BTN_A = 32;
+const int BTN_B = 33;
+const uint64_t WAKE_MASK = (1ULL &lt;&lt; BTN_A) | (1ULL &lt;&lt; BTN_B);
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1) {
+    uint64_t st = esp_sleep_get_ext1_wakeup_status();   // which pins?
+    if (st &amp; (1ULL &lt;&lt; BTN_A)) Serial.println("Button A (GPIO32) woke me");
+    if (st &amp; (1ULL &lt;&lt; BTN_B)) Serial.println("Button B (GPIO33) woke me");
+  } else {
+    Serial.println("Normal start");
+  }
+
+  // the buttons go to 3V3 and have 10k to GND: pressed = HIGH
+  esp_sleep_enable_ext1_wakeup(WAKE_MASK, ESP_EXT1_WAKEUP_ANY_HIGH);
+  Serial.println("Sleeping. Press A or B...");
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="dsExt1">
+  <li data-lines="2-4"><b class="what">A bit mask.</b> Each pin is one bit in a 64-bit number. <code>1ULL &lt;&lt; 32</code> means "shift the number 1 left by 32 places": a number whose only 1 bit is bit 32. With <code>|</code> (bitwise OR) we switch on both bits together.
+    <span class="why">The ESP32 has more than 32 pins, so a 32-bit number isn't enough. If you write <code>1 &lt;&lt; 32</code> (without ULL), the behavior is undefined and the mask comes out wrong; it's one of the classic bugs.</span></li>
+  <li data-lines="10-13"><b class="what">Which button woke me?</b> <code>esp_sleep_get_ext1_wakeup_status()</code> returns a mask in which the bits of the pins that caused the wake-up are 1. With <code>&amp;</code> (bitwise AND) we check each button's bit separately.
+    <span class="why">This means a sleeping board can do different jobs for different buttons, without having to read the pins again after waking up (by which time the button may already have been released).</span></li>
+  <li data-lines="19"><b class="what">Enabling EXT1.</b> We pass the mask and the <code>ANY_HIGH</code> mode.
+    <span class="why">Core 3.x also has a newer name (<code>esp_sleep_enable_ext1_wakeup_io</code>), which the latest official examples use; the older name used here works in every 3.x version. It may be removed in ESP-IDF version 6.</span></li>
+  <li data-lines="20-22"><b class="what">Sleep.</b> Same as the previous examples.
+    <span class="why">We fitted <b>external</b> pull-down resistors. Unlike EXT0, EXT1 does not keep the part that powers the internal RTC resistors switched on by default, so external resistors are the most reliable choice for a beginner.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="dsExt1">
+<p>Two buttons and two 10 kΩ resistors. After the <code>Sleeping</code> message, press either button and see which one gets reported.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btnA", "top": 20, "left": -200, "attrs": { "color": "green", "label": "A" } },
+    { "type": "wokwi-pushbutton", "id": "btnB", "top": 120, "left": -200, "attrs": { "color": "blue", "label": "B" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 80, "left": -110, "attrs": { "value": "10000" } },
+    { "type": "wokwi-resistor", "id": "r2", "top": 180, "left": -110, "attrs": { "value": "10000" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "btnA:1.l", "esp:3V3", "red", [] ],
+    [ "btnA:2.r", "esp:32", "blue", [] ],
+    [ "r1:1", "esp:32", "blue", [] ],
+    [ "r1:2", "esp:GND.1", "black", [] ],
+    [ "btnB:1.l", "esp:3V3", "red", [] ],
+    [ "btnB:2.r", "esp:33", "blue", [] ],
+    [ "r2:1", "esp:33", "blue", [] ],
+    [ "r2:2", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="touch">Waking up with touch</h2>
+<p>The ESP32 has several <span class="term" data-t="Touch">touch</span> pins that work without any button: you just touch a wire or a piece of aluminum foil. These pins can wake the board from deep sleep too. We pick <b>T7, which is GPIO27</b>, because it is not a strapping pin.</p>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"PAD","name":"Touch pad: a jumper wire or aluminum foil","pins":[["1","one wire to GPIO27; the other end free for touching"]]}
+  ],
+  "wires":[["GPIO27","PAD.1","blue"]]
+}</script><figcaption>Just one wire to GPIO27. Stick the other end of the wire to a piece of foil or a coin to make touching easier. No resistor is needed.</figcaption></div>
+
+<div class="code" data-file="DeepSleep_Touch.ino" id="dsTouch"><pre>
+// Waking up by touch on GPIO27 (T7)
+const int THRESHOLD = 40;   // on the ESP32: a touch reading below this = touched
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TOUCHPAD) {
+    Serial.println("Woken up by touch!");
+  }
+  Serial.printf("touchRead(T7) now = %d\n", touchRead(T7));
+  touchSleepWakeUpEnable(T7, THRESHOLD);   // core 3.x API
+  Serial.println("Touch the wire on GPIO27 to wake me");
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="dsTouch">
+  <li data-lines="2"><b class="what">The touch threshold.</b> On the original ESP32, <code>touchRead</code> gives a larger number when nothing is touching the pin, and the number drops when you touch it. 40 is the value Espressif's official example uses for the ESP32.
+    <span class="why">The right number depends on the wire length, the size of the foil and even the humidity. That's why line 10 prints the current value, so you can tune the threshold yourself: usually somewhere between the "not touched" and "touched" numbers. (On the ESP32-S2 and S3 it's the other way round: touching makes the number bigger.)</span></li>
+  <li data-lines="7-9"><b class="what">Detecting a touch wake-up.</b> The cause is <code>ESP_SLEEP_WAKEUP_TOUCHPAD</code>.
+    <span class="why">As with the other sources, after waking up we start from setup and need to find out why.</span></li>
+  <li data-lines="11"><b class="what">touchSleepWakeUpEnable(touch pin, threshold).</b> Registers pin T7 as a wake-up source.
+    <span class="why">This function was added in core 2.0.6 and is the recommended way in 3.x. Older tutorials use <code>touchAttachInterrupt(T7, callback, Threshold)</code> followed by <code>esp_sleep_enable_touchpad_wakeup()</code>.</span></li>
+</ol>
+<div class="callout info"><div class="ct">Wokwi and touch</div>
+<p>Wokwi's official feature table for the ESP32 does not list the touch sensor among the simulated parts. Try this example on a real board only.</p></div>
+
+<h2 id="hold">Holding a pin's state during sleep</h2>
+<p>Say you use a pin to drive a transistor that switches the power of a power-hungry sensor on and off. When the ESP32 goes to sleep, its pins may be released and the transistor could switch on by accident. The <code>gpio_hold_en</code> function "locks" a pin's state.</p>
+<div class="code" data-file="DeepSleep_Hold.ino" id="dsHold"><pre>
+// Holding an output pin's state during deep sleep
+const gpio_num_t PWR_PIN = GPIO_NUM_25;   // e.g. the control pin of the sensor's power transistor
+
+void goToSleep() {
+  digitalWrite(PWR_PIN, LOW);             // the state we want: sensor power off
+  gpio_hold_en(PWR_PIN);                  // lock this state
+  gpio_deep_sleep_hold_en();              // keep the lock during deep sleep too
+  esp_sleep_enable_timer_wakeup(60 * 1000000ULL);
+  esp_deep_sleep_start();
+}
+
+void setup() {
+  gpio_hold_dis(PWR_PIN);                 // after waking up, release the lock first
+  pinMode(PWR_PIN, OUTPUT);
+  digitalWrite(PWR_PIN, HIGH);            // sensor power on
+  delay(100);                             // ... read the sensor ...
+  goToSleep();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="dsHold">
+  <li data-lines="5-7"><b class="what">Locking the pin.</b> First we write the state we want, then <code>gpio_hold_en</code> locks it. On the ESP32, <code>gpio_deep_sleep_hold_en</code> turns on the lock for digital pins during deep sleep as well.
+    <span class="why">GPIO25 is an RTC pin, and for RTC pins <code>gpio_hold_en</code> alone is enough (it is equivalent to <code>rtc_gpio_hold_en</code>). Line 7 is needed for non-RTC pins, and having it here does no harm.</span></li>
+  <li data-lines="13"><b class="what">Releasing the lock after waking up.</b>
+    <span class="why">If you don't release it, every later <code>digitalWrite</code> on this pin does nothing, and you can spend hours hunting for a bug that isn't in your code!</span></li>
+</ol>
+
+<h2 id="light">Light sleep: a short nap, then carry on</h2>
+<p>In light sleep, the RAM stays powered. So after waking up, the program continues <b>from the line after</b> <code>esp_light_sleep_start()</code>, and all your ordinary variables are still where you left them. The price: about 0.8 mA instead of 10 µA. Light sleep suits short pauses (from a fraction of a second to a few seconds) and programs that you don't want to restart from the beginning.</p>
+<p>Another advantage: to wake from light sleep with a pin, the pin doesn't have to be an RTC pin; <b>any GPIO</b> input works with <code>gpio_wakeup_enable</code>.</p>
+
+<div class="code" data-file="LightSleep_Button.ino" id="lsDemo"><pre>
+// Light sleep: the program carries on from where it stopped
+#include "driver/gpio.h"
+
+const int BTN = 33;            // button between GPIO33 and GND
+int counter = 0;               // an ordinary variable; not wiped in light sleep
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BTN, INPUT_PULLUP);
+  gpio_wakeup_enable((gpio_num_t)BTN, GPIO_INTR_LOW_LEVEL);  // LOW = wake up
+  esp_sleep_enable_gpio_wakeup();
+  esp_sleep_enable_timer_wakeup(5 * 1000000ULL);             // or after 5 seconds
+}
+
+void loop() {
+  counter++;
+  Serial.printf("Awake! counter=%d\n", counter);
+  Serial.flush();                        // send all the text before sleeping
+  esp_light_sleep_start();               // it naps here ...
+  // ... and after waking up it carries on from this very line
+  esp_sleep_wakeup_cause_t c = esp_sleep_get_wakeup_cause();
+  Serial.println(c == ESP_SLEEP_WAKEUP_GPIO ? "Wake: button" : "Wake: timer");
+  delay(300);                            // pause so the button can be released
+}
+</pre></div>
+<ol class="walk" data-for="lsDemo">
+  <li data-lines="5"><b class="what">An ordinary counter.</b> This time <code>RTC_DATA_ATTR</code> isn't needed.
+    <span class="why">In light sleep the RAM stays on. In the output you'll see counter keep going up; compare that with normalCount in the deep sleep example, which was always 1.</span></li>
+  <li data-lines="9-11"><b class="what">Waking up with a GPIO.</b> <code>gpio_wakeup_enable</code> sets which pin wakes the board at which level, and <code>esp_sleep_enable_gpio_wakeup</code> switches this kind of wake-up on.
+    <span class="why">GPIO wake-up works on the "level", not the "edge". That means that as long as the button is held down, the wake-up condition is true. That's why we wait a little on line 23.</span></li>
+  <li data-lines="12"><b class="what">Two wake-up sources at once.</b> The 5-second timer is enabled too; whichever happens first wakes the board.
+    <span class="why">Combining sources is very common: "send a report every hour, but right away if the button is pressed".</span></li>
+  <li data-lines="19"><b class="what">esp_light_sleep_start().</b> The board sleeps, and after waking up, execution continues with the following lines (line 20 onward).
+    <span class="why">This is the biggest difference from deep sleep: no reset happens at all. Note that the Wi-Fi connection is not kept during a light sleep you start yourself with this function; if Wi-Fi is on, turn it off before sleeping, or use ESP-IDF's automatic power management features, which are beyond the scope of this lesson.</span></li>
+  <li data-lines="21-22"><b class="what">Who woke me up?</b> A cause of <code>ESP_SLEEP_WAKEUP_GPIO</code> means the button; otherwise it was the timer.
+    <span class="why">The same pattern as with deep sleep, but now in the middle of loop.</span></li>
+</ol>
+<div class="callout info"><div class="ct">Why doesn't this example have a Wokwi block?</div>
+<p>In Wokwi's official feature table, the RTC part is marked only as "partial", and nothing is promised about how light sleep behaves. Rather than confuse you with a simulation that may behave differently, try this example on a real board.</p></div>
+
+<h2 id="project">Project: a battery-powered temperature and humidity logger</h2>
+<p>Now we put everything together: wake up every 10 minutes, read the DHT22, send the reading over Wi-Fi and MQTT, and go straight back to sleep. The design goal: <b>the shortest possible awake time</b>. Judge every line of this program by one question: "Does this keep the board awake longer?"</p>
+
+<div class="gallery">
+  <figure><div class="frame"><img src="../assets/img/dht22.svg" alt="DHT22 sensor"></div><figcaption>DHT22: temperature and humidity over one data wire</figcaption></figure>
+  <figure><div class="frame"><img src="../assets/img/resistor.svg" alt="10 kΩ resistor"></div><figcaption>A 10 kΩ pull-up resistor (modules usually have one on board)</figcaption></figure>
+</div>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"DHT","name":"DHT22 sensor","img":"dht22.svg","pins":[["VCC","pin 1: 3.3 V power"],["DATA","pin 2: data"],["NC","pin 3: not connected"],["GND","pin 4: ground"]]},
+    {"id":"R1","name":"10 kΩ resistor","img":"resistor.svg","pins":[["1","to DATA"],["2","to 3V3"]]}
+  ],
+  "wires":[["3V3","DHT.VCC","red"],["GPIO4","DHT.DATA","blue"],["DHT.GND","GND","black"],["GPIO4","R1.1","blue"],["R1.2","3V3","red"]]
+}</script><figcaption>The DHT22 on GPIO4 (a safe pin) with a 10 kΩ pull-up resistor between DATA and 3V3. If you have a three-pin DHT22 module, the resistor is already on the module and you only need three wires.</figcaption></div>
+
+<div class="code" data-file="BatteryLogger.ino" id="logger"><pre>
+// Battery-powered logger: wake up, read, send, sleep
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;DHT.h&gt;
+
+// ---------- settings ----------
+const char* WIFI_SSID = "Wokwi-GUEST";           // at home: your router's network name
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const char* TOPIC     = "esp32fa/lesson61/logger"; // make up a unique name of your own
+const uint64_t SLEEP_MIN = 10;                     // every 10 minutes
+const uint32_t WIFI_TIMEOUT_MS = 8000;             // longest time to try Wi-Fi
+
+#define DHT_PIN  4
+#define DHT_TYPE DHT22
+DHT dht(DHT_PIN, DHT_TYPE);
+WiFiClient net;
+PubSubClient mqtt(net);
+
+// ---------- RTC memory: survives deep sleep ----------
+RTC_DATA_ATTR uint32_t bootCount = 0;
+RTC_DATA_ATTR uint8_t  savedChannel = 0;           // last time's Wi-Fi channel
+RTC_DATA_ATTR uint8_t  savedBssid[6];              // last time's router MAC
+RTC_DATA_ATTR uint32_t failCount = 0;              // number of failed sends
+
+void goToSleep() {
+  WiFi.disconnect(true);                           // switch Wi-Fi fully off
+  WiFi.mode(WIFI_OFF);
+  Serial.printf("Awake %lu ms, fails=%lu. Sleep %llu min\n", millis(), failCount, SLEEP_MIN);
+  Serial.flush();
+  esp_sleep_enable_timer_wakeup(SLEEP_MIN * 60ULL * 1000000ULL);
+  esp_deep_sleep_start();
+}
+
+bool connectWiFiFast() {
+  WiFi.mode(WIFI_STA);
+  WiFi.persistent(false);                          // don't write to flash every time
+  if (savedChannel != 0) {
+    WiFi.begin(WIFI_SSID, WIFI_PASS, savedChannel, savedBssid);  // shortcut
+  } else {
+    WiFi.begin(WIFI_SSID, WIFI_PASS);              // first time: full scan
+  }
+  uint32_t start = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    if (millis() - start &gt; WIFI_TIMEOUT_MS) {
+      savedChannel = 0;                            // shortcut failed; do a full scan next time
+      return false;
+    }
+    delay(20);
+  }
+  savedChannel = WiFi.channel();                   // keep for next time
+  memcpy(savedBssid, WiFi.BSSID(), 6);
+  return true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  bootCount++;
+  dht.begin();
+  if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER) delay(2000);  // first power-up: DHT22 not ready yet
+
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) {
+    Serial.println("DHT22 read failed");
+    failCount++;
+    goToSleep();                                   // don't switch Wi-Fi on for nothing
+  }
+  Serial.printf("#%lu  T=%.1f C  H=%.1f %%\n", bootCount, t, h);
+
+  if (connectWiFiFast()) {
+    mqtt.setServer(MQTT_HOST, 1883);
+    String id = "esp32-logger-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+    if (mqtt.connect(id.c_str())) {
+      char msg[64];
+      snprintf(msg, sizeof(msg), "{\"t\":%.1f,\"h\":%.1f,\"n\":%lu}", t, h, bootCount);
+      mqtt.publish(TOPIC, msg);
+      mqtt.loop();
+      delay(50);                                   // a moment for the packet to leave
+      mqtt.disconnect();
+      Serial.println(String("Sent: ") + msg);
+    } else {
+      failCount++;
+    }
+  } else {
+    failCount++;
+    Serial.println("Wi-Fi failed, will retry next wake");
+  }
+  goToSleep();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="logger">
+  <li data-lines="2-4"><b class="what">Libraries.</b> <code>WiFi.h</code> is part of the core. Install <code>PubSubClient</code> (by Nick O'Leary) and <code>DHT sensor library</code> (by Adafruit, which also needs <code>Adafruit Unified Sensor</code>) from the Library Manager.
+    <span class="why">These are the same libraries we used in lessons <a href="3-3.html">3.3</a> and <a href="5-1.html">5.1</a>; there's nothing new to learn here except how to sleep.</span></li>
+  <li data-lines="7-12"><b class="what">All the settings in one place.</b> The network name, the MQTT server, the topic, the sleep time and the longest time to keep trying Wi-Fi.
+    <span class="why"><code>WIFI_TIMEOUT_MS</code> is vital: if the router is switched off and the board waits forever for Wi-Fi, it drains the battery in one night. "Never wait forever" is rule number one for battery-powered devices. Be sure to change the topic to a name of your own, because broker.hivemq.com is public and anyone can see the messages.</span></li>
+  <li data-lines="21-24"><b class="what">RTC memory for the Wi-Fi shortcut.</b> Besides the counters, we keep last time's <b>channel</b> and <b>BSSID</b> (the router's MAC address).
+    <span class="why">A normal Wi-Fi connection first scans every channel to find the router, and that scan can take a few seconds. If we already know the channel and the router's address, we go straight to it. Wokwi's documentation recommends passing the channel number for the same reason.</span></li>
+  <li data-lines="26-33"><b class="what">The sleep function.</b> It switches Wi-Fi fully off, reports how long the board was awake (<code>millis()</code>) and sleeps for 10 minutes. <code>60ULL * 1000000ULL</code> converts minutes to microseconds.
+    <span class="why">Printing <code>millis()</code> right before sleeping gives you the most important number for optimizing: "how many milliseconds was I awake this round?" With it you can see the effect of every change as a number. Having one clean call for sleeping from anywhere in the program means no path gets forgotten.</span></li>
+  <li data-lines="35-54"><b class="what">Fast Wi-Fi connection.</b> If we have a saved channel, <code>WiFi.begin(ssid, pass, channel, bssid)</code> connects using the shortcut; otherwise it connects the normal way. The waiting loop lasts at most 8 seconds. After a successful connection, the channel and BSSID are saved. If the shortcut fails (for example because the router changed its channel), <code>savedChannel = 0</code> makes the next attempt do a full scan.
+    <span class="why"><code>WiFi.persistent(false)</code> stops the settings being written to flash memory on every wake-up; flash can only be written a limited number of times, and writing also costs time and energy. This is the one place where a short <code>delay</code> inside a loop is acceptable, because there is nothing to do but wait.</span></li>
+  <li data-lines="60"><b class="what">Wait 2 seconds, but only on the first power-up.</b> If the wake-up cause is not the timer (meaning the battery or USB was just connected, or you pressed EN), we wait 2 seconds.
+    <span class="why">According to its datasheet, the DHT22 isn't ready for about 1 to 2 seconds after power is applied, but the ESP32 boots in under half a second. Without this line, the first reading on a real board usually returns <code>nan</code>, the board sleeps for 10 minutes, and you think something is broken. On later (timer) wake-ups the sensor has already had power for a while, so the wait isn't needed and costs no battery life.</span></li>
+  <li data-lines="62-69"><b class="what">Sensor first, then Wi-Fi.</b> If reading the DHT22 fails, we go to sleep <b>without switching Wi-Fi on</b>.
+    <span class="why">Wi-Fi is the most expensive part. Switching it on to send "nothing" just wastes battery. Always order your tasks so that the cheap ones that might fail come first.</span></li>
+  <li data-lines="71-77"><b class="what">Connecting to MQTT and sending one JSON message.</b> A unique client ID is built from the MAC address. The message looks like <code>{"t":24.5,"h":40.0,"n":12}</code>.
+    <span class="why">One JSON message instead of three separate ones means one network round trip instead of three: a shorter awake time. The boot number <code>n</code> helps you spot on your dashboard whether a message went missing.</span></li>
+  <li data-lines="78-81"><b class="what">Time for the packet to leave, then disconnect.</b> <code>mqtt.loop()</code> and a 50-millisecond pause give the packet a chance to actually leave the board; then the connection is closed properly.
+    <span class="why">If you sleep right after publish, the packet is sometimes still sitting in the network queue and never reaches the server. 50 milliseconds is usually enough on a healthy connection; if messages go missing, raise this number a little.</span></li>
+  <li data-lines="82-89"><b class="what">Handling failure.</b> Every failure is counted, and we go to sleep no matter what.
+    <span class="why">A battery-powered device shouldn't stay awake to "try again". The next round will try again by itself. <code>failCount</code> tells you how reliable the network is.</span></li>
+</ol>
+
+<div class="callout tip"><div class="ct">Optional trick: a static IP</div>
+<p>After connecting to Wi-Fi, the board gets an IP address from the router (DHCP), which takes a little time. On your own home network you can give it a fixed IP so this step is skipped. Put these lines in <code>connectWiFiFast()</code> just <b>before</b> <code>WiFi.begin</code> (don't do this in Wokwi, because its network has its own addresses):</p></div>
+<div class="code" data-file="static_ip_part.ino" id="staticIp"><pre>
+IPAddress ip(192, 168, 1, 50);        // a free IP, outside the router's DHCP range
+IPAddress gateway(192, 168, 1, 1);    // the router's IP
+IPAddress subnet(255, 255, 255, 0);
+IPAddress dns(8, 8, 8, 8);
+WiFi.config(ip, gateway, subnet, dns); // before WiFi.begin
+</pre></div>
+<ol class="walk" data-for="staticIp">
+  <li data-lines="1-4"><b class="what">Four addresses.</b> The board's own IP, the router's IP (the gateway), the subnet mask, and a DNS server that turns the name <code>broker.hivemq.com</code> into an IP.
+    <span class="why">Take the numbers from your own router's settings. If you pick an IP that another device already has, both devices will have problems; that's why you choose an IP outside the range the router hands out automatically.</span></li>
+  <li data-lines="5"><b class="what">WiFi.config.</b> Applies these settings before connecting.
+    <span class="why">The saving is usually anywhere from a fraction of a second to a second or two, depending on the router. Measure it yourself by printing <code>millis()</code>; if it makes no difference, don't keep the extra complexity.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="logger">
+<p>In Wokwi, add the <code>DHT sensor library</code> and <code>PubSubClient</code> libraries from the <b>Library Manager</b> tab. Wokwi has a virtual Wi-Fi network called <code>Wokwi-GUEST</code> with no password, and it is connected to the real internet, so the messages really do reach broker.hivemq.com. For a quick test, temporarily change <code>60ULL</code> on line 31 to <code>6ULL</code> so the board wakes up every minute. Click the DHT22 in the simulator to change the temperature and humidity. To see the messages, subscribe to your topic in an MQTT client (such as the one you used in lesson 5.1).</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -40, "left": 180, "attrs": { "temperature": "24", "humidity": "40" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:4", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<div class="serial">#1  T=24.0 C  H=40.0 %
+Sent: {"t":24.0,"h":40.0,"n":1}
+Awake 3712 ms, fails=0. Sleep 10 min
+...
+#2  T=24.0 C  H=40.0 %
+Sent: {"t":24.0,"h":40.0,"n":2}
+Awake 1480 ms, fails=0. Sleep 10 min</div>
+<p>The numbers above are only examples and will be different on your network, but notice the pattern: the first boot (with a full Wi-Fi scan) takes longer, and the later boots (with the channel shortcut) are shorter.</p>
+
+<div class="callout why"><div class="ct">Why MQTT and not a web server?</div>
+<p>A web server (lesson <a href="4-2.html">4.2</a>) has to stay awake all the time in case someone opens the page, which clashes with deep sleep. With MQTT, the device "pushes" its message whenever it wakes up and then leaves. Battery-powered devices are almost always "senders", not "servers".</p></div>
+
+<h2 id="battery">Batteries for beginners: lithium cells, regulators, chargers</h2>
+<p>(You saw the basics of powering a circuit, regulators and the "common ground" rule in the <a href="1-4.html#power">power section of lesson 1.4</a>; here we only add the points that are specific to batteries and sleep.) The most popular battery for the ESP32 is a single-cell lithium battery: either a <b>LiPo</b> (a flat pouch, usually with a JST connector) or a cylindrical <b>18650</b> cell. Both have a nominal voltage of 3.7 V: 4.2 V when full and about 3.0 V when nearly empty.</p>
+
+<div class="callout warn"><div class="ct">Don't connect the battery straight to 3V3</div>
+<p>The board's 3V3 pin goes straight to the ESP32, and the ESP32 can only tolerate up to about 3.6 V. A full battery is 4.2 V, so connecting it directly can damage the chip. Connecting it to the 5V pin isn't a good idea either: the AMS1117 regulator on the board needs about one volt of headroom, so with a 3.7 V input its output drops below 3 V and the board resets the moment Wi-Fi transmits (a brownout). On top of that, it still has its own quiescent draw of several milliamps.</p></div>
+
+<p>The right way is a <b>low-power LDO regulator</b> with two properties: (1) a <b>very low quiescent current</b>, just a few microamps, and (2) the ability to supply Wi-Fi's current bursts (a few hundred milliamps) with a small voltage drop.</p>
+<div class="table-wrap"><table>
+<tr><th>Regulator</th><th>Maximum current</th><th>Quiescent current (per datasheet)</th><th>Notes</th></tr>
+<tr><td>AMS1117-3.3 (on most boards)</td><td>About 1 A</td><td>About 5 mA</td><td>Not suitable for batteries</td></tr>
+<tr><td>HT7833</td><td>500 mA</td><td>A few microamps</td><td>A good, cheap choice for an ESP32 on a lithium battery</td></tr>
+<tr><td>MCP1700-3302</td><td>250 mA</td><td>About 1.6 µA</td><td>Excellent quiescent current, but 250 mA is borderline for Wi-Fi peaks; a large capacitor (e.g. 470 µF) on the output is required, and the board may still reset</td></tr>
+</table></div>
+<div class="callout info"><div class="ct">What does dropout mean?</div>
+<p>To give a steady 3.3 V, every regulator needs its input to be a little above 3.3 V. That gap is called the "dropout voltage". With a good LDO, the output stays at a proper 3.3 V down to a battery voltage of about 3.5 V; below that, the output sags a little. The ESP32 usually keeps working down to about 3 V, but Wi-Fi becomes unstable at low voltages. Always read the datasheet of the regulator you buy.</p></div>
+
+<h3>The charger: a TP4056 module</h3>
+<p>Charge a lithium battery <b>only</b> with a charger made for lithium cells. The cheapest option is a TP4056 module, which runs from USB and charges the battery up to 4.2 V. It comes in two versions: charger only, and a version <b>with protection</b> (it has a DW01 chip with transistors next to it, and separate OUT+ and OUT− outputs). Always buy the version with protection, and connect the load (the regulator and the ESP32) to <code>OUT+</code> and <code>OUT−</code>, not straight to the battery.</p>
+<div class="callout example"><div class="ct">Work it out: the charging current</div>
+<p>On a TP4056 module, a resistor called R_PROG sets the charging current. According to the datasheet it is roughly <code>I = 1200 ÷ R_PROG</code> (current in amps, resistance in ohms). Typical modules have 1.2 kΩ, which means 1 A. The safety rule: don't charge faster than 1C, the battery's capacity number. For a 500 mAh battery, 1 A is 2C and dangerous; you need to change R_PROG to about 2.4 kΩ so the current becomes 500 mA.</p></div>
+
+<div class="callout warn"><div class="ct">Lithium battery safety is no joke</div>
+<ul>
+  <li>Set aside any battery that is swollen, punctured, crushed or hot right away; never charge it.</li>
+  <li>Never short-circuit the terminals, not even for a moment. A lithium battery delivers a very large current that can make a wire red-hot and melt it.</li>
+  <li><b>Check the polarity of the JST connector before plugging it in.</b> Different manufacturers put the red and black wires in the connector the opposite way round; plugging it in reversed burns out the charger or the board.</li>
+  <li>Do your first few charges under supervision on a fireproof surface (a tile or a metal tray, for example), not on a bed or a carpet.</li>
+  <li>Don't use an "unprotected" 18650 cell without a protection circuit.</li>
+  <li>Don't leave a battery in direct sunlight or in a hot car.</li>
+</ul></div>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC (powered through the 3V3 pin)",
+  "parts":[
+    {"id":"CHG","name":"TP4056 module with protection","pins":[["B+","to battery positive"],["B-","to battery negative"],["OUT+","protected output +"],["OUT-","protected output −"]]},
+    {"id":"BAT","name":"3.7 V LiPo battery","pins":[["+","positive"],["-","negative"]]},
+    {"id":"LDO","name":"HT7833 regulator","pins":[["VIN","input"],["VOUT","3.3 V output"],["GND","ground"]]}
+  ],
+  "wires":[["BAT.+","CHG.B+","red"],["BAT.-","CHG.B-","black"],["CHG.OUT+","LDO.VIN","red"],["CHG.OUT-","LDO.GND","black"],["LDO.VOUT","3V3","red"],["LDO.GND","GND","black"]]
+}</script><figcaption>The complete battery power chain: battery → charger with protection → low-power LDO → 3V3 pin. Next to the LDO's input and output pins, fit the capacitors its datasheet asks for (for example 10 µF ceramic), plus a larger electrolytic capacitor (for example 100 to 470 µF) close to the ESP32. Never connect USB and this supply at the same time; two sources on the same 3V3 rail fight each other.</figcaption></div>
+
+<h2 id="video">Helpful videos</h2>
+<div class="video" data-yt="DYIlM0nRLT0" data-title="ESP32 Low Power Modes Explained: Active vs Deep Sleep vs Hibernate" data-channel="DroneBot Workshop" data-lang="English">
+  <div class="sum"><ul>
+    <li>This video goes with an article on the DroneBot Workshop site about the ESP32's low-power modes. Compare the numbers it shows for each mode with the table in this lesson.</li>
+    <li>Notice what tool he uses to measure current, and whether he uses a development board or a bare chip; if his numbers differ from the datasheet, explain why using the "hard truth" section of this lesson.</li>
+    <li>If you see code that uses the old API (core 2.x), compare it with the versions in this lesson.</li>
+  </ul></div>
+</div>
+<div class="video" data-yt="-769_YIeGmI" data-title="#193 Comparison of 10 ESP32 Battery powered Boards without display (incl. deep-sleep)" data-channel="Andreas Spiess" data-lang="English">
+  <div class="sum"><ul>
+    <li>This video is older, but it shows exactly the same hard truth with real measurements: the sleep current of different boards varies enormously.</li>
+    <li>Pay attention to which parts on the board (regulator, USB converter, LED) cause the extra current during sleep.</li>
+    <li>Write down the criteria he uses for his comparison, so you can use them to choose the board for your next battery project. The specific board models may no longer be on sale.</li>
+  </ul></div>
+</div>
+
+<h2 id="debug">When it doesn't work: troubleshooting</h2>
+<div class="table-wrap"><table>
+<tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+<tr><td>The board went to sleep and never wakes up</td><td>No wake-up source was set, or the timer value overflowed without <code>ULL</code> and became a strange number</td><td>Check the wake-up source before <code>esp_deep_sleep_start</code>. Print the time. Always use <code>uint64_t</code> and <code>ULL</code>.</td></tr>
+<tr><td>Uploading new code fails: <code>Failed to connect to ESP32</code></td><td>The board is asleep and the USB port can't talk to it</td><td>Hold the <kbd>BOOT</kbd> button, press and release <kbd>EN</kbd> once, then upload (or hold BOOT while you see <code>Connecting...</code>). To make development easier, put a <code>delay(5000)</code> at the start of setup so you have time to upload, and remove it in the final version.</td></tr>
+<tr><td>The Serial Monitor disconnects and reconnects after every wake-up, or you don't see the first line</td><td>During deep sleep, the computer also sees the USB serial connection drop and come back</td><td>This is normal. To see the first lines, put a short <code>delay</code> after <code>Serial.begin</code> (only while testing).</td></tr>
+<tr><td>The board keeps waking up immediately</td><td>The wake-up pin is floating, or the button is still held down; or the wake-up level is the wrong way round</td><td>Check the pull-up or pull-down resistor. Match the level (0 or 1) to how the button is wired. Wait for the button to be released before sleeping.</td></tr>
+<tr><td>EXT1 with <code>ESP_EXT1_WAKEUP_ANY_LOW</code> won't compile</td><td>That mode doesn't exist on the original ESP32</td><td>Wire the buttons to 3V3 with pull-downs and use <code>ANY_HIGH</code> (as in this lesson).</td></tr>
+<tr><td>It still draws several milliamps while asleep</td><td>The dev board's regulator, USB converter and LED</td><td>The code is fine. Use a board made for batteries or a low-power regulator, (carefully) remove the LED, and switch sensors off with a transistor.</td></tr>
+<tr><td>The board resets as it wakes up (Brownout message)</td><td>A weak battery, a weak regulator, or a multimeter on the µA range in the circuit</td><td>Charge the battery, use a 500 mA regulator and a large capacitor, and switch the multimeter to the mA range.</td></tr>
+<tr><td>The DHT22 returns <code>nan</code> after waking up</td><td>The sensor has only just been powered (if you switch its power with a pin) and isn't ready</td><td>According to the datasheet, wait about 1 to 2 seconds after power is applied. If its power is always on, check the wiring and the pull-up resistor.</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">Coach's advice</div>
+<p>In battery projects, "I think" is banned; only "I measured" counts. For every change you make, write down two numbers: the sleep current (with a multimeter) and the awake time (with <code>millis()</code> just before sleeping). If the numbers didn't improve, undo the change. Anyone who works out battery life from the datasheet without measuring ends up, a week later, with a flat battery and an angry customer. And one more thing: don't be careless with lithium batteries. No project is worth a fire.</p></div>
+
+<h2 id="quiz">Quiz for this lesson</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">After waking up from <b>deep sleep</b>, where does the program continue?</p>
+  <ol><li data-why="That's how light sleep behaves, not deep sleep.">From the line after <code>esp_deep_sleep_start()</code></li><li>From the start of <code>setup()</code>, like a reset</li><li data-why="loop never runs without going through setup first.">From the start of <code>loop()</code></li><li data-why="The board does wake up; it only sleeps forever if you didn't set a wake-up source.">Nowhere; the board has to be reset by hand</li></ol>
+  <div class="fb">In deep sleep the main RAM and the CPU are switched off, so the program boots from the beginning. Only <code>RTC_DATA_ATTR</code> variables survive.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">A device is awake for 2 seconds at 100 mA every 10 minutes and draws 0.01 mA the rest of the time. Roughly what is its average current?</p>
+  <ol><li data-why="That would mean it's always awake. You forgot the sleep time.">100 mA</li><li data-why="Work it out again: 200 divided by 600 is about a third, not 5.">5 mA</li><li>About 0.34 mA</li><li data-why="That's only the sleep current; you left out the awake part.">0.01 mA</li></ol>
+  <div class="fb"><code>(100 × 2 + 0.01 × 598) ÷ 600 = (200 + 5.98) ÷ 600 ≈ 0.34 mA</code>. With a 2000 mAh battery that's about 5800 hours on paper.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">Your deep sleep code is correct, but the DevKit board draws 9 mA while asleep. What is the most likely reason?</p>
+  <ol><li>The regulator, the USB-to-serial converter and the LED on the development board</li><li data-why="If the chip really weren't asleep, you'd see tens of milliamps and the boot messages wouldn't appear again.">The ESP32 never went to sleep</li><li data-why="Wi-Fi is off in deep sleep and draws nothing.">Wi-Fi stayed on during sleep</li><li data-why="RTC memory only accounts for a few microamps.">You declared too many RTC_DATA_ATTR variables</li></ol>
+  <div class="fb">The datasheet's 10 µA is for the chip alone. The always-on parts of a development board add several milliamps.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">You want the ESP32 to wake from deep sleep when <b>either</b> of two buttons on GPIO32 and GPIO33 is pressed. Which approach is correct?</p>
+  <ol><li data-why="EXT0 watches only one pin.">Call <code>esp_sleep_enable_ext0_wakeup</code> twice with two pins</li><li data-why="That mode isn't defined on the original ESP32 and won't compile.">EXT1 with <code>ESP_EXT1_WAKEUP_ANY_LOW</code> and the buttons to GND</li><li data-why="Plain GPIO wake-up is for light sleep.">Just <code>gpio_wakeup_enable</code> for both pins</li><li>EXT1 with <code>ESP_EXT1_WAKEUP_ANY_HIGH</code>, the buttons to 3V3 and pull-down resistors</li></ol>
+  <div class="fb">On the original ESP32 the only EXT1 modes are <code>ANY_HIGH</code> and <code>ALL_LOW</code>. For "either one", we have to wake on HIGH.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">Why does the data logger read the DHT22 <b>before</b> switching Wi-Fi on?</p>
+  <ol><li data-why="The DHT22 has no radio interference with Wi-Fi.">Because Wi-Fi interferes with reading the DHT22</li><li>So that if the reading fails, we don't waste Wi-Fi's expensive energy</li><li data-why="The order of the libraries has nothing to do with this choice.">Because the DHT library has to run before WiFi.h</li><li data-why="The DHT22 doesn't need Wi-Fi.">Because the DHT22 doesn't work without Wi-Fi</li></ol>
+  <div class="fb">Wi-Fi is the most expensive job. Do the cheap tasks that might fail first.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">Which is the correct way to measure the ESP32's current draw with a multimeter?</p>
+  <ol><li data-why="That short-circuits the battery through the ammeter!">Put the two probes straight on the battery's two terminals</li><li data-why="With USB connected, the power comes from USB and your number has nothing to do with the battery.">Keep USB plugged in and put the probes on 3V3 and GND</li><li>Break the positive line and put the multimeter, set to current, in series in the path</li><li data-why="In voltage mode the multimeter doesn't measure current.">Set the multimeter to volts and divide the voltage by 100</li></ol>
+  <div class="fb">An ammeter always goes in series, like a water meter. And when you're done, move the red lead back to the voltage socket.</div>
+</div>
+
+<h2 id="practice">Exercises</h2>
+<div class="exercise"><div class="ct">Exercise 1: your own energy budget</div>
+<p>Run the <code>DeepSleep_Timer</code> program on your board and measure the awake and sleep currents with a multimeter. Then use the average-current formula to work out the life of a 1000 mAh battery for "one 3-second wake-up every 5 minutes". Do it once with your own measured number and once with the datasheet number (10 µA). How many times different are they?</p>
+<details><summary>Hint</summary><p>One cycle = 300 seconds. <code>I_avg = (I_awake × 3 + I_sleep × 297) ÷ 300</code>. Use the same units everywhere: convert everything to mA (10 µA = 0.01 mA). Then divide the capacity by the result, and report 75 percent of it as the realistic figure.</p></details>
+</div>
+<div class="exercise"><div class="ct">Exercise 2: a wireless doorbell</div>
+<p>Write a program in which the board stays in deep sleep and wakes up from a button on GPIO33 (EXT0), connects to Wi-Fi, sends the message <code>ding</code> to your MQTT topic and goes back to sleep. If Wi-Fi doesn't connect within 8 seconds, it goes back to sleep without sending.</p>
+<details><summary>Hint</summary><p>Take the <code>connectWiFiFast()</code> function and the MQTT part from the data logger. Instead of the timer, use <code>esp_sleep_enable_ext0_wakeup(GPIO_NUM_33, 0)</code> and the RTC pull-up. Remember to wait for the button to be released before sleeping: <code>while (digitalRead(33) == LOW) delay(10);</code></p></details>
+<details><summary>Answer</summary>
+<div class="code" data-file="DoorBell.ino" id="exBell"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include "driver/rtc_io.h"
+
+const char* WIFI_SSID = "Wokwi-GUEST";
+const char* WIFI_PASS = "";
+WiFiClient net;
+PubSubClient mqtt(net);
+
+void sleepNow() {
+  pinMode(33, INPUT_PULLUP);
+  while (digitalRead(33) == LOW) delay(10);      // wait until the button is released
+  WiFi.mode(WIFI_OFF);
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_33, 0);
+  rtc_gpio_pullup_en(GPIO_NUM_33);
+  rtc_gpio_pulldown_dis(GPIO_NUM_33);
+  esp_deep_sleep_start();
+}
+
+void setup() {
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    uint32_t t0 = millis();
+    while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - t0 &lt; 8000) delay(20);
+    if (WiFi.status() == WL_CONNECTED) {
+      mqtt.setServer("broker.hivemq.com", 1883);
+      if (mqtt.connect("esp32-doorbell-fa")) {
+        mqtt.publish("esp32fa/yourname/doorbell", "ding");
+        mqtt.loop(); delay(50); mqtt.disconnect();
+      }
+    }
+  }
+  sleepNow();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="exBell">
+  <li data-lines="10-18"><b class="what">A sleep function that waits for the button to be released.</b> First we make the pin an input with a pull-up so we can read it, wait for the release, switch Wi-Fi off and set up EXT0.
+    <span class="why">Without the waiting loop, if the user holds the button a little too long, the board wakes up again immediately and sends "ding" twice.</span></li>
+  <li data-lines="21-31"><b class="what">Send only if the button woke us.</b> On the first power-up (any other cause) we go straight to sleep. Wi-Fi gets at most 8 seconds.
+    <span class="why">This way, connecting the battery doesn't cause a false "ding". The time limit inside the while is the "never wait forever" rule again. Make the client ID and the topic unique with your own name.</span></li>
+</ol>
+</details>
+</div>
+<div class="exercise"><div class="ct">Exercise 3: cutting the sensor's power during sleep</div>
+<p>Even in standby, the DHT22 draws a few tens of microamps, which is not small next to the ESP32's 10 microamps. Design a way to power the DHT22 only while the board is awake. What part do you need, and how must the code's timing change?</p>
+<details><summary>Hint</summary><p>A transistor (or, for a very small current, a GPIO pin itself, after checking the pin's current limit) controls the sensor's VCC. Read the "holding a pin's state" section again. The DHT22 datasheet says you must wait a while after power is applied; that time adds directly to the awake time. Work out whether the trade is worth it.</p></details>
+</div>
+
+<div class="callout info"><div class="ct">The lesson in three lines</div>
+<p>Battery life = capacity ÷ average current, and the average current is set by the sleep current and the awake time. Deep sleep (about 10 µA for the chip) restarts the program from setup and keeps only <code>RTC_DATA_ATTR</code>; light sleep (about 0.8 mA) carries on from the same line. A development board draws several milliamps asleep: always measure with a multimeter, and use lithium batteries only with a protected charger and a low-power regulator.</p></div>
+
+</article>
+</body>
+</html>
