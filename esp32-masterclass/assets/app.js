@@ -13,7 +13,7 @@
   var BASE = (function () { var sc = document.currentScript || document.querySelector('script[src$="app.js"]'); return sc ? sc.getAttribute("src").replace(/app\.js.*$/, "") : "assets/"; })();
   var FA = "۰۱۲۳۴۵۶۷۸۹";
   function fa(n) { return EN ? String(n) : String(n).replace(/\d/g, function (d) { return FA[d]; }); }
-  function L(o, k) { return EN ? (o[k + "_en"] || o[k]) : o[k]; }
+  function LX(o, k) { return EN ? (o[k + "_en"] || o[k]) : o[k]; }
   var I18N = {
     fa: {
       sub: "از صفر مطلق تا پروژه اینترنت اشیا", menu: "منو", progress: "پیشرفت تو", theme: "حالت روشن یا تاریک",
@@ -102,7 +102,7 @@
   var logo = '<svg viewBox="0 0 40 40"><rect x="3" y="3" width="34" height="34" rx="9" fill="#2f7af0"/><rect x="11" y="10" width="18" height="20" rx="3" fill="#0f1729"/><path d="M13 13h14" stroke="#9ecbff" stroke-width="2"/><g stroke="#ffd166" stroke-width="2"><path d="M7 14h4M7 19h4M7 24h4M29 14h4M29 19h4M29 24h4"/></g><circle cx="20" cy="22" r="3" fill="#3cc9a0"/></svg>';
   var top = el("header", { "class": "topbar" },
     '<button class="btn icon-btn menu-toggle" data-act="nav" aria-label="' + t("menu") + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>' +
-    '<a class="brand" href="index.html">' + logo + '<span><b>' + L(C, "title") + '</b><small>' + t("sub") + '</small></span></a>' +
+    '<a class="brand" href="index.html">' + logo + '<span><b>' + LX(C, "title") + '</b><small>' + t("sub") + '</small></span></a>' +
     '<span class="spacer"></span>' +
     '<span class="progress-pill" title="' + t("progress") + '"><span class="bar"><i></i></span><span class="pct"></span></span>' +
     (HAS_TWIN ? '<a class="btn lang-btn" data-act="lang" href="' + TWIN + '" hreflang="' + (EN ? "fa" : "en") + '" lang="' + (EN ? "fa" : "en") + '" title="' + t("langTitle") + '" aria-label="' + t("langAria") + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span>' + t("langBtn") + '</span></a>' : '') +
@@ -110,11 +110,11 @@
 
   var side = el("aside", { "class": "sidebar", "aria-label": t("lessonsNav") });
   var sh = '<h4>' + t("extras") + '</h4>';
-  C.extras.forEach(function (x) { sh += '<a class="x' + (x.id === pageId ? " active" : "") + '" href="' + x.id + '.html">' + L(x, "title") + '</a>'; });
+  C.extras.forEach(function (x) { sh += '<a class="x' + (x.id === pageId ? " active" : "") + '" href="' + x.id + '.html">' + LX(x, "title") + '</a>'; });
   C.chapters.forEach(function (ch) {
-    sh += '<div class="chap"><div class="chap-title"><span class="dot" style="background:' + ch.color + '">' + fa(ch.n) + '</span>' + L(ch, "title") + '<span class="cnt" data-ch="' + ch.n + '"></span></div>';
+    sh += '<div class="chap"><div class="chap-title"><span class="dot" style="background:' + ch.color + '">' + fa(ch.n) + '</span>' + LX(ch, "title") + '<span class="cnt" data-ch="' + ch.n + '"></span></div>';
     ch.lessons.forEach(function (l) {
-      sh += '<a class="l' + (l.id === pageId ? " active" : "") + (done.indexOf(l.id) > -1 ? " done" : "") + '" data-id="' + l.id + '" href="' + l.id + '.html"><span class="num">' + fa(l.id.replace("-", ".")) + '</span><span>' + L(l, "title") + '</span></a>';
+      sh += '<a class="l' + (l.id === pageId ? " active" : "") + (done.indexOf(l.id) > -1 ? " done" : "") + '" data-id="' + l.id + '" href="' + l.id + '.html"><span class="num">' + fa(l.id.replace("-", ".")) + '</span><span>' + LX(l, "title") + '</span></a>';
     });
     sh += '</div>';
   });
@@ -143,11 +143,11 @@
   /* سرصفحه خودکار درس */
   if (lesson && !article.querySelector("h1")) {
     var head = el("header", { "class": "lesson-head" },
-      '<span class="eyebrow">' + t("chapter") + ' ' + fa(lesson.ch.n) + ' · ' + L(lesson.ch, "title") + ' · ' + t("lesson") + ' ' + fa(lesson.id.replace("-", ".")) + '</span>' +
-      '<h1>' + L(lesson, "title") + '</h1>' +
-      '<div class="meta"><span>⏱ ' + t("about") + ' ' + fa(lesson.min) + ' ' + t("minutes") + '</span><span>📶 ' + t("level") + ': ' + L(lesson, "level") + '</span><span>🧭 ' + t("lesson") + ' ' + fa(idx + 1) + ' ' + t("of") + ' ' + fa(lessons.length) + '</span></div>');
+      '<span class="eyebrow">' + t("chapter") + ' ' + fa(lesson.ch.n) + ' · ' + LX(lesson.ch, "title") + ' · ' + t("lesson") + ' ' + fa(lesson.id.replace("-", ".")) + '</span>' +
+      '<h1>' + LX(lesson, "title") + '</h1>' +
+      '<div class="meta"><span>⏱ ' + t("about") + ' ' + fa(lesson.min) + ' ' + t("minutes") + '</span><span>📶 ' + t("level") + ': ' + LX(lesson, "level") + '</span><span>🧭 ' + t("lesson") + ' ' + fa(idx + 1) + ' ' + t("of") + ' ' + fa(lessons.length) + '</span></div>');
     article.insertBefore(head, article.firstChild);
-    document.title = L(lesson, "title") + " · " + L(C, "title");
+    document.title = LX(lesson, "title") + " · " + LX(C, "title");
   }
 
   /* ---------- پیشرفت ---------- */
@@ -180,8 +180,8 @@
     article.appendChild(box);
     var prev = lessons[idx - 1], next = lessons[idx + 1];
     var pg = el("nav", { "class": "pager" },
-      (prev ? '<a class="prev" href="' + prev.id + '.html"><small>' + t("prev") + '</small>' + L(prev, "title") + '</a>' : '<a class="prev" href="index.html"><small>' + t("back") + '</small>' + t("home") + '</a>') +
-      (next ? '<a class="next" href="' + next.id + '.html"><small>' + t("next") + '</small>' + L(next, "title") + '</a>' : '<a class="next" href="index.html"><small>' + t("end") + '</small>' + t("backHome") + '</a>'));
+      (prev ? '<a class="prev" href="' + prev.id + '.html"><small>' + t("prev") + '</small>' + LX(prev, "title") + '</a>' : '<a class="prev" href="index.html"><small>' + t("back") + '</small>' + t("home") + '</a>') +
+      (next ? '<a class="next" href="' + next.id + '.html"><small>' + t("next") + '</small>' + LX(next, "title") + '</a>' : '<a class="next" href="index.html"><small>' + t("end") + '</small>' + t("backHome") + '</a>'));
     article.appendChild(pg);
   }
   main.appendChild(el("footer", { "class": "footer" }, t("footer")));
@@ -622,6 +622,6 @@
   }
 
   /* قابلیت‌های صفحه خانه و واژه‌نامه */
-  window.ESP32MC = { fa: fa, esc: esc, lessons: lessons, done: done, refresh: refreshProgress, L: L, t: t, EN: EN };
+  window.ESP32MC = { fa: fa, esc: esc, lessons: lessons, done: done, refresh: refreshProgress, L: LX, t: t, EN: EN };
   document.dispatchEvent(new Event("esp32mc-ready"));
 })();
