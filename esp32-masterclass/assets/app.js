@@ -4,9 +4,67 @@
    نقشه پایه‌ها، نقشه سیم‌کشی، پیشرفت درس‌ها و صفحه‌بندی. */
 (function () {
   "use strict";
-  var C = window.COURSE, G = window.GLOSSARY || {};
+  var C = window.COURSE;
+  /* زبان صفحه از ویژگی lang تگ html خوانده می‌شود؛ صفحه‌های انگلیسی در پوشه en/ هستند */
+  var LANG = (document.documentElement.getAttribute("lang") || "fa").slice(0, 2) === "en" ? "en" : "fa";
+  var EN = LANG === "en";
+  var G = (EN ? window.GLOSSARY_EN : window.GLOSSARY) || {};
+  /* مسیر پوشه assets از آدرس همین اسکریپت به دست می‌آید تا در en/ هم درست کار کند */
+  var BASE = (function () { var sc = document.currentScript || document.querySelector('script[src$="app.js"]'); return sc ? sc.getAttribute("src").replace(/app\.js.*$/, "") : "assets/"; })();
   var FA = "۰۱۲۳۴۵۶۷۸۹";
-  function fa(n) { return String(n).replace(/\d/g, function (d) { return FA[d]; }); }
+  function fa(n) { return EN ? String(n) : String(n).replace(/\d/g, function (d) { return FA[d]; }); }
+  function L(o, k) { return EN ? (o[k + "_en"] || o[k]) : o[k]; }
+  var I18N = {
+    fa: {
+      sub: "از صفر مطلق تا پروژه اینترنت اشیا", menu: "منو", progress: "پیشرفت تو", theme: "حالت روشن یا تاریک",
+      lessonsNav: "فهرست درس‌ها", extras: "صفحه‌های کمکی", onPage: "روی این صفحه",
+      chapter: "فصل", lesson: "درس", about: "حدود", minutes: "دقیقه", level: "سطح", of: "از",
+      doneYes: "آفرین! این درس را تمام کرده‌ای. هر وقت خواستی برای مرور برگرد.",
+      doneNo: "همه آزمون‌ها را درست جواب دادی و تمرین‌ها را انجام دادی؟ فقط آن وقت تیک بزن.",
+      doneBtnYes: "✓ تمام شد (برداشتن تیک)", doneBtnNo: "این درس را تمام کردم",
+      prev: "→ درس قبلی", back: "→ بازگشت", home: "خانه و نقشه راه", next: "درس بعدی ←", end: "پایان دوره ←", backHome: "بازگشت به خانه",
+      footer: 'مستر کلاس ESP32 فارسی · آموزش رایگان · <a href="credits.html">منابع و مجوز تصاویر</a>',
+      copy: "کپی کد", copied: "✓ کپی شد", letters: ["الف", "ب", "ج", "د"],
+      right: "✅ درست است!", wrong: "❌ نه، دوباره فکر کن.", hint: "راهنما: متن بالای این آزمون را دوباره بخوان.",
+      score: "امتیاز:", perfect: " — عالی! 🎉",
+      wokwiTitle: "همین مدار را در شبیه‌ساز Wokwi بساز", wokwiOpen: "باز کردن Wokwi ↗", copyDiagram: "کپی diagram.json", copySketch: "کپی کد sketch.ino",
+      diagramSum: "محتوای diagram.json (نقشه قطعات و سیم‌ها)",
+      play: "برای پخش کلیک کن (برای دیدن یوتیوب ممکن است به فیلترشکن نیاز داشته باشی)", channel: "کانال", vlang: "زبان ویدیو", vdefault: "انگلیسی", openYT: "باز کردن در یوتیوب ↗",
+      watchGuide: "راهنمای تماشا: به چه نکته‌هایی دقت کنی",
+      pinAria: "نقشه پایه‌های ESP32 DevKitC", all: "همه", pinPick: "روی یک پایه کلیک کن",
+      pinHelp: "هر پایه را انتخاب کن تا ببینی چه کاری از آن برمی‌آید و چه خطری دارد. با دکمه‌های بالا پایه‌های هم‌خانواده را جدا کن.",
+      pinGold: "<b>قانون طلایی مبتدی:</b> اول از پایه‌های سبز «امن» استفاده کن.",
+      wiringErr: "خطا در JSON نقشه سیم‌کشی", wiringAria: "نقشه سیم‌کشی",
+      lgPower: "تغذیه (3V3 یا 5V)", lgGnd: "زمین GND", lgOut: "سیگنال خروجی", lgIn: "سیگنال ورودی / داده", lgClk: "ساعت / SCL / SCK", lgSda: "داده I2C (SDA) / TX",
+      wTable: "جدول اتصال‌ها (برای چک کردن سیم به سیم)", wFrom: "از", wTo: "به", wColor: "رنگ پیشنهادی سیم",
+      langBtn: "EN", langTitle: "Read this page in English", langAria: "تغییر زبان به انگلیسی"
+    },
+    en: {
+      sub: "From absolute zero to real IoT projects", menu: "Menu", progress: "Your progress", theme: "Light or dark mode",
+      lessonsNav: "Lessons", extras: "Reference pages", onPage: "On this page",
+      chapter: "Chapter", lesson: "Lesson", about: "about", minutes: "min", level: "Level", of: "of",
+      doneYes: "Well done! You finished this lesson. Come back any time to review.",
+      doneNo: "Did you get every quiz right and do the exercises? Only then tick this box.",
+      doneBtnYes: "✓ Done (click to undo)", doneBtnNo: "I finished this lesson",
+      prev: "← Previous lesson", back: "← Back", home: "Home & roadmap", next: "Next lesson →", end: "End of course →", backHome: "Back to home",
+      footer: 'ESP32 Masterclass · free course · <a href="credits.html">Sources and image licenses</a>',
+      copy: "Copy code", copied: "✓ Copied", letters: ["A", "B", "C", "D"],
+      right: "✅ Correct!", wrong: "❌ Not quite, think again.", hint: "Hint: reread the text above this quiz.",
+      score: "Score:", perfect: " — perfect! 🎉",
+      wokwiTitle: "Build this circuit in the Wokwi simulator", wokwiOpen: "Open Wokwi ↗", copyDiagram: "Copy diagram.json", copySketch: "Copy sketch.ino",
+      diagramSum: "diagram.json contents (parts and wires)",
+      play: "Click to play", channel: "Channel", vlang: "Language", vdefault: "English", openYT: "Open on YouTube ↗",
+      watchGuide: "Watch guide: what to look for",
+      pinAria: "ESP32 DevKitC pinout", all: "All", pinPick: "Click a pin",
+      pinHelp: "Select any pin to see what it can do and what can go wrong. Use the buttons above to highlight a family of pins.",
+      pinGold: "<b>Beginner's golden rule:</b> start with the green “safe” pins.",
+      wiringErr: "Error in the wiring diagram JSON", wiringAria: "Wiring diagram",
+      lgPower: "Power (3V3 or 5V)", lgGnd: "Ground (GND)", lgOut: "Output signal", lgIn: "Input / data", lgClk: "Clock / SCL / SCK", lgSda: "I2C data (SDA) / TX",
+      wTable: "Connection table (check it wire by wire)", wFrom: "From", wTo: "To", wColor: "Suggested wire color",
+      langBtn: "فا", langTitle: "این صفحه را فارسی بخوان", langAria: "Switch to Persian"
+    }
+  };
+  function t(k) { return I18N[LANG][k]; }
   function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
   function el(tag, attrs, html) {
     var e = document.createElement(tag);
@@ -15,6 +73,16 @@
     return e;
   }
   function store(k, v) { try { if (v === undefined) return JSON.parse(localStorage.getItem(k) || "null"); localStorage.setItem(k, JSON.stringify(v)); } catch (e) { return null; } }
+
+  /* ---------- زبان: صفحه متناظر، ترجیح ذخیره‌شده و انتقال خودکار ---------- */
+  var FILE = (location.pathname.split("/").pop() || "index.html");
+  if (!/\.html$/.test(FILE)) FILE = "index.html";
+  var PAGE = FILE.replace(/\.html$/, "");
+  /* صفحه انگلیسی متناظر فقط وقتی لینک می‌شود که ترجمه‌اش منتشر شده باشد (فهرست enPages در course.js) */
+  var HAS_TWIN = EN || C.enPages === "all" || (C.enPages || []).indexOf(PAGE) > -1;
+  var TWIN = EN ? "../" + FILE : "en/" + FILE;
+  var prefLang = store("esp32mc-lang");
+  if (HAS_TWIN && prefLang && prefLang !== LANG) { location.replace(TWIN + location.hash); return; }
 
   /* ---------- پوسته، حالت شب ---------- */
   var savedTheme = store("esp32mc-theme");
@@ -33,19 +101,20 @@
 
   var logo = '<svg viewBox="0 0 40 40"><rect x="3" y="3" width="34" height="34" rx="9" fill="#2f7af0"/><rect x="11" y="10" width="18" height="20" rx="3" fill="#0f1729"/><path d="M13 13h14" stroke="#9ecbff" stroke-width="2"/><g stroke="#ffd166" stroke-width="2"><path d="M7 14h4M7 19h4M7 24h4M29 14h4M29 19h4M29 24h4"/></g><circle cx="20" cy="22" r="3" fill="#3cc9a0"/></svg>';
   var top = el("header", { "class": "topbar" },
-    '<button class="btn icon-btn menu-toggle" data-act="nav" aria-label="منو"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>' +
-    '<a class="brand" href="index.html">' + logo + '<span><b>' + C.title + '</b><small>از صفر مطلق تا پروژه اینترنت اشیا</small></span></a>' +
+    '<button class="btn icon-btn menu-toggle" data-act="nav" aria-label="' + t("menu") + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>' +
+    '<a class="brand" href="index.html">' + logo + '<span><b>' + L(C, "title") + '</b><small>' + t("sub") + '</small></span></a>' +
     '<span class="spacer"></span>' +
-    '<span class="progress-pill" title="پیشرفت تو"><span class="bar"><i></i></span><span class="pct"></span></span>' +
-    '<button class="btn icon-btn" data-act="theme" aria-label="حالت روشن یا تاریک" title="حالت روشن یا تاریک"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/></svg></button>');
+    '<span class="progress-pill" title="' + t("progress") + '"><span class="bar"><i></i></span><span class="pct"></span></span>' +
+    (HAS_TWIN ? '<a class="btn lang-btn" data-act="lang" href="' + TWIN + '" hreflang="' + (EN ? "fa" : "en") + '" lang="' + (EN ? "fa" : "en") + '" title="' + t("langTitle") + '" aria-label="' + t("langAria") + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span>' + t("langBtn") + '</span></a>' : '') +
+    '<button class="btn icon-btn" data-act="theme" aria-label="' + t("theme") + '" title="' + t("theme") + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/></svg></button>');
 
-  var side = el("aside", { "class": "sidebar", "aria-label": "فهرست درس‌ها" });
-  var sh = '<h4>صفحه‌های کمکی</h4>';
-  C.extras.forEach(function (x) { sh += '<a class="x' + (x.id === pageId ? " active" : "") + '" href="' + x.id + '.html">' + x.title + '</a>'; });
+  var side = el("aside", { "class": "sidebar", "aria-label": t("lessonsNav") });
+  var sh = '<h4>' + t("extras") + '</h4>';
+  C.extras.forEach(function (x) { sh += '<a class="x' + (x.id === pageId ? " active" : "") + '" href="' + x.id + '.html">' + L(x, "title") + '</a>'; });
   C.chapters.forEach(function (ch) {
-    sh += '<div class="chap"><div class="chap-title"><span class="dot" style="background:' + ch.color + '">' + fa(ch.n) + '</span>' + ch.title + '</div>';
+    sh += '<div class="chap"><div class="chap-title"><span class="dot" style="background:' + ch.color + '">' + fa(ch.n) + '</span>' + L(ch, "title") + '<span class="cnt" data-ch="' + ch.n + '"></span></div>';
     ch.lessons.forEach(function (l) {
-      sh += '<a class="l' + (l.id === pageId ? " active" : "") + (done.indexOf(l.id) > -1 ? " done" : "") + '" data-id="' + l.id + '" href="' + l.id + '.html"><span class="num">' + fa(l.id.replace("-", ".")) + '</span><span>' + l.title + '</span></a>';
+      sh += '<a class="l' + (l.id === pageId ? " active" : "") + (done.indexOf(l.id) > -1 ? " done" : "") + '" data-id="' + l.id + '" href="' + l.id + '.html"><span class="num">' + fa(l.id.replace("-", ".")) + '</span><span>' + L(l, "title") + '</span></a>';
     });
     sh += '</div>';
   });
@@ -59,32 +128,48 @@
   main.appendChild(article);
   document.body.insertBefore(top, document.body.firstChild);
   document.body.appendChild(el("div", { "class": "backdrop", "data-act": "nav" }));
+  /* نوار پیشرفت خواندن و دکمه بازگشت به بالا */
+  var rb = el("div", { "class": "read-bar", "aria-hidden": "true" }, "<i></i>");
+  var tt = el("button", { "class": "to-top", "type": "button", "aria-label": EN ? "Back to top" : "بازگشت به بالا" }, '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>');
+  document.body.appendChild(rb); document.body.appendChild(tt);
+  tt.addEventListener("click", function () { scrollTo({ top: 0, behavior: "smooth" }); });
+  var onScroll = function () {
+    var h = document.documentElement.scrollHeight - innerHeight;
+    rb.firstChild.style.width = (h > 0 ? Math.min(100, scrollY / h * 100) : 0) + "%";
+    tt.classList.toggle("show", scrollY > 900);
+  };
+  addEventListener("scroll", onScroll, { passive: true }); onScroll();
 
   /* سرصفحه خودکار درس */
   if (lesson && !article.querySelector("h1")) {
     var head = el("header", { "class": "lesson-head" },
-      '<span class="eyebrow">فصل ' + fa(lesson.ch.n) + ' · ' + lesson.ch.title + ' · درس ' + fa(lesson.id.replace("-", ".")) + '</span>' +
-      '<h1>' + lesson.title + '</h1>' +
-      '<div class="meta"><span>⏱ حدود ' + fa(lesson.min) + ' دقیقه</span><span>📶 سطح: ' + lesson.level + '</span><span>🧭 درس ' + fa(idx + 1) + ' از ' + fa(lessons.length) + '</span></div>');
+      '<span class="eyebrow">' + t("chapter") + ' ' + fa(lesson.ch.n) + ' · ' + L(lesson.ch, "title") + ' · ' + t("lesson") + ' ' + fa(lesson.id.replace("-", ".")) + '</span>' +
+      '<h1>' + L(lesson, "title") + '</h1>' +
+      '<div class="meta"><span>⏱ ' + t("about") + ' ' + fa(lesson.min) + ' ' + t("minutes") + '</span><span>📶 ' + t("level") + ': ' + L(lesson, "level") + '</span><span>🧭 ' + t("lesson") + ' ' + fa(idx + 1) + ' ' + t("of") + ' ' + fa(lessons.length) + '</span></div>');
     article.insertBefore(head, article.firstChild);
-    document.title = lesson.title + " · " + C.title;
+    document.title = L(lesson, "title") + " · " + L(C, "title");
   }
 
   /* ---------- پیشرفت ---------- */
   function refreshProgress() {
     var p = Math.round(done.filter(function (d) { return lessons.some(function (l) { return l.id === d; }); }).length / lessons.length * 100);
     top.querySelector(".bar i").style.width = p + "%";
-    top.querySelector(".pct").textContent = fa(p) + "٪";
+    top.querySelector(".pct").textContent = fa(p) + (EN ? "%" : "٪");
     side.querySelectorAll("a.l").forEach(function (a) { a.classList.toggle("done", done.indexOf(a.getAttribute("data-id")) > -1); });
     document.querySelectorAll("[data-lesson-link]").forEach(function (li) { li.classList.toggle("done", done.indexOf(li.getAttribute("data-lesson-link")) > -1); });
+    /* شمارنده «چند درس از این فصل تمام شده» کنار عنوان هر فصل */
+    C.chapters.forEach(function (ch) {
+      var n = ch.lessons.filter(function (l) { return done.indexOf(l.id) > -1; }).length, c = side.querySelector('.cnt[data-ch="' + ch.n + '"]');
+      if (c) { c.textContent = EN ? n + "/" + ch.lessons.length : fa(n) + " از " + fa(ch.lessons.length); c.classList.toggle("full", n === ch.lessons.length); }
+    });
   }
 
   if (lesson) {
     var isDone = function () { return done.indexOf(lesson.id) > -1; };
     var box = el("div", { "class": "done-box" }, '<p></p><button class="btn" data-act="done"></button>');
     var paint = function () {
-      box.querySelector("p").textContent = isDone() ? "آفرین! این درس را تمام کرده‌ای. برای مرور هر وقت خواستی برگرد." : "همه آزمون‌ها را درست جواب دادی و تمرین را انجام دادی؟ فقط آن وقت تیک بزن.";
-      var b = box.querySelector("button"); b.textContent = isDone() ? "✓ تمام شد (برداشتن تیک)" : "این درس را تمام کردم";
+      box.querySelector("p").textContent = isDone() ? t("doneYes") : t("doneNo");
+      var b = box.querySelector("button"); b.textContent = isDone() ? t("doneBtnYes") : t("doneBtnNo");
       b.classList.toggle("done", isDone());
     };
     paint();
@@ -95,17 +180,17 @@
     article.appendChild(box);
     var prev = lessons[idx - 1], next = lessons[idx + 1];
     var pg = el("nav", { "class": "pager" },
-      (prev ? '<a class="prev" href="' + prev.id + '.html"><small>→ درس قبلی</small>' + prev.title + '</a>' : '<a class="prev" href="index.html"><small>→ بازگشت</small>خانه و نقشه راه</a>') +
-      (next ? '<a class="next" href="' + next.id + '.html"><small>درس بعدی ←</small>' + next.title + '</a>' : '<a class="next" href="index.html"><small>پایان دوره ←</small>بازگشت به خانه</a>'));
+      (prev ? '<a class="prev" href="' + prev.id + '.html"><small>' + t("prev") + '</small>' + L(prev, "title") + '</a>' : '<a class="prev" href="index.html"><small>' + t("back") + '</small>' + t("home") + '</a>') +
+      (next ? '<a class="next" href="' + next.id + '.html"><small>' + t("next") + '</small>' + L(next, "title") + '</a>' : '<a class="next" href="index.html"><small>' + t("end") + '</small>' + t("backHome") + '</a>'));
     article.appendChild(pg);
   }
-  main.appendChild(el("footer", { "class": "footer" }, 'مستر کلاس ESP32 فارسی · آموزش رایگان · <a href="credits.html">منابع و مجوز تصاویر</a>'));
+  main.appendChild(el("footer", { "class": "footer" }, t("footer")));
   refreshProgress();
 
   /* فهرست «روی این صفحه» */
   var h2s = article.querySelectorAll("h2");
   if (h2s.length > 1) {
-    var toc = '<h4>روی این صفحه</h4>';
+    var toc = '<h4>' + t("onPage") + '</h4>';
     h2s.forEach(function (h, i) { if (!h.id) h.id = "s" + (i + 1); toc += '<a class="x" href="#' + h.id + '">' + h.textContent + '</a>'; });
     side.insertAdjacentHTML("afterbegin", toc);
   }
@@ -116,6 +201,7 @@
     if (t) {
       var a = t.getAttribute("data-act");
       if (a === "nav") document.body.classList.toggle("nav-open");
+      if (a === "lang") { e.preventDefault(); store("esp32mc-lang", EN ? "fa" : "en"); location.href = TWIN + location.hash; return; }
       if (a === "theme") {
         var cur = document.documentElement.getAttribute("data-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
         var nt = cur === "dark" ? "light" : "dark";
@@ -190,11 +276,11 @@
       });
     });
     pre.innerHTML = lines.map(function (l) { return '<span class="ln">' + (l || " ") + '</span>'; }).join("");
-    var bar = el("div", { "class": "bar" }, '<span class="dots"><i></i><i></i><i></i></span><span class="fname">' + esc(block.getAttribute("data-file") || lang) + '</span><button type="button">کپی کد</button>');
+    var bar = el("div", { "class": "bar" }, '<span class="dots"><i></i><i></i><i></i></span><span class="fname">' + esc(block.getAttribute("data-file") || lang) + '</span><button type="button">' + t("copy") + '</button>');
     block.insertBefore(bar, pre);
     bar.querySelector("button").addEventListener("click", function () {
       var b = this;
-      var done = function () { b.textContent = "✓ کپی شد"; setTimeout(function () { b.textContent = "کپی کد"; }, 1500); };
+      var done = function () { b.textContent = t("copied"); setTimeout(function () { b.textContent = t("copy"); }, 1500); };
       if (navigator.clipboard) navigator.clipboard.writeText(raw).then(done, function () { fallbackCopy(raw); done(); });
       else { fallbackCopy(raw); done(); }
     });
@@ -234,15 +320,15 @@
     var fb = q.querySelector(".fb");
     if (fb) fb.setAttribute("data-orig", fb.innerHTML);
     items.forEach(function (li, i) {
-      li.insertAdjacentHTML("afterbegin", "<b>" + "الف ب ج د".split(" ")[i] + ") </b>");
+      li.insertAdjacentHTML("afterbegin", "<b>" + t("letters")[i] + ") </b>");
       li.addEventListener("click", function () {
         if (q.classList.contains("solved")) return;
         if (i + 1 === ans) { li.classList.add("right"); q.classList.add("solved"); }
         else li.classList.add("wrong");
         q.classList.add("answered");
         if (!fb) fb = q.appendChild(el("div", { "class": "fb", "data-orig": "" }));
-        fb.style.borderRight = "4px solid " + (i + 1 === ans ? "var(--green)" : "var(--red)");
-        fb.innerHTML = (i + 1 === ans ? "<b>✅ درست است!</b> " : "<b>❌ نه، دوباره فکر کن.</b> ") + (i + 1 === ans ? fb.getAttribute("data-orig") : (li.getAttribute("data-why") || "راهنما: متن بالای این آزمون را دوباره بخوان."));
+        fb.style.borderInlineStart = "4px solid " + (i + 1 === ans ? "var(--green)" : "var(--red)");
+        fb.innerHTML = (i + 1 === ans ? "<b>" + t("right") + "</b> " : "<b>" + t("wrong") + "</b> ") + (i + 1 === ans ? fb.getAttribute("data-orig") : (li.getAttribute("data-why") || t("hint")));
         updateScore();
       });
     });
@@ -251,7 +337,7 @@
     var s = article.querySelector(".quiz-score");
     if (!s) return;
     var solved = article.querySelectorAll(".quiz.solved").length;
-    s.textContent = "امتیاز: " + fa(solved) + " از " + fa(quizzes.length) + (solved === quizzes.length ? " — عالی! 🎉" : "");
+    s.textContent = t("score") + " " + fa(solved) + " " + t("of") + " " + fa(quizzes.length) + (solved === quizzes.length ? t("perfect") : "");
   }
   updateScore();
 
@@ -263,17 +349,17 @@
     var body = w.innerHTML.replace(/<script[\s\S]*?<\/script>/i, "");
     var board = w.getAttribute("data-board") || "esp32";
     var url = w.getAttribute("data-url") || "https://wokwi.com/projects/new/" + board;
-    w.innerHTML = '<div class="wh"><b>' + (w.getAttribute("data-title") || "همین مدار را در شبیه‌ساز Wokwi بساز") + '</b>' +
-      '<a class="btn" target="_blank" rel="noopener" href="' + url + '">باز کردن Wokwi ↗</a>' +
-      (diagram ? '<button class="btn" data-copy="d">کپی diagram.json</button>' : '') +
-      (code ? '<button class="btn" data-copy="c">کپی کد sketch.ino</button>' : '') + '</div>' +
-      '<div class="wb">' + body + (diagram ? '<details><summary>محتوای diagram.json (نقشه قطعات و سیم‌ها)</summary><div class="code" data-lang="json" data-file="diagram.json"><pre>' + esc(diagram) + '</pre></div></details>' : '') + '</div>';
+    w.innerHTML = '<div class="wh"><b>' + (w.getAttribute("data-title") || t("wokwiTitle")) + '</b>' +
+      '<a class="btn" target="_blank" rel="noopener" href="' + url + '">' + t("wokwiOpen") + '</a>' +
+      (diagram ? '<button class="btn" data-copy="d">' + t("copyDiagram") + '</button>' : '') +
+      (code ? '<button class="btn" data-copy="c">' + t("copySketch") + '</button>' : '') + '</div>' +
+      '<div class="wb">' + body + (diagram ? '<details><summary>' + t("diagramSum") + '</summary><div class="code" data-lang="json" data-file="diagram.json"><pre>' + esc(diagram) + '</pre></div></details>' : '') + '</div>';
     w.querySelectorAll(".code").forEach(renderCode);
     w.querySelectorAll("[data-copy]").forEach(function (b) {
       b.addEventListener("click", function () {
         var txt = b.getAttribute("data-copy") === "d" ? diagram : code.querySelector("pre").innerText;
         (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).catch(function () { fallbackCopy(txt); });
-        var o = b.textContent; b.textContent = "✓ کپی شد"; setTimeout(function () { b.textContent = o; }, 1500);
+        var o = b.textContent; b.textContent = t("copied"); setTimeout(function () { b.textContent = o; }, 1500);
       });
     });
   });
@@ -284,14 +370,14 @@
     var id = v.getAttribute("data-yt");
     var stamps = v.querySelectorAll("[data-t]");
     var sum = v.querySelector(".sum");
-    var html = '<div class="ratio"><div class="poster"><div><div class="play"></div><div>' + esc(v.getAttribute("data-title") || "") + '</div><small style="opacity:.7">برای پخش کلیک کن (برای دیدن یوتیوب ممکن است به فیلترشکن نیاز داشته باشی)</small></div></div></div>' +
-      '<div class="vb"><h4>🎬 ' + esc(v.getAttribute("data-title") || "") + '</h4><div class="chan">کانال: ' + esc(v.getAttribute("data-channel") || "") + ' · زبان ویدیو: ' + esc(v.getAttribute("data-lang") || "انگلیسی") + ' · <a target="_blank" rel="noopener" href="https://www.youtube.com/watch?v=' + id + '">باز کردن در یوتیوب ↗</a></div>';
+    var html = '<div class="ratio"><div class="poster"><div><div class="play"></div><div>' + esc(v.getAttribute("data-title") || "") + '</div><small style="opacity:.7">' + t("play") + '</small></div></div></div>' +
+      '<div class="vb"><h4>🎬 ' + esc(v.getAttribute("data-title") || "") + '</h4><div class="chan">' + t("channel") + ': ' + esc(v.getAttribute("data-channel") || "") + ' · ' + t("vlang") + ': ' + esc(v.getAttribute("data-lang") || t("vdefault")) + ' · <a target="_blank" rel="noopener" href="https://www.youtube.com/watch?v=' + id + '">' + t("openYT") + '</a></div>';
     if (stamps.length) {
       html += '<div class="stamps">';
       stamps.forEach(function (s) { html += '<button data-s="' + tsec(s.getAttribute("data-t")) + '"><span>' + s.getAttribute("data-t") + '</span>' + s.innerHTML + '</button>'; });
       html += '</div>';
     }
-    if (sum) html += '<details><summary>' + esc(v.getAttribute("data-sum-label") || "راهنمای تماشا: به چه نکته‌هایی دقت کنی") + '</summary>' + sum.innerHTML + '</details>';
+    if (sum) html += '<details><summary>' + esc(v.getAttribute("data-sum-label") || t("watchGuide")) + '</summary>' + sum.innerHTML + '</details>';
     html += '</div>';
     v.innerHTML = html;
     function play(s) {
@@ -303,10 +389,10 @@
 
   /* ---------- نقشه پایه‌های ESP32 DevKitC V4 (۳۸ پایه) ---------- */
   var TAGS = {
-    power: ["تغذیه", "#d6453d"], gnd: ["زمین", "#222"], safe: ["امن برای استفاده", "#12a37f"], input: ["فقط ورودی", "#c99a06"],
-    adc1: ["ADC1", "#8b4fd6"], adc2: ["ADC2 (با Wi-Fi کار نمی‌کند)", "#b07be0"], touch: ["لمسی", "#e0781f"], dac: ["DAC", "#2f7af0"],
-    strap: ["Strapping (حساس هنگام بوت)", "#d6457a"], flash: ["فلش — استفاده نکن", "#7b889b"], uart: ["UART0 (USB)", "#475569"],
-    i2c: ["I2C پیش‌فرض", "#0f8fa8"], spi: ["SPI پیش‌فرض (VSPI)", "#0ea5e9"], rtc: ["RTC (بیدارکننده خواب)", "#65a30d"]
+    power: ["تغذیه", "#d6453d", "Power"], gnd: ["زمین", "#222", "Ground"], safe: ["امن برای استفاده", "#12a37f", "Safe to use"], input: ["فقط ورودی", "#c99a06", "Input only"],
+    adc1: ["ADC1", "#8b4fd6", "ADC1"], adc2: ["ADC2 (با Wi-Fi کار نمی‌کند)", "#b07be0", "ADC2 (not with Wi-Fi)"], touch: ["لمسی", "#e0781f", "Touch"], dac: ["DAC", "#2f7af0", "DAC"],
+    strap: ["Strapping (حساس هنگام بوت)", "#d6457a", "Strapping (boot-sensitive)"], flash: ["فلش — استفاده نکن", "#7b889b", "Flash — do not use"], uart: ["UART0 (USB)", "#475569", "UART0 (USB)"],
+    i2c: ["I2C پیش‌فرض", "#0f8fa8", "Default I2C"], spi: ["SPI پیش‌فرض (VSPI)", "#0ea5e9", "Default SPI (VSPI)"], rtc: ["RTC (بیدارکننده خواب)", "#65a30d", "RTC (can wake from sleep)"]
   };
   var L = [
     ["3V3", null, ["power"], "خروجی ۳٫۳ ولت تنظیم‌شده. برای تغذیه سنسورهای ۳٫۳ ولتی. حداکثر حدود ۵۰۰ میلی‌آمپر برای کل برد."],
@@ -350,9 +436,13 @@
     ["GPIO7", 7, ["flash"], "به حافظه فلش وصل است (SD0). استفاده نکن."],
     ["GPIO6", 6, ["flash"], "به حافظه فلش وصل است (CLK). استفاده نکن."]
   ];
+  var L_EN = ["Regulated 3.3 V output for 3.3 V sensors. Roughly 500 mA for the whole board.", "Enable / reset. Pulling it to GND resets the board; the EN button does exactly this.", "Also called VP or SENSOR_VP. Input only, no internal pull-up. Great for an analog sensor (ADC1_CH0).", "Also called VN. Input only, no internal pull-up. ADC1_CH3.", "Input only, no internal pull-up. A good choice for a potentiometer (ADC1_CH6). It cannot drive an LED.", "Input only, no internal pull-up. ADC1_CH7.", "General purpose and safe. ADC1_CH4 and touch T9. Good for analog sensors even with Wi-Fi on.", "General purpose and safe. ADC1_CH5 and touch T8.", "DAC1 output (a real analog voltage). It is on ADC2, so no analog reads while Wi-Fi is on.", "DAC2 output. ADC2_CH9.", "General purpose. Touch T7.", "Outputs a PWM signal during boot, so be careful with relays or motors. Touch T6.", "Strapping pin (MTDI): if it is HIGH at power-up the flash voltage is set wrong and the board won't boot. Avoid it when you can.", "Ground. Every part must share this common GND.", "General purpose and safe. Touch T4. MOSI of the second SPI bus (HSPI).", "Connected to the internal flash (SD2). Never use it; the program will crash.", "Connected to the internal flash (SD3). Do not use.", "Connected to the internal flash (CMD). Do not use.", "5 V straight from USB (or the board's 5 V input). For servos and 5 V modules. Never feed 5 V into a GPIO."];
+  var R_EN = ["Ground.", "General purpose. Default MOSI of VSPI (SD cards and SPI displays).", "Default I2C SCL (clock line for the OLED and sensors).", "TX0: Serial.print output goes to USB through this pin. Using it breaks the Serial Monitor.", "RX0: receives from USB and is used during upload. Leave it unconnected.", "Default I2C SDA (data line).", "Ground.", "Default MISO of VSPI.", "Default SCK (clock) of VSPI.", "Strapping pin and default VSPI CS. Outputs PWM during boot. Commonly and safely used as the SD card CS.", "General purpose. Printed TX2 on many boards and a common choice for Serial2, but on core 3.x pass the pins explicitly: Serial2.begin(9600, SERIAL_8N1, 16, 17). Used by PSRAM on WROVER modules.", "General purpose. Printed RX2; pass it explicitly to Serial2 (core 3.x defaults are GPIO4 and GPIO25). Used by PSRAM on WROVER modules.", "General purpose and safe. Touch T0.", "The BOOT button is wired here. If it is LOW at power-up the board enters download mode. Be careful.", "Many boards have a blue LED here. It is a strapping pin but fine for an LED. Touch T2.", "Strapping pin (MTDO): controls boot log output and outputs PWM during boot. Touch T3.", "Connected to the flash (SD1). Do not use.", "Connected to the flash (SD0). Do not use.", "Connected to the flash (CLK). Do not use."];
+  function tagName(k) { return EN ? TAGS[k][2] : TAGS[k][0]; }
+  function pinNote(side, i) { return EN ? (side ? R_EN : L_EN)[i] : (side ? R : L)[i][3]; }
   function buildPinout(box) {
     var W = 860, pitch = 34, y0 = 300, H = y0 + pitch * 19 + 110, bx = 330, bw = 200;
-    var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="نقشه پایه‌های ESP32 DevKitC">';
+    var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + t("pinAria") + '">';
     s += '<rect x="' + bx + '" y="40" width="' + bw + '" height="' + (H - 60) + '" rx="12" fill="#1b1f2a"/>';
     s += '<rect x="' + (bx + 40) + '" y="20" width="' + (bw - 80) + '" height="70" rx="4" fill="#2a3040"/><path d="M' + (bx + 52) + ' 72 v-38 h18 v26 h18 v-26 h18 v26 h18 v-26 h18 v38" stroke="#d9b650" stroke-width="3" fill="none"/>';
     s += '<rect x="' + (bx + 36) + '" y="96" width="' + (bw - 72) + '" height="170" rx="6" fill="#c9ced8"/><text x="' + (bx + bw / 2) + '" y="175" text-anchor="middle" font-size="15" font-weight="700" fill="#333">ESP32</text><text x="' + (bx + bw / 2) + '" y="196" text-anchor="middle" font-size="12" fill="#444">WROOM-32</text>';
@@ -380,18 +470,18 @@
     L.forEach(function (p, i) { s += pin(p, i, 0); });
     R.forEach(function (p, i) { s += pin(p, i, 1); });
     s += '</svg>';
-    var f = '<div class="filters"><button class="on" data-f="">همه</button>';
-    ["safe", "input", "adc1", "adc2", "touch", "dac", "strap", "flash", "i2c", "spi", "uart", "rtc", "power"].forEach(function (t) { f += '<button data-f="' + t + '">' + TAGS[t][0] + '</button>'; });
+    var f = '<div class="filters"><button class="on" data-f="">' + t("all") + '</button>';
+    ["safe", "input", "adc1", "adc2", "touch", "dac", "strap", "flash", "i2c", "spi", "uart", "rtc", "power"].forEach(function (t) { f += '<button data-f="' + t + '">' + tagName(t) + '</button>'; });
     f += '</div>';
-    box.innerHTML = f + '<div class="grid"><div>' + s + '</div><div class="info"><h4>روی یک پایه کلیک کن</h4><p>هر پایه را انتخاب کن تا ببینی چه کاری از آن برمی‌آید و چه خطری دارد. با دکمه‌های بالا پایه‌های هم‌خانواده را جدا کن.</p><p><b>قانون طلایی مبتدی:</b> اول از پایه‌های سبز «امن» استفاده کن.</p></div></div>';
+    box.innerHTML = f + '<div class="grid"><div>' + s + '</div><div class="info"><h4>' + t("pinPick") + '</h4><p>' + t("pinHelp") + '</p><p>' + t("pinGold") + '</p></div></div>';
     var info = box.querySelector(".info");
     box.querySelectorAll(".pin").forEach(function (g) {
       g.addEventListener("click", function () {
         var p = (+g.getAttribute("data-side") ? R : L)[+g.getAttribute("data-i")];
         box.querySelectorAll(".pin").forEach(function (x) { x.classList.remove("sel"); });
         g.classList.add("sel");
-        info.innerHTML = '<h4>' + p[0] + '</h4><div class="tags">' + p[2].map(function (t) { return '<span style="background:' + TAGS[t][1] + '">' + TAGS[t][0] + '</span>'; }).join("") + '</div><p>' + p[3] + '</p>' +
-          (p[1] != null ? '<p style="direction:ltr;text-align:right"><code>pinMode(' + p[1] + ', ' + (p[2].indexOf("input") > -1 ? "INPUT" : "OUTPUT") + ');</code></p>' : '');
+        info.innerHTML = '<h4>' + p[0] + '</h4><div class="tags">' + p[2].map(function (t) { return '<span style="background:' + TAGS[t][1] + '">' + tagName(t) + '</span>'; }).join("") + '</div><p>' + pinNote(+g.getAttribute("data-side"), +g.getAttribute("data-i")) + '</p>' +
+          (p[1] != null ? '<p style="direction:ltr;text-align:start"><code>pinMode(' + p[1] + ', ' + (p[2].indexOf("input") > -1 ? "INPUT" : "OUTPUT") + ');</code></p>' : '');
       });
     });
     box.querySelectorAll("[data-f]").forEach(function (b) {
@@ -414,7 +504,7 @@
   function buildWiring(box) {
     var js = box.querySelector('script[type="application/json"]');
     if (!js) return;
-    var spec; try { spec = JSON.parse(js.textContent); } catch (e) { box.insertAdjacentHTML("afterbegin", '<p style="color:red">خطا در JSON نقشه سیم‌کشی</p>'); return; }
+    var spec; try { spec = JSON.parse(js.textContent); } catch (e) { box.insertAdjacentHTML("afterbegin", '<p style="color:red">' + t("wiringErr") + '</p>'); return; }
     var cap = box.querySelector("figcaption");
     var bpins = [];
     spec.wires.forEach(function (w) { [w[0], w[1]].forEach(function (e) { if (e.indexOf(".") < 0 && bpins.indexOf(e) < 0) bpins.push(e); }); });
@@ -428,7 +518,7 @@
       var n = pt.pins.length, ph = Math.max(n * pitch + 26, 120);
       partsSvg += '<rect x="' + px + '" y="' + y + '" width="' + pw + '" height="' + ph + '" rx="14" fill="#fff" stroke="#cfd6e2" stroke-width="1.5"/>';
       partsSvg += '<text x="' + (px + pw - 12) + '" y="' + (y + 24) + '" text-anchor="start" font-size="14" font-weight="800" fill="#152033" direction="rtl">' + esc(pt.name) + '</text>';
-      if (pt.img) partsSvg += '<image href="assets/img/' + pt.img + '" x="' + (px + pw - 118) + '" y="' + (y + 32) + '" width="106" height="' + (ph - 42) + '" preserveAspectRatio="xMidYMid meet"/>';
+      if (pt.img) partsSvg += '<image href="' + BASE + 'img/' + pt.img + '" x="' + (px + pw - 118) + '" y="' + (y + 32) + '" width="106" height="' + (ph - 42) + '" preserveAspectRatio="xMidYMid meet"/>';
       pt.pins.forEach(function (pp, k) {
         var yy = y + 30 + k * pitch + (ph - 30 - n * pitch) / 2 + pitch / 2;
         pos[pt.id + "." + pp[0]] = [px, yy];
@@ -439,7 +529,7 @@
       y += ph + 18;
     });
     var H = Math.max(by + bh + 20, y + 10), W = px + pw + 20;
-    var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="نقشه سیم‌کشی">';
+    var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + t("wiringAria") + '">';
     s += '<rect x="' + bx + '" y="' + by + '" width="' + bw + '" height="' + bh + '" rx="14" fill="#1b1f2a"/>';
     s += '<rect x="' + (bx + 20) + '" y="' + (by + 16) + '" width="110" height="80" rx="6" fill="#c9ced8"/><text x="' + (bx + 75) + '" y="' + (by + 52) + '" text-anchor="middle" font-size="13" font-weight="800" fill="#333">ESP32</text><text x="' + (bx + 75) + '" y="' + (by + 70) + '" text-anchor="middle" font-size="10" fill="#555">WROOM-32</text>';
     s += '<text x="' + (bx + 20) + '" y="' + (by + bh - 16) + '" font-size="13" font-weight="700" fill="#e8eef8" direction="rtl" text-anchor="end">' + esc(spec.board || "ESP32 DevKitC") + '</text>';
@@ -459,8 +549,8 @@
     });
     Object.keys(dots).forEach(function (k) { if (dots[k] > 1) { var q = k.split(","); s += '<circle cx="' + q[0] + '" cy="' + q[1] + '" r="6.5" fill="#152033"/>'; } });
     s += partsSvg + labels + '</svg>';
-    var legend = '<div class="wire-legend"><span><i style="background:' + WC.red + '"></i>تغذیه (3V3 یا 5V)</span><span><i style="background:' + WC.black + '"></i>زمین GND</span><span><i style="background:' + WC.orange + '"></i>سیگنال خروجی</span><span><i style="background:' + WC.blue + '"></i>سیگنال ورودی / داده</span><span><i style="background:' + WC.green + '"></i>ساعت / SCL / SCK</span><span><i style="background:' + WC.yellow + '"></i>داده I2C (SDA) / TX</span></div>';
-    var table = '<details><summary>جدول اتصال‌ها (برای چک کردن سیم به سیم)</summary><div class="table-wrap"><table><tr><th>#</th><th>از</th><th>به</th><th>رنگ پیشنهادی سیم</th></tr>' +
+    var legend = '<div class="wire-legend"><span><i style="background:' + WC.red + '"></i>' + t("lgPower") + '</span><span><i style="background:' + WC.black + '"></i>' + t("lgGnd") + '</span><span><i style="background:' + WC.orange + '"></i>' + t("lgOut") + '</span><span><i style="background:' + WC.blue + '"></i>' + t("lgIn") + '</span><span><i style="background:' + WC.green + '"></i>' + t("lgClk") + '</span><span><i style="background:' + WC.yellow + '"></i>' + t("lgSda") + '</span></div>';
+    var table = '<details><summary>' + t("wTable") + '</summary><div class="table-wrap"><table><tr><th>#</th><th>' + t("wFrom") + '</th><th>' + t("wTo") + '</th><th>' + t("wColor") + '</th></tr>' +
       spec.wires.map(function (w, i) { return '<tr><td>' + fa(i + 1) + '</td><td class="ltr">' + esc(w[0]) + '</td><td class="ltr">' + esc(w[1]) + '</td><td><i style="display:inline-block;width:22px;height:6px;border-radius:3px;background:' + (WC[w[2]] || w[2]) + '"></i> ' + esc(w[2] || "") + '</td></tr>'; }).join("") + '</table></div></details>';
     box.innerHTML = '<div class="frame">' + s + '</div>' + legend + (cap ? '<figcaption>' + cap.innerHTML + '</figcaption>' : '') + table;
   }
@@ -522,7 +612,7 @@
 
   /* ---------- Mermaid (در صورت نیاز) ---------- */
   if (article.querySelector(".mermaid")) {
-    var sc = el("script", { src: "assets/vendor/mermaid.min.js" });
+    var sc = el("script", { src: BASE + "vendor/mermaid.min.js" });
     sc.onload = function () {
       var dark = (document.documentElement.getAttribute("data-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")) === "dark";
       window.mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default", fontFamily: "Vazirmatn, Tahoma, sans-serif" });
@@ -532,6 +622,6 @@
   }
 
   /* قابلیت‌های صفحه خانه و واژه‌نامه */
-  window.ESP32MC = { fa: fa, esc: esc, lessons: lessons, done: done, refresh: refreshProgress };
+  window.ESP32MC = { fa: fa, esc: esc, lessons: lessons, done: done, refresh: refreshProgress, L: L, t: t, EN: EN };
   document.dispatchEvent(new Event("esp32mc-ready"));
 })();
