@@ -589,12 +589,14 @@
       var text = node.nodeValue;
       for (var k = 0; k < keys.length; k++) {
         var key = keys[k]; if (used[key]) continue;
-        var i = text.indexOf(key);
-        while (i > -1 && (isWordChar(text[i - 1]) || isWordChar(text[i + key.length]))) i = text.indexOf(key, i + 1);
+        /* در انگلیسی حروف بزرگ و کوچک یکی حساب می‌شوند (Voltage و voltage)؛ اختصارهای تمام‌بزرگ مثل GPIO دقیق تطبیق داده می‌شوند */
+        var ci = EN && key !== key.toUpperCase(), hay = ci ? text.toLowerCase() : text, needle = ci ? key.toLowerCase() : key;
+        var i = hay.indexOf(needle);
+        while (i > -1 && (isWordChar(text[i - 1]) || isWordChar(text[i + key.length]))) i = hay.indexOf(needle, i + 1);
         if (i < 0) continue;
         used[key] = 1;
         var after = node.splitText(i); after.nodeValue = after.nodeValue.slice(key.length);
-        var span = el("span", { "class": "term", "data-t": key, tabindex: "0" }); span.textContent = key;
+        var span = el("span", { "class": "term", "data-t": key, tabindex: "0" }); span.textContent = text.substr(i, key.length);
         node.parentNode.insertBefore(span, after);
         wrapTerms._again = true;
         return;
