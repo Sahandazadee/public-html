@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Web server: control things at home from a browser · ESP32 Masterclass</title>
+<meta name="description" content="HTTP from zero for beginners, and building a web server on the ESP32 with the built-in WebServer library: on/off buttons for an LED and a relay module, a live potentiometer reading with fetch and JSON, the esp32.local name with mDNS, a login password and safety tips.">
+<link rel="alternate" hreflang="fa" href="../4-2.html"><link rel="alternate" hreflang="en" href="4-2.html">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="../assets/course.js"></script>
+<script defer src="../assets/glossary-en.js"></script>
+<script defer src="../assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="4-2">
+
+<p class="lede">In this lesson your ESP32 becomes a <b>tiny website</b>. You open the board's address in the browser on your phone or laptop and use the buttons on the page to switch an LED and a relay on and off; at the same time, a potentiometer's reading updates live in front of your eyes, without reloading the page. No app needed: any device with a browser becomes your controller.</p>
+
+<div class="goals">
+  <div><h4>🎯 After this lesson you can</h4><ul>
+    <li>Explain how a browser and a server talk over HTTP (GET, POST, codes 200 and 404)</li>
+    <li>Build a web page and an API with the built-in <code>WebServer</code> library</li>
+    <li>Use <code>fetch()</code> and JSON to make a page that updates itself</li>
+    <li>Control an active-LOW relay module correctly and safely</li>
+    <li>Find the board by the name <code>esp32.local</code> and keep strangers out</li>
+  </ul></div>
+  <div><h4>🧰 Prerequisites and parts</h4><ul>
+    <li>Lesson <a href="4-1.html">4.1</a> (connecting to Wi-Fi) and lesson <a href="3-1.html">3.1</a> (analog reading)</li>
+    <li>An ESP32 DevKitC board, a USB data cable, a breadboard and jumper wires</li>
+    <li>One LED and a 220 Ω resistor, one 10 kΩ potentiometer</li>
+    <li>A 1-channel 5 V relay module that works with a 3.3 V signal (optional; a second LED will do instead)</li>
+  </ul></div>
+</div>
+
+<div class="callout warn"><div class="ct">Safety first: mains power (220 V) can kill</div>
+<p>A relay can switch mains power (220 V), and the modules even have <code>10A 250VAC</code> printed on them. But this lesson has <b>no mains wiring instructions</b>, and it never will. 220 V can kill by passing through your heart, it causes sparks and fires on a breadboard, and cheap relay modules don't have enough insulation distance. Until you've had hands-on electrical training and an experienced person is next to you, work only with an <b>LED</b> or a <b>low-voltage</b> load (for example a 12 V LED strip or a 5 V fan with its own adapter). For real household appliances, use a standard, certified "smart plug" product.</p></div>
+
+<h2 id="http">HTTP from zero: how do a browser and a server talk?</h2>
+<p>Every time you type an address into a browser, two programs have a conversation:</p>
+<ul>
+  <li><b>Client:</b> your browser. It sends a <b>request</b>.</li>
+  <li><b>Server:</b> a program that waits for requests and sends back a <b>response</b>. Today, your ESP32 is the server.</li>
+</ul>
+<p>The language of this conversation is <b>HTTP</b>: a simple text-based agreement that both sides understand.</p>
+
+<div class="callout analogy"><div class="ct">An everyday example: a restaurant</div>
+<p>You (the browser) sit down in a restaurant and tell the waiter: "A cup of tea, please." That's the <b>request</b>. The kitchen (the server) makes the tea, and the waiter brings it with a label: "Here you go, tea" (a <b>response</b> with code 200, meaning "success"). If you order something that isn't on the menu, you hear: "We don't have that" (code 404). The important part: <b>the kitchen never comes to you on its own</b>; you always have to order. That's exactly why our page "asks" once every second.</p></div>
+
+<h3>URL: the exact address of something</h3>
+<p>In the address <code>http://192.168.1.37/api/state</code>:</p>
+<div class="table-wrap"><table>
+<tr><th>Part</th><th>Meaning</th></tr>
+<tr><td><code>http://</code></td><td>The language of the conversation (the protocol). No "s", which means it isn't encrypted.</td></tr>
+<tr><td><code>192.168.1.37</code></td><td>The server's address on the network (the board's IP, which we printed in lesson 4.1).</td></tr>
+<tr><td><code>:80</code> (invisible)</td><td>The <b>port</b>: the building's "door" number. HTTP uses door number 80 by default, so you don't need to write it.</td></tr>
+<tr><td><code>/api/state</code></td><td>The <b>path</b>: which page or which action. A plain <code>/</code> means the home page.</td></tr>
+<tr><td><code>?on=1</code> (in some addresses)</td><td>A <b>parameter</b> (query): extra information in the form <code>name=value</code>.</td></tr>
+</table></div>
+
+<h3>GET and POST: two kinds of request</h3>
+<ul>
+  <li><b>GET</b> means "give me something". When you type an address into the browser, you always send a GET. A GET should never <b>change</b> anything.</li>
+  <li><b>POST</b> means "do this / take this". We use POST to change a state (like switching the relay on).</li>
+</ul>
+<div class="callout why"><div class="ct">Why switch the relay with POST and not GET?</div>
+<p>Browsers, link previews in messaging apps and some browser extensions sometimes open addresses with GET <b>on their own, before you click</b>, so the page loads faster. If switching the relay on were a GET such as <code>/relay/on</code>, just sending the link in a chat could switch on the relay in your house! Nobody "prefetches" a POST. Simple rule: <b>read with GET, change with POST.</b></p></div>
+
+<h3>Status codes: what did the server answer?</h3>
+<div class="table-wrap"><table>
+<tr><th>Code</th><th>Name</th><th>Meaning</th></tr>
+<tr><td><b>200</b></td><td>OK</td><td>Everything went fine; here's your answer.</td></tr>
+<tr><td><b>400</b></td><td>Bad Request</td><td>Your request was incomplete or wrong (for example, you didn't send a required parameter).</td></tr>
+<tr><td><b>401</b></td><td>Unauthorized</td><td>Give a username and password first.</td></tr>
+<tr><td><b>404</b></td><td>Not Found</td><td>No such path exists.</td></tr>
+<tr><td><b>500</b></td><td>Internal Server Error</td><td>The server itself broke.</td></tr>
+</table></div>
+<p>A real HTTP request and response look like this; it's just plain text:</p>
+<div class="code" data-file="HTTP (real text)" data-lang="text" id="codeHttp"><pre>
+GET /api/state HTTP/1.1
+Host: 192.168.1.37
+User-Agent: Mozilla/5.0 (Android)
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 37
+
+{"led":true,"relay":false,"pot":2048}
+</pre></div>
+<ol class="walk" data-for="codeHttp">
+  <li data-lines="1-3"><b class="what">The browser's request.</b> First line: the type (GET), the path (<code>/api/state</code>) and the HTTP version. Then the headers: <code>Host</code> is the server's address and <code>User-Agent</code> says which browser this is.
+    <span class="why">An empty line (line 4) marks the end of the headers. The WebServer library reads all of this for you and hands you just the path and the parameters.</span></li>
+  <li data-lines="5-7"><b class="what">The ESP32's response.</b> The first line is the status code (<code>200 OK</code>). <code>Content-Type</code> says what kind of content this is (<code>text/html</code> for a page, <code>application/json</code> for data). <code>Content-Length</code> is the length of the content in bytes.
+    <span class="why">The browser uses Content-Type to decide whether to show the content as a page or hand it to JavaScript as data. Get it wrong and your page shows up as raw text.</span></li>
+  <li data-lines="9"><b class="what">The response body.</b> The content itself; here, a piece of JSON text.
+    <span class="why">JSON is the standard format for exchanging data on the web: <code>"name":value</code> pairs inside curly braces. Humans can read it, and JavaScript converts it in a single line.</span></li>
+</ol>
+
+<p>Today's whole conversation at a glance:</p>
+<pre class="mermaid" style="direction:ltr">sequenceDiagram
+  participant B as Phone browser
+  participant E as ESP32 web server
+  B-&gt;&gt;E: GET /
+  E--&gt;&gt;B: 200 OK + HTML page
+  loop every 1 second
+    B-&gt;&gt;E: GET /api/state
+    E--&gt;&gt;B: 200 OK + status JSON
+  end
+  Note over B: User taps the ON button
+  B-&gt;&gt;E: POST /api/led?on=1
+  Note over E: digitalWrite(4, HIGH)
+  E--&gt;&gt;B: 200 OK + new status JSON
+  B-&gt;&gt;E: GET /favicon.ico
+  E--&gt;&gt;B: 404 Not Found</pre>
+<p>The browser sends that last request by itself to fetch the little tab icon. We don't have an icon, so we return 404; that's completely normal.</p>
+
+<h3>HTML in two minutes</h3>
+<p>A web page is written in a language called <b>HTML</b>. HTML is made of "tags": <code>&lt;h1&gt;</code> starts a heading and <code>&lt;/h1&gt;</code> ends it. That's it!</p>
+<div class="code" data-file="page.html" data-lang="text" id="codeMini"><pre>
+&lt;!DOCTYPE html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+  &lt;meta charset="utf-8"&gt;
+  &lt;title&gt;My page&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;h1&gt;Hello&lt;/h1&gt;
+  &lt;p&gt;This is a paragraph&lt;/p&gt;
+  &lt;button onclick="alert('Hello')"&gt;Button&lt;/button&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</pre></div>
+<ol class="walk" data-for="codeMini">
+  <li data-lines="1-2,12"><b class="what">The skeleton.</b> <code>&lt;!DOCTYPE html&gt;</code> says "this is modern HTML". Everything goes inside <code>&lt;html&gt;</code>, and <code>lang="en"</code> tells the browser the page is in English. (For a right-to-left language such as Persian, you would add <code>dir="rtl"</code> here.)
+    <span class="why">Without DOCTYPE, the browser switches into a "compatibility mode for old pages" and the page looks strange.</span></li>
+  <li data-lines="3-6"><b class="what">head: behind-the-scenes information.</b> <code>charset="utf-8"</code> makes non-English characters (accents, Persian, emoji) display correctly, and <code>title</code> is the text shown on the browser tab.
+    <span class="why">If you leave out charset, such text shows up as garbled characters, for example "CafÃ©" instead of "Café".</span></li>
+  <li data-lines="7-11"><b class="what">body: what the user sees.</b> <code>h1</code> is a big heading, <code>p</code> a paragraph, <code>button</code> a button. <code>onclick</code> says which JavaScript code runs on a click.
+    <span class="why">Our project page is built with exactly these few tags, plus a little CSS for looks (color and size) and a little JavaScript for talking to the ESP32.</span></li>
+</ol>
+<p>Save this file on your laptop as <code>page.html</code> and double-click it to open it in your browser. Congratulations, your first web page!</p>
+
+<h2 id="relay">What is a relay, and what does active-LOW mean?</h2>
+<p>A <b>relay</b> is an electrical switch that is flipped by a small electromagnet (the coil). When current flows through the coil, a metal lever gets pulled and presses two contacts together (that's the "click" you hear). The control circuit (the ESP32) and the load circuit (for example a lamp) are completely separate electrically.</p>
+<div class="callout analogy"><div class="ct">An everyday example</div>
+<p>A relay is like asking a strong friend to throw the lever on a heavy floodgate. You just say "now" quietly (the ESP32's 3.3 V signal), and they do the heavy work with their own muscle (the coil and the contacts). An ESP32 pin gives about 20 to 40 mA at most; a 5 V relay coil needs about 70 mA; so a pin can't drive the relay directly, and the module has a transistor in between. (You saw the transistor, the flyback diode and the inside of a relay module in full in <a href="3-4.html#relay">lesson 3.4</a>; here we just use it.)</p></div>
+<p>Every <b>relay module</b> has two sides:</p>
+<ul>
+  <li><b>The control side (to the ESP32):</b> <code>VCC</code> (module power, usually 5 V), <code>GND</code> and <code>IN</code> (the command signal).</li>
+  <li><b>The load side (the blue screw terminals):</b> <code>COM</code> (common), <code>NO</code> (normally open: open at rest, connects to COM when the relay turns on) and <code>NC</code> (normally closed: connected at rest, disconnects when the relay turns on). In this lesson we connect nothing to this side.</li>
+</ul>
+<h3>Active-LOW: backwards logic</h3>
+<p>Most cheap relay modules on the market are <b>active-LOW</b>: when you set <code>IN</code> <b>LOW</b>, the relay turns <b>on</b>, and HIGH turns it off. The reason is their internal circuit (an optocoupler or a PNP transistor). Some modules have a jumper labeled <code>H</code>/<code>L</code> that selects this behavior.</p>
+<div class="callout example"><div class="ct">With numbers</div>
+<p>With an active-LOW module: <code>digitalWrite(26, LOW)</code> → about 0 V on IN → the small LED on the module lights, "click", COM connects to NO. <code>digitalWrite(26, HIGH)</code> → 3.3 V on IN → the relay is off. Our code has a constant called <code>RELAY_ACTIVE_LOW</code> that handles this reversal in one place, so the rest of the program only has to say "on" or "off".</p></div>
+<div class="callout warn"><div class="ct">Careful: not every 5 V module switches off with 3.3 V</div>
+<p>On some active-LOW modules powered with 5 V on VCC, the ESP32's HIGH (3.3 V) isn't enough to switch the relay fully off: there's still a 1.7 V difference between 5 and 3.3 V, and the relay may stay on all the time. When buying, look for a module that explicitly says "3.3V trigger" or "ESP32 compatible", or one with a <code>JD-VCC</code> jumper. If your module stays on no matter what, the problem isn't your code.</p>
+<p><b>If your module has a JD-VCC jumper (three pins <code>GND VCC JD-VCC</code> side by side with a jumper cap):</b> remove the cap; connect <code>JD-VCC</code> to the board's 5V (power for the coil), <code>VCC</code> to <b>3V3</b> (power for the optocoupler's LED) and GND to GND. Now the 3.3 V HIGH is at exactly the same level as VCC, and the relay switches fully off. Modules without this jumper don't offer this option.</p></div>
+
+<h2 id="wiring">Wiring diagram</h2>
+<p>Three parts: the LED on <b>GPIO4</b>, the relay input on <b>GPIO26</b> and the potentiometer on <b>GPIO34</b>.</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","first end"],["2","second end"]]},
+    {"id":"LED1","name":"LED","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−), short leg"]]},
+    {"id":"RLY","name":"1-channel relay module","pins":[["IN","command input"],["VCC","module power (5 V)"],["GND","ground"]]},
+    {"id":"POT","name":"10 kΩ potentiometer","img":"pot.svg","pins":[["VCC","outer leg"],["SIG","middle leg"],["GND","other outer leg"]]}
+  ],
+  "wires":[
+    ["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"],
+    ["GPIO26","RLY.IN","orange"],["5V","RLY.VCC","red"],["GND","RLY.GND","black"],
+    ["3V3","POT.VCC","red"],["GPIO34","POT.SIG","blue"],["GND","POT.GND","black"]
+  ]
+}</script><figcaption>The LED with its resistor on GPIO4; the relay input on GPIO26, powered from the 5V pin; the potentiometer between 3V3 and GND with its middle leg on GPIO34. All the GNDs are connected together.</figcaption></div>
+
+<div class="callout why"><div class="ct">Why these three pins?</div>
+<p><b>GPIO4</b> is our usual safe pin for the LED. <b>GPIO26</b> for the relay: it isn't a strapping pin, and unlike GPIO14 and GPIO15 it doesn't output a PWM signal during boot, so the relay doesn't "click click" when the board powers up. <b>GPIO34</b> for the potentiometer, because it's on <b>ADC1</b>. The most important hardware point in this lesson: <b>while Wi-Fi is on, ADC2 doesn't work</b> (the radio uses it). So in any Wi-Fi project, connect analog sensors only to ADC1 pins: GPIO32 to GPIO39. And connect the potentiometer to 3V3, not 5V; the ESP32's pins can't handle 5 volts.</p></div>
+<p>The board's 5V pin passes the USB cable's 5 V straight out, and that's enough for the relay coil (about 70 mA). If you don't have a relay module, no problem: wire a second LED with a resistor like the first one, but <b>from 3V3 to GPIO26</b> (anode toward 3V3). That LED then behaves just like an active-LOW relay: it lights on LOW. That's what we did in Wokwi too.</p>
+
+<h2 id="code">The complete program: a tiny smart home</h2>
+<p>This program is longer than in previous lessons, but it's built from a few simple pieces. We'll go through it piece by piece.</p>
+<div class="code" data-file="SmartHome.ino" id="codeWeb"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;ESPmDNS.h&gt;
+
+const char* WIFI_SSID = "Wokwi-GUEST";      // your network name
+const char* WIFI_PASS = "";                 // your network password
+
+const int LED_PIN   = 4;                    // a regular LED
+const int RELAY_PIN = 26;                   // the relay module's IN input
+const int POT_PIN   = 34;                   // potentiometer (ADC1, works with Wi-Fi)
+const bool RELAY_ACTIVE_LOW = true;         // most relay modules turn on with LOW
+
+WebServer server(80);                       // server on port 80 (the standard HTTP port)
+bool ledOn = false;
+bool relayOn = false;
+
+// the complete web page, inside a raw string literal
+const char INDEX_HTML[] PROGMEM = R"rawliteral(
+&lt;!DOCTYPE html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+&lt;meta charset="utf-8"&gt;
+&lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;
+&lt;title&gt;ESP32 Home&lt;/title&gt;
+&lt;style&gt;
+  body { font-family: sans-serif; text-align: center; background: #f2f4f8; }
+  .card { background: #fff; max-width: 340px; margin: 14px auto; padding: 12px; border-radius: 12px; }
+  button { font-size: 20px; padding: 10px 24px; margin: 4px; border: 0; border-radius: 8px; color: #fff; }
+  .on  { background: #2e9d5b; }
+  .off { background: #c0392b; }
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;h1&gt;ESP32 Home Control&lt;/h1&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;LED: &lt;span id="led"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;button class="on"  onclick="send('led', 1)"&gt;ON&lt;/button&gt;
+  &lt;button class="off" onclick="send('led', 0)"&gt;OFF&lt;/button&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;Relay: &lt;span id="relay"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;button class="on"  onclick="send('relay', 1)"&gt;ON&lt;/button&gt;
+  &lt;button class="off" onclick="send('relay', 0)"&gt;OFF&lt;/button&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;Pot: &lt;span id="pot"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;progress id="bar" max="4095" value="0"&gt;&lt;/progress&gt;
+&lt;/div&gt;
+&lt;script&gt;
+function show(s) {
+  document.getElementById('led').textContent   = s.led   ? 'ON' : 'OFF';
+  document.getElementById('relay').textContent = s.relay ? 'ON' : 'OFF';
+  document.getElementById('pot').textContent   = s.pot;
+  document.getElementById('bar').value         = s.pot;
+}
+function refresh() {
+  fetch('/api/state')
+    .then(r =&gt; r.json())
+    .then(show)
+    .catch(e =&gt; console.log('ESP32 unreachable', e));
+}
+function send(dev, val) {
+  fetch('/api/' + dev + '?on=' + val, { method: 'POST' })
+    .then(r =&gt; r.json())
+    .then(show);
+}
+refresh();
+setInterval(refresh, 1000);
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+)rawliteral";
+
+void setRelay(bool on) {
+  relayOn = on;
+  if (RELAY_ACTIVE_LOW) digitalWrite(RELAY_PIN, on ? LOW : HIGH);
+  else                  digitalWrite(RELAY_PIN, on ? HIGH : LOW);
+}
+
+String stateJson() {
+  String json = "{\"led\":";
+  json += ledOn ? "true" : "false";
+  json += ",\"relay\":";
+  json += relayOn ? "true" : "false";
+  json += ",\"pot\":";
+  json += analogRead(POT_PIN);              // a number from 0 to 4095
+  json += "}";
+  return json;                              // e.g. {"led":true,"relay":false,"pot":2048}
+}
+
+void handleRoot()  { server.send(200, "text/html; charset=utf-8", INDEX_HTML); }
+void handleState() { server.send(200, "application/json", stateJson()); }
+
+void handleLed() {
+  if (!server.hasArg("on")) { server.send(400, "text/plain", "missing ?on=0/1"); return; }
+  ledOn = (server.arg("on") == "1");
+  digitalWrite(LED_PIN, ledOn ? HIGH : LOW);
+  handleState();                            // send back the new state
+}
+
+void handleRelay() {
+  if (!server.hasArg("on")) { server.send(400, "text/plain", "missing ?on=0/1"); return; }
+  setRelay(server.arg("on") == "1");
+  handleState();
+}
+
+void handleNotFound() { server.send(404, "text/plain", "404: Not Found"); }
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  setRelay(false);                          // first thing: relay off
+  digitalWrite(LED_PIN, LOW);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting");
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - start &lt; 20000) {
+    delay(500);
+    Serial.print(".");
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nWiFi failed -&gt; restart in 5 s");
+    delay(5000);
+    ESP.restart();
+  }
+  Serial.print("\nOpen http://");
+  Serial.println(WiFi.localIP());
+
+  if (MDNS.begin("esp32")) {                // the name esp32.local
+    MDNS.addService("http", "tcp", 80);
+    Serial.println("or   http://esp32.local");
+  }
+
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/api/state", HTTP_GET, handleState);
+  server.on("/api/led", HTTP_POST, handleLed);
+  server.on("/api/relay", HTTP_POST, handleRelay);
+  server.onNotFound(handleNotFound);
+  server.begin();
+  Serial.println("HTTP server started");
+}
+
+void loop() {
+  server.handleClient();                    // "is anyone knocking?"
+  delay(2);                                 // a little breathing room for the rest of the system
+}
+</pre></div>
+<ol class="walk" data-for="codeWeb">
+  <li data-lines="1-3"><b class="what">Three built-in libraries.</b> <code>WiFi.h</code> for the network, <code>WebServer.h</code> for the web server, <code>ESPmDNS.h</code> for the name <code>esp32.local</code>. All three come with the ESP32 package.
+    <span class="why">A built-in library always matches your core version and needs no separate install; the best place to start.</span></li>
+  <li data-lines="5-11"><b class="what">Settings.</b> The network name and password (in Wokwi, that's <code>Wokwi-GUEST</code>), the three pins, and the fact that the relay is active-LOW.
+    <span class="why">If your module is active-HIGH, just change line 11 to <code>false</code>. (Remember that in a real project you should move the password into <code>secrets.h</code>, as in lesson 4.1.)</span></li>
+  <li data-lines="13"><b class="what">Creating the server.</b> <code>WebServer server(80);</code> creates a server object that waits for guests behind "door number 80".
+    <span class="why">80 is the default HTTP port, so users don't have to type it in the address. If you choose another port such as 8080, the address becomes <code>http://192.168.1.37:8080</code>.</span></li>
+  <li data-lines="14-15"><b class="what">Remembering the state.</b> Two variables that remember whether the LED and the relay are on right now.
+    <span class="why">The JSON response has to say what the current state is. Keeping it in a variable is simpler and more reliable than reading the pin, especially for the relay with its reversed logic.</span></li>
+  <li data-lines="17-18,72"><b class="what">A raw string literal.</b> <code>R"rawliteral(</code> starts and <code>)rawliteral"</code> ends a long piece of text in which <b>anything</b> is kept exactly as is: quotes, new lines, backslashes.
+    <span class="why">In a normal C++ string you have to write every <code>"</code> as <code>\"</code> and close every line separately; for a hundred lines of HTML full of quotes, that's a nightmare. The word <code>rawliteral</code> is just a "label" that marks the end of the text; any word would do, but it must be one that doesn't appear together with <code>)</code> and <code>"</code> in your HTML or JS. <code>PROGMEM</code> has no effect on the ESP32 (constants stay in flash anyway) and is only there for compatibility with ESP8266 and Arduino code.</span></li>
+  <li data-lines="19-32"><b class="what">The page header and styling (CSS).</b> <code>meta viewport</code> makes the page suitable for phones. Inside <code>&lt;style&gt;</code> we set the looks: each <code>.card</code> is a white card with rounded corners, the buttons are big, <code>.on</code> is green and <code>.off</code> is red.
+    <span class="why">Without viewport, the page shows up tiny on a phone. Big buttons (20 pixels) are easy to tap with a finger. We put the CSS inside the page itself so only one request is needed; the ESP32 shouldn't have to answer a separate request for every small file.</span></li>
+  <li data-lines="33-48"><b class="what">The page body.</b> Three cards: LED, relay and potentiometer. Each <code>&lt;span id="..."&gt;</code> is a named "blank" that JavaScript fills in later. <code>onclick="send('led', 1)"</code> means "on a click, call the <code>send</code> function with these two inputs". <code>&lt;progress&gt;</code> is a progress bar from 0 to 4095.
+    <span class="why">We deliberately wrote the page text in English so the code doesn't get scrambled in the editor (mixing Persian and English text on one line of code makes the words appear out of order). But other languages work perfectly well on the page itself, because we have <code>charset=utf-8</code>; if you want to write in a right-to-left language such as Persian, also add the <code>dir="rtl"</code> attribute to the <code>&lt;html&gt;</code> tag. The initial <code>?</code> shows that no data has arrived yet. If the page shows <code>?</code> forever, JavaScript couldn't talk to the ESP32: a troubleshooting clue.</span></li>
+  <li data-lines="50-55"><b class="what">The show function in JavaScript.</b> It takes a state object such as <code>{led:true, relay:false, pot:2048}</code> and updates the text in the three blanks and the value of the bar. <code>document.getElementById('led')</code> means "find the element whose id is led".
+    <span class="why">The display code lives in one function because it's called from two places: after each periodic update and after a button press. One piece of code, two uses.</span></li>
+  <li data-lines="56-61"><b class="what">The refresh function and fetch.</b> <code>fetch('/api/state')</code> sends a GET request to the ESP32 in the background, without leaving the page. <code>.then(r =&gt; r.json())</code> means "when the response arrives, turn the JSON text into an object". <code>.then(show)</code> means "then hand that object to show". <code>.catch</code> writes an error to the browser console if the ESP32 can't be reached.
+    <span class="why">fetch is "asynchronous": it sends the request and returns right away, so the browser doesn't freeze. The <code>.then</code> chain means "when it's ready, do this"; just like the Wi-Fi events in lesson 4.1. <code>r =&gt; r.json()</code> is a short function: "take r and return r.json()".</span></li>
+  <li data-lines="62-66"><b class="what">The send function.</b> Builds the address from pieces, so <code>'/api/' + 'led' + '?on=' + 1</code> becomes <code>/api/led?on=1</code>, and sends it with <code>method: 'POST'</code>. The ESP32 sends back the new state and show updates the page immediately.
+    <span class="why">Because the button's response is the new state itself, the user sees the result right away and doesn't have to wait for the next update (up to 1 second).</span></li>
+  <li data-lines="67-68"><b class="what">Start and repeat.</b> <code>refresh()</code> once at the very start, and <code>setInterval(refresh, 1000)</code> once every 1000 milliseconds.
+    <span class="why">This is "asking over and over" (polling), because the server can't come to the browser on its own (the restaurant example). One second is a good balance: almost live to the eye, and only one small request per second for the ESP32. If several phones open the page at the same time, don't go below 500.</span></li>
+  <li data-lines="74-78"><b class="what">setRelay: one place for the reversed logic.</b> If the relay is active-LOW, "on" means LOW and "off" means HIGH; otherwise the other way round.
+    <span class="why">If you repeat this logic in several places, sooner or later you'll get one of them wrong. One function, one source of truth.</span></li>
+  <li data-lines="80-89"><b class="what">Building the JSON.</b> We add the JSON text piece by piece to a <code>String</code> with <code>+=</code>. <code>\"</code> means a real quote inside the text. <code>analogRead(POT_PIN)</code> adds the number from 0 to 4095 directly.
+    <span class="why">For three values, building it by hand is the simplest way and needs no extra library. For larger data, the ArduinoJson library is better. Note that <code>true</code> and <code>false</code> have no quotes in JSON; if you add quotes, JavaScript treats the text <code>"false"</code> as "true"!</span></li>
+  <li data-lines="91-92"><b class="what">Two simple handlers.</b> <code>server.send(code, type, content)</code> sends the response. The home page with <code>text/html; charset=utf-8</code>, and the state with <code>application/json</code>.
+    <span class="why">Each path has its own function, like each counter in an office that handles just one job. <code>charset=utf-8</code> is required for non-English text (such as Persian) to display correctly.</span></li>
+  <li data-lines="94-99"><b class="what">handleLed: validate, act, respond.</b> First we check that the <code>on</code> parameter was sent (<code>hasArg</code>); if not, code 400. Then <code>server.arg("on")</code> gives the value as text, and we compare it with <code>"1"</code>. At the end we send back the new state with <code>handleState()</code>.
+    <span class="why">Never trust outside input: someone may type the address by hand and leave something out. Any value other than <code>"1"</code> means off, so strange input never switches anything on by mistake. <b>The safest default for an output is off.</b></span></li>
+  <li data-lines="101-105"><b class="what">handleRelay.</b> The same pattern, this time with <code>setRelay</code>.
+    <span class="why">Using the same pattern for every device means adding a third device is just copying a few lines.</span></li>
+  <li data-lines="107"><b class="what">The 404 page.</b> For every path we haven't defined (such as <code>/favicon.ico</code>).
+    <span class="why">Without it, the library still sends a plain 404, but writing it is a good habit, and later you can give a better message.</span></li>
+  <li data-lines="111-114"><b class="what">Pins and a safe starting state.</b> Both pins become outputs, and right away the relay and the LED are switched off.
+    <span class="why">In core 3.x, right after <code>pinMode(OUTPUT)</code> the pin is usually LOW; for an active-LOW relay that means "on". That's why the very next line switches it off. That gap lasts a few microseconds, and the relay's mechanical coil (which needs a few milliseconds to pull in) has no chance to react. (In core 3.x you can't write to a pin before pinMode; it only prints an error message.)</span></li>
+  <li data-lines="116-129"><b class="what">Connecting with a 20-second limit.</b> Like lesson 4.1. If it doesn't connect, instead of hanging we restart the board with <code>ESP.restart()</code> after 5 seconds.
+    <span class="why">A web server without a network is useless, so waiting in setup makes sense here; but not forever. The automatic restart means that after a power cut, if the board comes up before the router, it sorts itself out a few minutes later. <code>setAutoReconnect</code> covers later dropouts.</span></li>
+  <li data-lines="130-131"><b class="what">Printing the address.</b> We print the board's IP in full, with <code>http://</code>.
+    <span class="why">Copy it from the Serial Monitor and enter it in the browser on your phone or laptop; that device must be on the <b>same Wi-Fi</b>.</span></li>
+  <li data-lines="133-136"><b class="what">mDNS.</b> <code>MDNS.begin("esp32")</code> announces to the network "my name is esp32.local". <code>addService</code> adds that it has a web server on port 80.
+    <span class="why">With DHCP the IP may change, but the name stays the same. The name must be unique on the network; if you have two boards, name one <code>esp32-kitchen</code> and the other <code>esp32-garden</code>.</span></li>
+  <li data-lines="138-144"><b class="what">The route map (routing).</b> <code>server.on(path, type, function)</code> says "if a request of this type arrives at this path, call this function". Then <code>server.begin()</code> opens the door.
+    <span class="why">Because we set the type (<code>HTTP_GET</code> or <code>HTTP_POST</code>), if someone goes to <code>/api/led</code> with a GET, handleLed does <b>not</b> run and they get a 404; that's our "change only with POST" rule. All paths must be registered before <code>begin</code>.</span></li>
+  <li data-lines="147-150"><b class="what">loop: just check the door.</b> <code>server.handleClient()</code> checks whether a request has arrived; if so, it calls the function for that path. The small <code>delay(2)</code> gives the system's other tasks (such as Wi-Fi) a moment to breathe.
+    <span class="why">The WebServer library is "synchronous": requests are answered only when handleClient is called. So loop must never contain a long delay or a waiting loop; otherwise the page gets slow or shows a "timed out" error. If you have other work to do (such as reading a sensor), put it next to handleClient using the <code>millis()</code> pattern.</span></li>
+</ol>
+
+<h3>Upload and test</h3>
+<ol class="steps">
+  <li><b>Enter your own Wi-Fi name and password</b> on lines 5 and 6 and upload.</li>
+  <li>Open the <b>Serial Monitor</b> at 115200. You should see <code>Open http://192.168.1.37</code> (with your board's IP).</li>
+  <li><b>Connect your phone to the same Wi-Fi</b> (not mobile data!) and enter the address in the browser.</li>
+  <li><b>Try the buttons.</b> The LED should turn on and off, and on the relay module you should see the small LED and hear the "click".</li>
+  <li><b>Turn the potentiometer.</b> The number and the bar on the page should change within a second, without reloading.</li>
+  <li><b>The coach's test:</b> open the page on two devices at the same time. Switch the LED on from one; the other should show "ON" within a second. That means the truth lives in the ESP32, not in the page.</li>
+</ol>
+<div class="serial">Connecting.....
+Open http://192.168.1.37
+or   http://esp32.local
+HTTP server started</div>
+
+<div class="callout tip"><div class="ct">Test the API without the page, too</div>
+<p>In your laptop's browser, go to <code>http://192.168.1.37/api/state</code> to see the raw JSON. For a POST, type this in a terminal (Windows 10 and later, macOS and Linux): <code>curl -X POST "http://192.168.1.37/api/led?on=1"</code>. Being able to test each part on its own means that when something breaks, you know whether the problem is in the page or in the ESP32.</p></div>
+
+<div class="wokwi" data-board="esp32" data-code-from="codeWeb">
+<p>You can build the hardware side in Wokwi too: the LED on GPIO4, and instead of a relay module a blue LED wired from <b>3V3 to GPIO26</b>; this LED behaves exactly like an active-LOW relay (it lights on LOW). Watch the Serial Monitor: the board connects to <code>Wokwi-GUEST</code> and prints its IP (usually <code>10.10.0.2</code>).</p>
+<p><b>A limitation you should know about, honestly:</b> Wokwi's free Wi-Fi (the Public Gateway) only allows connections <b>from</b> the ESP32 to the internet, not connections <b>to</b> the ESP32. That means your browser can't open this web server's page, and the addresses <code>10.10.0.2</code> and <code>esp32.local</code> won't work in your browser. To see the page in Wokwi, you have to run the small <b>Wokwi IoT Gateway</b> program (the Private Gateway) on your computer, which is only available for <b>paid</b> Wokwi accounts; once you enable it (press F1 in the editor → Enable Private Wokwi IoT Gateway), the page opens at <code>http://localhost:9080</code>, because the gateway forwards your computer's port 9080 to port 80 on the simulated board (port forwarding). If you don't have a paid account, use Wokwi to check that the code compiles and connects, and view the page on a real board. <a href="https://docs.wokwi.com/guides/esp32-wifi" target="_blank" rel="noopener">Wokwi Wi-Fi documentation ↗</a></p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "red" } },
+    { "type": "wokwi-resistor", "id": "r2", "top": 110, "left": 260, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led2", "top": 30, "left": 290, "attrs": { "color": "blue", "label": "Relay" } },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": 200, "left": 180, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ],
+    [ "esp:3V3", "r2:1", "red", [] ],
+    [ "r2:2", "led2:A", "red", [] ],
+    [ "led2:C", "esp:26", "orange", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="mdns">mDNS: a name instead of a number</h2>
+<p>Remembering <code>192.168.1.37</code> is hard, and worse, DHCP might hand out a different number tomorrow. <b>mDNS</b> (Multicast DNS) solves this: the board announces on the local network, "Whoever is looking for <code>esp32.local</code>, that's me."</p>
+<div class="callout analogy"><div class="ct">An everyday example</div>
+<p>At a party, instead of memorizing someone's seat number, you call out their name and they raise their hand. mDNS is calling out a name on your home network. The <code>.local</code> ending means "look for it only on this network, not on the internet".</p></div>
+<ul>
+  <li><b>Windows 10 and 11, macOS, iPhone and Linux:</b> <code>http://esp32.local</code> usually works with no setup at all.</li>
+  <li><b>Android:</b> support depends on the Android version and the browser, and it doesn't work on many phones. On Android, use the IP.</li>
+  <li><b>A permanent fix for the IP:</b> on the router's settings page there's an option called <b>DHCP Reservation</b> or <b>Static Lease</b> that always gives your board's MAC the same IP. This is better than hard-coding a static IP in the ESP32 code, because it avoids IP conflicts.</li>
+</ul>
+
+<h2 id="security">Security: who can switch on your lights?</h2>
+<p>The program above has no password. That means <b>anyone connected to your home Wi-Fi</b> (a guest, a neighbor who knows the Wi-Fi password, an infected phone) can open the page and switch the relay. For an LED that doesn't matter; for a garage door it matters a lot.</p>
+<p>The simplest lock is <b>Basic Authentication</b>: the browser shows a username and password box. The WebServer library has this ready to use:</p>
+<div class="code" data-file="SmartHome_Auth (extra snippet)" id="codeAuth"><pre>
+const char* WEB_USER = "admin";
+const char* WEB_PASS = "Change-Me-2026";    // be sure to change this
+
+bool checkAuth() {
+  if (!server.authenticate(WEB_USER, WEB_PASS)) {
+    server.requestAuthentication();         // the browser shows the username and password box
+    return false;
+  }
+  return true;
+}
+
+void handleRoot() {
+  if (!checkAuth()) return;                 // the guard at the door
+  server.send(200, "text/html; charset=utf-8", INDEX_HTML);
+}
+// add this same first line to handleState, handleLed and handleRelay too
+</pre></div>
+<ol class="walk" data-for="codeAuth">
+  <li data-lines="1-2"><b class="what">Username and password.</b> Put these two below the <code>server</code> definition in the main program.
+    <span class="why">Be sure to change the password and move it into <code>secrets.h</code> as in lesson 4.1. A default password that's been published on the internet isn't a password.</span></li>
+  <li data-lines="4-10"><b class="what">The guard function.</b> <code>server.authenticate(user, pass)</code> checks whether the request carries the right password. If it doesn't, <code>requestAuthentication()</code> sends a 401 response so the browser shows the password box.
+    <span class="why">Once you've entered the password, the browser sends it by itself with later requests (including the fetch calls), so the page's JavaScript doesn't need any changes.</span></li>
+  <li data-lines="12-16"><b class="what">A guard at every door.</b> The first line of every handler: if there's no password, go back.
+    <span class="why">Forgetting even one path means leaving a back door open. The most dangerous paths (<code>/api/led</code> and <code>/api/relay</code>) matter more than the home page; someone can skip the page and send requests straight to the API.</span></li>
+</ol>
+<div class="callout warn"><div class="ct">Basic Auth is not encryption</div>
+<p>Over plain HTTP, the username and password are only "wrapped" in Base64, not encrypted. Anyone who eavesdrops on the network traffic can unwrap them in a second. Basic Auth keeps out a curious guest, not a hacker. Real encryption (HTTPS) is possible on the ESP32, but it's heavy and advanced.</p></div>
+
+<h3>Control from outside the house? Don't use port forwarding</h3>
+<p>You might want to reach the board from work too. Online you'll find tutorials telling you to set up "port forwarding" on your router so requests that reach your home's public IP get sent on to the ESP32. <b>Don't do it.</b></p>
+<ul>
+  <li>Automated bots scan every IP on the internet day and night and find an open port within a few hours.</li>
+  <li>The ESP32's simple WebServer isn't designed to face the internet directly, and the Basic Auth password travels unencrypted.</li>
+  <li>On many internet connections in Iran (especially mobile internet and some ADSL lines) you don't get your own public IP (CGNAT), so it isn't even possible.</li>
+</ul>
+<p>The right way is for the ESP32 to <b>connect out</b> to a trusted service on the internet by itself (instead of waiting for guests). That's exactly the topic of <a href="5-1.html">lesson 5.1: MQTT</a>.</p>
+
+<h2 id="async">An advanced option: ESPAsyncWebServer</h2>
+<p>In online tutorials you'll often see the <b>ESPAsyncWebServer</b> library. The main difference is that it's "asynchronous": you don't have to keep calling <code>handleClient()</code> in loop; requests are answered in a separate task as soon as they arrive.</p>
+<div class="table-wrap"><table>
+<tr><th></th><th>WebServer (built in, this lesson)</th><th>ESPAsyncWebServer</th></tr>
+<tr><td>Installation</td><td>None needed</td><td>Two libraries: itself and AsyncTCP</td></tr>
+<tr><td>How it works</td><td>Synchronous; loop must call handleClient</td><td>Asynchronous; loop is free</td></tr>
+<tr><td>Several users at once</td><td>Answers them one at a time</td><td>Copes better with several connections at once</td></tr>
+<tr><td>Features</td><td>The basics (pages, forms, Basic Auth)</td><td>WebSocket and SSE (sending data from the server without polling), serving files from memory, and more</td></tr>
+<tr><td>Pitfalls</td><td>Few</td><td>You must not put <code>delay</code> or long work in the handler functions; debugging is harder</td></tr>
+</table></div>
+<div class="callout warn"><div class="ct">Careful: which version you install</div>
+<p>The library's original repository (me-no-dev) and its later fork (mathieucarbou) were <b>archived</b> in January 2025 and are no longer updated. The currently maintained version lives in the <a href="https://github.com/ESP32Async/ESPAsyncWebServer" target="_blank" rel="noopener">ESP32Async</a> organization, together with <a href="https://github.com/ESP32Async/AsyncTCP" target="_blank" rel="noopener">AsyncTCP</a> from the same organization. The old versions have compile or stability problems with core 3.x. The coach's advice: until your project really needs WebSocket or lots of users, stick with the built-in WebServer.</p></div>
+
+<h2 id="video">Helpful video</h2>
+<div class="video" data-yt="_WqfNyE_pt8" data-title="ESP32 Servo Motor Web Server with Arduino IDE" data-channel="Random Nerd Tutorials" data-lang="English">
+  <div class="sum"><ul>
+    <li>This video is about controlling a servo (lesson 3.2) from a web page, but the structure is the same: the ESP32 sends an HTML page and the browser sends commands with HTTP requests. Focus on that part.</li>
+    <li>Notice how the slider value reaches the ESP32 inside the request address (like our <code>?on=1</code> parameter), and how the ESP32 pulls it out of the request.</li>
+    <li>Instead of the WebServer library, the video may show lower-level code that reads the request text line by line. Compare the two and see how much work the WebServer library takes off your hands.</li>
+    <li>The video predates core 3.x; for the servo part, keep in mind the differences in LEDC and the servo library covered in lesson 3.2.</li>
+  </ul></div>
+</div>
+
+<h2 id="debug">When it doesn't work: step-by-step troubleshooting</h2>
+<div class="table-wrap"><table>
+<tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+<tr><td>Browser: "This site can't be reached", or a long spinner</td><td>The phone isn't on the same Wi-Fi (for example it's on mobile data), or the IP is wrong</td><td>Check the phone's Wi-Fi. Turn off mobile data for a moment. Read the IP from the Serial Monitor again.</td></tr>
+<tr><td>It doesn't work on the phone but works on the laptop</td><td>The router's guest Wi-Fi or "AP isolation" is on, so devices can't see each other</td><td>Connect the phone to the main Wi-Fi (not the guest one) or turn off AP isolation on the router.</td></tr>
+<tr><td><code>esp32.local</code> won't open, but the IP works</td><td>Android or the network doesn't support mDNS</td><td>Use the IP, and set up a DHCP reservation on the router so it stays fixed.</td></tr>
+<tr><td>The page opens but shows only <code>?</code> instead of the states</td><td>The JavaScript has an error, or <code>/api/state</code> isn't answering</td><td>Open <code>/api/state</code> directly in the browser. On a laptop, press F12 and look for errors in the Console tab.</td></tr>
+<tr><td>Non-English text (such as Persian) on the page shows up as garbled characters</td><td><code>charset=utf-8</code> is missing</td><td>Use the type <code>"text/html; charset=utf-8"</code> both in the page's <code>meta</code> tag and in <code>server.send</code>.</td></tr>
+<tr><td>The potentiometer reading is always 0 or 4095, or doesn't move</td><td>The potentiometer is on an ADC2 pin, or the middle leg is wired wrong</td><td>Only GPIO32 to GPIO39 work with Wi-Fi. The <b>middle</b> leg must go to GPIO34.</td></tr>
+<tr><td>The relay never switches off</td><td>A 5 V module doesn't switch fully off with a 3.3 V HIGH</td><td>See the <a href="#relay">active-LOW</a> section; get a module that works with 3.3 V.</td></tr>
+<tr><td>The relay works backwards (switches off when you press "on")</td><td>The module is active-HIGH</td><td>Set <code>RELAY_ACTIVE_LOW</code> to <code>false</code>.</td></tr>
+<tr><td>The board resets when the relay clicks</td><td>A voltage dip or noise from the coil</td><td>A better USB cable, a 100 µF capacitor between the module's 5V and GND, and short wires.</td></tr>
+<tr><td>The page is slow and sometimes doesn't respond</td><td>There's a long <code>delay</code> in loop</td><td>loop must call <code>handleClient()</code> constantly; write the other work with <code>millis()</code>.</td></tr>
+<tr><td>A GET to <code>/api/led</code> gives a 404 error</td><td>Only POST is registered, on purpose</td><td>That's correct! Use the page's buttons or <code>curl -X POST</code>.</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">Coach's advice</div>
+<p>Write this lesson's two rules on a piece of paper and stick it above your desk. <b>First: the safest state is the default.</b> Any output that moves something or supplies power must be off at program start, after a reset, and when the input makes no sense. "It'll probably be fine" is the sentence said right before every accident. <b>Second: never trust any input from the network.</b> Any request may be incomplete, repeated, or from someone who shouldn't be sending it. Take these two seriously and you're already thinking like an engineer, not like someone who just copies code from the internet. And mains power at 220 V? The answer is simple: no, not yet.</p></div>
+
+<h2 id="quiz">Lesson quiz</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">Why does our page "ask" the ESP32 for the state every second with <code>fetch</code>, instead of the ESP32 announcing it by itself whenever the potentiometer changes?</p>
+  <ol><li data-why="The ESP32 is perfectly able to send data; the limitation is in the HTTP agreement.">Because the ESP32 can't send data</li><li>Because in HTTP the client (the browser) always makes the request and the server only answers</li><li data-why="fetch has nothing to do with the ESP32's battery use; the issue is the direction of the conversation.">Because fetch saves battery</li><li data-why="WebServer can send JSON just fine; that's exactly what we do in /api/state.">Because WebServer only sends HTML</li></ol>
+  <div class="fb">Like a restaurant waiter: until you order, nothing arrives. For the server to send on its own, you need WebSocket or SSE (in ESPAsyncWebServer) or MQTT (chapter 5).</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">You connected the potentiometer to GPIO25. It worked fine without Wi-Fi, but in this project it doesn't give sensible readings. Why?</p>
+  <ol><li data-why="GPIO25 is also a DAC output, but it can be an analog input too; the problem is elsewhere.">GPIO25 is output-only</li><li data-why="The ESP32's ADC is always 12-bit; Wi-Fi doesn't change the resolution.">Wi-Fi reduces the ADC resolution to 8 bits</li><li>GPIO25 is on ADC2, and while Wi-Fi is on, ADC2 belongs to the radio</li><li data-why="The potentiometer must be connected to 3V3, and the problem only appeared with Wi-Fi.">The potentiometer must be connected to 5V</li></ol>
+  <div class="fb">In Wi-Fi projects, use only ADC1 pins (GPIO32 to GPIO39) for analog.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">Your relay module is active-LOW. What must you send to the IN pin to switch the relay <b>on</b>?</p>
+  <ol><li><code>LOW</code></li><li data-why="With active-LOW, HIGH means off."><code>HIGH</code></li><li data-why="A relay is digital; PWM on its input makes no sense.">A PWM signal with 50% duty</li><li data-why="An ESP32 pin must not and cannot output 5 volts.">5 volts</li></ol>
+  <div class="fb">Active-LOW means "activated by LOW". That's why we wrote this logic only in the <code>setRelay</code> function.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">Why did we register switching the LED on with <code>HTTP_POST</code> in the code, and not <code>HTTP_GET</code>?</p>
+  <ol><li data-why="Both work at the same speed.">Because POST is faster</li><li data-why="POST on its own doesn't encrypt anything; encryption comes from HTTPS.">Because POST is encrypted</li><li data-why="WebServer supports both.">Because WebServer doesn't support GET</li><li>Because GET should be only for reading; browsers and link previews may open a GET by themselves, without you clicking</li></ol>
+  <div class="fb">Read with GET, change with POST. This rule prevents things from switching on unintentionally.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">In <code>R"rawliteral( ... )rawliteral"</code>, what role does the word <code>rawliteral</code> play?</p>
+  <ol><li data-why="It isn't a special name; any other word works too.">It's a special ESP32 command that compresses the HTML</li><li>It's just a label that marks the start and end of the raw text, so that a <code>)"</code> inside the HTML or JS doesn't end the text early</li><li data-why="PROGMEM does that on other boards, not this word.">It stores the text in flash memory</li><li data-why="A raw string doesn't run anything; it's just text.">It runs the JavaScript inside the text</li></ol>
+  <div class="fb">A C++ raw string has the form <code>R"label( ... )label"</code>. The label is up to you; it just must not appear in the text itself.</div>
+</div>
+
+<h2 id="practice">Exercises</h2>
+<div class="exercise"><div class="ct">Exercise 1: signal and uptime</div>
+<p>Add two more values to the JSON: <code>rssi</code> (signal strength) and <code>uptime</code> (how many seconds since the board powered up). Make a new card on the page to show them.</p>
+<details><summary>Hint</summary><p>Three places need to change: the <code>stateJson</code> function in C++, the HTML body (a card with two new <code>span</code> elements) and the <code>show</code> function in JavaScript. <code>millis() / 1000</code> gives you the seconds.</p></details>
+<details><summary>Answer</summary>
+<div class="code" data-file="SmartHome (changes)" id="codeEx2"><pre>
+// in stateJson, before the line json += "}";
+  json += ",\"rssi\":";
+  json += WiFi.RSSI();                      // e.g. -54
+  json += ",\"uptime\":";
+  json += millis() / 1000;                  // seconds since power-up
+
+// a new card in the HTML page:
+//   &lt;div class="card"&gt;&lt;h2&gt;RSSI: &lt;span id="rssi"&gt;?&lt;/span&gt; dBm, up: &lt;span id="up"&gt;?&lt;/span&gt; s&lt;/h2&gt;&lt;/div&gt;
+// and in the show function:
+//   document.getElementById('rssi').textContent = s.rssi;
+//   document.getElementById('up').textContent   = s.uptime;
+</pre></div>
+<ol class="walk" data-for="codeEx2">
+  <li data-lines="1-5"><b class="what">Two new "name:value" pairs in the JSON.</b> Each one starts with a comma, because they come after <code>"pot":...</code>. <code>WiFi.RSSI()</code> gives a negative number and <code>millis() / 1000</code> gives the seconds.
+    <span class="why">Where these lines go matters: they must come before the closing <code>"}"</code>, otherwise the JSON breaks and <code>r.json()</code> throws an error in the browser (the page stays stuck on <code>?</code>).</span></li>
+  <li data-lines="7-8"><b class="what">A new card in the HTML.</b> Two <code>span</code> elements with the ids <code>rssi</code> and <code>up</code>, which show <code>?</code> for now.
+    <span class="why">Put this line (without the leading <code>//</code>) inside the raw string, next to the other cards. The ids must match exactly the names used in the JavaScript.</span></li>
+  <li data-lines="9-11"><b class="what">Filling in the blanks in show.</b> <code>s.rssi</code> and <code>s.uptime</code> are the same names we used in the JSON.
+    <span class="why">Three parts of the code (C++, HTML, JS) have to agree with each other; a typo in any of them means <code>undefined</code> or <code>?</code> on the page.</span></li>
+</ol>
+</details>
+</div>
+<div class="exercise"><div class="ct">Exercise 2: an "all off" button</div>
+<p>Create a new path <code>/api/alloff</code> (POST only) that switches off both the LED and the relay, and add a big red "All off" button for it on the page.</p>
+<details><summary>Hint</summary><p>The function <code>handleAllOff()</code>: <code>ledOn = false; digitalWrite(LED_PIN, LOW); setRelay(false); handleState();</code>. In setup: <code>server.on("/api/alloff", HTTP_POST, handleAllOff);</code>. In JavaScript: <code>fetch('/api/alloff', {method:'POST'}).then(r =&gt; r.json()).then(show);</code></p></details>
+</div>
+<div class="exercise"><div class="ct">Exercise 3: a complete lock</div>
+<p>Add Basic Auth to <b>every</b> path (page, state, LED, relay). Then run two tests: (1) open the page in a private (incognito) browser window; the username and password box should appear. (2) In a terminal, without a password, type <code>curl -i -X POST "http://IP/api/led?on=1"</code>; the first line of the response should be <code>401 Unauthorized</code> and the LED should not turn on. Then try again with <code>curl -i -u admin:yourpassword -X POST ...</code> and you should get <code>200 OK</code>.</p>
+<details><summary>Hint</summary><p>The first line of every handler: <code>if (!checkAuth()) return;</code>. You don't need to lock the 404 path. If you forget to lock handleState, someone without the password can see the state of your home; does that matter? Think about it.</p></details>
+</div>
+
+<div class="callout info"><div class="ct">The lesson in three lines</div>
+<p>In HTTP the browser makes requests (GET to read, POST to change) and the ESP32 answers with a status code and content; the <code>WebServer</code> library connects each path to a function with <code>server.on</code>, and loop just calls <code>handleClient()</code>. The HTML page sits in a raw string <code>R"rawliteral(...)rawliteral"</code> and updates itself every second with <code>fetch</code> and JSON. Analog sensors only on ADC1, an active-LOW relay that starts switched off, a password with Basic Auth, and never port forwarding; for access from outside, MQTT in chapter 5.</p></div>
+
+</article>
+</body>
+</html>

@@ -1,0 +1,725 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wi-Fi: a stable connection with automatic reconnect · ESP32 Masterclass</title>
+<meta name="description" content="Networking from zero for beginners: IP, DHCP, SSID and 2.4 GHz; scanning for Wi-Fi, connecting with a timeout, automatic reconnect with events and millis, keeping your password out of the code, and getting Iran time over NTP on the ESP32 (core 3.x).">
+<link rel="alternate" hreflang="fa" href="../4-1.html"><link rel="alternate" hreflang="en" href="4-1.html">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="../assets/course.js"></script>
+<script defer src="../assets/glossary-en.js"></script>
+<script defer src="../assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="4-1">
+
+<p class="lede">Until now your ESP32 has been a lonely island: it could only talk to the world through wires. From this lesson on, your board joins your home network. But "getting connected" isn't the hard part. The hard part is <b>staying connected</b>: when the router restarts, the power blinks, or the signal gets weak, your program must not freeze. This lesson starts at "what is a network?" and ends with a professional, self-healing connection.</p>
+
+<div class="goals">
+  <div><h4>🎯 After this lesson you can</h4><ul>
+    <li>Explain what IP, DHCP, SSID, MAC and RSSI are and why they matter</li>
+    <li>Scan the Wi-Fi networks around you with the ESP32</li>
+    <li>Connect with a timeout and work out why it failed from the status code</li>
+    <li>Build a connection that comes back by itself after a dropout, without freezing your program</li>
+    <li>Keep your Wi-Fi password out of your code and get the exact Iran time from the internet</li>
+  </ul></div>
+  <div><h4>🧰 Prerequisites and parts</h4><ul>
+    <li>Lesson <a href="2-3.html">2.3</a> (Blink and the Serial Monitor) and lesson <a href="3-1.html">3.1</a> (<code>millis()</code>)</li>
+    <li>An ESP32 DevKitC board and a USB data cable</li>
+    <li>One LED and a 220 Ω resistor (for a network status light)</li>
+    <li>A router or a phone hotspot on the <b>2.4 GHz</b> band (or just Wokwi)</li>
+  </ul></div>
+</div>
+
+<h2 id="network">Networking from zero: the router, IP and DHCP</h2>
+<p>Before any code, you should know exactly what happens when we say "the ESP32 connected to Wi-Fi". Don't worry; it's only a handful of simple ideas.</p>
+
+<h3>What is a network?</h3>
+<p>A <b>network</b> is a group of devices that can send messages to each other. At home, your phone, laptop and TV are probably all on the same network. In the middle of that network sits a box we usually call "the modem". That box actually does two jobs:</p>
+<ul>
+  <li><b>Modem:</b> connects your phone line, fiber or SIM card to the internet. It is the part that talks to your internet provider (ISP).</li>
+  <li><b>Router:</b> builds the network inside your home, gives every device an address, and moves messages between the devices and the internet. The Wi-Fi antennas belong to this part.</li>
+</ul>
+<p>In most homes both jobs happen in one box (for example an ADSL/VDSL modem or a 4G modem). In this course, whenever we say "modem" or "router", we mean that box.</p>
+
+<div class="callout analogy"><div class="ct">An everyday example: an apartment building</div>
+<p>Picture your home network as an apartment building. The router is the <b>front-desk doorman</b>. Every apartment (every device) has an <b>apartment number</b> (its local IP address). To the outside world, the whole building has just one <b>street address</b> (the public IP). When a letter arrives from outside, it goes to the doorman, and the doorman knows which apartment it belongs to. The <b>fixed serial number on each apartment's door</b> is the MAC address: it never changes, even if the tenant moves to another apartment.</p></div>
+
+<h3>IP address: every device's apartment number</h3>
+<p>Every device on the network has an <b>IP address</b>: four numbers from 0 to 255 separated by dots, like <code>192.168.1.37</code>. Every message that travels on the network carries the sender's and receiver's addresses, just like an envelope.</p>
+<div class="table-wrap"><table>
+<tr><th>Type</th><th>Example</th><th>Where it means something</th><th>Who assigns it</th></tr>
+<tr><td><b>Local IP (Local / Private)</b></td><td><code>192.168.1.37</code> or <code>10.0.0.5</code></td><td>Only inside your home. Thousands of other homes have exactly the same number.</td><td>Your home router</td></tr>
+<tr><td><b>Public IP</b></td><td>For example <code>5.120.44.9</code></td><td>Across the whole internet. Every device in your home goes out to the internet with this one address.</td><td>Your internet provider (ISP)</td></tr>
+<tr><td><b>Gateway</b></td><td><code>192.168.1.1</code></td><td>The router's own IP on the local network: the exit door to the internet</td><td>Router settings</td></tr>
+</table></div>
+<p>Addresses that start with <code>192.168.</code> or <code>10.</code> or <code>172.16.</code> through <code>172.31.</code> are always <b>local</b>. This matters in the next lesson: when the ESP32 runs a web server, its address is local and can't be reached directly from outside your home.</p>
+
+<h3>DHCP: who hands out the apartment numbers?</h3>
+<p>You never told your phone to use the IP <code>192.168.1.23</code>. The router runs a service called <b>DHCP</b> that automatically "lends" a free IP to every device that joins. The loan has a time limit (say, 24 hours), which is why your board's IP might be slightly different tomorrow.</p>
+<div class="callout example"><div class="ct">With numbers: the four DHCP steps</div>
+<p>The ESP32 powers up and shouts: "Can anyone give me an IP?" (Discover). The router answers: "<code>192.168.1.37</code> is free" (Offer). The ESP32 says: "I'll take that one" (Request). The router confirms: "It's yours for 86400 seconds" (Ack). All of this usually takes less than a second. In our code, the moment this step finishes is the <code>GOT_IP</code> event.</p></div>
+
+<h3>SSID, password and MAC</h3>
+<ul>
+  <li><b>SSID</b> is the name of the Wi-Fi network; it's what you see in your phone's Wi-Fi list (for example <code>Irancell-TD-5G</code> or <code>Home</code>). It is case-sensitive: <code>Home</code> and <code>home</code> are two different networks.</li>
+  <li><b>Password:</b> on WPA2 networks it must be 8 to 63 characters long. The ESP32 compares it exactly, character by character.</li>
+  <li><b>MAC address</b> is a 6-byte ID written into the chip at the factory, like <code>24:0A:C4:12:34:56</code>. The router uses it to tell devices apart. Some routers only let in "allowed" MAC addresses (MAC filtering).</li>
+</ul>
+
+<h3>2.4 GHz: the biggest beginner trap</h3>
+<p>Wi-Fi works on two frequency "bands": <b>2.4 GHz</b> (longer range, lower speed, goes through walls better) and <b>5 GHz</b> (higher speed, shorter range). <b>The ESP32 supports only 2.4 GHz</b> (the 802.11 b/g/n standard). That means it doesn't see a 5 GHz network at all; it's not that it sees it and fails to connect.</p>
+<div class="callout warn"><div class="ct">Careful: 5 GHz networks don't show up in the ESP32's scan</div>
+<p>Many newer routers create two networks, for example <code>Home</code> and <code>Home_5G</code>. Always connect the ESP32 to the one without 5G. If your router broadcasts both bands under <b>one name</b> (band steering), it's usually fine and the ESP32 joins the 2.4 GHz part; but if the 2.4 GHz band is turned off in the router settings, the ESP32 will never connect. An iPhone hotspot also sometimes switches to 5 GHz; turn on the <b>Maximize Compatibility</b> option. (A rare exception: the new ESP32-C5 chip is dual-band, but this course's board is a regular ESP32.)</p></div>
+
+<h3>RSSI: signal strength as a number</h3>
+<p>RSSI is the received signal strength, measured in <b>dBm</b>. The numbers are <b>negative</b>, and <b>the closer to zero, the stronger</b>. So −45 is much better than −80. Every 3 dB means half or double the power, so the difference between −60 and −70 is much more than "a little": the power has dropped about 10 times.</p>
+<div class="table-wrap"><table>
+<tr><th>RSSI</th><th>Quality</th><th>In practice</th></tr>
+<tr><td><code>-30</code> to <code>-50</code></td><td>Excellent</td><td>The board is right next to the router. No problems at all.</td></tr>
+<tr><td><code>-50</code> to <code>-60</code></td><td>Good</td><td>Enough for any project.</td></tr>
+<tr><td><code>-60</code> to <code>-70</code></td><td>Fair</td><td>It works; sometimes slow or laggy.</td></tr>
+<tr><td><code>-70</code> to <code>-80</code></td><td>Weak</td><td>Occasional dropouts. Move the board.</td></tr>
+<tr><td>Below <code>-80</code></td><td>Almost unusable</td><td>The connection keeps dropping or never comes up.</td></tr>
+</table></div>
+
+<h2 id="modes">The ESP32's three Wi-Fi roles: STA, AP and AP+STA</h2>
+<p>The ESP32 can play three roles on Wi-Fi:</p>
+<ul>
+  <li><b>Station (STA):</b> joins your home router just like your phone does. It gets an IP from the router and has internet access. <b>90% of projects use this mode.</b></li>
+  <li><b>Access Point (AP):</b> the ESP32 creates its own Wi-Fi network. Your phone connects straight to the ESP32. There's no internet, but it's great for places with no router (a garden, a workshop) or for a first-time setup page. In this mode the ESP32's own default IP is <code>192.168.4.1</code>.</li>
+  <li><b>AP+STA:</b> both at once. It's connected to the router and has its own network at the same time. The WiFiManager library (further down) uses exactly this.</li>
+</ul>
+<pre class="mermaid">flowchart TB
+  subgraph S1["1) STA mode: station"]
+    direction LR
+    I1(("Internet")) --- R1["Home router&lt;br/&gt;192.168.1.1"]
+    R1 --- E1["ESP32&lt;br/&gt;192.168.1.37"]
+    R1 --- P1["Phone&lt;br/&gt;192.168.1.23"]
+  end
+  subgraph S2["2) AP mode: access point"]
+    direction LR
+    E2["ESP32&lt;br/&gt;192.168.4.1"] --- P2["Phone&lt;br/&gt;192.168.4.2"]
+  end
+  subgraph S3["3) AP+STA mode"]
+    direction LR
+    R3["Home router"] --- E3["ESP32&lt;br/&gt;both roles"] --- P3["Phone"]
+  end
+  S1 ~~~ S2 ~~~ S3</pre>
+<div class="callout why"><div class="ct">Why STA most of the time?</div>
+<p>In STA mode the ESP32 has internet access (time, MQTT, the cloud) and every device in the house can find it. In AP mode, anyone who wants to talk to the board has to leave their own Wi-Fi and join the ESP32's network, which means their phone loses internet. That's why AP is mostly used for "first-time setup" and for places without a router.</p></div>
+
+<p>This short program puts the ESP32 into AP mode so you can see how simple it is:</p>
+<div class="code" data-file="SoftAP.ino" id="codeAP"><pre>
+#include &lt;WiFi.h&gt;
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.mode(WIFI_AP);                              // Access Point only
+  bool ok = WiFi.softAP("ESP32-Setup", "12345678"); // name and password (at least 8 characters)
+  Serial.println(ok ? "AP started" : "AP failed");
+  Serial.print("AP IP: ");
+  Serial.println(WiFi.softAPIP());                 // usually 192.168.4.1
+}
+
+void loop() {
+  Serial.printf("Clients connected: %d\n", WiFi.softAPgetStationNum());
+  delay(3000);
+}
+</pre></div>
+<ol class="walk" data-for="codeAP">
+  <li data-lines="1"><b class="what">The WiFi library.</b> <code>WiFi.h</code> comes with the ESP32 package; you don't need to install anything from the Library Manager.
+    <span class="why">Everything Wi-Fi (STA, AP, scanning, events) is done with this one library and a ready-made object called <code>WiFi</code>.</span></li>
+  <li data-lines="5"><b class="what">WiFi.mode(WIFI_AP).</b> Sets the board's role to "access point only". The other options are <code>WIFI_STA</code> and <code>WIFI_AP_STA</code>.
+    <span class="why">Stating the role explicitly makes the behavior predictable. The ESP32 keeps its previous Wi-Fi settings in memory; if you don't set the role, it might start with the role left over from the last program.</span></li>
+  <li data-lines="6-7"><b class="what">WiFi.softAP(name, password).</b> Creates a network called <code>ESP32-Setup</code> with the password <code>12345678</code> and returns <code>true</code> if it succeeds.
+    <span class="why">A WPA2 password must be at least 8 characters. If you give a shorter one, softAP fails. Always print the result so you know when it fails.</span></li>
+  <li data-lines="8-9"><b class="what">WiFi.softAPIP().</b> The ESP32's own address on the network it created, usually <code>192.168.4.1</code>.
+    <span class="why">In this mode the ESP32 plays the router itself and runs DHCP too; your phone gets IPs like <code>192.168.4.2</code>.</span></li>
+  <li data-lines="12-15"><b class="what">Counting guests.</b> <code>softAPgetStationNum()</code> returns the number of connected devices. Join <code>ESP32-Setup</code> with your phone and watch the number go up.
+    <span class="why">A simple test that proves the network really works. By default the ESP32 allows at most 4 guests at the same time.</span></li>
+</ol>
+<p>From here on, this lesson works only with STA mode.</p>
+
+<h2 id="scan">Step 1: see which networks the ESP32 can see (Wi-Fi scanner)</h2>
+<p>Before connecting, it's smart to make sure the ESP32 can <b>see</b> your network at all. This program lists the networks around you every 10 seconds, just like opening the Wi-Fi list on your phone.</p>
+<div class="code" data-file="WiFiScan.ino" id="codeScan"><pre>
+#include &lt;WiFi.h&gt;                 // built-in Wi-Fi library (nothing to install)
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.mode(WIFI_STA);            // station mode (like a phone)
+  WiFi.disconnect();              // if it was connected somewhere, disconnect
+  delay(100);
+  Serial.print("My MAC address: ");
+  Serial.println(WiFi.macAddress());
+}
+
+void loop() {
+  Serial.println("Scanning...");
+  int n = WiFi.scanNetworks();    // takes about 2 to 4 seconds
+
+  if (n &lt;= 0) {
+    Serial.println("No networks found");
+  } else {
+    Serial.printf("%d networks found:\n", n);
+    for (int i = 0; i &lt; n; i++) {
+      Serial.printf("%2d | %-24s | %4d dBm | ch %2d | %s\n",
+                    i + 1,
+                    WiFi.SSID(i).c_str(),
+                    WiFi.RSSI(i),
+                    WiFi.channel(i),
+                    WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "open" : "locked");
+    }
+  }
+  WiFi.scanDelete();              // free the memory used by the scan results
+  Serial.println();
+  delay(10000);                   // scan again in 10 seconds
+}
+</pre></div>
+<ol class="walk" data-for="codeScan">
+  <li data-lines="5-7"><b class="what">STA mode, and drop any old connection.</b> To scan, the board must be in station mode. <code>WiFi.disconnect()</code> ends any earlier connection, and <code>delay(100)</code> gives the radio a moment to get ready.
+    <span class="why">If the board is in the middle of trying to connect, the scan may fail or return incomplete results. "Settle down first, then scan."</span></li>
+  <li data-lines="8-9"><b class="what">Print the MAC address.</b> <code>WiFi.macAddress()</code> returns the board's MAC address as text.
+    <span class="why">If your router uses MAC filtering, you'll need to add exactly this value in the router settings. It's a good idea to write it down right at the start.</span></li>
+  <li data-lines="14"><b class="what">WiFi.scanNetworks().</b> Sweeps the radio across all the 2.4 GHz channels and returns how many networks it found. Meanwhile (about 2 to 4 seconds) the program waits.
+    <span class="why">For a troubleshooting tool, waiting is fine. If a negative number comes back (−1 means still scanning, −2 means it failed), we treat it as "nothing found"; that's why the condition is <code>n &lt;= 0</code>, not <code>n == 0</code>.</span></li>
+  <li data-lines="20-26"><b class="what">Print each network on one line.</b> <code>Serial.printf</code> is like <code>print</code> but with a template: <code>%d</code> is a placeholder for a whole number, <code>%s</code> for text, and <code>%-24s</code> means "left-align the text in 24 columns". For each network we print its name (<code>SSID(i)</code>), signal strength (<code>RSSI(i)</code>), channel and whether it's locked.
+    <span class="why">A tidy table is much easier to read than jumbled lines. <code>.c_str()</code> is needed because <code>%s</code> wants C-style text, not a <code>String</code> object. The expression <code>condition ? a : b</code> is a short if: "open" if the network is open, otherwise "locked".</span></li>
+  <li data-lines="29"><b class="what">WiFi.scanDelete().</b> Frees the memory that held the scan results.
+    <span class="why">If you scan in an endless loop and never free that memory, it slowly fills up. Good habit: whatever you take, give back.</span></li>
+</ol>
+<p>The output on a real board looks something like this (in Wokwi you'll only see <code>Wokwi-GUEST</code>):</p>
+<div class="serial">My MAC address: 24:0A:C4:12:34:56
+Scanning...
+4 networks found:
+ 1 | Home                     |  -48 dBm | ch  6 | locked
+ 2 | Neighbor-WiFi            |  -71 dBm | ch 11 | locked
+ 3 | MobinNet-2G              |  -79 dBm | ch  1 | locked
+ 4 | Cafe-Free                |  -86 dBm | ch  6 | open</div>
+<div class="callout tip"><div class="ct">Your first troubleshooting test</div>
+<p>If your home network isn't in this list, no code will ever connect to it. The cause is almost always one of these: the network is 5 GHz, the SSID is hidden, or the board is too far away. Fix that first.</p></div>
+
+<h2 id="connect">Step 2: connecting with a timeout</h2>
+<p>The simplest connection code you'll find online is this: <code>while (WiFi.status() != WL_CONNECTED) delay(500);</code>. The problem? If the password is wrong, the board stays in that loop <b>forever</b> and doesn't say a word. We'll write a better version that waits at most 15 seconds and tells you why it failed.</p>
+<div class="code" data-file="WiFiConnect.ino" id="codeConnect"><pre>
+#include &lt;WiFi.h&gt;
+
+const char* WIFI_SSID = "Wokwi-GUEST";    // put your own network name here
+const char* WIFI_PASS = "";               // network password (empty for Wokwi)
+const unsigned long TIMEOUT_MS = 15000;   // wait at most 15 seconds
+
+// turns the status number into a readable name
+const char* statusName(wl_status_t s) {
+  switch (s) {
+    case WL_IDLE_STATUS:     return "IDLE (0)";
+    case WL_NO_SSID_AVAIL:   return "NO_SSID_AVAIL (1)";
+    case WL_CONNECTED:       return "CONNECTED (3)";
+    case WL_CONNECT_FAILED:  return "CONNECT_FAILED (4)";
+    case WL_CONNECTION_LOST: return "CONNECTION_LOST (5)";
+    case WL_DISCONNECTED:    return "DISCONNECTED (6)";
+    default:                 return "OTHER";
+  }
+}
+
+bool connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.printf("Connecting to %s", WIFI_SSID);
+
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    if (millis() - start &gt; TIMEOUT_MS) {            // timeout
+      Serial.printf("\nFailed! status = %s\n", statusName(WiFi.status()));
+      return false;
+    }
+    Serial.print(".");
+    delay(500);
+  }
+  Serial.println("\nConnected!");
+  return true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  if (connectWiFi()) {
+    Serial.print("IP address : "); Serial.println(WiFi.localIP());
+    Serial.print("Gateway    : "); Serial.println(WiFi.gatewayIP());
+    Serial.print("MAC address: "); Serial.println(WiFi.macAddress());
+    Serial.printf("RSSI       : %d dBm\n", WiFi.RSSI());
+  } else {
+    Serial.println("Check SSID, password, and that the network is 2.4 GHz");
+  }
+}
+
+void loop() {
+  static unsigned long last = 0;
+  if (millis() - last &gt;= 5000) {                    // every 5 seconds
+    last = millis();
+    Serial.printf("status=%s  RSSI=%d dBm\n", statusName(WiFi.status()), WiFi.RSSI());
+  }
+}
+</pre></div>
+<ol class="walk" data-for="codeConnect">
+  <li data-lines="3-5"><b class="what">Network name, password and timeout.</b> <code>const char*</code> means "a fixed piece of text". For Wokwi the name is <code>Wokwi-GUEST</code> and the password is empty; on a real board, write your own network's name and password. <code>unsigned long</code> is the right type for milliseconds.
+    <span class="why">Putting these at the top of the program means you don't have to hunt through the code to change networks. (A bit later you'll learn why it's better not to keep the password in this file at all.)</span></li>
+  <li data-lines="7-18"><b class="what">Turning the status code into a name.</b> <code>WiFi.status()</code> returns a number. This function uses a <code>switch</code> to turn that number into a readable name.
+    <span class="why">"status = 1" tells you nothing; "NO_SSID_AVAIL" means "no network with this name was found". A readable log means fast troubleshooting.</span></li>
+  <li data-lines="21-23"><b class="what">Start connecting.</b> <code>WiFi.mode(WIFI_STA)</code> selects the station role, and <code>WiFi.begin(name, password)</code> <b>starts</b> the connection attempt and returns right away.
+    <span class="why">Key point: <code>begin</code> does not wait for the connection to finish. Connecting carries on in the background, and we have to ask for the status. This is exactly what later lets us write a program that never freezes.</span></li>
+  <li data-lines="25-33"><b class="what">A waiting loop with a limit.</b> We store the start time in <code>start</code>. As long as we're not connected, we print a dot every 500 milliseconds; but if <code>millis() - start</code> goes over 15000, we leave with an error message and the value <code>false</code>.
+    <span class="why">This is the same <code>millis()</code> pattern from lesson 3.1. The dots show the program is alive. The timeout guarantees the board never silently hangs. 15 seconds is plenty: a normal connection usually takes 2 to 5 seconds.</span></li>
+  <li data-lines="40-47"><b class="what">Print the network details.</b> If it connected: the board's own IP (<code>localIP</code>), the router's IP (<code>gatewayIP</code>), the MAC and the signal strength (<code>RSSI</code>). If not, we print a short hint.
+    <span class="why">You'll need the IP in the next lesson to reach the board from a browser. RSSI is the first number to look at when a connection is unstable.</span></li>
+  <li data-lines="50-56"><b class="what">A non-blocking loop.</b> Prints the status and RSSI every 5 seconds. The word <code>static</code> means the variable <code>last</code> is set to zero only once and keeps its value between passes of loop.
+    <span class="why">With this log you can carry the board around the house and see where the signal gets weak: a free "signal meter".</span></li>
+</ol>
+<div class="serial">Connecting to Home.....
+Connected!
+IP address : 192.168.1.37
+Gateway    : 192.168.1.1
+MAC address: 24:0A:C4:12:34:56
+RSSI       : -52 dBm
+status=CONNECTED (3)  RSSI=-53 dBm</div>
+
+<h3>WiFi.status() codes</h3>
+<div class="table-wrap"><table>
+<tr><th>Number</th><th>Name</th><th>In plain words</th></tr>
+<tr><td>0</td><td><code>WL_IDLE_STATUS</code></td><td>Still trying; no result yet.</td></tr>
+<tr><td>1</td><td><code>WL_NO_SSID_AVAIL</code></td><td>No network with this name was found (wrong name, 5 GHz, or too far away).</td></tr>
+<tr><td>2</td><td><code>WL_SCAN_COMPLETED</code></td><td>A scan finished (this is about scanning, not connecting).</td></tr>
+<tr><td>3</td><td><code>WL_CONNECTED</code></td><td>Connected and has an IP. 🎉</td></tr>
+<tr><td>4</td><td><code>WL_CONNECT_FAILED</code></td><td>The connection failed (often a wrong password).</td></tr>
+<tr><td>5</td><td><code>WL_CONNECTION_LOST</code></td><td>It was connected, but the link was lost.</td></tr>
+<tr><td>6</td><td><code>WL_DISCONNECTED</code></td><td>Not connected (the general "off" state; you sometimes see this with a wrong password too).</td></tr>
+<tr><td>254</td><td><code>WL_STOPPED</code></td><td>The Wi-Fi radio is off (core 3.x).</td></tr>
+<tr><td>255</td><td><code>WL_NO_SHIELD</code></td><td>Wi-Fi hasn't been started yet; for example, <code>WiFi.mode</code> was never called.</td></tr>
+</table></div>
+<div class="callout warn"><div class="ct">The status code isn't always precise</div>
+<p>With a wrong password you sometimes see <code>WL_CONNECT_FAILED</code> and sometimes just <code>WL_DISCONNECTED</code>. The status code is a summary. For the exact cause, in the <a href="#robust">stable connection section</a> we read the "disconnect reason code" from the events, which tells you much more.</p></div>
+
+<div class="wokwi" data-board="esp32" data-code-from="codeConnect">
+<p>In Wokwi, open an empty ESP32 project, paste the code above and press ▶. Wokwi has a virtual Wi-Fi network called <b><code>Wokwi-GUEST</code></b> with no password that is connected to the real internet. In Wokwi the board usually gets the IP <code>10.10.0.2</code>. Speed tip: if you write <code>WiFi.begin(WIFI_SSID, WIFI_PASS, 6)</code> instead of <code>WiFi.begin(WIFI_SSID, WIFI_PASS)</code>, the scan step is skipped because Wokwi-GUEST is on channel 6, and you connect about 4 seconds sooner. This program has no external parts, so diagram.json is just the board.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="secrets">Get the Wi-Fi password out of your code (the secrets.h pattern)</h2>
+<p>So far we've written the password straight into the code. Now imagine you put the code on GitHub or send it to a friend on a messaging app so they can help you: your home Wi-Fi password goes along with it! The professional solution is to keep passwords in a separate file that is never published.</p>
+<div class="callout analogy"><div class="ct">An everyday example</div>
+<p>You can hand a cake recipe to anyone, but you don't tuck your house key inside the cookbook. The program code is the recipe, and <code>secrets.h</code> is the key you keep separately in your pocket.</p></div>
+<ol class="steps">
+  <li><b>Create a new file.</b> In the Arduino IDE, click the small ⋯ menu next to the tab names (top right of the editor) and choose <b>New Tab</b>. Name it exactly <code>secrets.h</code>. The file is saved next to your <code>.ino</code> file in the same folder.</li>
+  <li><b>Write your passwords in it:</b></li>
+</ol>
+<div class="code" data-file="secrets.h" id="codeSecrets"><pre>
+#pragma once
+// Passwords live only here. Never post this file on GitHub or in a group chat.
+#define WIFI_SSID "MyHomeWiFi"
+#define WIFI_PASS "my-strong-password"
+</pre></div>
+<ol class="walk" data-for="codeSecrets">
+  <li data-lines="1"><b class="what">#pragma once.</b> Tells the compiler to read this file only once, even if it gets included several times.
+    <span class="why">Without it, if two different files include <code>secrets.h</code>, you get a "redefinition" error.</span></li>
+  <li data-lines="3-4"><b class="what">#define.</b> Creates a "text substitution": wherever the compiler sees <code>WIFI_SSID</code>, it replaces it with <code>"MyHomeWiFi"</code>.
+    <span class="why">The simplest approach for constants that are defined only once. If your password contains a <code>"</code> or a <code>\</code>, you must put a <code>\</code> in front of it: for example, write the password <code>ab"c</code> as <code>"ab\"c"</code>.</span></li>
+</ol>
+<ol class="steps" start="3">
+  <li><b>In the main program</b>, write <code>#include "secrets.h"</code> (with double quotes, not <code>&lt;&gt;</code>; quotes mean "look for it in the project's own folder").</li>
+  <li><b>If you use Git,</b> create a <code>.gitignore</code> file in the project folder and put this line in it so Git never picks up <code>secrets.h</code>:</li>
+</ol>
+<div class="code" data-file=".gitignore" data-lang="text" id="codeIgnore"><pre>
+secrets.h
+</pre></div>
+<ol class="walk" data-for="codeIgnore">
+  <li data-lines="1"><b class="what">The name of a file that must not be published.</b> Git ignores every file whose name is listed in <code>.gitignore</code>.
+    <span class="why">So that others know which file to create, people usually publish a sample copy called <code>secrets_example.h</code> with made-up values (below).</span></li>
+</ol>
+<div class="code" data-file="secrets_example.h" id="codeSecEx"><pre>
+#pragma once
+// This is the sample copy and goes on GitHub; the real values live in secrets.h
+#define WIFI_SSID "YOUR_WIFI_NAME"
+#define WIFI_PASS "YOUR_WIFI_PASSWORD"
+</pre></div>
+<ol class="walk" data-for="codeSecEx">
+  <li data-lines="3-4"><b class="what">Made-up values.</b> Anyone who downloads the project copies this file, renames it to <code>secrets.h</code> and fills in their own password.
+    <span class="why">The project stays buildable for everyone, and nobody's password leaks.</span></li>
+</ol>
+<div class="callout warn"><div class="ct">The password isn't hidden on the board itself</div>
+<p><code>secrets.h</code> only stops the password from leaking through the <b>source code</b>. The password is still inside the compiled program in the board's flash, and anyone who has the board in their hands can read it (unless you use Flash Encryption, which is an advanced topic). So don't leave the board lying around in a public place.</p></div>
+
+<h3>WiFiManager: set up Wi-Fi from your phone (a quick intro)</h3>
+<p>If you build a device and give it to someone else, they can't write their home Wi-Fi password into the code and upload it again. The <a href="https://github.com/tzapu/WiFiManager" target="_blank" rel="noopener">WiFiManager</a> library solves this (in the Library Manager, search for <code>WiFiManager</code>, and among the several results with similar names install exactly <b>WiFiManager by tzapu</b>, version 2.0.17 or newer; it needs no other dependencies). If the board can't connect, it opens a network in AP mode; the user joins it with their phone, a settings page opens automatically (a captive portal, like hotel Wi-Fi), they pick the network and type the password, and the board saves them in its own memory.</p>
+<div class="code" data-file="WiFiManager_Basic.ino" id="codeWM"><pre>
+#include &lt;WiFiManager.h&gt;              // the tzapu/WiFiManager library
+
+void setup() {
+  Serial.begin(115200);
+  WiFiManager wm;
+  wm.setConfigPortalTimeout(180);     // wait at most 3 minutes for setup
+  // if the saved password works, it connects directly;
+  // otherwise it creates a Wi-Fi network called ESP32-Setup and waits for setup from a phone
+  bool ok = wm.autoConnect("ESP32-Setup", "setup1234");
+  Serial.println(ok ? "Connected!" : "Config portal timed out");
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="codeWM">
+  <li data-lines="1,5"><b class="what">The library and the manager object.</b> <code>WiFiManager wm;</code> creates a Wi-Fi manager.
+    <span class="why">All the complicated work (AP, web page, saving the password) lives inside the library; you only write a few lines.</span></li>
+  <li data-lines="6"><b class="what">The portal timeout.</b> If nobody completes the setup within 180 seconds, <code>autoConnect</code> returns <code>false</code>.
+    <span class="why">Without this line the board waits for setup forever: exactly the kind of "freezing" we're fighting in this lesson.</span></li>
+  <li data-lines="7-10"><b class="what">autoConnect.</b> First it tries the saved password; if that fails, it creates the <code>ESP32-Setup</code> network with the password <code>setup1234</code>. Join it with your phone; if the page doesn't open by itself, go to <code>192.168.4.1</code> in your browser.
+    <span class="why">This is the AP+STA mode you saw above, in action.</span></li>
+</ol>
+
+<h2 id="robust">Step 3: a stable connection with automatic reconnect</h2>
+<p>Now for the most important part of the lesson. In the real world, Wi-Fi <b>drops</b>: the router restarts at night, the power goes out and comes back, someone turns on the microwave (microwave ovens also work at 2.4 GHz!). A good program has three qualities:</p>
+<ol>
+  <li><b>It never waits for Wi-Fi.</b> If the board has buttons, sensors or motors besides Wi-Fi, they must keep working even while the network is down.</li>
+  <li><b>It comes back by itself.</b> No manual reset needed.</li>
+  <li><b>It tells you what happened.</b> It prints the reason for the dropout.</li>
+</ol>
+
+<div class="callout analogy"><div class="ct">An everyday example: a doorbell instead of checking the door over and over</div>
+<p>Say you're waiting for the mail carrier. The bad way: open the door every 10 seconds to check whether they've arrived, and do nothing else in the meantime. The good way: get on with your work and react when the <b>doorbell</b> rings. Wi-Fi "events" are that doorbell: whenever something happens (connected, got an IP, disconnected), the Wi-Fi library calls the function you registered.</p></div>
+
+<h3>Our three tools</h3>
+<ul>
+  <li><b><code>WiFi.setAutoReconnect(true)</code>:</b> tells the library itself to try again if the connection drops. (It's on by default in core 3.x; we write it out anyway to be sure.)</li>
+  <li><b><code>WiFi.onEvent(function)</code>:</b> registers our function as the "doorbell".</li>
+  <li><b>A watchdog built with <code>millis()</code>:</b> if we still stay offline for a while despite all that, we give the reconnect a nudge ourselves every 10 seconds, without ever stopping loop.</li>
+</ul>
+
+<h3>Wiring diagram: a network status LED</h3>
+<p>We put an LED on GPIO4 so you can see the status even without the Serial Monitor: <b>steady on = connected</b>, <b>fast blinking = disconnected</b>. The wiring is exactly the same as in lesson 2.3.</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","first end (no polarity)"],["2","second end"]]},
+    {"id":"LED1","name":"Green or red LED","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−), short leg"]]}
+  ],
+  "wires":[["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>Network status light: GPIO4 → 220 Ω resistor → LED → GND. The current is about 6 mA.</figcaption></div>
+
+<p>The program below needs the <code>secrets.h</code> file you created above:</p>
+<div class="code" data-file="RobustWiFi.ino" id="codeRobust"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;time.h&gt;
+#include "secrets.h"                          // WIFI_SSID and WIFI_PASS live here
+
+const int LED_PIN = 4;                        // network status LED
+const unsigned long RETRY_MS = 10000;         // one manual retry every 10 seconds
+const char* TZ_IRAN = "&lt;+0330&gt;-3:30";         // Iran time, no daylight saving
+
+volatile bool wifiUp = false;                 // do we have an IP right now?
+unsigned long lastRetry = 0, lastBlink = 0, lastPrint = 0;
+bool ledState = false;
+
+// the Wi-Fi library itself calls this function whenever something happens
+void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+  switch (event) {
+    case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+      Serial.println("[WiFi] Linked to router, waiting for IP...");
+      break;
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      wifiUp = true;
+      Serial.print("[WiFi] Got IP: ");
+      Serial.println(IPAddress(info.got_ip.ip_info.ip.addr));
+      break;
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      wifiUp = false;
+      Serial.printf("[WiFi] Disconnected, reason %d (%s)\n",
+                    info.wifi_sta_disconnected.reason,
+                    WiFi.disconnectReasonName((wifi_err_reason_t)info.wifi_sta_disconnected.reason));
+      break;
+    default:
+      break;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+
+  WiFi.onEvent(onWiFiEvent);                  // register before begin
+  WiFi.setHostname("esp32-lab");              // the board's name in the router's list
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);                // reconnect by itself after a dropout
+  WiFi.begin(WIFI_SSID, WIFI_PASS);           // we don't wait!
+  Serial.println("[WiFi] Connecting in background...");
+
+  configTzTime(TZ_IRAN, "pool.ntp.org", "time.google.com");
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  // 1) watchdog: if we're still offline, give a small nudge every 10 seconds
+  if (!wifiUp &amp;&amp; now - lastRetry &gt;= RETRY_MS) {
+    lastRetry = now;
+    Serial.println("[WiFi] Still offline -&gt; reconnect()");
+    WiFi.disconnect();
+    WiFi.reconnect();
+  }
+
+  // 2) LED: connected = steady on, disconnected = fast blink
+  if (wifiUp) {
+    ledState = true;
+  } else if (now - lastBlink &gt;= 200) {
+    lastBlink = now;
+    ledState = !ledState;
+  }
+  digitalWrite(LED_PIN, ledState ? HIGH : LOW);
+
+  // 3) print the time and signal strength every 5 seconds
+  if (now - lastPrint &gt;= 5000) {
+    lastPrint = now;
+    struct tm t;
+    if (getLocalTime(&amp;t, 10)) {               // wait at most 10 milliseconds
+      char buf[24];
+      strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &amp;t);
+      Serial.printf("[Time] %s  RSSI %d dBm\n", buf, WiFi.RSSI());
+    } else {
+      Serial.println("[Time] not synced yet");
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="codeRobust">
+  <li data-lines="1-3"><b class="what">Three includes.</b> <code>WiFi.h</code> for the network, <code>time.h</code> for working with time and date (the standard C library), and our own <code>secrets.h</code> for the name and password.
+    <span class="why">Because <code>WIFI_SSID</code> and <code>WIFI_PASS</code> are now defined in <code>secrets.h</code>, there's no password in this file anymore. You can publish this file without worrying.</span></li>
+  <li data-lines="5-7"><b class="what">Constants.</b> The LED pin, the retry interval (10 seconds) and the Iran time zone string, which we explain in detail further down.
+    <span class="why">10 seconds is a good balance: short enough to reconnect soon after the router comes back, long enough not to wear out the router (and ourselves) with back-to-back attempts.</span></li>
+  <li data-lines="9-11"><b class="what">State variables.</b> <code>wifiUp</code> says whether we have an IP right now. The word <code>volatile</code> tells the compiler "this variable may be changed from somewhere else, so really read it from memory every time".
+    <span class="why">The event function runs in a <b>task</b> (a separate thread of execution) apart from loop. <code>volatile</code> prevents loop from keeping a stale copy of the value in the processor's registers and missing the change.</span></li>
+  <li data-lines="14-15,30-33"><b class="what">The event function.</b> In core 3.x its signature is exactly <code>(WiFiEvent_t event, WiFiEventInfo_t info)</code>. <code>event</code> says what happened and <code>info</code> holds the details. With a <code>switch</code> we react to only the three important events and ignore the rest (<code>default</code>).
+    <span class="why">The library has dozens of events (scan started, AP started, and so on). You don't need to know them all; these three are enough for a station.</span></li>
+  <li data-lines="16-18"><b class="what">STA_CONNECTED.</b> The ESP32 has "shaken hands" with the router and the password was accepted, but it doesn't have an IP yet.
+    <span class="why">The difference between CONNECTED and GOT_IP matters: without an IP you can't send any message yet. If you see this line but GOT_IP never comes, the problem is the router's DHCP, not the password.</span></li>
+  <li data-lines="19-23"><b class="what">STA_GOT_IP: now we're really online.</b> We set <code>wifiUp</code> to true and print the IP from inside <code>info</code>. <code>IPAddress(...)</code> turns the raw number into the familiar <code>192.168.1.37</code> form.
+    <span class="why">We tie "being online" to GOT_IP, not to CONNECTED, because only from this moment can data be sent.</span></li>
+  <li data-lines="24-29"><b class="what">STA_DISCONNECTED: we got cut off.</b> We set <code>wifiUp</code> to false and print the reason code (<code>reason</code>) and its name (<code>disconnectReasonName</code>).
+    <span class="why">The reason code is the most valuable troubleshooting information you have (table below). On purpose, we don't call <code>WiFi.begin</code> or <code>delay</code> here: the event function must finish quickly, and calling Wi-Fi functions from inside it has caused strange behavior in reports to Espressif. We leave the heavy work to loop.</span></li>
+  <li data-lines="39"><b class="what">Registering the doorbell.</b> <code>WiFi.onEvent(onWiFiEvent)</code> hands our function to the library. This happens <b>before</b> <code>begin</code>.
+    <span class="why">If you register it after begin, the connection might come up so fast that you miss the GOT_IP event, and <code>wifiUp</code> stays false forever.</span></li>
+  <li data-lines="40-43"><b class="what">Hostname, mode, auto-reconnect and start.</b> <code>setHostname</code> is the name you see in the router's device list. <code>setAutoReconnect(true)</code> turns on automatic retries. <code>begin</code> <b>starts</b> connecting and the program carries on without waiting.
+    <span class="why">Instead of "esp32-A1B2C3" you see "esp32-lab" in the router's list and can find your device easily. The hostname must be set before <code>mode</code> and <code>begin</code>, otherwise it isn't applied. And more importantly: there's no waiting loop in setup; the board enters loop within the first second.</span></li>
+  <li data-lines="46"><b class="what">Starting NTP.</b> <code>configTzTime</code> sets the time zone and two time servers. From then on the ESP32 fetches the time from the internet by itself, in the background (as soon as the connection is up), and re-syncs once every hour.
+    <span class="why">We call it after <code>WiFi.mode</code> so the network stack (TCP/IP) is already running. We give two servers so that if one doesn't answer, the other does. Full explanation in the <a href="#ntp">NTP section</a>.</span></li>
+  <li data-lines="52-58"><b class="what">The watchdog.</b> If we're offline and 10 seconds have passed since the last attempt, we call <code>disconnect()</code> and then <code>reconnect()</code>. Both functions return immediately.
+    <span class="why">Auto-reconnect is enough in most cases, but in some situations (for example a router that has been off for a long time) the library gives up trying. This watchdog guarantees the board never stays offline "forever". Because it only runs once every 10 seconds, loop still spins freely thousands of times per second.</span></li>
+  <li data-lines="60-67"><b class="what">A status LED without delay.</b> Connected: the LED is steady on. Disconnected: the LED flips every 200 milliseconds (2.5 blinks per second).
+    <span class="why">This part proves loop never freezes: even while the network is down, the steady blinking carries on. If there were a long delay or a waiting loop anywhere in the program, the blinking would stop. We keep track of <code>ledState</code> ourselves instead of reading the pin back; that's simpler and more reliable.</span></li>
+  <li data-lines="69-80"><b class="what">Printing the time every 5 seconds.</b> <code>getLocalTime(&amp;t, 10)</code> fills the <code>t</code> structure with the current time. The 10 means "wait at most 10 milliseconds". <code>strftime</code> turns the time into text using the pattern <code>%Y-%m-%d %H:%M:%S</code>.
+    <span class="why">By default <code>getLocalTime</code> waits up to 5000 milliseconds, which means that when there's no internet, loop freezes for 5 seconds every time and the LED stops blinking! With the 10 we removed that trap. If the time hasn't synced yet, it returns <code>false</code> and we print "not synced yet".</span></li>
+</ol>
+<p>Output on a real board when you switch the router off and back on in the middle:</p>
+<div class="serial">[WiFi] Connecting in background...
+[WiFi] Linked to router, waiting for IP...
+[WiFi] Got IP: 192.168.1.37
+[Time] 2026-09-23 14:05:12  RSSI -54 dBm
+[WiFi] Disconnected, reason 200 (BEACON_TIMEOUT)
+[WiFi] Disconnected, reason 201 (NO_AP_FOUND)
+[WiFi] Still offline -> reconnect()
+[WiFi] Disconnected, reason 201 (NO_AP_FOUND)
+[Time] 2026-09-23 14:05:32  RSSI 0 dBm
+[WiFi] Linked to router, waiting for IP...
+[WiFi] Got IP: 192.168.1.37</div>
+<p>Notice: even while the internet is down, the clock keeps going. After the first sync, the ESP32 keeps the time running with its own internal timer. (An RSSI of zero means "we're not connected, there's no number".)</p>
+
+<h3>The disconnect reason codes you'll see most</h3>
+<div class="table-wrap"><table>
+<tr><th>Code</th><th>Name</th><th>Usually means</th></tr>
+<tr><td>2</td><td><code>AUTH_EXPIRE</code></td><td>Authentication expired; often a weak signal or a busy router.</td></tr>
+<tr><td>8</td><td><code>ASSOC_LEAVE</code></td><td>The ESP32 left on its own (for example because we called <code>disconnect()</code>). Nothing to worry about.</td></tr>
+<tr><td>15</td><td><code>4WAY_HANDSHAKE_TIMEOUT</code></td><td>Almost always a <b>wrong password</b>.</td></tr>
+<tr><td>200</td><td><code>BEACON_TIMEOUT</code></td><td>The router can't be heard anymore: it was switched off or the signal is very weak.</td></tr>
+<tr><td>201</td><td><code>NO_AP_FOUND</code></td><td>No network with this name was found (wrong name, 5 GHz, router off).</td></tr>
+<tr><td>202</td><td><code>AUTH_FAIL</code></td><td>Authentication was rejected; wrong password or MAC filtering.</td></tr>
+<tr><td>204</td><td><code>HANDSHAKE_TIMEOUT</code></td><td>Like 15; often a wrong password.</td></tr>
+<tr><td>210</td><td><code>NO_AP_FOUND_W_COMPATIBLE_SECURITY</code></td><td>The network is there, but its security type doesn't match the ESP32's settings (for example an old router using WEP or WPA).</td></tr>
+</table></div>
+<p>The full list is in the <a href="https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/wifi.html" target="_blank" rel="noopener">Wi-Fi guide of the ESP-IDF documentation</a>.</p>
+
+<div class="callout warn"><div class="ct">Careful: older tutorials use different names</div>
+<p>In very old tutorials (core version 1.x), the events had names like <code>SYSTEM_EVENT_STA_DISCONNECTED</code> and <code>SYSTEM_EVENT_STA_GOT_IP</code>, and the disconnect reason was read with <code>info.disconnected.reason</code>. From core 2.x the names changed to <code>ARDUINO_EVENT_WIFI_STA_...</code> and <code>info.wifi_sta_disconnected.reason</code>, and core 3.x (the current version) uses the same names. If old code won't compile, change these names first.</p></div>
+
+<div class="wokwi" data-board="esp32" data-code-from="codeRobust">
+<p>You can run this program in Wokwi too. It needs two extra steps: (1) in the Wokwi editor, click the arrow next to the tabs, choose <b>New file…</b> and name it <code>secrets.h</code>; fill it in like the sample above, but with <code>"Wokwi-GUEST"</code> for the name and <code>""</code> for the password. (2) Replace diagram.json with the one below, which has an LED on GPIO4. After a few seconds the LED goes steady and the Tehran time is printed in the Serial Monitor. You can't test a Wi-Fi dropout in Wokwi; try that on a real board by switching off the router.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "green" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="ntp">Exact time from the internet: NTP and the Iran time zone</h2>
+<p>The ESP32 has no battery-backed clock. Every time it powers up, it thinks it's 1970! But when it's online, it can ask <b>NTP servers</b> (Network Time Protocol) for the exact world time. <code>pool.ntp.org</code> is a free, worldwide pool of thousands of time servers.</p>
+<div class="callout analogy"><div class="ct">An everyday example</div>
+<p>It's like setting your wristwatch by the time announcement on the radio. The radio announces <b>Greenwich</b> time (UTC), and you have to know how far ahead Tehran is. NTP is the radio, and the "time zone" is knowing that difference.</p></div>
+<p>Iran is <b>3 hours 30 minutes ahead of UTC</b>. Important: Iran permanently dropped daylight saving time in <b>September 2022 (Shahrivar 1401)</b>, and since then it stays on UTC+3:30 all year round. So our time zone string has no daylight-saving rule at all:</p>
+<div class="table-wrap"><table>
+<tr><th>Part of the string <code>&lt;+0330&gt;-3:30</code></th><th>Meaning</th></tr>
+<tr><td><code>&lt;+0330&gt;</code></td><td>The short name of the zone (for display only). In the POSIX format, a name that contains digits or signs must be inside <code>&lt; &gt;</code>.</td></tr>
+<tr><td><code>-3:30</code></td><td>The offset from UTC. <b>The sign is reversed!</b> In the POSIX format it means "how much you must <b>add</b> to local time to get UTC". Tehran is 3:30 ahead, so you have to <b>subtract</b> 3:30: <code>-3:30</code>.</td></tr>
+<tr><td>(nothing else)</td><td>Because there's no daylight saving time, the second part (like <code>,M3.4.2/0,...</code> in older code) doesn't exist.</td></tr>
+</table></div>
+<div class="callout warn"><div class="ct">Careful: old Iran time zone strings are wrong</div>
+<p>In tutorials from before 2022 you'll see strings like <code>IRST-3:30IRDT,...</code> that include daylight saving time. If you use them, your board's clock will be one hour ahead during the first half of the Iranian year. There's another way too: <code>configTime(12600, 0, "pool.ntp.org");</code>, where 12600 seconds is 3.5 × 3600 and the zero means no daylight saving. The result is the same, but the <code>configTzTime</code> version is easier to read.</p></div>
+<div class="callout why"><div class="ct">Why does exact time matter?</div>
+<p>To timestamp sensor readings (logging temperature to an SD card), to switch on the yard light at exactly 7 p.m., and so that the logs and messages you send to the internet in chapter 5 (MQTT, HTTP) carry the real time. One subtle point: on many devices and libraries, a secure connection (HTTPS or MQTT over TLS) checks the certificate's validity dates against the device's clock and fails without the correct time. In Arduino-ESP32 core 3.3, <code>WiFiClientSecure</code> does <b>not</b> check the certificate dates by default, so the connection works even without NTP; still, make getting the time a habit, because other libraries and chips may be stricter, and a log without timestamps is useless for troubleshooting. (HTTPS details are in <a href="5-4.html#api">lesson 5.4</a>.)</p></div>
+
+<h2 id="power">Enough power: why does the board reset when Wi-Fi turns on?</h2>
+<p>The Wi-Fi radio draws a lot of current while transmitting: up to about <b>250 mA</b> in short pulses, while without Wi-Fi about 40 to 50 mA is enough. If the power supply is weak (a thin, long USB cable, an unpowered USB hub port, a cheap power bank), the 3.3 V rail dips for a moment (you saw the power path from USB to the regulator in <a href="1-4.html#power">lesson 1.4</a>), and a built-in protection circuit (the <span class="term" data-t="Brownout">Brownout Detector</span>) resets the board to prevent erratic behavior.</p>
+<div class="serial">Brownout detector was triggered
+
+ets Jun  8 2016 00:22:57
+rst:0xc (SW_CPU_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)</div>
+<div class="callout example"><div class="ct">With numbers</div>
+<p>A cheap 1.5 m USB cable can have about 1 Ω of total resistance (there and back). At 0.25 A: <code>V = I × R = 0.25 × 1 = 0.25V</code> of drop. So the port's 5 V arrives as 4.75 V, plus the regulator's own drop; and if the computer's port is weak to begin with, that's enough to push the voltage below the safe limit for a moment.</p></div>
+<ul>
+  <li>Use a <b>short, thick cable</b> and a USB port directly on the computer, or a 5 V charger rated 1 A or more.</li>
+  <li>An <b>electrolytic capacitor of 100 to 470 µF</b> between 3V3 and GND close to the board acts like a small reservoir and covers the brief dips (the capacitor's negative leg goes to GND).</li>
+  <li>In an emergency you can lower the transmit power: <code>WiFi.setTxPower(WIFI_POWER_8_5dBm);</code> after <code>WiFi.begin</code>. The Wi-Fi range gets shorter, but the current drops too.</li>
+  <li><b>Never</b> turn off the Brownout Detector in code (code you'll see on some forums). That's like pulling the fuse out of your house's fuse box: it hides the problem, and at low voltage the board starts behaving in strange and damaging ways.</li>
+</ul>
+
+<h2 id="video">Helpful video</h2>
+<div class="video" data-yt="VnfX9YJbaU8" data-title="WiFiManager with ESP32 - Stop Hard-coding WiFi Credentials!" data-channel="DroneBot Workshop" data-lang="English">
+  <div class="sum"><ul>
+    <li>This video is about the same WiFiManager library we introduced in the <a href="#secrets">secrets.h</a> section. Notice how the "configuration portal" opens on the phone, and which mode (AP or STA) the ESP32 is in at that moment.</li>
+    <li>Watch how the presenter erases the saved password to test the portal again; you'll need to do this in your own exercise.</li>
+    <li>The video may have been recorded with an older core; if a function or event name differs from this lesson, this lesson and core 3.x are what count.</li>
+  </ul></div>
+</div>
+
+<h2 id="debug">When it won't connect: step-by-step troubleshooting</h2>
+<div class="table-wrap"><table>
+<tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+<tr><td>The network isn't in the scan, <code>NO_SSID_AVAIL</code> or reason 201</td><td>The network is 5 GHz</td><td>Connect to the router's 2.4 GHz network (usually the name without 5G). Make sure the 2.4 GHz band is enabled in the router settings. iPhone hotspot: turn on Maximize Compatibility.</td></tr>
+<tr><td>The network isn't in the scan, but your phone is connected to it</td><td>The SSID is hidden</td><td>A scan doesn't show hidden networks, but <code>WiFi.begin</code> with the <b>exact</b> name (with correct upper and lower case) usually connects. If it doesn't, turn off the hidden setting temporarily.</td></tr>
+<tr><td>Reason 15, 202 or 204; status 4 or 6</td><td>Wrong password</td><td>Check the password character by character. An extra space at the end, upper vs lower case, and the characters <code>"</code> or <code>\</code> (they must be written with a <code>\</code> in front) are the most common mistakes.</td></tr>
+<tr><td>The network name is in Persian or has an emoji, and it won't connect</td><td>Special characters in the SSID or password</td><td>The ESP32 compares byte by byte, and your code file may have saved the characters with a different encoding. The safest way: use only English letters and digits in the SSID and password.</td></tr>
+<tr><td>RSSI below −75 and constant dropouts (reason 200 or 2)</td><td>Weak signal</td><td>Move the board closer to the router, don't put it inside a metal box, and keep the board's PCB antenna (the end of the board) away from wires and metal. For long distances, use a board with an external antenna (IPEX) or a Wi-Fi extender.</td></tr>
+<tr><td>The password is right, but you get AUTH_FAIL (202)</td><td>MAC filtering on the router</td><td>Read the board's MAC with the scanner above and add it to the allowed list on the router's settings page (usually <code>192.168.1.1</code>).</td></tr>
+<tr><td>Reason 210 with an old router</td><td>The router uses old WEP or WPA; core 3.x requires at least WPA2 by default</td><td>Best fix: set the router's security to WPA2. If you can't, write <code>WiFi.setMinSecurity(WIFI_AUTH_WEP);</code> before <code>begin</code>.</td></tr>
+<tr><td>It connects, but GOT_IP never arrives</td><td>The router's DHCP is full or turned off</td><td>Restart the router; in the router settings, raise the number of devices DHCP may serve.</td></tr>
+<tr><td>University or hotel Wi-Fi with a login page</td><td>Captive portal</td><td>The ESP32 can't type a username into that page. Use your phone's hotspot.</td></tr>
+<tr><td><code>Brownout detector was triggered</code> and constant resets</td><td>Weak power when the radio turns on</td><td>See the <a href="#power">enough power</a> section: a better cable, a capacitor, or lower transmit power.</td></tr>
+<tr><td>The clock is off by one hour</td><td>An old time zone string with daylight saving time</td><td>Use <code>"&lt;+0330&gt;-3:30"</code>.</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">Coach's advice</div>
+<p>From this lesson on, every program that uses Wi-Fi has to pass one test: <b>"Switch off the router in the middle."</b> If your program froze, its buttons stopped responding, or it didn't come back on its own after the router was switched back on, that program is unfinished, even if it has worked fine on your desk for months. In a real home, the router will restart; it's not a question of "if" but "when". And one more rule: never write a <code>while</code> loop without a timeout for Wi-Fi. Every waiting loop you don't write is a bug you'll never have.</p></div>
+
+<h2 id="quiz">Lesson quiz</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">Your router has two networks: <code>Home</code> and <code>Home_5G</code>. The ESP32 scanner shows only <code>Home</code>. Why?</p>
+  <ol><li data-why="The scanner shows password-protected networks too (labeled locked).">The Home_5G network has a password</li><li>The ESP32 supports only the 2.4 GHz band and doesn't see 5 GHz networks at all</li><li data-why="5 GHz does have a shorter range, but distance isn't the problem here; the ESP32 doesn't have that band at all.">Home_5G is too far away</li><li data-why="scanNetworks returns every network it can see; it isn't limited to one.">The scanner shows only one network</li></ol>
+  <div class="fb">The ESP32's radio is 802.11 b/g/n on 2.4 GHz only. Always connect it to the router's 2.4 GHz network.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">Your board's IP is <code>192.168.1.37</code>. A friend in another city types this address into their browser. What happens?</p>
+  <ol><li data-why="This is a local address; on the internet it doesn't point to your home.">Your board's page opens for them</li><li data-why="A local IP has nothing to do with your internet provider; your home router assigned it.">They reach your internet provider</li><li data-why="Your home router never even receives their messages; they aren't on your network.">Your home router asks them for a password</li><li>It never reaches your board; <code>192.168.x.x</code> addresses are local and only mean something inside each home's own network</li></ol>
+  <div class="fb">A local IP is like an apartment number: "apartment 37" exists in every building. From outside, only the public IP is visible.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">Why did the <code>STA_DISCONNECTED</code> event function only set a variable to false, instead of calling <code>WiFi.begin</code> right there?</p>
+  <ol><li data-why="begin can be called from other functions too; the problem is where it's called from.">Because WiFi.begin is allowed only once in the whole program</li><li data-why="The compiler gives no error; the problem shows up at run time.">Because it won't compile</li><li>Because the event function runs in a separate task and must finish quickly; we leave the heavy work to loop and the millis watchdog</li><li data-why="setAutoReconnect helps, but the main reason is that the event function is no place for heavy work.">Because setAutoReconnect does everything and the watchdog isn't needed</li></ol>
+  <div class="fb">The event function is like a doorbell: it just announces. The main program makes the decisions and does the work.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">Which is the correct Iran time zone string for <code>configTzTime</code> in core 3.x?</p>
+  <ol><li><code>"&lt;+0330&gt;-3:30"</code></li><li data-why="The sign is reversed in the POSIX format; +3:30 means 3:30 behind UTC."><code>"&lt;+0330&gt;+3:30"</code></li><li data-why="Iran has had no daylight saving time since 2022; this string has a daylight-saving rule."><code>"IRST-3:30IRDT,J79/24,J263/24"</code></li><li data-why="That's Greenwich time, not Tehran."><code>"UTC0"</code></li></ol>
+  <div class="fb">An offset 3:30 ahead of UTC, with the reversed POSIX sign, and no daylight-saving part.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">Your board's RSSI is <code>-83 dBm</code> and the connection keeps dropping. What is the best first step?</p>
+  <ol><li data-why="The password has nothing to do with signal strength; with a wrong password it wouldn't connect at all.">Change the Wi-Fi password</li><li>Move the board closer to the router or remove metal obstacles</li><li data-why="RETRY_MS only changes how often it retries; more attempts don't make a weak signal stronger.">Set RETRY_MS to 1 second</li><li data-why="Lowering the transmit power makes the signal weaker, not stronger.">Lower WiFi.setTxPower</li></ol>
+  <div class="fb">Below −80 is almost unusable. Fix the physical problem (distance, obstacles, antenna) first.</div>
+</div>
+
+<h2 id="practice">Exercises</h2>
+<div class="exercise"><div class="ct">Exercise 1: an LED signal meter</div>
+<p>Change the <code>WiFiConnect</code> program so that, once connected, the blink speed of the LED on GPIO4 depends on the signal strength: RSSI better than −60 → steady on; between −60 and −75 → slow blink (every 500 milliseconds); worse than −75 → fast blink (every 100 milliseconds). No delay.</p>
+<details><summary>Hint</summary><p>In loop, read the RSSI and use if to choose an <code>interval</code> variable. Then use the same <code>now - lastBlink &gt;= interval</code> pattern from lesson 3.1. Remember that RSSI is negative: "better than −60" means <code>rssi &gt; -60</code>.</p></details>
+<details><summary>Answer</summary>
+<div class="code" data-file="SignalMeter_loop.ino" id="codeEx1"><pre>
+// at the top of the program:  const int LED_PIN = 4;   and in setup:  pinMode(LED_PIN, OUTPUT);
+void loop() {
+  static unsigned long lastBlink = 0;
+  static bool ledState = false;
+  int rssi = WiFi.RSSI();                 // returns 0 when not connected
+
+  if (WiFi.status() == WL_CONNECTED &amp;&amp; rssi &gt; -60) {
+    ledState = true;                      // good signal: steady on
+  } else {
+    unsigned long interval = (rssi &gt; -75 &amp;&amp; rssi != 0) ? 500 : 100;
+    if (millis() - lastBlink &gt;= interval) {
+      lastBlink = millis();
+      ledState = !ledState;
+    }
+  }
+  digitalWrite(LED_PIN, ledState ? HIGH : LOW);
+}
+</pre></div>
+<ol class="walk" data-for="codeEx1">
+  <li data-lines="1"><b class="what">A note about the rest of the program.</b> This is only loop; the includes, <code>connectWiFi</code> and setup stay the same as in the <code>WiFiConnect</code> program, and only these two lines are added to it.
+    <span class="why">In the exercises we write only the part that changes, so the real change doesn't get lost.</span></li>
+  <li data-lines="3-5"><b class="what">The LED's memory and reading RSSI.</b> <code>static</code> means the value is kept between passes of loop.
+    <span class="why">We read RSSI once per pass and use that same number in every condition; like "read the clock once" in lesson 3.1.</span></li>
+  <li data-lines="7-8"><b class="what">Good signal: steady on.</b> Only if we really are connected <b>and</b> RSSI is better than −60.
+    <span class="why">Checking <code>WL_CONNECTED</code> is needed because RSSI is zero while disconnected, and zero is "bigger" than −60; without it, being disconnected would be mistaken for "excellent signal".</span></li>
+  <li data-lines="9-15"><b class="what">Slow or fast blinking.</b> Between −60 and −75 the interval is 500 ms; worse than that, or disconnected, 100 ms; then the same millis pattern.
+    <span class="why"><code>rssi != 0</code> sends the disconnected state into the "fast" group, so one look at the LED tells you something is seriously wrong.</span></li>
+  <li data-lines="16"><b class="what">Writing to the pin.</b> Once, at the end of loop.
+    <span class="why">Decide in several branches, write in one place: the code is tidier and bugs are easier to find.</span></li>
+</ol>
+</details>
+</div>
+<div class="exercise"><div class="ct">Exercise 2: an outage log</div>
+<p>Add two things to the <code>RobustWiFi</code> program: (a) a counter that goes up by one every time Wi-Fi drops, and (b) every time it gets an IP again, print "back after X seconds". Then switch the router off and on twice and watch the output.</p>
+<details><summary>Hint</summary><p>In the DISCONNECTED event, increase the counter only while <code>wifiUp</code> is still true, and store the time in <code>downSince = millis()</code>; that's because while the router is off, the DISCONNECTED event repeats over and over. In GOT_IP, print the difference <code>millis() - downSince</code>. Declare these variables volatile too.</p></details>
+</div>
+<div class="exercise"><div class="ct">Exercise 3: two roles at once (AP+STA)</div>
+<p>Write a program that both connects to your home router and creates its own network called <code>ESP32-Lab</code>. Print both IPs. Join <code>ESP32-Lab</code> with your phone and see what IP you get.</p>
+<details><summary>Hint</summary><p><code>WiFi.mode(WIFI_AP_STA)</code>, then <code>WiFi.softAP(...)</code> and <code>WiFi.begin(...)</code>. The station IP comes from <code>WiFi.localIP()</code> and the access point IP from <code>WiFi.softAPIP()</code>. Note: in this mode the AP's channel has to match the router's channel, because the ESP32 has only one radio.</p></details>
+</div>
+
+<div class="callout info"><div class="ct">The lesson in three lines</div>
+<p>The ESP32 sees only 2.4 GHz Wi-Fi, gets a local IP from the router through DHCP, and needs an RSSI better than −70 for stable operation. <code>WiFi.begin</code> only starts connecting; with <code>onEvent</code> (GOT_IP and DISCONNECTED), <code>setAutoReconnect</code> and a <code>millis()</code> watchdog you build a connection that never locks up loop. Keep your password in <code>secrets.h</code> and get Iran time with <code>configTzTime("&lt;+0330&gt;-3:30", ...)</code>.</p></div>
+
+</article>
+</body>
+</html>
