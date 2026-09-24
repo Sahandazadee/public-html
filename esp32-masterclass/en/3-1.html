@@ -1,0 +1,1031 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Digital and analog input and output: buttons, potentiometers, LDRs · ESP32 Masterclass</title>
+<meta name="description" content="Reading a button with a pull-up and debouncing, timing with millis, interrupts, analog reading with the ESP32's 12-bit ADC, a potentiometer, and building an automatic night light with an LDR; line by line for absolute beginners.">
+<link rel="alternate" hreflang="fa" href="../3-1.html"><link rel="alternate" hreflang="en" href="3-1.html">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="../assets/course.js"></script>
+<script defer src="../assets/glossary-en.js"></script>
+<script defer src="../assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="3-1">
+
+<p class="lede">So far the ESP32 has only been "talking": turning an LED on and off. In this lesson you teach it to "listen": to tell whether a button is pressed, where a potentiometer's knob is turned, and how bright the room is. Along the way you fully learn three key ideas you'll need in every project that follows: the pull-up resistor, non-blocking timing with <code>millis()</code>, and reading voltages with the ADC.</p>
+
+<div class="goals">
+  <div><h4>🎯 After this lesson you can</h4><ul>
+    <li>Wire a button correctly and know why you see crazy numbers without a pull-up</li>
+    <li>Remove button bounce with <code>millis()</code> and toggle an LED on or off with each press</li>
+    <li>Do several things at once without <code>delay</code></li>
+    <li>Read a voltage with <code>analogRead</code> and <code>analogReadMilliVolts</code> and know the ADC's limits</li>
+    <li>Build an automatic night light with an LDR and hysteresis</li>
+  </ul></div>
+  <div><h4>🧰 Prerequisites and parts</h4><ul>
+    <li>Lesson <a href="2-3.html">2.3</a> (blinking an LED and the Serial Monitor)</li>
+    <li>An ESP32 DevKitC board, a breadboard and jumper wires</li>
+    <li>One 4-pin tactile push button, 6 or 12 mm</li>
+    <li>One LED + a 220 Ω resistor, and one 10 kΩ resistor (brown, black, orange)</li>
+    <li>One 10 kΩ potentiometer and one LDR light-dependent resistor (for example a GL5528)</li>
+  </ul></div>
+</div>
+
+<div class="gallery">
+  <figure><div class="frame"><img src="../assets/img/button.svg" alt="A four-pin push button"></div><figcaption>4-pin tactile push button<span class="src">Image: Fritzing, CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="../assets/img/pot.svg" alt="A three-pin potentiometer"></div><figcaption>10 kΩ potentiometer<span class="src">Image: Fritzing, CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="../assets/img/ldr.svg" alt="An LDR light-dependent resistor"></div><figcaption>Light-dependent resistor (LDR)<span class="src">Image: Fritzing, CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="../assets/img/resistor.svg" alt="A resistor"></div><figcaption>10 kΩ and 220 Ω resistors<span class="src">Image: Fritzing, CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="../assets/img/led.svg" alt="An LED"></div><figcaption>LED (long leg = anode)<span class="src">Image: Fritzing, CC BY-SA 3.0</span></figcaption></figure>
+</div>
+
+<h2 id="digital-vs-analog">Digital and analog: two ways of "listening"</h2>
+<p>When a GPIO pin is an input, it "reads" the voltage on itself. There are two kinds of reading:</p>
+<ul>
+  <li><b>Digital:</b> only two answers are possible: <code>HIGH</code> (high voltage, close to 3.3 V) or <code>LOW</code> (close to zero). Like a yes/no question: "Is the button pressed?"</li>
+  <li><b>Analog:</b> the answer is a number in a range, for example 0 to 4095. Like a "how much?" question: "How far is the knob turned? How bright is it?"</li>
+</ul>
+<div class="callout analogy"><div class="ct">An everyday example</div>
+<p>The light switch in your room is digital: it's either on or off. The volume knob on a radio is analog: it can sit anywhere between zero and maximum. The first half of this lesson is about the "switch", and the second half is about the "volume knob".</p></div>
+
+<div class="callout why"><div class="ct">How does the ESP32 decide between HIGH and LOW?</div>
+<p>Inside the pin there's a comparator circuit. If the voltage is above roughly 75% of the supply voltage (about 2.5 V or more) it reads HIGH, and if it's below roughly 25% (about 0.8 V or less) it reads LOW. In between is a "gray zone" where the answer can't be trusted. The goal of everything you learn next is to make sure the pin <b>never</b> sits in the gray zone.</p></div>
+
+<h2 id="button">The 4-pin push button: what's going on inside?</h2>
+<p>Small tactile buttons have four legs but only <b>two</b> electrical connections. Each pair of legs that face each other along the same long side of the body is always connected. Pressing the button connects these two pairs together.</p>
+
+<figure><div class="frame"><svg viewBox="0 0 640 300" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="Internal structure of a four-pin button">
+  <rect x="170" y="60" width="180" height="180" rx="14" fill="#e9edf3" stroke="#6b7280" stroke-width="2"/>
+  <circle cx="260" cy="150" r="46" fill="#cfd6e2" stroke="#6b7280" stroke-width="2"/>
+  <!-- legs -->
+  <rect x="130" y="80" width="40" height="14" fill="#b8bec9"/><rect x="350" y="80" width="40" height="14" fill="#b8bec9"/>
+  <rect x="130" y="206" width="40" height="14" fill="#b8bec9"/><rect x="350" y="206" width="40" height="14" fill="#b8bec9"/>
+  <text x="112" y="92" font-size="14" font-weight="700" text-anchor="end" fill="#152033">1</text>
+  <text x="408" y="92" font-size="14" font-weight="700" fill="#152033">2</text>
+  <text x="112" y="218" font-size="14" font-weight="700" text-anchor="end" fill="#152033">3</text>
+  <text x="408" y="218" font-size="14" font-weight="700" fill="#152033">4</text>
+  <!-- internal fixed connections -->
+  <line x1="150" y1="87" x2="370" y2="87" stroke="#d6453d" stroke-width="4"/>
+  <line x1="150" y1="213" x2="370" y2="213" stroke="#2563eb" stroke-width="4"/>
+  <!-- switch -->
+  <line x1="260" y1="87" x2="260" y2="128" stroke="#152033" stroke-width="3"/>
+  <line x1="260" y1="172" x2="260" y2="213" stroke="#152033" stroke-width="3"/>
+  <line x1="260" y1="172" x2="290" y2="132" stroke="#152033" stroke-width="3"/>
+  <circle cx="260" cy="128" r="4" fill="#152033"/><circle cx="260" cy="172" r="4" fill="#152033"/>
+  <text x="440" y="120" font-size="14" fill="#d6453d">1 &amp; 2: always connected</text>
+  <text x="440" y="236" font-size="14" fill="#2563eb">3 &amp; 4: always connected</text>
+  <text x="440" y="178" font-size="14" fill="#152033">Press = top joins bottom</text>
+  <text x="260" y="40" font-size="14" font-weight="700" text-anchor="middle" fill="#152033">Top view</text>
+  <text x="260" y="280" font-size="13" text-anchor="middle" fill="#4d5b70">Safest: always use two diagonal legs (e.g. 1 and 4)</text>
+</svg></div>
+<figcaption>Inside a 4-pin button. The legs that are farther apart on the body (1 and 2) are really one single point. If you use diagonal legs (1 and 4, or 2 and 3), it doesn't matter which way you turned the button; it always works.</figcaption></figure>
+
+<div class="callout tip"><div class="ct">Test it with a multimeter</div>
+<p>If you're not sure which legs are connected, set your multimeter to continuity (beep) mode. Two legs that beep without pressing are permanently connected. Two legs that beep only while you press are the switch.</p></div>
+
+<h2 id="floating">The floating pin problem: our first deliberately broken experiment</h2>
+<p>The simplest idea that comes to mind is this: connect one side of the button to 3V3 and the other to GPIO27. Press the button, 3.3 V reaches the pin, and we read HIGH. Release it, and... what? The pin is connected to <b>nothing</b>! This is called "floating", and we're doing this experiment on purpose so you can see with your own eyes why you shouldn't do it.</p>
+
+<div class="code" data-file="Floating_Demo.ino" id="c1"><pre>
+// Floating pin experiment: button with no pull resistor (deliberately wrong!)
+const int BUTTON_PIN = 27;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT);          // plain input, no internal resistor
+}
+
+void loop() {
+  int state = digitalRead(BUTTON_PIN); // answer: 0 or 1
+  Serial.println(state);
+  delay(100);
+}
+</pre></div>
+<ol class="walk" data-for="c1">
+  <li data-lines="2"><b class="what">The button's pin number.</b> We chose GPIO27.
+    <span class="why">GPIO27 is one of the safe pins (it isn't a strapping pin and isn't wired to the flash), and it can be both an input and an output.</span></li>
+  <li data-lines="6"><b class="what">pinMode(pin, INPUT).</b> Makes the pin a plain input; the ESP32 only "looks at" the voltage and connects no internal resistor.
+    <span class="why">We chose the plain mode on purpose so you can see the floating problem. Shortly we'll fix it with a single word.</span></li>
+  <li data-lines="10"><b class="what">digitalRead(pin).</b> Reads the pin's voltage and returns <code>1</code> (HIGH) or <code>0</code> (LOW).
+    <span class="why">We store the answer in an <code>int</code> variable so we can print it or make decisions with it.</span></li>
+  <li data-lines="11-12"><b class="what">Print and a short pause.</b> One number is printed every 100 milliseconds.
+    <span class="why">100 milliseconds is fast enough to see the changes and slow enough not to flood the Serial Monitor.</span></li>
+</ol>
+<p>Put the button between 3V3 and GPIO27 (the same wiring as "method 1" a little further down, but <b>without</b> the 10 kΩ resistor), upload the code and open the Serial Monitor at <code>115200</code>. Without pressing the button, <b>bring your finger close to the GPIO27 wire, or touch it</b>. You'll probably see something like this:</p>
+<div class="serial">0
+0
+1
+1
+0
+1
+0
+0
+1</div>
+<p>You haven't pressed the button, yet the number keeps changing! A floating pin is like a tiny antenna: the electric charge on your body, the 50 Hz mains wiring in the wall and even nearby wires all affect it. The ESP32's input has a very high resistance, so the tiniest bit of charge is enough to push its voltage up and down.</p>
+
+<div class="callout analogy"><div class="ct">Example: a flag on a pole</div>
+<p>A floating pin is like a flag that isn't tied to its pole: every breeze blows it in some direction. A pull resistor is like a spring that always pulls the flag toward one default side; only when your hand (the button) pulls it does it go the other way.</p></div>
+
+<div class="callout warn"><div class="ct">You won't see this experiment in Wokwi</div>
+<p>The simulator is a perfect, noise-free world and may show a floating pin as perfectly steady. This is exactly one of the places where real hardware teaches you something the simulator can't. If you have a real board, definitely try this experiment.</p></div>
+
+<h2 id="pull">The fix: pull-up and pull-down resistors</h2>
+<p>The fix is to "tie" the pin to a known voltage through a fairly large resistor (usually 10 kΩ):</p>
+<ul>
+  <li><b>Pull-down:</b> a resistor from the pin to <b>GND</b>. Normal (released) state = LOW. The button sits between the pin and 3V3; pressed = HIGH.</li>
+  <li><b>Pull-up:</b> a resistor from the pin to <b>3V3</b>. Normal (released) state = HIGH. The button sits between the pin and GND; pressed = LOW.</li>
+</ul>
+
+<figure><div class="frame"><svg viewBox="0 0 700 330" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="Pull-down and pull-up circuits compared">
+  <text x="170" y="28" font-size="16" font-weight="800" text-anchor="middle" fill="#152033">Pull-down</text>
+  <text x="530" y="28" font-size="16" font-weight="800" text-anchor="middle" fill="#152033">Pull-up</text>
+  <line x1="350" y1="40" x2="350" y2="310" stroke="#dbe2ec" stroke-width="2"/>
+  <!-- pull-down -->
+  <text x="170" y="58" font-size="13" text-anchor="middle" fill="#d6453d" font-weight="700">3V3</text>
+  <line x1="170" y1="64" x2="170" y2="100" stroke="#d6453d" stroke-width="3"/>
+  <line x1="170" y1="100" x2="195" y2="130" stroke="#152033" stroke-width="3"/>
+  <line x1="170" y1="140" x2="170" y2="160" stroke="#152033" stroke-width="3"/>
+  <text x="205" y="124" font-size="13" fill="#152033">button</text>
+  <line x1="170" y1="160" x2="60" y2="160" stroke="#2563eb" stroke-width="3"/>
+  <circle cx="170" cy="160" r="5" fill="#152033"/>
+  <text x="55" y="165" font-size="13" text-anchor="end" fill="#2563eb" font-weight="700">GPIO27</text>
+  <line x1="170" y1="160" x2="170" y2="190" stroke="#152033" stroke-width="3"/>
+  <rect x="160" y="190" width="20" height="60" rx="3" fill="#f5deb3" stroke="#8b5a2b" stroke-width="2"/>
+  <text x="190" y="225" font-size="13" fill="#152033">10kΩ</text>
+  <line x1="170" y1="250" x2="170" y2="275" stroke="#222" stroke-width="3"/>
+  <line x1="150" y1="275" x2="190" y2="275" stroke="#222" stroke-width="3"/><line x1="158" y1="282" x2="182" y2="282" stroke="#222" stroke-width="3"/><line x1="166" y1="289" x2="174" y2="289" stroke="#222" stroke-width="3"/>
+  <text x="200" y="290" font-size="13" fill="#222">GND</text>
+  <text x="170" y="318" font-size="13" text-anchor="middle" fill="#4d5b70">released = LOW · pressed = HIGH</text>
+  <!-- pull-up -->
+  <text x="530" y="58" font-size="13" text-anchor="middle" fill="#d6453d" font-weight="700">3V3</text>
+  <line x1="530" y1="64" x2="530" y2="90" stroke="#d6453d" stroke-width="3"/>
+  <rect x="520" y="90" width="20" height="60" rx="3" fill="#f5deb3" stroke="#8b5a2b" stroke-width="2"/>
+  <text x="550" y="125" font-size="13" fill="#152033">10kΩ</text>
+  <line x1="530" y1="150" x2="530" y2="175" stroke="#152033" stroke-width="3"/>
+  <circle cx="530" cy="175" r="5" fill="#152033"/>
+  <line x1="530" y1="175" x2="420" y2="175" stroke="#2563eb" stroke-width="3"/>
+  <text x="415" y="180" font-size="13" text-anchor="end" fill="#2563eb" font-weight="700">GPIO27</text>
+  <line x1="530" y1="175" x2="530" y2="205" stroke="#152033" stroke-width="3"/>
+  <line x1="530" y1="205" x2="555" y2="235" stroke="#152033" stroke-width="3"/>
+  <line x1="530" y1="245" x2="530" y2="275" stroke="#222" stroke-width="3"/>
+  <text x="565" y="230" font-size="13" fill="#152033">button</text>
+  <line x1="510" y1="275" x2="550" y2="275" stroke="#222" stroke-width="3"/><line x1="518" y1="282" x2="542" y2="282" stroke="#222" stroke-width="3"/><line x1="526" y1="289" x2="534" y2="289" stroke="#222" stroke-width="3"/>
+  <text x="560" y="290" font-size="13" fill="#222">GND</text>
+  <text x="530" y="318" font-size="13" text-anchor="middle" fill="#4d5b70">released = HIGH · pressed = LOW</text>
+</svg></div>
+<figcaption>Two ways to "tie" a pin to a default state. In both, the 10 kΩ resistor prevents a short circuit.</figcaption></figure>
+
+<div class="callout example"><div class="ct">Do the math: why 10 kΩ and not zero ohms?</div>
+<p>In the pull-up circuit, while the button is pressed, current flows from 3V3 through the resistor to GND: <code>I = 3.3V ÷ 10000Ω = 0.00033A = 0.33mA</code>. Very small and harmless.</p>
+<p>If you used a plain wire (zero ohms) instead of the resistor, pressing the button would connect 3V3 straight to GND: a short circuit! The board's regulator heats up and the ESP32 resets. And if you use a very large resistor (say 10 MΩ), the "spring" becomes so weak that noise overpowers it again. 10 kΩ is a good balance between low current and resistance to noise (anything between 4.7 kΩ and 47 kΩ works too).</p></div>
+
+<h3>Method 1: an external 10 kΩ pull-down resistor</h3>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"BTN","name":"Push button","img":"button.svg","pins":[["1","one side of the button"],["4","the other side (diagonal)"]]},
+    {"id":"R1","name":"10 kΩ resistor (pull-down)","img":"resistor.svg","pins":[["1","pin side"],["2","ground side"]]}
+  ],
+  "wires":[["3V3","BTN.1","red"],["GPIO27","BTN.4","blue"],["GPIO27","R1.1","blue"],["R1.2","GND","black"]]
+}</script><figcaption>The button between 3V3 and GPIO27, and the 10 kΩ resistor between GPIO27 and GND. Released: the resistor pulls the pin down to zero (LOW). Pressed: 3.3 V reaches the pin directly (HIGH).</figcaption></div>
+<p>With this wiring, run the <code>Floating_Demo</code> code again without changing it. Now you see only <code>0</code> until you press the button, no matter how much you touch the wire. Problem solved.</p>
+
+<h3>Method 2: the ESP32's internal resistors (no extra parts)</h3>
+<p>Inside almost every GPIO there are ready-made pull-up and pull-down resistors (each about 45 kΩ) that you switch on with one word in <code>pinMode</code>:</p>
+<div class="table-wrap"><table>
+<tr><th>Mode in pinMode</th><th>What gets connected</th><th>Where the button goes</th><th>Released / pressed</th></tr>
+<tr><td><code>INPUT</code></td><td>Nothing (floating)</td><td>Only with an external resistor</td><td>Undefined!</td></tr>
+<tr><td><code>INPUT_PULLUP</code></td><td>Internal resistor to 3V3</td><td>Between the pin and GND</td><td>HIGH / LOW</td></tr>
+<tr><td><code>INPUT_PULLDOWN</code></td><td>Internal resistor to GND</td><td>Between the pin and 3V3</td><td>LOW / HIGH</td></tr>
+</table></div>
+
+<div class="callout warn"><div class="ct">GPIO34 to GPIO39 have no internal resistors</div>
+<p>The input-only pins GPIO34, 35, 36 and 39 have no internal pull-up or pull-down at all. If you write <code>INPUT_PULLUP</code> for these pins, the compiler won't complain, but the pin still floats. For a button on these pins, always add an external 10 kΩ resistor. (These pins are great for analog reading; you'll see that later.)</p></div>
+
+<div class="callout why"><div class="ct">Why do professionals prefer the pull-up?</div>
+<p>With a pull-up, the button wire goes to GND, not to 3V3. If a GND wire accidentally touches a metal case or something else, nothing bad happens; but a 3V3 wire run outside the circuit makes a short circuit if it touches GND. On top of that, the habit dates back to older chips that had internal pull-ups but no pull-downs. So for the rest of the course we always use <code>INPUT_PULLUP</code>.</p></div>
+
+<h2 id="pullup-code">A button with INPUT_PULLUP and reversed logic</h2>
+<p>The main circuit for the rest of this section: a button between GPIO27 and GND (no resistor, since we use the internal pull-up) and an LED with a 220 Ω resistor on GPIO4, the same circuit as in lesson 2.3.</p>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"BTN","name":"Push button","img":"button.svg","pins":[["1","to GPIO27"],["4","to GND (diagonal leg)"]]},
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO4 side"],["2","LED side"]]},
+    {"id":"LED1","name":"Red LED","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−), short leg"]]}
+  ],
+  "wires":[["GPIO27","BTN.1","blue"],["BTN.4","GND","black"],["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>The main circuit for the digital section: the button on GPIO27 with the internal pull-up, the LED on GPIO4.</figcaption></div>
+
+<div class="code" data-file="Button_Pullup.ino" id="c2"><pre>
+// Button with internal pull-up: pressed = LOW
+const int BUTTON_PIN = 27;
+const int LED_PIN = 4;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);   // internal ~45k resistor to 3.3V
+  pinMode(LED_PIN, OUTPUT);
+}
+
+void loop() {
+  bool pressed = (digitalRead(BUTTON_PIN) == LOW);   // reversed logic!
+  digitalWrite(LED_PIN, pressed ? HIGH : LOW);
+  Serial.println(pressed ? "pressed" : "released");
+  delay(50);
+}
+</pre></div>
+<ol class="walk" data-for="c2">
+  <li data-lines="2-3"><b class="what">Two constants for two pins.</b> The button on 27 and the LED on 4.
+    <span class="why">The same habit as in the last lesson: a meaningful name instead of a bare number, so if you move a wire you only change one line.</span></li>
+  <li data-lines="7"><b class="what">INPUT_PULLUP.</b> The pin becomes an input, and the internal resistor to 3.3 V is connected too. Now the pin is always HIGH while released.
+    <span class="why">One word replaces an external resistor and two wires. Fewer wires = fewer chances for mistakes.</span></li>
+  <li data-lines="12"><b class="what">Converting to "human" logic.</b> <code>digitalRead(...) == LOW</code> means "is the pin LOW?". The answer (<code>true</code> or <code>false</code>) goes into a <code>bool</code> variable called <code>pressed</code>.
+    <span class="why">With a pull-up, pressed = LOW. This "reversed logic" (active low) is a common source of mistakes. By converting it on the very first line into a clear name (<code>pressed</code>), you don't have to think backwards anywhere else in the program.</span></li>
+  <li data-lines="13"><b class="what">The ternary operator <code>? :</code>.</b> <code>pressed ? HIGH : LOW</code> means "HIGH if pressed is true, otherwise LOW".
+    <span class="why">A short if/else on one line. When you're just choosing between two values, it's easier to read.</span></li>
+  <li data-lines="14-15"><b class="what">Report and pause.</b> Prints the button's state as text.
+    <span class="why">The text <code>pressed/released</code> is easier to read than 0/1, and you no longer have to remember which number means pressed.</span></li>
+</ol>
+<p>The result: the LED stays on while you hold the button and goes off when you release it, like a doorbell.</p>
+
+<h2 id="millis">millis(): the clock that never stops</h2>
+<p>Before we tackle the button's next problem, we need a vital tool. In lesson 2.3 you saw that <code>delay(1000)</code> <b>freezes</b> the whole program for one second. If you press and release the button during that second, the program never notices. To build a device that does several things at once, we have to put delay aside.</p>
+<p><code>millis()</code> is a simple function: it returns the number of milliseconds that have passed since the board powered up. That's all. It doesn't stop the program; it just tells you the time.</p>
+
+<div class="callout analogy"><div class="ct">Example: boiling an egg</div>
+<p>The <code>delay</code> way: you put the egg in the water and stand <b>motionless</b> by the stove for 10 minutes. If the phone rings, you don't answer.</p>
+<p>The <code>millis</code> way: you look at the clock (8:00) and go do other things. Every few seconds you glance at the clock and ask: "Have ten minutes passed since 8:00?" As long as the answer is no, you get on with your other jobs. When it's yes, you turn off the stove.</p></div>
+
+<div class="callout example"><div class="ct">With numbers</div>
+<p>Say the board powered up 5 seconds ago: <code>millis()</code> gives <code>5000</code>. We turned the LED on at moment <code>5000</code> and saved that number in the variable <code>lastToggle</code>. On the following passes of loop we keep calculating <code>millis() − lastToggle</code>. When <code>millis()</code> reaches <code>5500</code>, the result is <code>500</code>; that means 500 milliseconds have passed and it's time to switch the LED. During those 500 milliseconds, loop may have run hundreds of thousands of times, and each time it had a chance to do something else too.</p></div>
+
+<div class="code" data-file="Blink_NoDelay.ino" id="c3"><pre>
+// Blink without delay: by looking at the clock
+const int LED_PIN = 4;
+const unsigned long INTERVAL = 500;   // every 500 milliseconds
+unsigned long lastToggle = 0;         // the last time we switched the LED
+bool ledOn = false;
+
+void setup() {
+  pinMode(LED_PIN, OUTPUT);
+}
+
+void loop() {
+  unsigned long now = millis();
+  if (now - lastToggle &gt;= INTERVAL) {   // is it time?
+    lastToggle = now;
+    ledOn = !ledOn;
+    digitalWrite(LED_PIN, ledOn);
+  }
+  // loop is free here; do whatever else you like
+}
+</pre></div>
+<ol class="walk" data-for="c3">
+  <li data-lines="3"><b class="what">The unsigned long type.</b> A 32-bit unsigned (positive-only) whole number that goes up to about 4.3 billion.
+    <span class="why"><code>millis()</code> returns exactly this type. If you store the time in a plain <code>int</code>, the number goes negative after about 24 days and the program behaves strangely. The rule: every variable that deals with time is an <code>unsigned long</code>.</span></li>
+  <li data-lines="4-5"><b class="what">The program's memory.</b> <code>lastToggle</code> holds the time of the last change, and <code>ledOn</code> holds the LED's current state.
+    <span class="why">Since there's no delay any more, the program has to "remember" where it is by itself. These variables are global so they aren't wiped between passes of loop.</span></li>
+  <li data-lines="12"><b class="what">Read the clock once.</b> We store the current time in <code>now</code>.
+    <span class="why">If you call millis in several places during one pass of loop, the answers may differ slightly. Reading it once and using that one number keeps the logic clean.</span></li>
+  <li data-lines="13"><b class="what">The key question: "has enough time passed?"</b> <code>now - lastToggle</code> is how many milliseconds have passed since the last change. If it's 500 or more, we enter the if.
+    <span class="why">Always write it as "subtract and compare", not <code>now &gt;= lastToggle + INTERVAL</code>. The millis counter rolls back to zero after about 49.7 days (overflow); thanks to the math of unsigned numbers, the subtraction form works correctly even at that moment, but the addition form breaks.</span></li>
+  <li data-lines="14-16"><b class="what">Record the time and flip the LED.</b> We update the time, <code>!ledOn</code> flips the value (true↔false), and we write it to the pin.
+    <span class="why"><code>digitalWrite</code> treats <code>true</code> like HIGH and <code>false</code> like LOW. So you don't need a separate if.</span></li>
+  <li data-lines="18"><b class="what">loop is free.</b> No line stops the program.
+    <span class="why">This is exactly where, in the next section, we'll add button reading without breaking the blinking.</span></li>
+</ol>
+
+<h2 id="bounce">Button bounce: when one press looks like three</h2>
+<p>When the metal contacts inside a button hit each other, they "bounce up and down" a few times before settling, like a ball dropped on the floor. This usually lasts under 10 milliseconds; to you it's an instant, but in that time the ESP32 reads the pin thousands of times and sees several zeros and ones.</p>
+
+<figure><div class="frame"><svg viewBox="0 0 700 250" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="Button bounce waveform">
+  <line x1="60" y1="200" x2="680" y2="200" stroke="#9aa4b5" stroke-width="1.5"/>
+  <line x1="60" y1="40" x2="60" y2="200" stroke="#9aa4b5" stroke-width="1.5"/>
+  <text x="52" y="64" font-size="13" text-anchor="end" fill="#152033">3.3V</text>
+  <text x="52" y="184" font-size="13" text-anchor="end" fill="#152033">0V</text>
+  <path d="M60 60 H250 V180 H262 V60 H270 V180 H285 V60 H290 V180 H305 V90 H310 V180 H680" fill="none" stroke="#2563eb" stroke-width="3" stroke-linejoin="round"/>
+  <rect x="250" y="30" width="62" height="165" fill="#e0781f" opacity=".12"/>
+  <text x="281" y="24" font-size="13" text-anchor="middle" fill="#e0781f" font-weight="700">Bounce: about 1 to 10 ms</text>
+  <text x="150" y="50" font-size="13" text-anchor="middle" fill="#152033">Released (HIGH with pull-up)</text>
+  <text x="500" y="170" font-size="13" text-anchor="middle" fill="#152033">Pressed and stable (LOW)</text>
+  <text x="250" y="222" font-size="13" text-anchor="middle" fill="#152033">Moment of press</text>
+  <text x="470" y="236" font-size="13" text-anchor="middle" fill="#4d5b70">In this window the ESP32 sees several "HIGH to LOW" edges</text>
+</svg></div>
+<figcaption>The real waveform of a cheap button being pressed (with a pull-up). If the program counts every falling edge as a press, it counts several presses instead of 1.</figcaption></figure>
+
+<p>Let's see the problem first. This program counts one every time the button goes from released to pressed, but it deliberately has no debouncing:</p>
+<div class="code" data-file="Count_NoDebounce.ino" id="c4"><pre>
+// Counting presses without debouncing (deliberately incomplete!)
+const int BUTTON_PIN = 27;
+int lastState = HIGH;     // previous state (released = HIGH)
+int count = 0;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+}
+
+void loop() {
+  int state = digitalRead(BUTTON_PIN);
+  if (lastState == HIGH &amp;&amp; state == LOW) {   // edge: it was just pressed
+    count++;
+    Serial.print("Press #");
+    Serial.println(count);
+  }
+  lastState = state;
+}
+</pre></div>
+<ol class="walk" data-for="c4">
+  <li data-lines="3-4"><b class="what">Remembering the previous state.</b> <code>lastState</code> holds the button's state from the previous pass of loop; <code>count</code> holds the number of presses.
+    <span class="why">To catch "the moment of pressing", we have to compare the current state with the previous one. A single photo can't tell you something changed; two photos in a row can.</span></li>
+  <li data-lines="13"><b class="what">Edge detection (state change detection).</b> The condition is true only when the pin was HIGH (released) before and is LOW (pressed) now. <code>&amp;&amp;</code> means "and".
+    <span class="why">If we only asked "is it LOW?", the counter would go up on every pass of loop for as long as your finger is on the button; that's thousands of times a second! We want the "press event", not the "being pressed" state.</span></li>
+  <li data-lines="14-16"><b class="what">Count and print.</b> <code>count++</code> adds one, and the number is printed.
+    <span class="why">Printing the number lets you see the bounce with your own eyes: one press, several counts.</span></li>
+  <li data-lines="18"><b class="what">Update the memory.</b> The current state becomes the "previous state" for the next pass.
+    <span class="why">If you forget this line, <code>lastState</code> stays HIGH forever and edge detection breaks.</span></li>
+</ol>
+<p>Press the button carefully ten times. With cheap buttons you'll usually see something like this (the count sometimes jumps by two or three at a time):</p>
+<div class="serial">Press #1
+Press #2
+Press #3
+Press #4
+Press #5
+Press #6</div>
+<p>From only three real presses! (Wokwi's button simulates bounce by default too, so you can see this there as well.)</p>
+
+<h3 id="debounce">Debouncing with millis: "only believe a change that stays put"</h3>
+<p>The idea is simple: every time the pin's raw reading changes, restart a timer from zero. Only if the reading stays <b>unchanged</b> for 30 milliseconds do you accept it as the button's real state. Bounces always end before 30 milliseconds, so they're never "believed". In this same program, each press toggles the LED on or off.</p>
+
+<div class="code" data-file="Toggle_Debounce.ino" id="c5"><pre>
+// Toggle the LED with each press + debouncing with millis
+const int BUTTON_PIN = 27;
+const int LED_PIN = 4;
+const unsigned long DEBOUNCE_MS = 30;   // bounce is usually under 10ms
+
+int stableState = HIGH;           // the button's "confirmed" state
+int lastReading = HIGH;           // the last raw reading
+unsigned long lastChangeTime = 0; // when the raw reading last changed
+bool ledOn = false;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LED_PIN, OUTPUT);
+}
+
+void loop() {
+  int reading = digitalRead(BUTTON_PIN);
+
+  if (reading != lastReading) {        // the raw reading changed (maybe bounce)
+    lastChangeTime = millis();         // restart the timer
+    lastReading = reading;
+  }
+
+  if (millis() - lastChangeTime &gt; DEBOUNCE_MS &amp;&amp; reading != stableState) {
+    stableState = reading;             // steady for 30ms: it's a real change
+    if (stableState == LOW) {          // only at the moment of pressing (not releasing)
+      ledOn = !ledOn;
+      digitalWrite(LED_PIN, ledOn);
+      Serial.println(ledOn ? "LED ON" : "LED OFF");
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="c5">
+  <li data-lines="4"><b class="what">The waiting time: 30 milliseconds.</b>
+    <span class="why">Most buttons bounce for under 10 milliseconds; 30 gives a good safety margin. On the other hand, people can't notice a delay under about 50 milliseconds, so the button doesn't feel "sluggish". If your button is really poor quality, raise it to 50.</span></li>
+  <li data-lines="6-9"><b class="what">Four memory variables.</b> <code>stableState</code>: the last state we "believed". <code>lastReading</code>: the last thing the pin said (maybe bounce). <code>lastChangeTime</code>: when the raw reading last changed. <code>ledOn</code>: the LED's state.
+    <span class="why">Separating the "raw reading" from the "believed state" is the heart of debouncing. We always track the raw reading, but we only act on the believed state.</span></li>
+  <li data-lines="18"><b class="what">The raw reading.</b> We read the pin on every pass of loop.
+    <span class="why">loop runs thousands of times a second, so no change escapes the program's notice; not even one-millisecond bounces.</span></li>
+  <li data-lines="20-23"><b class="what">Every raw change resets the timer.</b> If the reading differs from last time, we record the time.
+    <span class="why">During bounce this condition keeps coming true and the timer keeps restarting. So until the bouncing is over, 30 quiet milliseconds never happen.</span></li>
+  <li data-lines="25-26"><b class="what">The confirmation condition.</b> Two things are needed together: more than 30 ms since the last raw change, <b>and</b> a reading that differs from the believed state. Then we believe the new state.
+    <span class="why">The second condition makes us react to each real change only once, not on every pass of loop while the button stays put.</span></li>
+  <li data-lines="27-31"><b class="what">Toggle only at the moment of pressing.</b> When the believed state becomes LOW (pressed), we flip the LED and report it.
+    <span class="why">Releasing the button is a "real change" too (LOW to HIGH). Without this if, the LED would turn on when you press and off when you release; that's the doorbell again!</span></li>
+</ol>
+
+<div class="callout tip"><div class="ct">There's hardware debouncing too</div>
+<p>A 100 nF capacitor in parallel with the button smooths out most of the bounce. But software debouncing is free, needs no extra parts and can be adjusted. For beginner projects, software is all you need.</p></div>
+
+<h2 id="multitask">Several things at once: blinking + a button, without delay</h2>
+<p>Now we combine the two skills: the LED blinks using millis, and at the same time the (debounced) button pauses or restarts the blinking. If you wrote this program with <code>delay(500)</code>, short button presses would get lost in the middle of the delay.</p>
+
+<div class="code" data-file="Blink_And_Button.ino" id="c6"><pre>
+// Blinking + reading a button, at the same time and without delay
+const int BUTTON_PIN = 27;
+const int LED_PIN = 4;
+const unsigned long BLINK_MS = 500;
+const unsigned long DEBOUNCE_MS = 30;
+
+bool blinking = true;             // the button turns this on/off
+bool ledOn = false;
+unsigned long lastBlink = 0;
+
+int stableState = HIGH, lastReading = HIGH;
+unsigned long lastChangeTime = 0;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LED_PIN, OUTPUT);
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  // Job 1: the button (with debouncing)
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChangeTime = now; lastReading = reading; }
+  if (now - lastChangeTime &gt; DEBOUNCE_MS &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) {
+      blinking = !blinking;
+      Serial.println(blinking ? "Blinking ON" : "Blinking paused");
+    }
+  }
+
+  // Job 2: blinking (only if enabled)
+  if (blinking &amp;&amp; now - lastBlink &gt;= BLINK_MS) {
+    lastBlink = now;
+    ledOn = !ledOn;
+    digitalWrite(LED_PIN, ledOn);
+  }
+  if (!blinking &amp;&amp; ledOn) {         // when paused, keep the LED off
+    ledOn = false;
+    digitalWrite(LED_PIN, LOW);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="c6">
+  <li data-lines="7-9"><b class="what">Blinking memory.</b> <code>blinking</code> says whether blinking is enabled; <code>ledOn</code> and <code>lastBlink</code> work like in Blink_NoDelay.
+    <span class="why">Each "job" has its own variables. This separation lets you add a third and fourth job later without everything getting tangled.</span></li>
+  <li data-lines="11-12"><b class="what">Button memory.</b> The same debouncing variables; this time two variables of the same type are declared on one line.
+    <span class="why"><code>int a = 1, b = 2;</code> means two int variables on one line. It's just shorter.</span></li>
+  <li data-lines="21"><b class="what">One clock for everyone.</b> The current time is read once, and both jobs use it.
+    <span class="why">Both jobs make their decisions from the same "snapshot" of the clock; the logic becomes simpler and more predictable.</span></li>
+  <li data-lines="24-31"><b class="what">Job 1: the button.</b> Exactly the earlier debouncing logic, except it flips the <code>blinking</code> variable instead of the LED. Line 25 is the earlier three lines squeezed onto one line.
+    <span class="why">On each pass of loop this part takes only a few microseconds and never waits; that's why no press ever gets lost.</span></li>
+  <li data-lines="35-39"><b class="what">Job 2: blinking.</b> If blinking is enabled <b>and</b> 500 ms have passed, flip the LED.
+    <span class="why">Two completely independent jobs are written one after the other, and neither keeps the other waiting. This pattern (check a condition quickly, do a short job, move on) is the foundation of every multitasking microcontroller program.</span></li>
+  <li data-lines="40-43"><b class="what">A clean pause.</b> If blinking is paused but the LED was left on, turn it off.
+    <span class="why">Without this part, if you press the button right while the LED is on, the LED gets "stuck" on. Small details are the difference between a professional product and an amateur one.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="c6">
+<p>Open a new ESP32 project in Wokwi, replace <code>diagram.json</code> with the text below and paste the code above into <code>sketch.ino</code>. Click the green button and watch the blinking pause and start again. You can also try the <code>Button_Pullup</code>, <code>Count_NoDebounce</code> and <code>Toggle_Debounce</code> sketches on this same circuit.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 150, "left": -150, "attrs": { "color": "green" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:27", "btn1:1.r", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="interrupt">A short introduction to interrupts</h2>
+<p>In the methods so far, the program kept asking the pin "have you been pressed?" (this is called polling). The other approach is to tell the hardware: "Whenever the pin goes from HIGH to LOW, drop whatever you're doing and run this little function." That function is called an ISR (interrupt service routine).</p>
+<div class="callout analogy"><div class="ct">Example: the doorbell</div>
+<p>Polling means walking to the front door every minute and opening it to see if anyone is there. An interrupt is the doorbell: whatever you're doing, you stop when it rings, open the door, and go back to what you were doing.</p></div>
+
+<div class="code" data-file="Button_Interrupt.ino" id="c7"><pre>
+// Counting button presses with an interrupt
+const int BUTTON_PIN = 27;
+
+volatile uint32_t pressCount = 0;     // shared between the ISR and loop
+volatile uint32_t lastIsrTime = 0;
+
+void IRAM_ATTR onButton() {           // ISR: short and fast
+  uint32_t now = millis();
+  if (now - lastIsrTime &gt; 200) {      // simple debouncing inside the ISR
+    pressCount++;
+    lastIsrTime = now;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), onButton, FALLING);
+}
+
+void loop() {
+  static uint32_t shown = 0;
+  uint32_t count = pressCount;        // take a copy
+  if (count != shown) {
+    shown = count;
+    Serial.printf("Presses: %lu\n", (unsigned long)count);
+  }
+  delay(1000);                        // even with a long delay, no press is lost
+}
+</pre></div>
+<ol class="walk" data-for="c7">
+  <li data-lines="4-5"><b class="what">The volatile keyword.</b> Tells the compiler: "this variable can change at any moment, outside the normal flow of the program; read it from memory every time".
+    <span class="why">For speed, the compiler may keep the value in a register and stop reading it from memory. Then loop would never see the change the ISR made. Every variable that both the ISR and loop work with must be volatile.</span></li>
+  <li data-lines="7"><b class="what">IRAM_ATTR.</b> Places the ISR in fast internal RAM (IRAM).
+    <span class="why">Normal ESP32 code is read from flash memory. If an interrupt arrives right while the flash is busy (for example during a write), an ISR sitting in flash can't run and the board crashes. IRAM_ATTR removes that risk.</span></li>
+  <li data-lines="8-12"><b class="what">The ISR body: counting only.</b> If more than 200 ms have passed since the last interrupt, the counter goes up by one.
+    <span class="why">Button bounce triggers the interrupt several times too, so debouncing is needed here as well. 200 ms is bigger than the earlier 30 ms because here we only see falling edges, and releasing the button can also produce falling-edge bounces.</span></li>
+  <li data-lines="18"><b class="what">attachInterrupt.</b> Takes three things: the pin's interrupt number (<code>digitalPinToInterrupt</code>), the name of the ISR function, and the kind of edge: <code>FALLING</code> means "from HIGH to LOW", which with a pull-up is the moment of pressing.
+    <span class="why">The other options: <code>RISING</code> (LOW to HIGH, the moment of release) and <code>CHANGE</code> (both).</span></li>
+  <li data-lines="22-27"><b class="what">loop only reports.</b> It takes a copy of the counter and prints it if it has changed since the last display. <code>static</code> means the <code>shown</code> variable isn't wiped between passes of loop.
+    <span class="why">Heavy work (like printing to Serial) always happens in loop, never in the ISR. Taking a copy means that if an interrupt arrives in the middle, the comparison and the print both use one fixed number.</span></li>
+  <li data-lines="28"><b class="what">A one-second delay, on purpose.</b>
+    <span class="why">To show off the power of interrupts: even while loop is asleep for a whole second, presses get counted. The display may be up to a second late, but nothing is lost.</span></li>
+</ol>
+
+<div class="callout warn"><div class="ct">The strict rules of an ISR (important!)</div>
+<p>1) An ISR must be <b>very short</b>: set a flag or bump a counter and return. 2) Inside an ISR, never call <code>Serial.print</code>, <code>delay</code>, Wi-Fi functions or slow sensor reads; the board may reset with a watchdog error or a <code>Guru Meditation Error</code>. 3) Make shared variables volatile. 4) If a shared variable is bigger than 32 bits, or you change several variables together, use a critical section (<code>portENTER_CRITICAL</code>) in loop; you'll see this in more advanced projects.</p></div>
+<div class="callout coach"><div class="ct">Coach's advice: an interrupt is not a hammer</div>
+<p>When beginners learn about interrupts, they want to solve everything with them. For a button that a human presses, polling with millis (as in the previous section) is simpler, easier to debug and completely good enough. Save interrupts for very fast or very short events: counting pulses from a water-flow sensor, a motor encoder, or waking the board from sleep.</p></div>
+
+<h2 id="analog">Analog input: the ADC takes a "ruler" reading tens of thousands of times a second</h2>
+<p>Many sensors don't give a yes/no answer; they output a <b>voltage</b> that changes with whatever they measure. A part of the ESP32 called the ADC (analog-to-digital converter) turns that voltage into a number.</p>
+<p>The ESP32's ADC is <b>12-bit</b>: it divides the voltage range into <code>2<sup>12</sup> = 4096</code> steps and gives you a number from <code>0</code> to <code>4095</code>.</p>
+<div class="callout analogy"><div class="ct">Example: a ruler with 4096 marks</div>
+<p>Imagine a ruler that, instead of centimeters, has 4096 tiny marks. The ADC holds the voltage up against this ruler and says "it reached mark number 2048". The more marks, the finer the measurement. The Arduino Uno has a 1024-mark (10-bit) ruler; the ESP32's is four times finer.</p></div>
+<div class="callout example"><div class="ct">With numbers</div>
+<p>If we assume a range of 0 to 3.3 V, each step is roughly <code>3.3 ÷ 4095 ≈ 0.0008V</code>, or 0.8 millivolts. So the number 2048 means roughly <code>2048 × 0.0008 ≈ 1.65V</code>, half of 3.3 V. In practice, though, the ESP32's ADC isn't this clean; you'll see why below.</p></div>
+
+<h3 id="adc-limits">Three facts you need to know about the ESP32's ADC</h3>
+<p><b>1) Attenuation.</b> Internally, the ADC can only measure voltages of about one volt directly. To read higher voltages, the ESP32 "shrinks" the input voltage before measuring it. In Arduino-ESP32 the default is <code>ADC_11db</code>, which gives the widest range. According to the official documentation, the measurable range on the classic ESP32 is:</p>
+<div class="table-wrap"><table>
+<tr><th>Attenuation</th><th>Measurable range (classic ESP32)</th><th>When to use it</th></tr>
+<tr><td><code>ADC_0db</code></td><td>100 to 950 mV</td><td>Very small signals</td></tr>
+<tr><td><code>ADC_2_5db</code></td><td>100 to 1250 mV</td><td>Rarely used</td></tr>
+<tr><td><code>ADC_6db</code></td><td>150 to 1750 mV</td><td>Sensors with outputs up to 1.7 V</td></tr>
+<tr><td><code>ADC_11db</code> (default)</td><td>150 to 3100 mV</td><td>Potentiometers, LDRs and most jobs</td></tr>
+</table></div>
+<p>You can change it with <code>analogSetAttenuation(ADC_6db)</code> for all pins or <code>analogSetPinAttenuation(pin, ADC_6db)</code> for one pin. In this lesson we leave the default alone.</p>
+
+<p><b>2) Non-linearity at both ends of the range.</b> The classic ESP32's ADC is "blind" near zero and near 3.3 V: voltages below roughly 0.1 to 0.15 V all read as <code>0</code>, and voltages above roughly 3.1 V all read as <code>4095</code>. Even in the middle of the range the relationship isn't perfectly straight.</p>
+
+<figure><div class="frame"><svg viewBox="0 0 640 330" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="ADC non-linearity chart">
+  <line x1="80" y1="280" x2="600" y2="280" stroke="#152033" stroke-width="1.5"/>
+  <line x1="80" y1="280" x2="80" y2="30" stroke="#152033" stroke-width="1.5"/>
+  <text x="340" y="318" font-size="13" text-anchor="middle" fill="#152033">Input voltage (volts)</text>
+  <text x="80" y="298" font-size="12" text-anchor="middle" fill="#4d5b70">0</text>
+  <text x="237" y="298" font-size="12" text-anchor="middle" fill="#4d5b70">1.0</text>
+  <text x="395" y="298" font-size="12" text-anchor="middle" fill="#4d5b70">2.0</text>
+  <text x="552" y="298" font-size="12" text-anchor="middle" fill="#4d5b70">3.0</text>
+  <text x="600" y="298" font-size="12" text-anchor="middle" fill="#4d5b70">3.3</text>
+  <text x="72" y="284" font-size="12" text-anchor="end" fill="#4d5b70">0</text>
+  <text x="72" y="54" font-size="12" text-anchor="end" fill="#4d5b70">4095</text>
+  <line x1="80" y1="50" x2="600" y2="50" stroke="#dbe2ec" stroke-dasharray="4 4"/>
+  <line x1="80" y1="280" x2="600" y2="50" stroke="#9aa4b5" stroke-width="2" stroke-dasharray="6 5"/>
+  <text x="470" y="165" font-size="12" fill="#7b889b">Ideal line (dashed)</text>
+  <path d="M80 280 L100 280 C140 262 200 225 300 180 S470 100 568 50 L600 50" fill="none" stroke="#2563eb" stroke-width="3.5"/>
+  <rect x="80" y="40" width="22" height="245" fill="#d6453d" opacity=".10"/>
+  <rect x="566" y="40" width="34" height="245" fill="#d6453d" opacity=".10"/>
+  <text x="112" y="120" font-size="12" fill="#d6453d">Below about 0.15 V: all zero</text>
+  <text x="560" y="36" font-size="12" text-anchor="end" fill="#d6453d">Above about 3.1 V: all 4095</text>
+  <text x="330" y="232" font-size="12" fill="#2563eb">Real behavior (schematic)</text>
+</svg></div>
+<figcaption>A schematic sketch (not a precise measurement) of how the classic ESP32's ADC behaves with 11 dB attenuation. For trustworthy measurements, keep the signal in the middle of the range (about 0.2 to 2.9 V).</figcaption></figure>
+
+<p>The practical fix: use <code>analogReadMilliVolts</code> instead of <code>analogRead</code>. This function corrects the raw number using calibration data that Espressif wrote into each chip's eFuse memory at the factory, and returns <b>millivolts</b> directly. It's more accurate, and you don't have to do the math yourself.</p>
+
+<p><b>3) ADC1 and ADC2; Wi-Fi is ADC2's enemy.</b> The ESP32 has two converters. <b>ADC2 can't be used while Wi-Fi is on</b>, because the Wi-Fi driver itself uses it, and <code>analogRead</code> on ADC2 pins returns an error or a meaningless number.</p>
+<div class="table-wrap"><table>
+<tr><th>Converter</th><th>Pins on the DevKitC</th><th>With Wi-Fi</th></tr>
+<tr><td>ADC1</td><td><code>GPIO32, 33, 34, 35, 36, 39</code></td><td>✅ Always works</td></tr>
+<tr><td>ADC2</td><td><code>GPIO0, 2, 4, 12, 13, 14, 15, 25, 26, 27</code></td><td>❌ Not while Wi-Fi is on</td></tr>
+</table></div>
+<div class="callout coach"><div class="ct">The coach's rule</div>
+<p>Start the habit today: <b>analog sensor = ADC1 pin</b> (32 to 39). Even if your current project has no Wi-Fi. Three months from now you'll add Wi-Fi and spend hours wondering why your sensor suddenly broke. That's why in this lesson the potentiometer is on GPIO34 and the LDR on GPIO35.</p></div>
+
+<h2 id="pot">The potentiometer: your first analog input</h2>
+<p>A potentiometer is a resistor with three legs. The two outer legs connect to the two ends of a resistive track (say 10 kΩ). The middle leg (the wiper) is a metal "brush" that slides along the track as you turn the knob. If you connect one end to 3V3 and the other to GND, the middle leg shows any voltage between 0 and 3.3 V, depending on where the knob is.</p>
+
+<figure><div class="frame"><svg viewBox="0 0 620 220" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="Inside a potentiometer">
+  <rect x="120" y="90" width="380" height="30" rx="6" fill="#c9a36a" stroke="#8b5a2b" stroke-width="2"/>
+  <line x1="120" y1="105" x2="60" y2="105" stroke="#d6453d" stroke-width="4"/>
+  <line x1="500" y1="105" x2="560" y2="105" stroke="#222" stroke-width="4"/>
+  <text x="50" y="110" font-size="14" text-anchor="end" fill="#d6453d" font-weight="700">3V3</text>
+  <text x="570" y="110" font-size="14" fill="#222" font-weight="700">GND</text>
+  <path d="M340 60 L340 86 L332 76 M340 86 L348 76" stroke="#2563eb" stroke-width="4" fill="none"/>
+  <line x1="340" y1="60" x2="340" y2="30" stroke="#2563eb" stroke-width="4"/>
+  <text x="352" y="36" font-size="14" fill="#2563eb" font-weight="700">SIG → GPIO34</text>
+  <text x="230" y="150" font-size="13" text-anchor="middle" fill="#152033">R1 ≈ 6k</text>
+  <text x="420" y="150" font-size="13" text-anchor="middle" fill="#152033">R2 ≈ 4k</text>
+  <text x="310" y="195" font-size="13" text-anchor="middle" fill="#4d5b70">Wiper at 60% of travel: Vout = 3.3 × 4k ÷ 10k = 1.32V</text>
+</svg></div>
+<figcaption>A potentiometer is really an adjustable voltage divider. The resistive track is split into two pieces, and the middle leg's voltage depends on the ratio between them.</figcaption></figure>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"POT","name":"10 kΩ potentiometer","img":"pot.svg","pins":[["VCC","first outer leg"],["SIG","middle leg (wiper)"],["GND","second outer leg"]]}
+  ],
+  "wires":[["3V3","POT.VCC","red"],["GPIO34","POT.SIG","blue"],["POT.GND","GND","black"]]
+}</script><figcaption>The middle leg always goes to the GPIO. The two outer legs go to 3V3 and GND (if you swap them, only the direction of rotation is reversed).</figcaption></div>
+
+<div class="callout warn"><div class="ct">Never connect the potentiometer to 5V</div>
+<p>If you connect an outer leg to 5V, at the end of the knob's travel 5 volts reaches GPIO34. The ESP32's pins tolerate 3.6 V at most; 5 V can permanently damage the pin or the whole chip. Always 3V3.</p></div>
+
+<div class="code" data-file="Pot_Read.ino" id="c8"><pre>
+// Reading a potentiometer on GPIO34
+const int POT_PIN = 34;       // ADC1_CH6, input only
+
+void setup() {
+  Serial.begin(115200);
+  // default resolution is 12 bits (0 to 4095) and default attenuation is 11dB
+}
+
+void loop() {
+  int raw = analogRead(POT_PIN);                  // 0 to 4095
+  uint32_t mv = analogReadMilliVolts(POT_PIN);    // calibrated millivolts
+  int percent = map(raw, 0, 4095, 0, 100);        // convert to percent
+
+  Serial.printf("raw=%4d  mV=%4lu  percent=%3d%%\n", raw, (unsigned long)mv, percent);
+  delay(200);
+}
+</pre></div>
+<ol class="walk" data-for="c8">
+  <li data-lines="2"><b class="what">GPIO34.</b> An input-only pin from the ADC1 group.
+    <span class="why">Input-only pins aren't useful for anything else; using them for analog keeps the all-purpose pins free for LEDs and buttons.</span></li>
+  <li data-lines="4-7"><b class="what">setup without pinMode.</b> We only start Serial.
+    <span class="why"><code>analogRead</code> prepares the pin for the ADC by itself; there's no need for pinMode. The default settings (12 bits, 11 dB) are exactly what we want for 0 to 3.3 V.</span></li>
+  <li data-lines="10"><b class="what">analogRead.</b> Returns the raw number, 0 to 4095 (uncalibrated).
+    <span class="why">For a "ratio" (for example, the knob's position as a percentage), the raw number is good enough and fast.</span></li>
+  <li data-lines="11"><b class="what">analogReadMilliVolts.</b> Returns the actual voltage in millivolts, using the factory calibration.
+    <span class="why">When the voltage itself matters (a sensor that says "one degree per 10 millivolts", or a battery voltage), this function is more accurate. <code>uint32_t</code> means a positive 32-bit number, the same type the function returns.</span></li>
+  <li data-lines="12"><b class="what">map(value, fromLow, fromHigh, toLow, toHigh).</b> Moves a number from one range to another: 0→0, 4095→100, 2048→50.
+    <span class="why"><code>map</code> works with whole numbers and throws away the fraction. That's fine for a percentage. Its formula is plain proportion: <code>(raw − 0) × (100 − 0) ÷ (4095 − 0) + 0</code>.</span></li>
+  <li data-lines="14"><b class="what">Serial.printf.</b> Formatted printing: <code>%4d</code> means a whole number in 4 character spaces, <code>%lu</code> means unsigned long, and <code>%%</code> means the % sign itself.
+    <span class="why">printf prints several values neatly on one line and the columns stay lined up; that's much easier to read than several prints in a row.</span></li>
+</ol>
+<p>Slowly turn the knob from one end to the other:</p>
+<div class="serial">raw=   0  mV= 142  percent=  0%
+raw= 812  mV= 803  percent= 19%
+raw=2047  mV=1760  percent= 49%
+raw=3350  mV=2780  percent= 81%
+raw=4095  mV=3142  percent=100%</div>
+<p>(Your numbers will be a little different; these are examples.) Notice that at both ends, <code>raw</code> gets "stuck" at 0 or 4095 while the millivolts are still above zero and below 3300. That's the non-linearity you saw above.</p>
+
+<div class="wokwi" data-board="esp32" data-code-from="c8">
+<p>In Wokwi, turn the potentiometer with the mouse and watch the numbers in the Serial Monitor. (The simulator's ADC is ideal, so you won't see the non-linearity at the ends of the range there.)</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": 20, "left": -170, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h3 id="smooth">Smoothing the readings (averaging)</h3>
+<p>Even if you hold the knob still, the number wobbles up and down by a few units; for example 2041, 2053, 2046. That's the ADC's natural noise. Two simple ways to calm it down:</p>
+<ul>
+  <li><b>Average several samples:</b> read 16 times in a row and take the average. Random noise largely cancels itself out.</li>
+  <li><b>Exponential moving average:</b> each time, move only 10% of the way toward the new value. Like a heavy needle on a gauge that moves slowly.</li>
+</ul>
+<div class="code" data-file="Pot_Smooth.ino" id="c9"><pre>
+// Averaging: 16 samples, one calm number
+const int POT_PIN = 34;
+const int SAMPLES = 16;
+
+int readAverage(int pin) {
+  long sum = 0;
+  for (int i = 0; i &lt; SAMPLES; i++) {
+    sum += analogRead(pin);
+    delayMicroseconds(100);      // a short gap between samples
+  }
+  return sum / SAMPLES;
+}
+
+float smoothed = 0;             // for the exponential moving average
+
+void setup() {
+  Serial.begin(115200);
+  smoothed = analogRead(POT_PIN);
+}
+
+void loop() {
+  int avg = readAverage(POT_PIN);
+  smoothed = smoothed + 0.1 * (avg - smoothed);   // 10% toward the new value
+  Serial.printf("raw:%d avg:%d smooth:%.0f\n", analogRead(POT_PIN), avg, smoothed);
+  delay(50);
+}
+</pre></div>
+<ol class="walk" data-for="c9">
+  <li data-lines="5"><b class="what">Our own function.</b> <code>int readAverage(int pin)</code> means a function that takes a pin number and returns a whole number.
+    <span class="why">We put code that's needed in several places into a function so it isn't repeated. You can use this same function for the LDR or any other analog sensor.</span></li>
+  <li data-lines="6-10"><b class="what">A for loop: add up 16 times.</b> <code>for (int i = 0; i &lt; 16; i++)</code> means "start i at zero, repeat while it's less than 16, and add one each time". Each pass adds one sample to <code>sum</code>.
+    <span class="why"><code>sum</code> is a <code>long</code> because 16 × 4095 = 65520 is bigger than the small int range on some boards; it's a good habit to use a bigger type for sums. The 100-microsecond gap makes the samples a little more independent of each other.</span></li>
+  <li data-lines="11"><b class="what">Divide and return.</b> The sum divided by 16 = the average.
+    <span class="why">The whole function takes about 2 milliseconds; perfectly acceptable for a potentiometer or a light level.</span></li>
+  <li data-lines="14,18"><b class="what">The moving average's starting value.</b> In setup, we fill <code>smoothed</code> with the first reading.
+    <span class="why">If it started at zero, for the first few seconds it would slowly "creep up" from zero and show a wrong number.</span></li>
+  <li data-lines="23"><b class="what">The exponential moving average formula.</b> Work out the gap between the new value and the smoothed value, and add 10% of it.
+    <span class="why">Make 0.1 bigger (say 0.3) and it becomes faster and noisier; make it smaller (0.05) and it becomes calmer and slower. It's a tuning knob between "speed" and "calm".</span></li>
+  <li data-lines="24"><b class="what">Comparing three numbers.</b> Prints the raw, averaged and smoothed values side by side; for example <code>raw:2047 avg:2051 smooth:2049</code>. <code>%.0f</code> means a decimal number with no digits after the point.
+    <span class="why">We chose the <code>name:number</code> format (with a colon, separated by spaces) on purpose, because the Serial Plotter in Arduino IDE 2 understands exactly this format. Close the Serial Monitor and open <code>Tools › Serial Plotter</code> to see three colored lines; the raw line is jagged and the smooth line is soft. (With <code>=</code> instead of <code>:</code>, the plotter won't recognize the numbers.)</span></li>
+</ol>
+
+<h2 id="ldr">The LDR and the voltage divider: measuring light</h2>
+<p>An LDR (light-dependent resistor) is a part whose resistance changes with light: low in bright light (say 1 kΩ) and very high in the dark (up to about one megaohm). But the ADC reads <b>voltage</b>, not resistance. So we have to turn the change in resistance into a change in voltage. The tool for this is the "voltage divider": we put the LDR in series with a fixed resistor.</p>
+
+<figure><div class="frame"><svg viewBox="0 0 660 330" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="Voltage divider circuit with an LDR">
+  <text x="160" y="30" font-size="14" text-anchor="middle" fill="#d6453d" font-weight="700">3V3</text>
+  <line x1="160" y1="38" x2="160" y2="60" stroke="#d6453d" stroke-width="3"/>
+  <rect x="148" y="60" width="24" height="70" rx="3" fill="#f5deb3" stroke="#8b5a2b" stroke-width="2"/>
+  <text x="182" y="100" font-size="14" fill="#152033">R_fixed = 10kΩ</text>
+  <line x1="160" y1="130" x2="160" y2="170" stroke="#152033" stroke-width="3"/>
+  <circle cx="160" cy="165" r="5" fill="#152033"/>
+  <line x1="160" y1="165" x2="60" y2="165" stroke="#2563eb" stroke-width="3"/>
+  <text x="55" y="160" font-size="14" text-anchor="end" fill="#2563eb" font-weight="700">GPIO35</text>
+  <text x="55" y="180" font-size="13" text-anchor="end" fill="#2563eb">Vout</text>
+  <rect x="148" y="180" width="24" height="70" rx="12" fill="#fff3c4" stroke="#c99a06" stroke-width="2"/>
+  <path d="M154 196 L166 208 M154 214 L166 226 M154 232 L166 244" stroke="#c99a06" stroke-width="2"/>
+  <text x="182" y="220" font-size="14" fill="#152033">LDR</text>
+  <path d="M230 175 L200 195 M240 190 L210 210" stroke="#e0781f" stroke-width="2.5"/>
+  <text x="246" y="186" font-size="12" fill="#e0781f">light</text>
+  <line x1="160" y1="250" x2="160" y2="280" stroke="#222" stroke-width="3"/>
+  <line x1="140" y1="280" x2="180" y2="280" stroke="#222" stroke-width="3"/><line x1="148" y1="287" x2="172" y2="287" stroke="#222" stroke-width="3"/><line x1="156" y1="294" x2="164" y2="294" stroke="#222" stroke-width="3"/>
+  <text x="190" y="292" font-size="13" fill="#222">GND</text>
+  <rect x="330" y="40" width="310" height="250" rx="12" fill="#f5f7fb" stroke="#dbe2ec"/>
+  <text x="485" y="70" font-size="15" text-anchor="middle" fill="#152033" font-weight="800">Vout = 3.3 × R_LDR ÷ (10k + R_LDR)</text>
+  <text x="620" y="110" font-size="13" text-anchor="end" fill="#152033">Bright light (LDR ≈ 1k): 0.30 V</text>
+  <text x="620" y="145" font-size="13" text-anchor="end" fill="#152033">Room light (LDR ≈ 10k): 1.65 V</text>
+  <text x="620" y="180" font-size="13" text-anchor="end" fill="#152033">Dusk (LDR ≈ 50k): 2.75 V</text>
+  <text x="620" y="215" font-size="13" text-anchor="end" fill="#152033">Total darkness (LDR ≈ 1M): 3.27 V</text>
+  <text x="620" y="262" font-size="13" text-anchor="end" fill="#12a37f" font-weight="700">Darker → higher voltage → bigger number</text>
+</svg></div>
+<figcaption>A voltage divider with the LDR at the bottom and a 10 kΩ resistor at the top. The LDR values are typical for a GL5528 and vary from part to part.</figcaption></figure>
+
+<div class="callout example"><div class="ct">The voltage divider formula, step by step with numbers</div>
+<p>Current flows from 3V3 through both resistors to GND. The voltage at the middle point is the share that drops across the LDR: <code>Vout = Vin × R_LDR ÷ (R_fixed + R_LDR)</code>.</p>
+<p>In room light the LDR is about 10 kΩ: <code>3.3 × 10k ÷ (10k + 10k) = 3.3 × 0.5 = 1.65V</code>. Right in the middle of the range.</p>
+<p>In partial darkness the LDR is about 50 kΩ: <code>3.3 × 50k ÷ 60k = 2.75V</code>. In bright light, 1 kΩ: <code>3.3 × 1k ÷ 11k = 0.30V</code>.</p></div>
+<div class="callout why"><div class="ct">Why a 10 kΩ fixed resistor?</div>
+<p>A voltage divider is most sensitive when its two resistors are close in value; that's where the smallest change in the LDR makes the biggest change in voltage. A GL5528's resistance in ordinary room light is about 10 to 20 kΩ, so 10 kΩ gives the best sensitivity exactly in the range that matters for a night light (the change from room light to darkness). If the fixed resistor were 1 MΩ, Vout would stay close to zero in all normal lighting and the differences would get lost.</p></div>
+<div class="callout tip"><div class="ct">Want brighter = bigger number?</div>
+<p>Swap the LDR and the fixed resistor (LDR on top to 3V3, resistor at the bottom to GND). Then the relationship is reversed. We chose this arrangement because the LDR module in the Wokwi simulator is built exactly this way too (a 10 kΩ resistor to VCC and the LDR to GND), and we want the code to behave the same in both places.</p></div>
+
+<h3 id="hysteresis">The boundary problem: why one threshold isn't enough (hysteresis)</h3>
+<p>The simplest night light: "if the voltage is above 2400 millivolts, LED on, otherwise off". The problem? At dusk, when the light sits right near the boundary, ADC noise pushes the number up and down between 2398 and 2403, and the LED flickers like a broken lamp.</p>
+<p>The fix is "hysteresis": <b>two</b> separate thresholds. Turn on at 2600 millivolts, but turn off only when it drops back below 2200. The gap between the two (400 millivolts) is much bigger than the noise, so there's no more flickering.</p>
+
+<figure><div class="frame"><svg viewBox="0 0 660 260" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="Hysteresis chart">
+  <line x1="60" y1="210" x2="640" y2="210" stroke="#152033" stroke-width="1.5"/>
+  <line x1="60" y1="210" x2="60" y2="20" stroke="#152033" stroke-width="1.5"/>
+  <line x1="60" y1="80" x2="640" y2="80" stroke="#d6453d" stroke-dasharray="6 5" stroke-width="2"/>
+  <line x1="60" y1="130" x2="640" y2="130" stroke="#12a37f" stroke-dasharray="6 5" stroke-width="2"/>
+  <text x="636" y="74" font-size="12" text-anchor="end" fill="#d6453d">2600 mV: turn on</text>
+  <text x="636" y="148" font-size="12" text-anchor="end" fill="#12a37f">2200 mV: turn off</text>
+  <path d="M60 190 C120 180 150 150 190 120 S240 70 260 78 S285 90 300 76 S330 60 360 72 S400 110 420 100 S450 140 470 150 S560 185 640 190" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <rect x="236" y="220" width="226" height="18" fill="#e0781f" opacity=".85"/>
+  <text x="349" y="233" font-size="12" text-anchor="middle" fill="#fff" font-weight="700">LED on</text>
+  <text x="30" y="30" font-size="12" fill="#152033">mV</text>
+  <text x="120" y="252" font-size="12" text-anchor="middle" fill="#4d5b70">day</text>
+  <text x="350" y="252" font-size="12" text-anchor="middle" fill="#4d5b70">night</text>
+  <text x="560" y="252" font-size="12" text-anchor="middle" fill="#4d5b70">morning</text>
+</svg></div>
+<figcaption>The blue curve is the LDR voltage over one night. Despite the small ups and downs near the red line, the LED turns on only once and off only once.</figcaption></figure>
+
+<div class="callout analogy"><div class="ct">Example: a heater's thermostat</div>
+<p>A good thermostat turns the heater on at 19 degrees and off at 22 degrees, not both at 20 degrees. Otherwise the heater would switch on and off every few seconds and wear out quickly. Hysteresis is in every control device around you.</p></div>
+
+<h2 id="nightlight">Project: an automatic night light</h2>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"R1","name":"10 kΩ fixed resistor","img":"resistor.svg","pins":[["1","to 3V3"],["2","middle point"]]},
+    {"id":"LDR","name":"LDR light-dependent resistor","img":"ldr.svg","pins":[["1","middle point (no polarity)"],["2","to GND"]]},
+    {"id":"R2","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO4 side"],["2","LED side"]]},
+    {"id":"LED1","name":"White or yellow LED","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−)"]]}
+  ],
+  "wires":[["3V3","R1.1","red"],["GPIO35","R1.2","blue"],["R1.2","LDR.1","blue"],["LDR.2","GND","black"],["GPIO4","R2.1","orange"],["R2.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>Top: the voltage divider (3V3 → 10 kΩ → middle point → LDR → GND), with the middle point going to GPIO35. Bottom: the usual LED on GPIO4.</figcaption></div>
+
+<div class="code" data-file="Night_Light.ino" id="c10"><pre>
+// Automatic night light with an LDR and hysteresis
+const int LDR_PIN = 35;               // middle of the voltage divider (ADC1_CH7)
+const int LED_PIN = 4;
+const uint32_t DARK_ON_MV   = 2600;   // above this: it's dark, turn on
+const uint32_t LIGHT_OFF_MV = 2200;   // below this: it's light, turn off
+
+bool lampOn = false;
+
+uint32_t readLdrMv() {
+  uint32_t sum = 0;
+  for (int i = 0; i &lt; 8; i++) sum += analogReadMilliVolts(LDR_PIN);
+  return sum / 8;                     // average of 8 samples
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+}
+
+void loop() {
+  uint32_t mv = readLdrMv();
+
+  if (!lampOn &amp;&amp; mv &gt; DARK_ON_MV) {           // it got dark
+    lampOn = true;
+    digitalWrite(LED_PIN, HIGH);
+  } else if (lampOn &amp;&amp; mv &lt; LIGHT_OFF_MV) {   // it got light enough
+    lampOn = false;
+    digitalWrite(LED_PIN, LOW);
+  }
+
+  Serial.printf("LDR=%lu mV  lamp=%s\n", (unsigned long)mv, lampOn ? "ON" : "OFF");
+  delay(200);
+}
+</pre></div>
+<ol class="walk" data-for="c10">
+  <li data-lines="2"><b class="what">GPIO35 for the LDR.</b> Another ADC1 pin.
+    <span class="why">We chose ADC1 so nothing breaks when you add Wi-Fi (for example, to report the light level to your phone).</span></li>
+  <li data-lines="4-5"><b class="what">The two hysteresis thresholds.</b> On at 2600 and off at 2200 millivolts.
+    <span class="why">With a 10 kΩ resistor, 2600 mV means the LDR is about 37 kΩ (twilight), and 2200 mV means about 20 kΩ. Tune these numbers later to the real values in your own room: first watch the Serial Monitor in the light and in the dark, then set the thresholds.</span></li>
+  <li data-lines="7"><b class="what">Remembering the lamp's state.</b>
+    <span class="why">Hysteresis is impossible without memory: the decision depends on whether the lamp is currently on or off.</span></li>
+  <li data-lines="9-13"><b class="what">A reading function with averaging.</b> Reads the millivolts 8 times and takes the average. Here the for loop has a one-line body and doesn't need curly braces.
+    <span class="why">Averaging reduces the noise and hysteresis handles the rest of the flicker. Two layers of protection. We used millivolts so the thresholds have a physical meaning and are the same on every board.</span></li>
+  <li data-lines="23-25"><b class="what">The turn-on condition.</b> Only if the lamp is off <b>and</b> the voltage has gone above 2600.
+    <span class="why">The <code>!lampOn</code> condition means this branch isn't even considered while the lamp is on. Each branch is for one state only.</span></li>
+  <li data-lines="26-29"><b class="what">The turn-off condition.</b> <code>else if</code>: only if the lamp is on <b>and</b> the voltage has dropped below 2200.
+    <span class="why">Between 2200 and 2600 neither branch runs, and the lamp keeps its previous state. This "dead zone" is the heart of hysteresis.</span></li>
+  <li data-lines="31-32"><b class="what">Report.</b> Prints the voltage and the lamp's state, 5 times a second.
+    <span class="why">Light changes slowly; 200 milliseconds is more than fast enough for a night light. (A delay is fine here because there's nothing else to do; if you add a button, switch to millis.)</span></li>
+</ol>
+<div class="serial">LDR=1638 mV  lamp=OFF
+LDR=2107 mV  lamp=OFF
+LDR=2615 mV  lamp=ON
+LDR=2580 mV  lamp=ON
+LDR=2390 mV  lamp=ON
+LDR=2150 mV  lamp=OFF</div>
+<p>Notice: on lines 4 and 5 the voltage dropped below 2600, but the lamp stayed on. It only turned off once the voltage fell below 2200. That means hysteresis is working.</p>
+
+<div class="wokwi" data-board="esp32" data-code-from="c10">
+<p>Wokwi has no bare LDR; instead it has a "light sensor module" that contains exactly this voltage divider (LDR + 10 kΩ resistor), with its output on the <code>AO</code> pin. We don't need the <code>DO</code> pin for now. During the simulation, click the module and use the slider to raise and lower the light level (lux). With Wokwi's default settings, the lamp turns on below about 15 lux and off above about 40 lux.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": 40, "left": -260, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "yellow" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.1", "black", [] ],
+    [ "ldr1:AO", "esp:35", "blue", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<div class="callout info"><div class="ct">Ready-made LDR modules (with a blue potentiometer)</div>
+<p>Cheap light sensor modules usually have four pins (<code>VCC, GND, DO, AO</code>) and a small blue potentiometer. <code>AO</code> is the voltage divider output. <code>DO</code> is the digital output of a built-in comparator whose threshold you set with the potentiometer on the module (with no programmable hysteresis). If you have one of these modules, connect <code>AO</code> to GPIO35, make sure VCC goes to 3V3 (not 5V), and <b>don't</b> add the external 10 kΩ resistor; the module already has it. On most of these modules "darker = bigger number" too, but some three-pin modules (for example the KY-018) are wired the other way round. So run the code first, cover the sensor with your hand and see whether the millivolts go up or down. If they go down, swap the <code>&gt;</code> and <code>&lt;</code> in the code and adjust the two thresholds to match the numbers you saw.</p></div>
+
+<h2 id="video">Helpful video</h2>
+<div class="video" data-yt="wIcC8-g9Lnw" data-title="Understanding Arduino Interrupts | Hardware, Pin Change &amp; Timer Interrupts" data-channel="DroneBot Workshop" data-lang="English">
+  <div class="sum"><ul>
+    <li>This video uses an Arduino Uno, but the idea of hardware interrupts and the button bounce problem apply to the ESP32 in exactly the same way. Focus on the "Hardware Interrupts" part.</li>
+    <li>The Pin Change Interrupt and Timer Interrupt parts are specific to the Uno's chip; on the ESP32 every GPIO has its own hardware interrupt, so that complexity isn't needed. Just skim those parts.</li>
+    <li>Notice why the presenter declares variables <code>volatile</code> and why he keeps the ISR short. On the ESP32 you also need <code>IRAM_ATTR</code>, which the Uno doesn't have.</li>
+  </ul></div>
+</div>
+<p>Further reading: the <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/adc.html" target="_blank" rel="noopener">official ADC documentation for Arduino-ESP32</a>, the <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/gpio.html" target="_blank" rel="noopener">GPIO and interrupt documentation</a>, and the <a href="https://docs.arduino.cc/language-reference/en/functions/time/millis/" target="_blank" rel="noopener">millis page in the Arduino reference</a>.</p>
+
+<h2 id="debug">When it doesn't work: troubleshooting</h2>
+<div class="table-wrap"><table>
+<tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+<tr><td>Without pressing, the button's reading randomly switches between 0 and 1</td><td>A floating pin: plain <code>INPUT</code> with no resistor, or pin 34 to 39, which has no internal pull-up</td><td>Write <code>INPUT_PULLUP</code> and take the button to GND; on 34 to 39, add an external 10 kΩ resistor.</td></tr>
+<tr><td>The button always reads as "pressed"</td><td>The button is rotated 90 degrees and you've used two always-connected legs</td><td>Use diagonal legs (1 and 4), or rotate the button 90 degrees.</td></tr>
+<tr><td>The logic is backwards (released = on)</td><td>With a pull-up, pressed = LOW</td><td>Compare with <code>== LOW</code>, as in the <code>Button_Pullup</code> code.</td></tr>
+<tr><td>One press is counted several times</td><td>Bounce</td><td>Debounce with millis; if it still happens, raise DEBOUNCE_MS to 50.</td></tr>
+<tr><td>With delay, some presses get lost</td><td>The program doesn't read the pin during the delay</td><td>Remove the delay and use the millis pattern.</td></tr>
+<tr><td>The board resets with <code>Guru Meditation Error</code> when you press the button</td><td>An ISR without <code>IRAM_ATTR</code>, or Serial.print/delay inside the ISR</td><td>Keep the ISR short, only a flag or a counter; move the printing to loop.</td></tr>
+<tr><td>analogRead is always 0 or always 4095</td><td>The potentiometer's middle leg isn't connected, or both outer legs go to the same place</td><td>Measure the middle leg's voltage with a multimeter; it should change between 0 and 3.3 as you turn the knob.</td></tr>
+<tr><td>The analog reading broke after you turned on Wi-Fi</td><td>You used an ADC2 pin (for example 4, 25, 26, 27)</td><td>Move the sensor to one of 32 to 39 (ADC1).</td></tr>
+<tr><td>At dusk the night light keeps switching on and off</td><td>A single threshold without hysteresis, or the two thresholds are too close together</td><td>Two thresholds at least a few hundred millivolts apart, plus averaging.</td></tr>
+<tr><td>The LDR gives almost the same number in all lighting</td><td>Wrong fixed resistor (for example 100 Ω instead of 10 kΩ)</td><td>Check the color bands: 10 kΩ = brown, black, orange.</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">Coach's advice</div>
+<p>In this lesson you picked up two tools that separate amateurs from professionals: <b>millis instead of delay</b> and <b>real numbers before thresholds</b>. Never guess a threshold; first open the Serial Monitor, watch the values under real conditions and write them down, then choose your number. And every time you're about to write <code>delay</code>, ask yourself: "During this time, does my program need to listen for anything else?" If the answer is yes, delay is off-limits. Solve the exercises below without looking at the answers; if you get stuck, open the hint first, not the answer.</p></div>
+
+<h2 id="quiz">Lesson quiz</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">A button is connected between GPIO27 and GND, and your code has <code>pinMode(27, INPUT_PULLUP)</code>. When you press the button, what does <code>digitalRead(27)</code> return?</p>
+  <ol><li data-why="With a pull-up, the released state is HIGH; pressing connects the pin to GND.">HIGH</li><li>LOW</li><li data-why="With a pull-up the pin never floats; it's either HIGH or LOW.">A random number</li><li data-why="digitalRead only gives HIGH or LOW, not an analog number.">4095</li></ol>
+  <div class="fb">Pressing the button connects the pin straight to GND, and the internal pull-up resistor prevents a short circuit. The result: LOW. This is called "reversed logic", or active low.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">Which form of checking elapsed time with millis is correct and safe against overflow?</p>
+  <ol><li data-why="This addition form breaks after the counter overflows (about 49.7 days).">if (millis() &gt;= last + 500)</li><li data-why="loop might not run during that exact millisecond (for example while Serial is busy) and skip that moment; then the condition never comes true again.">if (millis() == last + 500)</li><li data-why="delay stops the program; this isn't the millis pattern at all.">delay(500); last = millis();</li><li>if (millis() - last &gt;= 500) with last as an unsigned long</li></ol>
+  <div class="fb">Subtracting <code>unsigned long</code> numbers gives the right answer even when the counter starts again from zero. The rule: time is always unsigned long, and comparisons are always done by subtraction.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">You connected an analog sensor to GPIO26, and it worked fine while Wi-Fi was off. After turning Wi-Fi on, the numbers became meaningless. Why?</p>
+  <ol><li>GPIO26 is on ADC2, and ADC2 can't be used while Wi-Fi is on</li><li data-why="Wi-Fi doesn't change the 3V3 voltage in a way that breaks only one pin.">Wi-Fi halves the supply voltage</li><li data-why="The attenuation doesn't change automatically with Wi-Fi.">Wi-Fi changes the ADC attenuation to 0 dB</li><li data-why="GPIO26 is also a DAC output, but that's not the problem; the root cause is ADC2.">GPIO26 is output-only</li></ol>
+  <div class="fb">The Wi-Fi driver uses ADC2 itself. For analog sensors, always choose ADC1 (GPIO32 to 39).</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">The LDR is at the bottom (to GND) and the 10 kΩ resistor is at the top (to 3V3). If the LDR is 30 kΩ at some moment, roughly what is the voltage at the middle point?</p>
+  <ol><li data-why="That's the fixed resistor's share; we want the voltage across the LDR.">0.83 V</li><li data-why="1.65 V only happens when the two resistors are equal.">1.65 V</li><li>2.48 V</li><li data-why="3.3 V only happens when the LDR is infinite (total darkness).">3.3 V</li></ol>
+  <div class="fb"><code>3.3 × 30k ÷ (10k + 30k) = 3.3 × 0.75 ≈ 2.48V</code>.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">Why does our night light have two thresholds (2600 and 2200 millivolts) instead of one?</p>
+  <ol><li data-why="The ESP32 has no limit on the number of conditions.">Because the ADC can only compare two numbers</li><li>So that near the boundary, noise doesn't make it switch on and off over and over (hysteresis)</li><li data-why="Power consumption doesn't change with the number of thresholds.">To reduce power consumption</li><li data-why="The LED has nothing to do with ADC calibration.">Because an LED has two legs</li></ol>
+  <div class="fb">The gap between the two thresholds creates a "dead zone" that is bigger than the noise; the same thing a heater's thermostat does.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">Which of these is allowed and correct inside an ISR (interrupt function)?</p>
+  <ol><li data-why="Serial in an ISR can cause a lock-up or a crash.">Serial.println("pressed")</li><li data-why="delay is forbidden in an ISR; an ISR must finish in a few microseconds.">delay(50) for debouncing</li><li data-why="Wi-Fi work is far too slow and complex; never in an ISR.">Sending a message to your phone over Wi-Fi</li><li>Incrementing a volatile counter</li></ol>
+  <div class="fb">An ISR should be as short as a doorbell ring: change a flag or a counter and return. The heavy work is done by loop.</div>
+</div>
+
+<h2 id="practice">Exercises</h2>
+<div class="exercise"><div class="ct">Exercise 1: a counter with two buttons</div>
+<p>Connect a second button to GPIO26 (with <code>INPUT_PULLUP</code>). The first button (GPIO27) should increase a number and the second should decrease it. Print the number to the Serial Monitor and don't let it go below zero. Both buttons must be debounced.</p>
+<details><summary>Hint</summary><p>Each button needs its own three variables (<code>stableState</code>, <code>lastReading</code>, <code>lastChangeTime</code>). If you don't feel like repeating yourself, make a <code>struct</code> or two arrays of two. The "don't go below zero" condition: <code>if (count &gt; 0) count--;</code></p></details>
+</div>
+<div class="exercise"><div class="ct">Exercise 2: blink speed from a potentiometer</div>
+<p>Use a potentiometer on GPIO34 to set the blink speed of the LED on GPIO4, anywhere from 50 to 1000 milliseconds. Write it without delay (using millis) so it still works if you add a button later.</p>
+<details><summary>Hint</summary><p>Calculate <code>unsigned long interval = map(analogRead(34), 0, 4095, 50, 1000);</code> on every pass of loop, and use it in the millis condition instead of a fixed number.</p></details>
+<details><summary>Answer</summary>
+<div class="code" data-file="Pot_Blink_Speed.ino" id="ex2ans"><pre>
+const int POT_PIN = 34;
+const int LED_PIN = 4;
+unsigned long lastToggle = 0;
+bool ledOn = false;
+
+void setup() {
+  pinMode(LED_PIN, OUTPUT);
+}
+
+void loop() {
+  unsigned long interval = map(analogRead(POT_PIN), 0, 4095, 50, 1000);
+  unsigned long now = millis();
+  if (now - lastToggle &gt;= interval) {
+    lastToggle = now;
+    ledOn = !ledOn;
+    digitalWrite(LED_PIN, ledOn);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="ex2ans">
+  <li data-lines="11"><b class="what">A variable interval.</b> On every pass of loop, the potentiometer's number is mapped to the range 50 to 1000 milliseconds.
+    <span class="why">Because it's recalculated on every pass, turning the knob takes effect immediately; even in the middle of a long blink.</span></li>
+  <li data-lines="12-17"><b class="what">The same millis pattern.</b> Only the variable interval replaces the INTERVAL constant.
+    <span class="why">Once you've learned the millis pattern properly, the only things that ever change are "what" and "how often".</span></li>
+</ol>
+</details>
+</div>
+<div class="exercise"><div class="ct">Exercise 3: a night light with a manual button</div>
+<p>Add a button (GPIO27) to the night light project that cycles through three modes in order: "automatic" → "always on" → "always off" → "automatic". Print the current mode to the Serial Monitor. The program must not contain any delay.</p>
+<details><summary>Hint</summary><p>Create a variable <code>int mode = 0;</code>. On each (debounced) press: <code>mode = (mode + 1) % 3;</code>. The <code>%</code> sign is the remainder of a division, and it makes the value go back to 0 after 2. Read the LDR every 200 ms using millis.</p></details>
+</div>
+
+<div class="callout info"><div class="ct">The lesson in three lines</div>
+<p>A digital input without a pull-up floats; <code>INPUT_PULLUP</code> + a button to GND + reversed logic, plus debouncing with millis, make a button reliable. <code>millis()</code> with the "subtract and compare" pattern instead of delay lets several jobs run at once; interrupts are only for very fast events. The 12-bit ADC (0 to 4095) with 11 dB attenuation reads about 0.15 to 3.1 V; use ADC1, <code>analogReadMilliVolts</code> is more accurate, and with a voltage divider and hysteresis you can turn any resistive sensor, like an LDR, into a stable decision.</p></div>
+
+</article>
+</body>
+</html>
