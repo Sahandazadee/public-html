@@ -1,0 +1,1552 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ابزارهای پروژه واقعی: FreeRTOS، OTA، LittleFS و API · مستر کلاس ESP32</title>
+<meta name="description" content="از اسکچ سرگرمی تا دستگاه واقعی: Taskها و صف در FreeRTOS، آپدیت بی‌سیم OTA، سیستم فایل LittleFS، فراخوانی API اینترنتی با HTTPS و JSON، و چک‌لیست پایداری برای دستگاهی که ماه‌ها روشن می‌ماند.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="5-4">
+
+<p class="lede">تا اینجا برنامه‌هایی نوشتی که روی میز کار می‌کنند: برد کنار لپ‌تاپ است، کابل USB وصل است و اگر گیر کرد دکمه EN را می‌زنی. ولی دستگاه واقعی جای دیگری زندگی می‌کند: داخل سقف، پشت کمد، روی پشت‌بام. آنجا کسی دکمه ریست نمی‌زند و کابل USB نیست. در این درس چهار ابزاری را یاد می‌گیری که فاصله «اسکچ سرگرمی» تا «دستگاه واقعی» را پر می‌کنند: چند کار هم‌زمان با <b>FreeRTOS</b>، آپدیت بی‌سیم با <b>OTA</b>، نگه‌داشتن فایل و تنظیمات با <b>LittleFS</b>، و حرف زدن با سرویس‌های اینترنتی با <b>API</b>. آخر درس هم یک چک‌لیست پایداری داریم و همه را در یک پروژه کوچک کنار هم می‌گذاریم.</p>
+
+<div class="goals">
+  <div><h4>🎯 بعد از این درس می‌توانی</h4><ul>
+    <li>با <code>xTaskCreatePinnedToCore</code> چند Task بسازی و با صف (Queue) و Mutex بین آن‌ها داده را امن جابه‌جا کنی</li>
+    <li>معنی «Task watchdog got triggered» و «stack overflow» را بفهمی و درستشان کنی</li>
+    <li>برنامه را بدون کابل، از طریق Wi-Fi روی برد بریزی (ArduinoOTA و صفحه آپدیت وب)</li>
+    <li>فایل را در حافظه فلش بنویسی و بخوانی و صفحه وب را از LittleFS سرو کنی</li>
+    <li>از یک API واقعی (هوای تهران) با HTTPS داده بگیری، JSON را تجزیه کنی و به گوشی‌ات هشدار بفرستی</li>
+    <li>دستگاهی بسازی که ماه‌ها بدون دخالت تو کار کند و علت هر ریست را ثبت کند</li>
+  </ul></div>
+  <div><h4>🧰 پیش‌نیاز و وسایل</h4><ul>
+    <li>درس <a href="4-1.html">۴.۱</a> (Wi-Fi، الگوی <code>secrets.h</code>، NTP) و <a href="4-2.html">۴.۲</a> (WebServer)؛ درس <a href="5-1.html">۵.۱</a> (JSON و TLS) کمک می‌کند</li>
+    <li>برد ESP32 DevKitC، دو LED با دو مقاومت ۲۲۰ اهم، یک پتانسیومتر ۱۰ کیلو، یک دکمه فشاری</li>
+    <li>برای پروژه آخر: نمایشگر OLED ۰٫۹۶ اینچ SSD1306 (درس <a href="3-3.html">۳.۳</a>)</li>
+    <li>کتابخانه‌ها: <b>ArduinoJson</b> نسخه ۷ (Benoit Blanchon)، <b>Adafruit SSD1306</b> و <b>Adafruit GFX Library</b>؛ بقیه (WiFi، WebServer، HTTPClient، ArduinoOTA، LittleFS، Update، Preferences) داخل خود core هستند</li>
+    <li>Arduino-ESP32 core نسخه <b>3.x</b> (این درس با 3.3.12 تست شده)</li>
+  </ul></div>
+</div>
+
+<div class="callout info"><div class="ct">نقشه درس</div>
+<p>درس بلند است، ولی هر بخش مستقل است. اگر خسته شدی، بعد از هر بخش استراحت کن. ترتیب: <a href="#rtos">FreeRTOS</a> ← <a href="#ota">OTA</a> ← <a href="#littlefs">LittleFS</a> ← <a href="#api">API</a> ← <a href="#robust">پایداری</a> ← <a href="#project">پروژه ترکیبی</a>.</p></div>
+
+<!-- ======================= FreeRTOS ======================= -->
+<h2 id="rtos">بخش ۱: FreeRTOS، چند کار هم‌زمان بدون قاطی شدن</h2>
+
+<h3>مشکل: loop() تنها، زود شلوغ می‌شود</h3>
+<p>فرض کن دستگاهی می‌خواهی که: یک LED را هر ۲۵۰ میلی‌ثانیه چشمک بزند، یک LED دیگر را هر ۱ ثانیه، هر ۲۰۰ میلی‌ثانیه پتانسیومتر را بخواند، هر ۱۰ دقیقه هوای تهران را از اینترنت بگیرد، و همیشه به صفحه وب جواب بدهد. با <code>delay()</code> غیرممکن است، چون هر delay همه کارهای دیگر را متوقف می‌کند. با <code>millis()</code> (درس <a href="3-1.html">۳.۱</a>) شدنی است، ولی loop پر از <code>if (millis() - lastX &gt;= ...)</code> می‌شود. بدتر از همه: گرفتن هوا از اینترنت ممکن است ۲ تا ۵ ثانیه طول بکشد و در این مدت LEDها و صفحه وب هم منتظر می‌مانند.</p>
+
+<p>راه حل حرفه‌ای این است که هر کار را جدا بنویسی، انگار هر کدام برنامه کوچک خودش را دارد، و یک «مدیر» تصمیم بگیرد هر لحظه نوبت کیست. این مدیر <b>FreeRTOS</b> است: یک سیستم‌عامل بی‌درنگ (Real-Time Operating System) کوچک که <b>همیشه</b> روی ESP32 در حال اجراست، حتی وقتی تو خبر نداری.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره: آشپزخانه رستوران</div>
+<p>یک رستوران را تصور کن. اگر فقط <b>یک آشپز</b> داشته باشد (این همان loop تنهاست)، باید برنج را بگذارد، بدود کباب را برگرداند، بدود سالاد درست کند، و اگر پای تلفن سفارش‌ها گیر کند، کباب می‌سوزد. رستوران واقعی <b>چند آشپز</b> دارد (هر کدام یک <b>Task</b>): یکی مسئول برنج، یکی کباب، یکی سالاد. <b>سرآشپز</b> (زمان‌بند FreeRTOS یا Scheduler) تصمیم می‌گیرد چه کسی از اجاق استفاده کند. ESP32 دو اجاق دارد (دو هسته)، پس دو آشپز می‌توانند دقیقا هم‌زمان بپزند.</p>
+<p>آشپزها با هم حرف نمی‌زنند که کار هم را خراب نکنند؛ سفارش را روی <b>پیشخوان</b> می‌گذارند (این <b>Queue</b> یا صف است). و فقط یک <b>چاقوی بزرگ</b> هست؛ هر کس برش داشت، بقیه صبر می‌کنند تا سر جایش بگذارد (این <b>Mutex</b> است).</p></div>
+
+<h3>راز: loop() خودش یک Task است</h3>
+<p>وقتی در Arduino IDE برنامه می‌نویسی، core آردوینو قبل از همه چیز یک Task به اسم <code>loopTask</code> می‌سازد که <code>setup()</code> را یک بار و بعد <code>loop()</code> را بی‌نهایت بار صدا می‌زند. مشخصات این Task در core 3.3.12 (از فایل <code>main.cpp</code> و <code>sdkconfig</code> خود core):</p>
+<div class="table-wrap"><table>
+<tr><th>ویژگی</th><th>مقدار loopTask</th><th>یعنی چه</th></tr>
+<tr><td>هسته</td><td>هسته ۱ (<code>ARDUINO_RUNNING_CORE</code>)</td><td>هسته ۰ بیشتر برای Wi-Fi و بلوتوث است</td></tr>
+<tr><td>اولویت</td><td>1</td><td>اولویت پایین؛ Task بیکار (Idle) اولویت 0 دارد</td></tr>
+<tr><td>Stack</td><td>8192 بایت (۸ کیلوبایت)</td><td>حافظه‌ای که متغیرهای محلی loop در آن می‌نشینند</td></tr>
+</table></div>
+<p>یعنی تو از روز اول با FreeRTOS کار می‌کردی. حالا فقط یاد می‌گیری آشپز دوم و سوم را هم استخدام کنی. (Wi-Fi هم خودش چند Task با اولویت بالا روی هسته ۰ دارد؛ برای همین است که Wi-Fi «پشت صحنه» کار می‌کند.)</p>
+
+<h3>اولین Taskها: دو LED با دو سرعت</h3>
+<p>مدار: دو LED، هر کدام با مقاومت ۲۲۰ اهم خودش، روی GPIO4 و GPIO5. پتانسیومتر روی GPIO34 را هم همین حالا وصل کن چون در مثال بعدی لازم است.</p>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"R1","name":"مقاومت ۲۲۰ اهم (LED سریع)","img":"resistor.svg","pins":[["1","طرف اول"],["2","طرف دوم"]]},
+    {"id":"LED1","name":"LED قرمز (سریع، GPIO4)","img":"led.svg","pins":[["A","آند (+) پایه بلند"],["K","کاتد (−) پایه کوتاه"]]},
+    {"id":"R2","name":"مقاومت ۲۲۰ اهم (LED کند)","img":"resistor.svg","pins":[["1","طرف اول"],["2","طرف دوم"]]},
+    {"id":"LED2","name":"LED سبز (کند، GPIO5)","img":"led.svg","pins":[["A","آند (+) پایه بلند"],["K","کاتد (−) پایه کوتاه"]]},
+    {"id":"POT","name":"پتانسیومتر ۱۰ کیلو اهم","img":"pot.svg","pins":[["VCC","پایه کناری: ۳٫۳ ولت"],["SIG","پایه وسط: ولتاژ متغیر"],["GND","پایه کناری دیگر: زمین"]]}
+  ],
+  "wires":[["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"],
+           ["GPIO5","R2.1","purple"],["R2.2","LED2.A","purple"],["LED2.K","GND","black"],
+           ["3V3","POT.VCC","red"],["GPIO34","POT.SIG","blue"],["POT.GND","GND","black"]]
+}</script><figcaption>یک مدار برای هر دو مثال FreeRTOS: LED سریع روی GPIO4، LED کند روی GPIO5، پتانسیومتر روی GPIO34 (ADC1، فقط ورودی؛ با Wi-Fi هم کار می‌کند).</figcaption></div>
+
+<div class="callout warn"><div class="ct">دقت کن: GPIO5 یک Strapping Pin است</div>
+<p>GPIO5 هنگام روشن شدن نقش کوچکی در تنظیم بوت دارد. یک LED با مقاومت ۲۲۰ اهم مشکلی ایجاد نمی‌کند، ولی اگر برد تو موقع روشن شدن رفتار عجیبی داشت، LED دوم را به GPIO18 ببر و عدد را در کد عوض کن (درس <a href="1-3.html">۱.۳</a>).</p></div>
+
+<div class="code" data-file="TwoTasks.ino" id="rtosBlink"><pre>
+// دو LED با دو سرعت مختلف، هر کدام در Task خودش
+const int LED_FAST = 4;   // LED سریع
+const int LED_SLOW = 5;   // LED کند
+
+void blinkFast(void *param) {          // تابع Task اول
+  pinMode(LED_FAST, OUTPUT);
+  bool on = false;
+  for (;;) {                           // Task هرگز نباید تمام شود
+    on = !on;
+    digitalWrite(LED_FAST, on);
+    vTaskDelay(pdMS_TO_TICKS(250));    // ۲۵۰ میلی‌ثانیه کنار برو
+  }
+}
+
+void blinkSlow(void *param) {          // تابع Task دوم
+  pinMode(LED_SLOW, OUTPUT);
+  bool on = false;
+  for (;;) {
+    on = !on;
+    digitalWrite(LED_SLOW, on);
+    vTaskDelay(pdMS_TO_TICKS(1000));   // ۱ ثانیه
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  xTaskCreatePinnedToCore(
+    blinkFast,     // کدام تابع
+    "blinkFast",   // اسم Task (فقط برای عیب‌یابی)
+    2048,          // اندازه Stack به «بایت»
+    NULL,          // پارامتر ورودی (نداریم)
+    1,             // اولویت
+    NULL,          // دستگیره Task (لازم نداریم)
+    1);            // هسته ۱
+  xTaskCreatePinnedToCore(blinkSlow, "blinkSlow", 2048, NULL, 1, NULL, 1);
+  Serial.printf("setup() runs on core %d\n", xPortGetCoreID());
+}
+
+void loop() {                          // loop خودش هم یک Task است
+  Serial.printf("loop() alive on core %d, millis=%lu\n",
+                xPortGetCoreID(), millis());
+  delay(2000);
+}
+</pre></div>
+<ol class="walk" data-for="rtosBlink">
+  <li data-lines="5"><b class="what">تابع Task.</b> هر Task یک تابع معمولی با این شکل دقیق است: <code>void اسم(void *param)</code>. ورودی <code>param</code> یک «اشاره‌گر به هر چیزی» است که موقع ساختن Task می‌توانی به آن بدهی.
+    <span class="why">FreeRTOS برای همه Taskها یک شکل ثابت می‌خواهد تا بتواند با همه یکسان رفتار کند. اگر شکل تابع فرق کند، کامپایلر خطا می‌دهد.</span></li>
+  <li data-lines="6-7"><b class="what">کار یک‌باره اول Task.</b> مثل یک <code>setup</code> کوچک مخصوص همین Task: پین را خروجی می‌کند و یک متغیر محلی برای وضعیت LED می‌سازد.
+    <span class="why">متغیر <code>on</code> داخل Task است و روی Stack همین Task زندگی می‌کند. هر Task Stack جدای خودش را دارد، پس دو Task با متغیرهای هم‌نام قاطی نمی‌شوند.</span></li>
+  <li data-lines="8,12"><b class="what">حلقه بی‌پایان <code>for (;;)</code>.</b> Task باید تا ابد در یک حلقه بماند. این همان نقش <code>loop()</code> است.
+    <span class="why">اگر تابع Task به <code>}</code> آخر برسد و return کند، ESP32 با خطا (abort) ریست می‌شود. اگر واقعا کار Task تمام شد، باید خودش را با <code>vTaskDelete(NULL);</code> پاک کند.</span></li>
+  <li data-lines="11"><b class="what">vTaskDelay و pdMS_TO_TICKS.</b> <code>vTaskDelay</code> به زمان‌بند می‌گوید «من فعلا کاری ندارم، اجاق را به دیگران بده». واحد آن «تیک» است؛ <code>pdMS_TO_TICKS(250)</code> میلی‌ثانیه را به تیک تبدیل می‌کند.
+    <span class="why">روی ESP32 آردوینو هر تیک ۱ میلی‌ثانیه است (<code>CONFIG_FREERTOS_HZ=1000</code>)، پس تبدیل عدد را عوض نمی‌کند؛ ولی اگر روزی کد را روی سیستمی با تیک ۱۰ میلی‌ثانیه ببری، بدون این ماکرو زمان‌ها ۱۰ برابر می‌شوند. عادت درست را از اول بساز.</span></li>
+  <li data-lines="15-23"><b class="what">Task دوم.</b> دقیقا همان الگو، فقط با پین و زمان دیگر.
+    <span class="why">ببین چقدر ساده شد: هر Task فقط به کار خودش فکر می‌کند. هیچ <code>if (millis() - last ...)</code> درهمی نیست.</span></li>
+  <li data-lines="27-34"><b class="what">xTaskCreatePinnedToCore با هفت ورودی.</b> به ترتیب: تابع، اسم، اندازه Stack، پارامتر، اولویت، دستگیره (Handle)، شماره هسته.
+    <span class="why">«PinnedToCore» یعنی «به این هسته سنجاقش کن». اگر هسته را مشخص نکنی (تابع <code>xTaskCreate</code>)، Task می‌تواند روی هر دو هسته اجرا شود؛ برای شروع، سنجاق کردن رفتار را قابل پیش‌بینی‌تر می‌کند.</span></li>
+  <li data-lines="30"><b class="what">2048 یعنی ۲۰۴۸ بایت.</b> این مهم‌ترین نکته ESP32 است: در FreeRTOS نسخه ESP-IDF اندازه Stack به <b>بایت</b> است.
+    <span class="why">در FreeRTOS استاندارد (مثلا روی STM32) همین عدد به «word» است و هر word چهار بایت؛ یعنی 2048 آنجا ۸ کیلوبایت می‌شد. اگر کدی از اینترنت برداشتی که Stack را 512 گذاشته، روی ESP32 فقط ۵۱۲ بایت می‌گیری و احتمالا برد کرش می‌کند. برای Task ساده ۲۰۴۸، برای Task با <code>Serial.printf</code> حدود ۳۰۰۰ تا ۴۰۹۶، و برای Task با HTTPS دست‌کم ۸ تا ۱۲ کیلوبایت بگذار.</span></li>
+  <li data-lines="32"><b class="what">اولویت (Priority).</b> عددی از 0 تا 24؛ بزرگ‌تر یعنی مهم‌تر. وقتی دو Task آماده اجرا هستند، زمان‌بند همیشه اولویت بالاتر را انتخاب می‌کند. Taskهای هم‌اولویت به نوبت (هر تیک) اجرا می‌شوند.
+    <span class="why">۱ همان اولویت loop است. برای شروع همه را ۱ یا ۲ بگذار. اولویت بالا به Taskی بده که <b>زود</b> باید جواب بدهد و <b>کوتاه</b> کار می‌کند؛ Task طولانی با اولویت بالا بقیه را گرسنه نگه می‌دارد.</span></li>
+  <li data-lines="35"><b class="what">Task دوم در یک خط.</b> همان هفت ورودی، بدون توضیح.
+    <span class="why">بعد از این خط سه Task روی هسته ۱ داریم: loopTask و دو چشمک‌زن؛ به‌علاوه Taskهای خود سیستم روی هسته ۰.</span></li>
+  <li data-lines="39-43"><b class="what">loop هم کار خودش را می‌کند.</b> هر ۲ ثانیه یک پیام چاپ می‌کند؛ <code>xPortGetCoreID()</code> شماره هسته فعلی را برمی‌گرداند.
+    <span class="why">نکته مهم: در ESP32 آردوینو <code>delay()</code> در واقع همان <code>vTaskDelay</code> است (در core تعریف شده <code>vTaskDelay(ms / portTICK_PERIOD_MS)</code>)، پس delay در loop هم CPU را به Taskهای دیگر می‌دهد و چشمک‌ها قطع نمی‌شوند. ولی <code>delayMicroseconds()</code> و حلقه‌های خالی مثل <code>while(...) {}</code> واقعا CPU را قفل می‌کنند.</span></li>
+</ol>
+
+<div class="serial">setup() runs on core 1
+loop() alive on core 1, millis=312
+loop() alive on core 1, millis=2312
+loop() alive on core 1, millis=4312</div>
+<p>و روی برد: LED قرمز ۲ بار در ثانیه و LED سبز هر ۲ ثانیه یک بار (۱ ثانیه روشن، ۱ ثانیه خاموش) چشمک می‌زند، کاملا مستقل از هم.</p>
+
+<div class="callout why"><div class="ct">پس vTaskDelay با delay چه فرقی دارد؟</div>
+<p>در ESP32 آردوینو از نظر رفتار تقریبا هیچ؛ هر دو Task فعلی را می‌خوابانند و CPU آزاد می‌شود. تفاوت در واحد است: <code>delay(ms)</code> میلی‌ثانیه می‌گیرد و <code>vTaskDelay(ticks)</code> تیک. داخل Taskها از <code>vTaskDelay(pdMS_TO_TICKS(...))</code> استفاده می‌کنیم چون زبان خود FreeRTOS است و روی هر سیستمی درست کار می‌کند. اگر می‌خواهی کاری <b>دقیقا</b> هر ۱۰۰ میلی‌ثانیه تکرار شود (بدون این که زمان اجرای خود کار به آن اضافه شود)، از <code>vTaskDelayUntil</code> استفاده کن.</p></div>
+
+<h3>انتقال امن داده: صف (Queue)</h3>
+<p>حالا مسئله واقعی: یک Task سنسور را می‌خواند و Task دیگری باید آن را نمایش بدهد. اولین فکر: «یک متغیر سراسری بگذارم، یکی بنویسد و دیگری بخواند». برای یک <code>int</code> ساده معمولا کار می‌کند، ولی برای داده بزرگ‌تر (مثلا یک struct با دما و رطوبت و زمان) ممکن است Task نمایش <b>وسط نوشتن</b> آن را بخواند: دمای جدید با رطوبت قدیمی! به این باگ «Race Condition» (مسابقه) می‌گویند و بدترین نوع باگ است، چون هر هزار بار یک بار رخ می‌دهد.</p>
+<p><b>صف</b> راه حل رسمی FreeRTOS است. صف یک لوله با تعداد خانه مشخص است: یک Task از یک سر <b>کپی</b> داده را می‌گذارد و Task دیگر از سر دیگر برمی‌دارد، به همان ترتیب (اول وارد، اول خارج). FreeRTOS تضمین می‌کند که هیچ‌وقت داده نصفه جابه‌جا نشود.</p>
+
+<pre class="mermaid">flowchart LR
+  POT["پتانسیومتر<br/>GPIO34"] --> S["Task حسگر<br/>اولویت ۲<br/>هر ۲۰۰ میلی‌ثانیه"]
+  S -- "xQueueSend" --> Q[("صف<br/>۱۰ خانه")]
+  Q -- "xQueueReceive" --> D["Task نمایش<br/>اولویت ۱"]
+  D --> LED["LED با PWM<br/>GPIO4"]
+  D --> M{{"Mutex<br/>قفل سریال"}}
+  L["loopTask<br/>گزارش Stack"] --> M
+  M --> SER["Serial Monitor"]</pre>
+
+<div class="code" data-file="QueueDemo.ino" id="rtosQueue"><pre>
+// Task حسگر ← صف (Queue) ← Task نمایش، به‌علاوه قفل Serial
+const int POT_PIN = 34;          // پتانسیومتر (ADC1، فقط ورودی)
+const int LED_PIN = 4;           // LED با روشنایی متغیر (PWM)
+
+QueueHandle_t potQueue;          // صف بین دو Task
+SemaphoreHandle_t serialMutex;   // قفل Serial Monitor
+TaskHandle_t sensorHandle = NULL;
+TaskHandle_t displayHandle = NULL;
+
+void sensorTask(void *param) {
+  for (;;) {
+    int raw = analogRead(POT_PIN);                  // 0 تا 4095
+    if (xQueueSend(potQueue, &amp;raw, 0) != pdPASS) {  // صبر نکن
+      // صف پر است: این نمونه را دور بریز
+    }
+    vTaskDelay(pdMS_TO_TICKS(200));                 // ۵ بار در ثانیه
+  }
+}
+
+void displayTask(void *param) {
+  int value;
+  for (;;) {
+    // تا ۱ ثانیه منتظر داده بمان؛ در این مدت CPU آزاد است
+    if (xQueueReceive(potQueue, &amp;value, pdMS_TO_TICKS(1000)) == pdPASS) {
+      ledcWrite(LED_PIN, value / 16);               // 0..4095 → 0..255
+      if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        Serial.printf("pot=%4d  led=%3d\n", value, value / 16);
+        xSemaphoreGive(serialMutex);                // قفل را پس بده
+      }
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  ledcAttach(LED_PIN, 5000, 8);                     // 5kHz، ۸ بیت
+  potQueue = xQueueCreate(10, sizeof(int));         // ۱۰ خانه، هر کدام یک int
+  serialMutex = xSemaphoreCreateMutex();
+  if (potQueue == NULL || serialMutex == NULL) {
+    Serial.println("Out of memory!");
+    while (true) delay(1000);
+  }
+  xTaskCreatePinnedToCore(sensorTask, "sensor", 3072, NULL, 2, &amp;sensorHandle, 1);
+  xTaskCreatePinnedToCore(displayTask, "display", 4096, NULL, 1, &amp;displayHandle, 1);
+}
+
+void loop() {
+  delay(5000);
+  if (xSemaphoreTake(serialMutex, portMAX_DELAY) == pdTRUE) {
+    Serial.printf("[stack] sensor free=%u B, display free=%u B, heap=%u B\n",
+                  (unsigned)uxTaskGetStackHighWaterMark(sensorHandle),
+                  (unsigned)uxTaskGetStackHighWaterMark(displayHandle),
+                  (unsigned)ESP.getFreeHeap());
+    xSemaphoreGive(serialMutex);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="rtosQueue">
+  <li data-lines="5-8"><b class="what">دستگیره‌ها (Handle).</b> <code>QueueHandle_t</code> و <code>SemaphoreHandle_t</code> و <code>TaskHandle_t</code> مثل «شماره تلفن» صف، قفل و Taskها هستند؛ خود شیء را FreeRTOS در حافظه می‌سازد و ما فقط شماره‌اش را نگه می‌داریم.
+    <span class="why">سراسری هستند تا همه Taskها به آن‌ها دسترسی داشته باشند. خود دستگیره بعد از ساخته شدن عوض نمی‌شود، پس سراسری بودنش خطری ندارد.</span></li>
+  <li data-lines="12-13"><b class="what">خواندن و فرستادن.</b> <code>xQueueSend(صف، آدرس داده، زمان صبر)</code> محتوای <code>raw</code> را <b>کپی</b> می‌کند و در صف می‌گذارد. علامت <code>&amp;</code> یعنی «آدرس این متغیر».
+    <span class="why">چون کپی می‌شود، بعد از این خط <code>raw</code> می‌تواند عوض شود بدون این که داده داخل صف خراب شود. زمان صبر <code>0</code> یعنی «اگر صف پر است منتظر نمان»؛ Task سنسور نباید به خاطر کندی نمایش عقب بیفتد.</span></li>
+  <li data-lines="14"><b class="what">اگر صف پر بود.</b> <code>xQueueSend</code> مقدار <code>errQUEUE_FULL</code> برمی‌گرداند و ما عمدا کاری نمی‌کنیم: این نمونه دور ریخته می‌شود.
+    <span class="why">در دستگاه واقعی باید تصمیم بگیری: «داده جدید مهم‌تر است یا قدیمی؟». برای نمایش، تازه‌ترین داده مهم است؛ برای لاگ، همه داده‌ها. این تصمیم را آگاهانه بگیر، نه تصادفی.</span></li>
+  <li data-lines="24"><b class="what">xQueueReceive با زمان صبر.</b> Task نمایش تا ۱ ثانیه منتظر می‌ماند تا چیزی به صف برسد. در این مدت واقعا <b>می‌خوابد</b> و صفر درصد CPU مصرف می‌کند.
+    <span class="why">این زیباترین بخش صف است: Task نمایش نیازی به vTaskDelay ندارد، چون خود انتظار برای صف، CPU را آزاد می‌کند. به محض رسیدن داده، FreeRTOS بیدارش می‌کند.</span></li>
+  <li data-lines="25"><b class="what">روشنایی LED.</b> عدد ۱۲ بیتی ADC (۰ تا ۴۰۹۵) تقسیم بر ۱۶ می‌شود ۰ تا ۲۵۵، یعنی بازه PWM هشت بیتی.
+    <span class="why">همان ledcWrite درس <a href="3-2.html">۳.۲</a> با API نسخه ۳. در core 2.x باید از <code>ledcSetup</code> و <code>ledcAttachPin</code> با شماره کانال استفاده می‌کردی.</span></li>
+  <li data-lines="26-29"><b class="what">Mutex دور Serial.</b> <code>xSemaphoreTake</code> چاقو را برمی‌دارد (تا ۱۰۰ میلی‌ثانیه صبر می‌کند اگر دست کس دیگری است)، چاپ می‌کند و <code>xSemaphoreGive</code> آن را پس می‌دهد.
+    <span class="why">بدون قفل، اگر loop و Task نمایش هم‌زمان چاپ کنند، خط‌ها وسط هم می‌افتند: <code>pot=12[stack] sens34 led=...</code>. هر منبع مشترکی (Serial، I2C، یک فایل، یک متغیر بزرگ) را که بیش از یک Task از آن استفاده می‌کنند، با Mutex محافظت کن. قانون طلایی: <b>هر Take یک Give دارد</b>، وگرنه بقیه تا ابد منتظر می‌مانند.</span></li>
+  <li data-lines="37-42"><b class="what">ساختن صف و قفل و بررسی موفقیت.</b> <code>xQueueCreate(10, sizeof(int))</code> صفی با ۱۰ خانه می‌سازد که هر خانه اندازه یک int است (۴ بایت).
+    <span class="why">صف و قفل از Heap حافظه گرفته می‌شوند. اگر حافظه تمام باشد <code>NULL</code> برمی‌گردد، و استفاده از NULL یعنی کرش. همیشه بررسی کن. صف و قفل باید <b>قبل</b> از ساختن Taskها ساخته شوند، چون Taskها بلافاصله شروع به استفاده می‌کنند.</span></li>
+  <li data-lines="43-44"><b class="what">اولویت‌ها و دستگیره‌ها.</b> Task حسگر اولویت ۲ دارد و Task نمایش ۱. این بار دستگیره (<code>&amp;sensorHandle</code>) را می‌گیریم.
+    <span class="why">خواندن سنسور کوتاه و حساس به زمان است، پس اولویت بالاتر. دستگیره را لازم داریم تا بعدا از بیرون درباره Task سؤال کنیم (مثلا چقدر Stack مصرف کرده).</span></li>
+  <li data-lines="49-54"><b class="what">uxTaskGetStackHighWaterMark.</b> «علامت بالاترین سطح آب» یعنی کمترین مقدار Stack آزادی که این Task تا حالا داشته، در ESP-IDF به <b>بایت</b>.
+    <span class="why">این عدد ابزار تنظیم Stack است: اگر برای Task ۴۰۹۶ بایت گذاشتی و این عدد ۲۸۰۰ است، یعنی حداکثر حدود ۱۳۰۰ بایت مصرف شده؛ می‌توانی Stack را کم کنی و RAM آزاد کنی. اگر زیر ۵۰۰ بایت شد، Stack را بیشتر کن. ESP.getFreeHeap هم کل RAM آزاد را نشان می‌دهد.</span></li>
+</ol>
+
+<div class="serial">pot=2048  led=128
+pot=2051  led=128
+pot=4095  led=255
+[stack] sensor free=1964 B, display free=2312 B, heap=289140 B
+pot=4095  led=255</div>
+<p>(عددهای Stack و Heap روی برد تو کمی فرق می‌کنند؛ مهم این است که بدانی چطور بخوانی‌شان.)</p>
+
+<div class="wokwi" data-board="esp32" data-code-from="rtosQueue">
+<p>در Wokwi امتحان کن: پتانسیومتر را بچرخان و ببین روشنایی LED و عددها در Serial Monitor عوض می‌شوند. FreeRTOS در Wokwi کامل شبیه‌سازی می‌شود، پس Taskها، صف و Mutex دقیقا مثل برد واقعی رفتار می‌کنند. کتابخانه اضافه‌ای لازم نیست.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": -110, "left": 180, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 130, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 50, "left": 210, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h3>وقتی Stack کم می‌آید (Stack Overflow)</h3>
+<p>هر Task یک جعبه حافظه به اندازه‌ای که گفتی دارد. متغیرهای محلی، آرایه‌ها و هر تابعی که صدا می‌زنی در این جعبه جا می‌گیرند. <code>Serial.printf</code> خودش چند صد بایت می‌خواهد و یک اتصال HTTPS چند کیلوبایت. اگر جعبه لبریز شود، داده روی حافظه همسایه ریخته می‌شود. خوشبختانه ESP32 مراقب است و قبل از خرابی کامل، این را چاپ و برد را ریست می‌کند:</p>
+<div class="serial">***ERROR*** A stack overflow in task display has been detected.
+
+Backtrace: 0x40081f2e:0x3ffb5f40 0x40086d15:0x3ffb5f60 ...
+Rebooting...</div>
+<p>علامت‌های رایج Stack کم: همین پیام، یا <code>Guru Meditation Error: Core 1 panic'ed (LoadProhibited)</code>، یا ریست‌های تصادفی وقتی Task کار سنگین‌تری می‌کند (مثلا اولین اتصال HTTPS). درمان: عدد Stack را در <code>xTaskCreatePinnedToCore</code> دو برابر کن، بعد با <code>uxTaskGetStackHighWaterMark</code> ببین واقعا چقدر لازم است. آرایه بزرگ (مثلا <code>char buf[4000]</code>) را هم داخل Task محلی تعریف نکن؛ سراسری یا <code>static</code> کن تا از Stack بیرون برود.</p>
+
+<h3>نگهبان Task (Task Watchdog): چرا برد خودش ریست می‌شود؟</h3>
+<p>ESP32 یک «نگهبان» دارد که هر چند وقت یک بار سر می‌زند ببیند Taskهای مهم زنده‌اند. در core آردوینو این نگهبان <b>Task بیکار هسته ۰</b> (<code>IDLE0</code>) را زیر نظر دارد، با مهلت <b>۵ ثانیه</b> (<code>CONFIG_ESP_TASK_WDT_TIMEOUT_S=5</code>). Task بیکار فقط وقتی اجرا می‌شود که هیچ Task دیگری روی آن هسته کار نداشته باشد. پس اگر یک Task روی هسته ۰ پنج ثانیه بدون وقفه کار کند، IDLE0 هیچ‌وقت نوبت نمی‌گیرد و نگهبان نتیجه می‌گیرد «سیستم قفل شده» و برد را ریست می‌کند.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>نگهبان شب یک ساختمان هر ساعت باید دکمه‌ای را در لابی بزند تا سیستم بفهمد بیدار است. اگر کسی جلوی لابی را با یک کار بی‌پایان بسته باشد و نگهبان نتواند به دکمه برسد، زنگ خطر به صدا درمی‌آید. vTaskDelay همان «راه دادن» به نگهبان است.</p></div>
+
+<div class="code" data-file="WatchdogDemo_WRONG.ino" id="wdtBad"><pre>
+// ❌ نمونه عمدا غلط: Task حریص بدون استراحت روی هسته ۰
+volatile unsigned long counter = 0;
+
+void greedyTask(void *param) {
+  for (;;) {
+    counter++;              // بی‌وقفه کار می‌کند و هرگز کنار نمی‌رود
+    // vTaskDelay(1);       // ✅ درمان: این خط را از حالت توضیح دربیاور
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  xTaskCreatePinnedToCore(greedyTask, "greedy", 2048, NULL, 1, NULL, 0);
+}
+
+void loop() {
+  Serial.println(counter);
+  delay(1000);
+}
+</pre></div>
+<ol class="walk" data-for="wdtBad">
+  <li data-lines="4-9"><b class="what">Task حریص.</b> یک حلقه بی‌پایان که فقط عدد را زیاد می‌کند و هیچ‌وقت <code>vTaskDelay</code> صدا نمی‌زند.
+    <span class="why">این Task آماده اجراست و اولویتش (۱) از IDLE0 (۰) بیشتر است؛ پس زمان‌بند همیشه او را انتخاب می‌کند و IDLE0 گرسنه می‌ماند.</span></li>
+  <li data-lines="13"><b class="what">روی هسته ۰.</b> آخرین ورودی <code>0</code> است.
+    <span class="why">اگر همین Task را روی هسته ۱ بگذاری، در تنظیمات پیش‌فرض ریست نمی‌شود (IDLE1 زیر نظر نیست) ولی loop و Taskهای هم‌اولویت هسته ۱ کند می‌شوند. «ریست نمی‌شود» یعنی «مشکل پنهان است»، نه «درست است».</span></li>
+  <li data-lines="7"><b class="what">درمان.</b> یک <code>vTaskDelay(1)</code> (حتی ۱ میلی‌ثانیه) در حلقه کافی است تا IDLE0 نوبت بگیرد.
+    <span class="why">قانون: هر حلقه بی‌پایان در هر Task باید جایی بخوابد یا منتظر چیزی بماند (vTaskDelay، xQueueReceive، xSemaphoreTake با زمان صبر). حلقه‌های انتظار مثل <code>while (!ready) {}</code> دشمن شماره یک هستند.</span></li>
+</ol>
+<p>حدود ۵ ثانیه بعد از روشن شدن چیزی شبیه این می‌بینی و برد ریست می‌شود:</p>
+<div class="serial">E (5316) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (5316) task_wdt:  - IDLE0 (CPU 0)
+E (5316) task_wdt: Tasks currently running:
+E (5316) task_wdt: CPU 0: greedy
+E (5316) task_wdt: CPU 1: IDLE1
+E (5316) task_wdt: Aborting.
+abort() was called at PC 0x400d8c5f on core 0
+...
+Rebooting...</div>
+<p>خط <code>CPU 0: greedy</code> مجرم را لو می‌دهد: اسمی که به Task دادی. برای همین اسم Taskها را معنادار انتخاب کن.</p>
+
+<div class="callout warn"><div class="ct">راه غلط: خاموش کردن نگهبان</div>
+<p>در انجمن‌ها کدهایی مثل <code>disableCore0WDT()</code> می‌بینی. این کار پیام را قطع می‌کند ولی مشکل سر جایش است: Taskهای سیستم (مثل Wi-Fi) روی هسته ۰ گرسنه می‌مانند و اتصال شبکه عجیب قطع می‌شود. نگهبان دشمن تو نیست؛ دوستی است که می‌گوید کدت یک جا گیر کرده.</p></div>
+
+<div class="callout tip"><div class="ct">Task یا millis()؟ کدام را انتخاب کنم؟</div>
+<p>برای دو سه کار سبک و سریع، <code>millis()</code> در loop ساده‌تر است و باگ‌های هم‌زمانی ندارد. Task را وقتی بیاور که: ۱) یک کار <b>کند و مسدودکننده</b> داری (HTTPS، خواندن کند سنسور، نوشتن روی SD) که نباید بقیه را منتظر بگذارد؛ ۲) کارها زمان‌بندی کاملا متفاوت دارند؛ ۳) می‌خواهی از هسته دوم استفاده کنی. هر Task جدید یعنی Stack جدا، و هر داده مشترک یعنی صف یا Mutex. بی‌دلیل Task نساز.</p></div>
+
+<!-- ======================= OTA ======================= -->
+<h2 id="ota">بخش ۲: آپدیت بی‌سیم (OTA)، برنامه‌ریزی بدون کابل</h2>
+<p>دستگاهت را داخل سقف کاذب نصب کرده‌ای تا چراغ‌ها را کنترل کند. یک هفته بعد یک باگ پیدا می‌کنی. بدون OTA باید نردبان بیاوری، سقف را باز کنی، لپ‌تاپ را با کابل USB بالا ببری. با <b>OTA</b> (Over-The-Air، «از راه هوا») برنامه جدید را از پشت میزت، از طریق همان Wi-Fi، روی برد می‌ریزی.</p>
+
+<h3>OTA پشت صحنه چطور کار می‌کند؟ (پارتیشن‌ها)</h3>
+<p>حافظه فلش ۴ مگابایتی ESP32 مثل یک هارد دیسک به چند «پارتیشن» تقسیم شده است. نقشه این تقسیم را در منوی <code>Tools › Partition Scheme</code> انتخاب می‌کنی. نکته کلیدی OTA این است: برای آپدیت امن باید <b>دو جای برنامه</b> (app0 و app1) وجود داشته باشد. برنامه جدید در جای خالی نوشته می‌شود، در حالی که برنامه فعلی هنوز در حال اجراست. فقط وقتی دانلود کامل و سالم تمام شد، یک «یادداشت» کوچک (پارتیشن <code>otadata</code>) عوض می‌شود که «از دفعه بعد از جای دیگر بوت کن». اگر وسط آپدیت برق برود، برنامه قدیمی دست‌نخورده باقی است.</p>
+
+<figure><div class="frame"><svg viewBox="0 0 760 260" style="direction:ltr" role="img" aria-label="نقشه پارتیشن‌های Default 4MB">
+  <style>.pt{font:13px Vazirmatn,sans-serif;fill:#fff}.pl{font:12px JetBrains Mono,monospace;fill:currentColor}.ph{font:bold 14px Vazirmatn,sans-serif;fill:currentColor}</style>
+  <text x="380" y="22" text-anchor="middle" class="ph" direction="rtl">Default 4MB with spiffs: فلش ۴ مگابایتی</text>
+  <rect x="20" y="40" width="30" height="60" fill="#888"/><text x="35" y="118" text-anchor="middle" class="pl">boot</text>
+  <rect x="50" y="40" width="20" height="60" fill="#12a37f"/><text x="60" y="135" text-anchor="middle" class="pl">nvs</text>
+  <rect x="70" y="40" width="10" height="60" fill="#e0781f"/><text x="75" y="152" text-anchor="middle" class="pl">otadata</text>
+  <rect x="80" y="40" width="240" height="60" fill="#2f7af0"/><text x="200" y="75" text-anchor="middle" class="pt">app0 (1.25MB)</text>
+  <rect x="320" y="40" width="240" height="60" fill="#8b4fd6"/><text x="440" y="75" text-anchor="middle" class="pt">app1 (1.25MB)</text>
+  <rect x="560" y="40" width="165" height="60" fill="#d6457a"/><text x="642" y="75" text-anchor="middle" class="pt">spiffs (1.375MB)</text>
+  <rect x="725" y="40" width="15" height="60" fill="#555"/><text x="732" y="118" text-anchor="middle" class="pl">core</text>
+  <text x="200" y="175" text-anchor="middle" class="ph" direction="rtl">برنامه فعلی در حال اجرا</text>
+  <text x="440" y="175" text-anchor="middle" class="ph" direction="rtl">برنامه جدید اینجا نوشته می‌شود</text>
+  <text x="642" y="175" text-anchor="middle" class="ph" direction="rtl">LittleFS از همین استفاده می‌کند</text>
+  <path d="M200 190 C 260 235, 380 235, 440 190" fill="none" stroke="currentColor" stroke-width="2" marker-end="url(#ar)"/>
+  <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+  <text x="320" y="245" text-anchor="middle" class="ph" direction="rtl">بعد از آپدیت موفق، otadata می‌گوید: از app1 بوت کن</text>
+</svg></div>
+<figcaption>نقشه واقعی فایل <code>default.csv</code> در core 3.3.12 (به نسبت، تقریبی رسم شده). عدد ۱٫۲۵ مگابایت همان «1.2MB APP» در منو است.</figcaption></figure>
+
+<div class="table-wrap"><table>
+<tr><th>گزینه در منوی Partition Scheme (برد ESP32 Dev Module)</th><th>جای برنامه</th><th>OTA؟</th><th>فضای فایل (LittleFS)</th></tr>
+<tr><td><b>Default 4MB with spiffs (1.2MB APP/1.5MB SPIFFS)</b></td><td>۲ × ۱٫۲۵ مگابایت</td><td>✅ دارد</td><td>حدود ۱٫۴ مگابایت</td></tr>
+<tr><td><b>Minimal SPIFFS (1.9MB APP with OTA/128KB SPIFFS)</b></td><td>۲ × ۱٫۹ مگابایت</td><td>✅ دارد</td><td>۱۲۸ کیلوبایت</td></tr>
+<tr><td>No OTA (2MB APP/2MB SPIFFS)</td><td>۱ × ۲ مگابایت</td><td>❌ ندارد</td><td>حدود ۱٫۹ مگابایت</td></tr>
+<tr><td>Huge APP (3MB No OTA/1MB SPIFFS)</td><td>۱ × ۳ مگابایت</td><td>❌ ندارد</td><td>حدود ۹۰۰ کیلوبایت</td></tr>
+<tr><td>No FS 4MB (2MB APP x2)</td><td>۲ × حدود ۱٫۹ مگابایت</td><td>✅ دارد</td><td>❌ ندارد</td></tr>
+</table></div>
+<div class="callout warn"><div class="ct">دام رایج: Huge APP و OTA</div>
+<p>وقتی برنامه بزرگ می‌شود (Wi-Fi + بلوتوث + HTTPS)، خطای <code>Sketch too big</code> می‌گیری و بسیاری از آموزش‌ها می‌گویند «Huge APP را انتخاب کن». آن کار خطا را برطرف می‌کند ولی <b>OTA را برای همیشه می‌کشد</b>، چون فقط یک جای برنامه دارد. برای دستگاهی که OTA لازم دارد، <b>Minimal SPIFFS</b> را انتخاب کن: برنامه تا ۱٫۹ مگابایت و OTA سالم. فقط فضای فایل به ۱۲۸ کیلوبایت کم می‌شود که برای یک صفحه تنظیمات کافی است. یادت باشد تغییر Partition Scheme فقط با آپلود USB اعمال می‌شود.</p></div>
+
+<h3>روش اول: ArduinoOTA، آپلود از خود Arduino IDE</h3>
+<p>کتابخانه <code>ArduinoOTA</code> داخل core است. برد را روی شبکه «اعلام» می‌کند (با mDNS، همان درس <a href="4-2.html#mdns">۴.۲</a>) و روی پورت <b>3232</b> منتظر برنامه جدید می‌ماند. اول فایل <code>secrets.h</code> درس ۴.۱ را کامل‌تر کن؛ این نسخه همه رمزهای این درس را دارد:</p>
+<div class="code" data-file="secrets.h" id="secrets54"><pre>
+#pragma once
+#define WIFI_SSID "MyHomeWiFi"
+#define WIFI_PASS "my-strong-password"
+#define OTA_PASS  "ota-pass-2026"      // رمز آپدیت بی‌سیم
+#define WEB_USER  "admin"              // نام کاربری صفحه آپدیت وب
+#define WEB_PASS  "change-me-now"      // رمز صفحه آپدیت وب
+#define NTFY_TOPIC "home-alert-7f3k9q" // اسم Topic ی ntfy: حدس‌ناپذیر
+</pre></div>
+<ol class="walk" data-for="secrets54">
+  <li data-lines="2-3"><b class="what">رمز Wi-Fi.</b> همان دو خط درس ۴.۱.
+    <span class="why">یک فایل رمز برای همه برنامه‌های این درس؛ هر برنامه فقط خط‌هایی را که لازم دارد استفاده می‌کند.</span></li>
+  <li data-lines="4"><b class="what">رمز OTA.</b> کسی که این رمز را نداند نمی‌تواند برنامه برد را عوض کند.
+    <span class="why">OTA بدون رمز یعنی هر کسی که به Wi-Fi تو وصل است (مهمان، همسایه‌ای که رمز را دارد، یک گوشی آلوده) می‌تواند هر برنامه‌ای روی دستگاهت بریزد.</span></li>
+  <li data-lines="5-6"><b class="what">نام کاربری و رمز صفحه آپدیت وب.</b> برای روش دوم همین بخش.
+    <span class="why">جدا از رمز OTA، تا اگر یکی لو رفت دیگری امن بماند.</span></li>
+  <li data-lines="7"><b class="what">اسم Topic ی ntfy.</b> برای بخش هشدار به گوشی (بخش ۴).
+    <span class="why">در ntfy.sh اسم Topic خودش حکم رمز را دارد؛ پس جای آن هم در secrets.h است.</span></li>
+</ol>
+
+<div class="code" data-file="BasicOTA.ino" id="otaBasic"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;ArduinoOTA.h&gt;
+#include "secrets.h"             // WIFI_SSID، WIFI_PASS، OTA_PASS
+#ifndef OTA_PASS                 // اگر در secrets.h نبود، هشدار بده
+#warning "OTA_PASS is not defined in secrets.h"
+#define OTA_PASS "change-me"
+#endif
+
+const int LED_PIN = 4;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) {   // برای سادگی؛ نسخه پایدار در درس ۴.۱
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.printf("\nIP: %s\n", WiFi.localIP().toString().c_str());
+
+  ArduinoOTA.setHostname("esp32-kitchen");  // اسم در منوی Port
+  ArduinoOTA.setPassword(OTA_PASS);         // بدون رمز، هر کسی می‌تواند فلش کند
+  ArduinoOTA
+    .onStart([]() { Serial.println("OTA start"); })
+    .onEnd([]() { Serial.println("\nOTA done, rebooting"); })
+    .onProgress([](unsigned int done, unsigned int total) {
+      Serial.printf("OTA %u%%\r", done * 100 / total);
+    })
+    .onError([](ota_error_t err) { Serial.printf("OTA error %u\n", err); });
+  ArduinoOTA.begin();                       // از اینجا به بعد منتظر آپدیت است
+  Serial.println("OTA ready");
+}
+
+void loop() {
+  ArduinoOTA.handle();                      // هر دور: «آپدیت نیامده؟»
+  static unsigned long last = 0;            // چشمک بدون delay (درس ۳.۱)
+  static bool on = false;
+  if (millis() - last &gt;= 500) {
+    last = millis();
+    on = !on;
+    digitalWrite(LED_PIN, on);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="otaBasic">
+  <li data-lines="2"><b class="what">کتابخانه ArduinoOTA.</b> جزو core است، نصب لازم ندارد.
+    <span class="why">WiFi.h را هم لازم داریم چون OTA روی شبکه کار می‌کند.</span></li>
+  <li data-lines="4-7"><b class="what">محافظ #ifndef.</b> اگر در <code>secrets.h</code> خط <code>OTA_PASS</code> را ننوشته باشی، کامپایلر یک هشدار نارنجی نشان می‌دهد و رمز موقت <code>change-me</code> گذاشته می‌شود.
+    <span class="why">برنامه با secrets.h قدیمی درس ۴.۱ هم کامپایل می‌شود، ولی هشدار یادت می‌اندازد که رمز واقعی بگذاری. هشدارهای کامپایلر را هرگز نادیده نگیر.</span></li>
+  <li data-lines="14-20"><b class="what">وصل شدن به Wi-Fi.</b> نسخه ساده برای کوتاه ماندن مثال.
+    <span class="why">در دستگاه واقعی از نسخه پایدار درس <a href="4-1.html#robust">۴.۱</a> با سقف زمان و اتصال دوباره خودکار استفاده کن. OTA بدون Wi-Fi کار نمی‌کند.</span></li>
+  <li data-lines="22"><b class="what">setHostname.</b> اسم برد روی شبکه؛ همان چیزی که در منوی Port می‌بینی.
+    <span class="why">اگر اسم ندهی، چیزی مثل <code>esp32-a0b1c2d3e4f5</code> (بر اساس MAC) می‌گیرد. وقتی سه دستگاه در خانه داری، «esp32-kitchen» خیلی بهتر است. فقط حروف کوچک انگلیسی، عدد و خط تیره استفاده کن.</span></li>
+  <li data-lines="23"><b class="what">setPassword.</b> رمز OTA. Arduino IDE موقع آپلود آن را از تو می‌پرسد.
+    <span class="why">در core 3.3 احراز هویت OTA با SHA-256 است (نسخه‌های قدیمی MD5 داشتند که دیگر امن حساب نمی‌شود). اگر نمی‌خواهی رمز خام در برنامه باشد، از <code>setPasswordHash</code> با هش SHA-256 رمز استفاده کن.</span></li>
+  <li data-lines="24-30"><b class="what">رویدادها (Callback).</b> چهار تابع کوچک برای شروع، پایان، پیشرفت و خطا. <code>[]() { ... }</code> یک «تابع بی‌نام» (lambda) در C++ است.
+    <span class="why">در <code>onStart</code> در پروژه واقعی موتورها و رله‌ها را خاموش کن و فایل‌ها را ببند؛ چند ثانیه بعد برد ریست می‌شود و نباید چیزی نیمه‌کاره بماند.</span></li>
+  <li data-lines="31"><b class="what">ArduinoOTA.begin.</b> از اینجا به بعد برد روی شبکه اعلام حضور می‌کند و منتظر آپدیت است.
+    <span class="why">باید <b>بعد</b> از وصل شدن Wi-Fi صدا زده شود.</span></li>
+  <li data-lines="36"><b class="what">ArduinoOTA.handle در هر دور loop.</b> بررسی می‌کند آیا کسی می‌خواهد آپدیت بفرستد.
+    <span class="why">اگر loop جایی با delay طولانی یا حلقه انتظار گیر کند، OTA جواب نمی‌دهد و IDE خطای «No response from device» می‌گیرد. برای همین چشمک LED را با <code>millis()</code> نوشتیم، نه delay.</span></li>
+</ol>
+
+<h3>قدم‌به‌قدم: اولین آپدیت بی‌سیم</h3>
+<ol class="steps">
+  <li><b>بار اول حتما با کابل USB.</b> برد هنوز کد OTA را ندارد، پس نمی‌تواند برنامه را از هوا بگیرد. برنامه بالا را مثل همیشه با USB آپلود کن. (Partition Scheme باید OTA داشته باشد؛ Default کافی است.)</li>
+  <li><b>Serial Monitor را ببین.</b> باید IP و <code>OTA ready</code> را ببینی.</li>
+  <li><b>کامپیوتر و برد روی یک شبکه.</b> لپ‌تاپ باید به <b>همان</b> مودم وصل باشد (نه اینترنت گوشی، نه شبکه مهمان مودم که دستگاه‌ها را از هم جدا می‌کند).</li>
+  <li><b>پورت شبکه را انتخاب کن.</b> کابل USB را جدا کن (یا بگذار بماند) و منوی <code>Tools › Port</code> را باز کن. زیر عنوان <b>Network ports</b> چیزی مثل <code>esp32-kitchen at 192.168.1.50</code> ظاهر می‌شود. اگر نیست، ۳۰ ثانیه صبر کن و منو را دوباره باز کن؛ IDE هر چند ثانیه شبکه را می‌گردد.</li>
+  <li><b>یک تغییر کوچک بده</b> (مثلا 500 را 100 کن تا LED سریع‌تر چشمک بزند) و دکمه Upload را بزن. IDE رمز را می‌پرسد: همان <code>OTA_PASS</code>.</li>
+  <li><b>نتیجه.</b> نوار پیشرفت <code>Uploading: [====    ] 45%</code> را می‌بینی. بعد برد خودش ریست می‌شود و LED با سرعت جدید چشمک می‌زند. Serial Monitor شبکه‌ای وجود ندارد؛ برای دیدن پیام‌ها هنوز کابل لازم است (یا لاگ را از طریق وب یا MQTT بفرست).</li>
+</ol>
+
+<div class="callout warn"><div class="ct">مهم: هر برنامه جدید هم باید کد OTA داشته باشد</div>
+<p>اگر برنامه‌ای را از هوا بریزی که <code>ArduinoOTA.begin</code> و <code>handle</code> ندارد (یا در setup گیر می‌کند، یا Wi-Fi اشتباه دارد)، این آخرین آپدیت بی‌سیم تو بود! دفعه بعد باید نردبان و کابل بیاوری. عادت کن: کد OTA را اول از همه در هر برنامه بگذار و قبل از فرستادن به دستگاه سقفی، آن را روی یک برد روی میز تست کن.</p></div>
+
+<h3>روش دوم: صفحه آپدیت در مرورگر (Update + WebServer)</h3>
+<p>ArduinoOTA فقط از داخل Arduino IDE و در همان شبکه کار می‌کند. گاهی می‌خواهی فایل برنامه را به کس دیگری بدهی (مثلا به مشتری) تا بدون نصب Arduino IDE آپدیت کند. راه حل: یک صفحه وب روی خود ESP32 که فایل <code>.bin</code> را می‌گیرد. کتابخانه <code>Update</code> (داخل core) نوشتن در پارتیشن دوم را انجام می‌دهد.</p>
+
+<h4>ساختن فایل .bin</h4>
+<ol class="steps">
+  <li>در Arduino IDE منوی <code>Sketch › Export Compiled Binary</code> را بزن (میان‌بر <kbd>Alt</kbd>+<kbd>Ctrl</kbd>+<kbd>S</kbd>).</li>
+  <li>بعد از کامپایل، در پوشه پروژه یک پوشه <code>build</code> ساخته می‌شود و داخل آن پوشه‌ای با اسم برد (مثلا <code>esp32.esp32.esp32</code>). با <code>Sketch › Show Sketch Folder</code> بازش کن.</li>
+  <li>چند فایل <code>.bin</code> می‌بینی. فایل درست همان است که اسمش <b>فقط</b> <code>اسم‌پروژه.ino.bin</code> است. فایل‌های <code>.bootloader.bin</code>، <code>.partitions.bin</code> و <code>.merged.bin</code> را برای OTA نفرست؛ آن‌ها برای فلش کامل با کابل هستند.</li>
+</ol>
+
+<div class="code" data-file="WebUpdate.ino" id="otaWeb"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;Update.h&gt;
+#include "secrets.h"
+#ifndef WEB_USER
+#warning "WEB_USER/WEB_PASS are not defined in secrets.h"
+#define WEB_USER "admin"
+#define WEB_PASS "change-me"
+#endif
+
+WebServer server(80);
+
+const char UPDATE_PAGE[] PROGMEM = R"HTML(
+&lt;!doctype html&gt;&lt;meta charset="utf-8"&gt;
+&lt;h3&gt;Firmware update&lt;/h3&gt;
+&lt;form method="POST" action="/update" enctype="multipart/form-data"&gt;
+  &lt;input type="file" name="firmware" accept=".bin"&gt;
+  &lt;button&gt;Upload&lt;/button&gt;
+&lt;/form&gt;)HTML";
+
+void handlePage() {
+  if (!server.authenticate(WEB_USER, WEB_PASS)) {
+    return server.requestAuthentication();          // پنجره نام کاربری و رمز
+  }
+  server.send(200, "text/html", UPDATE_PAGE);
+}
+
+void handleUploadDone() {                           // بعد از تمام شدن آپلود
+  if (!server.authenticate(WEB_USER, WEB_PASS)) {
+    return server.requestAuthentication();
+  }
+  bool ok = !Update.hasError();
+  server.send(200, "text/plain", ok ? "OK, rebooting..." : Update.errorString());
+  if (ok) {
+    delay(500);
+    ESP.restart();                                  // با برنامه جدید بالا بیا
+  }
+}
+
+void handleUploadChunk() {                          // برای هر تکه از فایل
+  if (!server.authenticate(WEB_USER, WEB_PASS)) return;
+  HTTPUpload &amp;up = server.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    Serial.printf("Update: %s\n", up.filename.c_str());
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) Update.printError(Serial);
+  } else if (up.status == UPLOAD_FILE_WRITE) {
+    if (Update.write(up.buf, up.currentSize) != up.currentSize) {
+      Update.printError(Serial);
+    }
+  } else if (up.status == UPLOAD_FILE_END) {
+    if (Update.end(true)) Serial.printf("Done: %u bytes\n", up.totalSize);
+    else Update.printError(Serial);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.printf("Open http://%s/\n", WiFi.localIP().toString().c_str());
+  server.on("/", HTTP_GET, handlePage);
+  server.on("/update", HTTP_POST, handleUploadDone, handleUploadChunk);
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();
+}
+</pre></div>
+<ol class="walk" data-for="otaWeb">
+  <li data-lines="3"><b class="what">کتابخانه Update.</b> رابط ساده برای نوشتن برنامه جدید در پارتیشن OTA خالی.
+    <span class="why">خود ArduinoOTA هم در پشت صحنه از همین کتابخانه استفاده می‌کند. ما فقط راه رسیدن فایل را (به جای IDE، مرورگر) عوض کرده‌ایم.</span></li>
+  <li data-lines="13-19"><b class="what">صفحه HTML با فرم آپلود.</b> <code>enctype="multipart/form-data"</code> یعنی «این فرم فایل می‌فرستد». <code>R"HTML( ... )HTML"</code> همان رشته خام درس ۴.۲ است.
+    <span class="why">بدون enctype مرورگر فقط اسم فایل را می‌فرستد، نه محتوای آن را. <code>accept=".bin"</code> فقط پنجره انتخاب فایل را به فایل‌های bin محدود می‌کند (امنیت نیست، راحتی است).</span></li>
+  <li data-lines="21-26"><b class="what">صفحه اصلی با رمز.</b> <code>server.authenticate</code> نام کاربری و رمز را بررسی می‌کند؛ اگر غلط بود، <code>requestAuthentication</code> پنجره ورود مرورگر را باز می‌کند.
+    <span class="why">صفحه آپدیت بدون رمز یعنی هر کسی در شبکه می‌تواند دستگاهت را صاحب شود. این احراز هویت ساده (Basic/Digest) روی HTTP رمزنگاری نشده است، پس فقط در شبکه خانگی مورد اعتماد استفاده کن و هرگز این صفحه را با Port Forwarding روی اینترنت باز نکن.</span></li>
+  <li data-lines="62"><b class="what">server.on با دو تابع.</b> برای آپلود فایل، WebServer دو تابع می‌خواهد: <code>handleUploadChunk</code> که برای <b>هر تکه</b> از فایل صدا زده می‌شود، و <code>handleUploadDone</code> که بعد از تمام شدن کل آپلود جواب را به مرورگر می‌فرستد.
+    <span class="why">فایل bin حدود یک مگابایت است و RAM آزاد ESP32 حدود ۳۰۰ کیلوبایت. پس نمی‌شود کل فایل را اول در RAM گرفت؛ باید تکه‌تکه (هر بار چند کیلوبایت) رسید و فورا در فلش نوشت.</span></li>
+  <li data-lines="43-45"><b class="what">شروع: Update.begin.</b> در اولین تکه، پارتیشن OTA خالی آماده (پاک) می‌شود. <code>UPDATE_SIZE_UNKNOWN</code> یعنی «اندازه را نمی‌دانم، تا جای خالی هست بنویس».
+    <span class="why">اگر پارتیشن OTA وجود نداشته باشد (Huge APP)، همین‌جا خطا می‌گیری و Update.printError علتش را در Serial چاپ می‌کند.</span></li>
+  <li data-lines="46-49"><b class="what">نوشتن هر تکه.</b> <code>Update.write</code> تکه را در فلش می‌نویسد و تعداد بایت نوشته‌شده را برمی‌گرداند.
+    <span class="why">اگر عدد با اندازه تکه یکی نبود، یعنی نوشتن خراب شد. بررسی کن، حدس نزن.</span></li>
+  <li data-lines="50-52"><b class="what">پایان: Update.end(true).</b> بررسی می‌کند فایل کامل و سالم است (سربرگ و checksum برنامه) و اگر بود، otadata را عوض می‌کند تا دفعه بعد از برنامه جدید بوت شود.
+    <span class="why">اگر فایل اشتباهی (مثلا یک عکس یا فایل merged) فرستاده باشی، همین‌جا رد می‌شود و برنامه قبلی سالم می‌ماند. این همان امنیت دو پارتیشن است.</span></li>
+  <li data-lines="32-37"><b class="what">جواب و ریست.</b> اگر خطایی نبود، «OK» را برای مرورگر می‌فرستد، نیم ثانیه صبر می‌کند تا پیام برسد، و <code>ESP.restart()</code>.
+    <span class="why">برنامه جدید فقط بعد از ریست اجرا می‌شود. بدون delay، ممکن است برد قبل از رسیدن جواب به مرورگر ریست شود و تو فکر کنی آپدیت شکست خورده.</span></li>
+</ol>
+<p>استفاده: آدرس IP برد را در مرورگر باز کن، نام کاربری و رمز را بزن، فایل <code>.ino.bin</code> را انتخاب و Upload کن. حدود ۱۰ تا ۲۰ ثانیه بعد «OK, rebooting...» را می‌بینی.</p>
+
+<div class="callout tip"><div class="ct">میان‌بر: کتابخانه آماده HTTPUpdateServer</div>
+<p>core 3.x یک کتابخانه به اسم <code>HTTPUpdateServer</code> هم دارد که همین صفحه را با دو خط به WebServer تو اضافه می‌کند. ما عمدا نسخه دستی را نوشتیم تا بفهمی پشت صحنه چه می‌گذرد. در آموزش‌های اینترنتی کتابخانه‌هایی مثل ElegantOTA را هم می‌بینی؛ نسخه‌های قدیمی آن (AsyncElegantOTA) منسوخ شده‌اند.</p></div>
+
+<h3>برگشت خودکار (Rollback): اگر برنامه جدید خراب بود چه؟</h3>
+<p>فرض کن برنامه جدید باگی دارد که باعث می‌شود به Wi-Fi وصل نشود. حالا دیگر OTA هم کار نمی‌کند! ESP-IDF برای این حالت «برگشت خودکار» دارد و در core آردوینو ۳ هم روشن است (<code>CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y</code>). ایده: برنامه جدید بعد از اولین بوت «در حال آزمایش» است. اگر خودش اعلام کند «من سالمم»، ماندگار می‌شود؛ اگر قبل از آن ریست شود یا خودش بگوید «خرابم»، bootloader به برنامه قبلی برمی‌گردد.</p>
+<p>به طور پیش‌فرض core آردوینو برنامه جدید را بلافاصله در شروع کار «سالم» اعلام می‌کند. برای این که خودت تصمیم بگیری:</p>
+<div class="code" data-file="RollbackCheck.ino" id="rollback"><pre>
+#include &lt;WiFi.h&gt;
+#include "esp_ota_ops.h"
+#include "secrets.h"
+
+// به core می‌گوییم: «تأیید برنامه جدید را خودم انجام می‌دهم»
+bool verifyRollbackLater() {
+  return true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - t0 &lt; 30000) delay(500);
+
+  if (WiFi.status() == WL_CONNECTED) {
+    esp_ota_mark_app_valid_cancel_rollback();   // «این نسخه سالم است»
+    Serial.println("New firmware confirmed");
+  } else {
+    Serial.println("No Wi-Fi: rolling back");
+    esp_ota_mark_app_invalid_rollback_and_reboot();  // برگرد به نسخه قبلی
+  }
+}
+
+void loop() {
+  delay(1000);
+}
+</pre></div>
+<ol class="walk" data-for="rollback">
+  <li data-lines="6-8"><b class="what">verifyRollbackLater.</b> core این تابع را به شکل «ضعیف» (weak) تعریف کرده که <code>false</code> برمی‌گرداند. وقتی خودت آن را با <code>true</code> بنویسی، نسخه تو جایگزین می‌شود و core تأیید خودکار را انجام نمی‌دهد.
+    <span class="why">این الگوی «تابع weak» در core آردوینو زیاد است: راهی برای تغییر رفتار داخلی بدون دست زدن به فایل‌های core.</span></li>
+  <li data-lines="16-18"><b class="what">تأیید.</b> اگر Wi-Fi در ۳۰ ثانیه وصل شد، <code>esp_ota_mark_app_valid_cancel_rollback()</code> می‌گوید «این نسخه ماندگار است».
+    <span class="why">معیار سلامت را خودت انتخاب کن: وصل شدن به Wi-Fi، جواب دادن سرور MQTT، یا هر چیزی که برای ادامه OTA لازم است.</span></li>
+  <li data-lines="19-22"><b class="what">رد کردن.</b> <code>esp_ota_mark_app_invalid_rollback_and_reboot()</code> برد را ریست می‌کند و bootloader نسخه قبلی را اجرا می‌کند.
+    <span class="why">اگر برنامه با کابل USB ریخته شده باشد، نسخه قبلی معتبری نیست و این تابع فقط خطا برمی‌گرداند؛ پس روی میز با آن کاری نمی‌شود. این مکانیزم فقط بعد از یک آپدیت OTA معنا دارد.</span></li>
+</ol>
+
+<div class="callout warn"><div class="ct">امنیت OTA را جدی بگیر</div>
+<p>OTA یعنی «راهی برای عوض کردن مغز دستگاه از راه دور». اگر این راه باز باشد، مهاجم هم می‌تواند از آن استفاده کند. حداقل‌ها: ۱) همیشه رمز بگذار؛ ۲) پورت 3232 و صفحه آپدیت را هرگز با Port Forwarding روی اینترنت باز نکن؛ ۳) برای دستگاهی که به دیگران می‌فروشی، OTA امضاشده (Signed OTA، مثال <code>SignedOTA</code> در کتابخانه ArduinoOTA) و Secure Boot را مطالعه کن تا فقط برنامه امضاشده با کلید خصوصی خودت پذیرفته شود.</p></div>
+<p class="note">OTA و آپلود فایل LittleFS در Wokwi شبیه‌سازی نمی‌شوند (Wokwi برنامه را مستقیم در حافظه شبیه‌ساز می‌گذارد و پورت شبکه‌ای برای IDE ندارد). این دو را روی برد واقعی تمرین کن.</p>
+
+<!-- ======================= LittleFS ======================= -->
+<h2 id="littlefs">بخش ۳: LittleFS، یک فلش‌مموری کوچک داخل ESP32</h2>
+<p>در درس ۴.۲ صفحه وب را به شکل یک رشته بزرگ داخل کد C++ نوشتیم. کار می‌کرد، ولی هر تغییر کوچک در رنگ یک دکمه یعنی کامپایل و آپلود دوباره کل برنامه. و اگر بخواهی تنظیمات (مثلا شهر انتخابی کاربر) یا لاگ چند روزه را نگه داری، متغیرها با ریست پاک می‌شوند. <b>LittleFS</b> یک «سیستم فایل» است: بخشی از حافظه فلش (همان پارتیشن <code>spiffs</code> در شکل بالا) را مثل یک فلش‌مموری کوچک با پوشه و فایل در اختیارت می‌گذارد. فایل‌ها با خاموش شدن برق و حتی با آپلود برنامه جدید (با USB یا OTA) باقی می‌مانند.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>برنامه تو مثل آشپز است و RAM مثل میز کارش: سریع ولی با تعطیلی رستوران (قطع برق) پاک می‌شود. LittleFS مثل <b>قفسه دفترها</b> در آشپزخانه است: دستور غذاها (صفحه وب) و دفتر حساب (لاگ) آنجا می‌ماند، حتی اگر آشپز عوض شود (برنامه جدید).</p></div>
+
+<div class="callout why"><div class="ct">چرا LittleFS و نه SPIFFS؟</div>
+<p>SPIFFS سیستم فایل قدیمی‌تر ESP32 است که پوشه واقعی ندارد و با قطع برق وسط نوشتن آسیب‌پذیرتر است؛ Espressif آن را دیگر توسعه نمی‌دهد. LittleFS برای میکروکنترلر طراحی شده: در برابر قطع برق مقاوم است (Power-loss resilient) و نوشتن را روی کل حافظه پخش می‌کند تا یک نقطه از فلش زود فرسوده نشود (Wear leveling). اسم پارتیشن هنوز «spiffs» است ولی LittleFS به راحتی از همان استفاده می‌کند.</p></div>
+
+<h3>نوشتن، اضافه کردن، خواندن و فهرست فایل‌ها</h3>
+<div class="code" data-file="LittleFS_Basics.ino" id="fsBasics"><pre>
+#include &lt;LittleFS.h&gt;
+
+void listFiles(const char *dir) {
+  File root = LittleFS.open(dir);
+  File f = root.openNextFile();
+  while (f) {
+    Serial.printf("  %-20s %6u bytes\n", f.name(), (unsigned)f.size());
+    f = root.openNextFile();
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  if (!LittleFS.begin(true)) {               // true = اگر خراب بود، فرمت کن
+    Serial.println("LittleFS mount failed");
+    return;
+  }
+  Serial.printf("FS: %u of %u bytes used\n",
+                (unsigned)LittleFS.usedBytes(), (unsigned)LittleFS.totalBytes());
+
+  File f = LittleFS.open("/note.txt", "w");  // w = بساز یا از اول بنویس
+  f.println("Hello from ESP32!");
+  f.close();                                 // بستن = ذخیره قطعی
+
+  f = LittleFS.open("/log.txt", "a");        // a = به آخر فایل اضافه کن
+  f.printf("boot at %lu ms\n", millis());
+  f.close();
+
+  f = LittleFS.open("/log.txt", "r");        // r = فقط خواندن
+  Serial.println("--- log.txt ---");
+  while (f.available()) {
+    Serial.write(f.read());
+  }
+  f.close();
+
+  Serial.println("--- files ---");
+  listFiles("/");
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="fsBasics">
+  <li data-lines="1"><b class="what">کتابخانه LittleFS.</b> داخل core است.
+    <span class="why">نصب جدا لازم نیست. کتابخانه‌های قدیمی مثل «LITTLEFS by lorol» را نصب نکن؛ آن‌ها مال core 1.x بودند و با core 3 تداخل دارند.</span></li>
+  <li data-lines="15-18"><b class="what">LittleFS.begin(true).</b> سیستم فایل را «سوار» (mount) می‌کند. ورودی <code>true</code> یعنی «اگر نتوانستی سوار کنی (مثلا بار اول که هنوز فرمت نشده)، فرمت کن».
+    <span class="why">بار اولی که روی برد نو اجرا می‌کنی، پارتیشن خالی و فرمت‌نشده است و بدون <code>true</code> همیشه «mount failed» می‌گیری. ولی دقت کن: اگر فایل‌ها واقعا خراب شده باشند، <code>true</code> همه را پاک می‌کند. برای دستگاهی با داده ارزشمند، اول با <code>false</code> امتحان کن و فرمت را آگاهانه انجام بده.</span></li>
+  <li data-lines="19-20"><b class="what">فضای کل و مصرف‌شده.</b> <code>totalBytes</code> و <code>usedBytes</code>.
+    <span class="why">با Partition Scheme پیش‌فرض حدود ۱٫۳ تا ۱٫۴ مگابایت می‌بینی؛ با Minimal SPIFFS فقط ۱۲۸ کیلوبایت. قبل از ذخیره لاگ طولانی، همیشه جای خالی را بدان.</span></li>
+  <li data-lines="22-24"><b class="what">حالت "w": نوشتن از اول.</b> فایل را می‌سازد؛ اگر از قبل بود، محتوایش را <b>پاک</b> می‌کند. بعد مثل Serial با <code>println</code> و <code>printf</code> در آن می‌نویسی.
+    <span class="why">اسم فایل همیشه با <code>/</code> شروع می‌شود (مسیر کامل). <code>close()</code> را فراموش نکن: تا فایل بسته نشود، ممکن است آخرین تکه داده هنوز در RAM باشد و با قطع برق از بین برود.</span></li>
+  <li data-lines="26-28"><b class="what">حالت "a": اضافه کردن.</b> به انتهای فایل اضافه می‌کند و قبلی‌ها را نگه می‌دارد.
+    <span class="why">برای لاگ همیشه "a". با هر بار ریست، یک خط <code>boot at ...</code> اضافه می‌شود. دکمه EN را چند بار بزن و ببین فایل بلندتر می‌شود؛ این ثابت می‌کند داده بعد از ریست مانده است.</span></li>
+  <li data-lines="30-35"><b class="what">حالت "r": خواندن.</b> <code>available()</code> می‌گوید چند بایت دیگر مانده و <code>read()</code> یک بایت برمی‌گرداند.
+    <span class="why">خواندن بایت به بایت برای فایل‌های کوچک ساده و کم‌حافظه است. برای فایل بزرگ، <code>f.readStringUntil('\n')</code> خط به خط می‌خواند.</span></li>
+  <li data-lines="3-10"><b class="what">فهرست فایل‌ها.</b> پوشه را باز می‌کنیم و با <code>openNextFile()</code> یکی‌یکی جلو می‌رویم تا فایل خالی (false) برگردد.
+    <span class="why">ابزار عیب‌یابی عالی: وقتی صفحه وب پیدا نمی‌شود، اول ببین فایل واقعا روی برد هست و اسمش دقیقا چیست (حروف بزرگ و کوچک فرق دارند).</span></li>
+</ol>
+<div class="serial">FS: 8192 of 1441792 bytes used
+--- log.txt ---
+boot at 523 ms
+boot at 519 ms
+--- files ---
+  log.txt                  30 bytes
+  note.txt                 18 bytes</div>
+
+<h3>صفحه وب از LittleFS</h3>
+<p>حالا صفحه وب را از کد C++ بیرون می‌کشیم. در پوشه پروژه (کنار فایل <code>.ino</code>) یک پوشه به اسم دقیق <code>data</code> بساز و این دو فایل را در آن بگذار:</p>
+<div class="code" data-lang="text" data-file="پوشه پروژه"><pre>
+LittleFS_Web/
+├── LittleFS_Web.ino
+├── secrets.h
+└── data/
+    ├── index.html
+    └── style.css
+</pre></div>
+<div class="code" data-file="data/index.html" data-lang="text" id="fsIndex"><pre>
+&lt;!doctype html&gt;
+&lt;html lang="fa" dir="rtl"&gt;
+&lt;head&gt;
+  &lt;meta charset="utf-8"&gt;
+  &lt;meta name="viewport" content="width=device-width,initial-scale=1"&gt;
+  &lt;title&gt;دستگاه من&lt;/title&gt;
+  &lt;link rel="stylesheet" href="/style.css"&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;h1&gt;سلام از LittleFS!&lt;/h1&gt;
+  &lt;p&gt;این صفحه از حافظه فلش ESP32 خوانده شد، نه از داخل کد.&lt;/p&gt;
+  &lt;p&gt;دما: &lt;b id="t"&gt;...&lt;/b&gt;&lt;/p&gt;
+  &lt;script&gt;
+    fetch('/api/temp').then(r =&gt; r.json())
+      .then(d =&gt; document.getElementById('t').textContent = d.t + ' °C');
+  &lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</pre></div>
+<ol class="walk" data-for="fsIndex">
+  <li data-lines="2-8"><b class="what">یک صفحه HTML معمولی.</b> فارسی و راست‌چین، با فایل CSS جدا.
+    <span class="why">حالا می‌توانی صفحه را روی کامپیوتر با دوبار کلیک در مرورگر ببینی و طراحی کنی، بدون کامپایل. فقط <code>fetch</code> آن روی کامپیوتر جواب نمی‌گیرد.</span></li>
+  <li data-lines="12-16"><b class="what">داده زنده با fetch.</b> صفحه ثابت است، ولی دما را از آدرس <code>/api/temp</code> که برنامه ESP32 می‌سازد می‌گیرد (همان الگوی درس ۴.۲).
+    <span class="why">جداسازی تمیز: «ظاهر» در فایل‌ها، «داده» در کد. طراح وب و برنامه‌نویس ESP32 می‌توانند جدا کار کنند.</span></li>
+</ol>
+<div class="code" data-file="data/style.css" data-lang="text" id="fsCss"><pre>
+body { font-family: sans-serif; max-width: 480px; margin: 2em auto; }
+h1   { color: #2f7af0; }
+</pre></div>
+<ol class="walk" data-for="fsCss">
+  <li data-lines="1-2"><b class="what">ظاهر صفحه در فایل جدا.</b> فونت، عرض حداکثر ۴۸۰ پیکسل (برای گوشی) و رنگ آبی تیتر.
+    <span class="why">فایل CSS را مرورگر جدا درخواست می‌کند (<code>/style.css</code>)، پس برنامه ESP32 باید برای این آدرس هم جواب داشته باشد؛ خط ۱۹ برنامه پایین همین کار را می‌کند.</span></li>
+</ol>
+
+<div class="code" data-file="LittleFS_Web.ino" id="fsWeb"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;LittleFS.h&gt;
+#include "secrets.h"
+
+WebServer server(80);
+
+void setup() {
+  Serial.begin(115200);
+  if (!LittleFS.begin(true)) {
+    Serial.println("LittleFS mount failed");
+  }
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.printf("Open http://%s/\n", WiFi.localIP().toString().c_str());
+
+  // فایل‌های ثابت مستقیم از LittleFS (بعد از LittleFS.begin)
+  server.serveStatic("/", LittleFS, "/index.html");
+  server.serveStatic("/style.css", LittleFS, "/style.css", "max-age=3600");
+
+  // داده زنده از کد
+  server.on("/api/temp", []() {
+    float t = temperatureRead();               // دمای داخلی تراشه (تقریبی)
+    server.send(200, "application/json", "{\"t\":" + String(t, 1) + "}");
+  });
+  server.onNotFound([]() { server.send(404, "text/plain", "Not found"); });
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();
+}
+</pre></div>
+<ol class="walk" data-for="fsWeb">
+  <li data-lines="10-12"><b class="what">سوار کردن LittleFS قبل از هر چیز.</b>
+    <span class="why"><code>serveStatic</code> در لحظه تعریف بررسی می‌کند که مسیر یک فایل است یا پوشه؛ اگر LittleFS هنوز سوار نشده باشد، اشتباه تشخیص می‌دهد.</span></li>
+  <li data-lines="18"><b class="what">serveStatic برای صفحه اصلی.</b> «هر کس آدرس <code>/</code> را خواست، فایل <code>/index.html</code> را از LittleFS بفرست». نوع محتوا (text/html) را از پسوند فایل حدس می‌زند.
+    <span class="why">یک خط به جای یک تابع کامل. نکته ریز: اگر به جای فایل یک <b>پوشه</b> بدهی (مثلا <code>serveStatic("/", LittleFS, "/")</code>)، کتابخانه برای آدرس <code>/</code> دنبال <code>index.htm</code> (بدون l) می‌گردد، نه index.html. ما برای جلوگیری از این دام، مسیر فایل را دقیق دادیم.</span></li>
+  <li data-lines="19"><b class="what">فایل CSS با Cache.</b> ورودی چهارم <code>"max-age=3600"</code> به مرورگر می‌گوید «این فایل را تا یک ساعت دوباره نخواه».
+    <span class="why">ESP32 یک سرور ضعیف است؛ هر درخواست کمتر یعنی جواب سریع‌تر به بقیه. برای index.html کش نگذاشتیم تا تغییراتت فورا دیده شود.</span></li>
+  <li data-lines="22-25"><b class="what">مسیر داده زنده.</b> <code>temperatureRead()</code> دمای داخلی تراشه را می‌دهد (دقیق نیست، فقط برای نمایش) و به شکل JSON فرستاده می‌شود.
+    <span class="why">در پروژه واقعی به جای آن دمای DHT22 یا هر سنسور دیگر را بگذار.</span></li>
+</ol>
+
+<h3>آپلود پوشه data روی برد (Arduino IDE 2)</h3>
+<p>Arduino IDE 2 برای ریختن پوشه <code>data</code> روی LittleFS یک افزونه لازم دارد: <a href="https://github.com/earlephilhower/arduino-littlefs-upload" target="_blank" rel="noopener">arduino-littlefs-upload</a> از Earle Philhower (سازنده core ی RP2040). از Arduino IDE نسخه 2.2.1 به بعد کار می‌کند.</p>
+<ol class="steps">
+  <li><b>دانلود.</b> به صفحه <a href="https://github.com/earlephilhower/arduino-littlefs-upload/releases" target="_blank" rel="noopener">Releases</a> برو و آخرین فایل <code>arduino-littlefs-upload-x.y.z.vsix</code> را دانلود کن (از حالت zip خارجش نکن).</li>
+  <li><b>پوشه plugins.</b> در ویندوز به <code>C:\Users\اسم‌کاربر\.arduinoIDE\</code> برو و اگر پوشه <code>plugins</code> نیست، بسازش. در مک و لینوکس: <code>~/.arduinoIDE/plugins/</code>. دقت کن اسم پوشه با نقطه شروع می‌شود (<code>.arduinoIDE</code>) و در ویندوز ممکن است پنهان باشد.</li>
+  <li><b>کپی و راه‌اندازی دوباره.</b> فایل vsix را در پوشه plugins بگذار و Arduino IDE را کامل ببند و باز کن.</li>
+  <li><b>Serial Monitor را ببند.</b> اگر باز باشد، آپلود با خطای «port doesn't exist» شکست می‌خورد.</li>
+  <li><b>اجرا.</b> <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> (در مک <kbd>⌘</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>) را بزن و فرمان <b>Upload LittleFS to Pico/ESP8266/ESP32</b> را انتخاب کن. افزونه از روی Partition Scheme انتخابی تو، اندازه و محل پارتیشن را می‌فهمد، یک تصویر LittleFS از پوشه data می‌سازد و با کابل USB روی برد می‌ریزد.</li>
+  <li><b>حالا برنامه را آپلود کن</b> (یا قبلش؛ ترتیب مهم نیست). این دو آپلود جدا از هم هستند: آپلود برنامه فایل‌ها را پاک نمی‌کند و آپلود LittleFS برنامه را.</li>
+</ol>
+<div class="callout warn"><div class="ct">دو دام رایج</div>
+<p>۱) Partition Scheme موقع آپلود LittleFS و موقع آپلود برنامه <b>باید یکی باشد</b>؛ اگر اولی را با Default و دومی را با Minimal SPIFFS بریزی، برنامه پارتیشن را جای دیگری می‌بیند و «mount failed» یا فایل‌های گم‌شده می‌گیری. ۲) آپلود LittleFS کل پارتیشن را <b>بازنویسی</b> می‌کند؛ لاگ‌ها و تنظیماتی که برنامه روی برد ساخته بود پاک می‌شوند. همین افزونه در Wokwi کار نمی‌کند؛ در Wokwi فایل‌ها را باید با کد بسازی (مثل برنامه LittleFS_Basics).</p></div>
+
+<h3>کجا چه چیزی را ذخیره کنم؟ Preferences، LittleFS یا کارت SD</h3>
+<div class="table-wrap"><table>
+<tr><th></th><th>Preferences (NVS)</th><th>LittleFS</th><th>کارت SD</th></tr>
+<tr><td>شکل داده</td><td>کلید و مقدار: <code>"boots" = 42</code></td><td>فایل و پوشه</td><td>فایل و پوشه (FAT32)</td></tr>
+<tr><td>اندازه</td><td>کوچک (پارتیشن nvs حدود ۲۰ کیلوبایت)</td><td>ده‌ها کیلوبایت تا چند مگابایت</td><td>گیگابایت‌ها</td></tr>
+<tr><td>بهترین کاربرد</td><td>تنظیمات کوچک، شمارنده، رمز Wi-Fi، آخرین وضعیت رله</td><td>صفحه وب، فایل JSON تنظیمات، لاگ کوتاه</td><td>لاگ طولانی، عکس (ESP32-CAM)، داده‌ای که با کامپیوتر می‌خوانی</td></tr>
+<tr><td>مقاومت در قطع برق</td><td>خیلی خوب (هر کلید اتمیک نوشته می‌شود)</td><td>خوب (طراحی مقاوم)</td><td>ضعیف‌تر؛ قطع برق وسط نوشتن می‌تواند FAT را خراب کند</td></tr>
+<tr><td>سخت‌افزار اضافه</td><td>ندارد</td><td>ندارد</td><td>ماژول SD و ۴ سیم SPI (درس <a href="3-3.html">۳.۳</a>)</td></tr>
+<tr><td>با آپلود برنامه پاک می‌شود؟</td><td>خیر</td><td>خیر (ولی آپلود LittleFS پاکش می‌کند)</td><td>خیر</td></tr>
+</table></div>
+<div class="callout tip"><div class="ct">فلش هم عمر دارد</div>
+<p>هر خانه حافظه فلش حدود ۱۰ هزار تا ۱۰۰ هزار بار پاک‌شدن را تحمل می‌کند. LittleFS و NVS نوشتن را پخش می‌کنند، ولی اگر هر ثانیه یک خط لاگ بنویسی، در چند ماه ضرر می‌زنی. قانون: فقط وقتی مقدار <b>عوض شد</b> ذخیره کن (نه در هر دور loop)، و لاگ پرتکرار را در RAM جمع کن و مثلا هر ۱۰ دقیقه یک‌جا بنویس.</p></div>
+
+<!-- ======================= API ======================= -->
+<h2 id="api">بخش ۴: فراخوانی API اینترنتی (HTTPS و JSON)</h2>
+<p>تا حالا ESP32 سرور بود (دیگران از او چیزی می‌خواستند). حالا برعکس: ESP32 <b>مشتری</b> (Client) می‌شود و از یک سرویس اینترنتی چیزی می‌پرسد. به آدرسی که یک سرویس برای جواب دادن به برنامه‌ها (نه انسان‌ها) آماده کرده <b>API</b> می‌گویند. جواب معمولا JSON است، همان قالبی که در درس ۵.۱ دیدی.</p>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>API مثل پنجره سفارش یک نانوایی است. لازم نیست بدانی داخل نانوایی چه خبر است؛ فقط باید زبان سفارش را بدانی («دو تا بربری») و نانوا جواب را در شکل مشخصی (کیسه نان) تحویل می‌دهد. آدرس URL سفارش توست و JSON کیسه نان.</p></div>
+
+<h3>هوای تهران از Open-Meteo</h3>
+<p><a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener">Open-Meteo</a> یک سرویس هواشناسی رایگان است که برای استفاده غیرتجاری کلید (API Key) و ثبت‌نام نمی‌خواهد. قبل از هر کدی، آدرس زیر را در مرورگر کامپیوترت باز کن تا ببینی جواب چه شکلی است؛ این عادت حرفه‌ای‌هاست:</p>
+<div class="code" data-lang="text" data-file="URL"><pre>
+https://api.open-meteo.com/v1/forecast?latitude=35.69&amp;longitude=51.39&amp;current=temperature_2m,wind_speed_10m
+</pre></div>
+<p>آدرس سه بخش دارد: <code>latitude</code> و <code>longitude</code> (عرض و طول جغرافیایی تهران)، و <code>current</code> (کدام مقدارهای «همین الان» را می‌خواهی: دمای ۲ متری زمین و سرعت باد در ارتفاع ۱۰ متری). جواب چیزی شبیه این است (کوتاه‌شده):</p>
+<div class="code" data-lang="json" data-file="جواب سرور"><pre>
+{
+  "latitude": 35.7,
+  "longitude": 51.4,
+  "timezone": "GMT",
+  "current_units": { "time": "iso8601", "interval": "seconds",
+                     "temperature_2m": "°C", "wind_speed_10m": "km/h" },
+  "current": {
+    "time": "2026-09-23T10:15",
+    "interval": 900,
+    "temperature_2m": 27.4,
+    "wind_speed_10m": 11.2
+  }
+}
+</pre></div>
+<p>ما فقط دو عدد می‌خواهیم: <code>current.temperature_2m</code> و <code>current.wind_speed_10m</code>. بقیه اضافه است و RAM را هدر می‌دهد.</p>
+
+<h3>کتابخانه لازم: ArduinoJson 7</h3>
+<ol class="steps">
+  <li>Arduino IDE → <code>Tools › Manage Libraries</code> (آیکون کتاب).</li>
+  <li>عبارت <b>ArduinoJson</b> را جست‌وجو کن و <b>ArduinoJson by Benoit Blanchon</b> را نصب کن؛ مطمئن شو نسخه <b>7.x</b> است. وابستگی ندارد.</li>
+</ol>
+
+<div class="code" data-file="WeatherTehran.ino" id="weather"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WiFiClientSecure.h&gt;
+#include &lt;HTTPClient.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#include "secrets.h"
+
+const char *URL =
+  "https://api.open-meteo.com/v1/forecast"
+  "?latitude=35.69&amp;longitude=51.39"
+  "&amp;current=temperature_2m,wind_speed_10m";
+
+bool fetchWeather(float &amp;temp, float &amp;wind) {
+  WiFiClientSecure client;
+  client.setInsecure();              // فقط برای یادگیری! پایین‌تر روش درست را ببین
+  HTTPClient http;
+  http.setConnectTimeout(5000);      // حداکثر ۵ ثانیه برای وصل شدن
+  http.setTimeout(5000);             // حداکثر ۵ ثانیه برای جواب
+  http.useHTTP10(true);              // بدون chunked، برای خواندن جریانی
+  if (!http.begin(client, URL)) return false;
+
+  int code = http.GET();
+  if (code != HTTP_CODE_OK) {
+    Serial.printf("HTTP error: %d %s\n", code, http.errorToString(code).c_str());
+    http.end();
+    return false;
+  }
+
+  JsonDocument filter;               // فقط همین دو عدد را نگه دار
+  filter["current"]["temperature_2m"] = true;
+  filter["current"]["wind_speed_10m"] = true;
+
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, http.getStream(),
+                               DeserializationOption::Filter(filter));
+  http.end();
+  if (err) {
+    Serial.printf("JSON error: %s\n", err.c_str());
+    return false;
+  }
+  temp = doc["current"]["temperature_2m"] | NAN;   // اگر نبود: NAN
+  wind = doc["current"]["wind_speed_10m"] | NAN;
+  return !isnan(temp);
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.println("Wi-Fi OK");
+}
+
+void loop() {
+  float t, w;
+  if (fetchWeather(t, w)) {
+    Serial.printf("Tehran: %.1f C, wind %.1f km/h\n", t, w);
+  }
+  delay(10UL * 60 * 1000);           // هر ۱۰ دقیقه، نه هر ثانیه
+}
+</pre></div>
+<ol class="walk" data-for="weather">
+  <li data-lines="2-4"><b class="what">سه کتابخانه.</b> <code>WiFiClientSecure</code> برای اتصال رمزنگاری‌شده (HTTPS)، <code>HTTPClient</code> برای ساختن درخواست و خواندن جواب HTTP، و <code>ArduinoJson</code> برای تجزیه JSON.
+    <span class="why">در core 3.x اسم اصلی کلاس <code>NetworkClientSecure</code> است و <code>WiFiClientSecure</code> یک اسم مستعار سازگار با قبل است؛ هر دو یکی‌اند. ما اسم آشناتر را نگه داشتیم.</span></li>
+  <li data-lines="7-10"><b class="what">آدرس API.</b> رشته‌های کنار هم در C++ خودشان به هم می‌چسبند؛ آدرس را برای خوانایی در سه خط شکستیم.
+    <span class="why">پارامترها را با <code>&amp;</code> از هم جدا کن و فاصله نگذار. یک حرف اشتباه (مثلا <code>temperature_2</code>) باعث جواب خطای 400 می‌شود.</span></li>
+  <li data-lines="13-14"><b class="what">setInsecure: رمزنگاری بدون بررسی هویت.</b> اتصال رمز می‌شود ولی ESP32 بررسی نمی‌کند که طرف مقابل واقعا open-meteo.com است.
+    <span class="why">حقیقت صادقانه (مثل درس ۵.۱): برای گرفتن دمای عمومی که رازی نیست، خطرش کم است؛ بدترین حالت این است که کسی دمای دروغ به تو بدهد. ولی برای هر چیزی که رمز یا فرمان جابه‌جا می‌کند، هرگز setInsecure نگذار. روش درست (<code>useBuiltinCACertBundle</code>) را در مثال بعدی می‌بینی.</span></li>
+  <li data-lines="16-17"><b class="what">سقف زمان.</b> <code>setConnectTimeout</code> برای وصل شدن و <code>setTimeout</code> برای انتظار جواب، هر دو به میلی‌ثانیه.
+    <span class="why">بدون سقف زمان، اگر اینترنت کند یا سرور شلوغ باشد، برنامه ممکن است مدت زیادی منتظر بماند. دستگاه واقعی هیچ‌وقت نباید بی‌نهایت منتظر چیزی بماند.</span></li>
+  <li data-lines="18"><b class="what">useHTTP10.</b> درخواست را با HTTP نسخه 1.0 می‌فرستد.
+    <span class="why">در HTTP/1.1 سرور ممکن است جواب را «تکه‌تکه» (chunked) بفرستد و بین تکه‌ها عددهای اندازه بگذارد. چون ما جواب را مستقیم از جریان شبکه (<code>getStream</code>) به ArduinoJson می‌دهیم، آن عددها JSON را خراب می‌کنند. HTTP/1.0 تکه‌تکه ندارد. این توصیه رسمی مستندات ArduinoJson است.</span></li>
+  <li data-lines="21-26"><b class="what">GET و بررسی کد جواب.</b> <code>HTTP_CODE_OK</code> یعنی 200. عدد منفی یعنی اصلا به سرور نرسیدیم؛ <code>errorToString</code> آن را به متن تبدیل می‌کند (مثلا <code>connection refused</code> یا <code>read Timeout</code>).
+    <span class="why">کدهای مهم: 200 موفق، 400 آدرس غلط، 429 «زیادی درخواست دادی» (Rate limit)، 5xx خطای سرور. همیشه قبل از خواندن جواب، کد را بررسی کن و <code>http.end()</code> را در هر مسیری فراموش نکن تا حافظه آزاد شود.</span></li>
+  <li data-lines="28-30"><b class="what">فیلتر JSON.</b> یک سند کوچک که شکلش می‌گوید «از جواب فقط این دو فیلد را نگه دار».
+    <span class="why">جواب کامل چند صد بایت است و در API های دیگر (مثلا پیش‌بینی ۷ روزه ساعتی) ده‌ها کیلوبایت. با فیلتر، ArduinoJson بقیه را هنگام خواندن دور می‌ریزد و RAM کمی مصرف می‌شود.</span></li>
+  <li data-lines="32-39"><b class="what">deserializeJson مستقیم از شبکه.</b> جواب بدون ذخیره در یک String بزرگ، مستقیم از جریان شبکه خوانده می‌شود. اگر JSON ناقص یا خراب بود، <code>err</code> مقدار دارد و <code>err.c_str()</code> علت را می‌گوید (مثلا <code>IncompleteInput</code> یا <code>NoMemory</code>).
+    <span class="why">در نسخه ۷ فقط <code>JsonDocument</code> داریم که اندازه‌اش را خودش تنظیم می‌کند. در نسخه ۶ باید <code>StaticJsonDocument&lt;512&gt;</code> یا <code>DynamicJsonDocument</code> با اندازه دستی می‌نوشتی؛ کدهای قدیمی اینترنت با نسخه ۷ هشدار یا خطا می‌دهند.</span></li>
+  <li data-lines="40-42"><b class="what">عملگر <code>|</code> برای مقدار پیش‌فرض.</b> «اگر این فیلد بود مقدارش را بده، وگرنه NAN (نه‌عدد)».
+    <span class="why">اگر سرویس روزی اسم فیلد را عوض کند، به جای صفر دروغین (که شبیه دمای واقعی است!) NAN می‌گیری و می‌فهمی مشکلی هست.</span></li>
+  <li data-lines="57"><b class="what">هر ۱۰ دقیقه.</b> <code>10UL * 60 * 1000</code> میلی‌ثانیه؛ <code>UL</code> یعنی عدد بزرگ بدون علامت تا ضرب سرریز نکند.
+    <span class="why">Open-Meteo خودش داده «current» را حدودا هر ۱۵ دقیقه به‌روز می‌کند (فیلد <code>interval: 900</code>)؛ درخواست هر ثانیه فقط سرور را اذیت می‌کند و ممکن است IP تو را محدود کند. طبق شرایط Open-Meteo، استفاده رایگان فقط برای کار غیرتجاری است، با سقف کمتر از ۱۰ هزار درخواست در روز (و ۶۰۰ در دقیقه)، و داده با مجوز CC BY 4.0 است (اگر جایی منتشرش کردی، اسم Open-Meteo را بیاور). هر ۱۰ دقیقه یعنی ۱۴۴ درخواست در روز.</span></li>
+</ol>
+<div class="serial">Wi-Fi OK
+Tehran: 27.4 C, wind 11.2 km/h</div>
+
+<div class="wokwi" data-board="esp32" data-code-from="weather">
+<p>این برنامه در Wokwi هم کار می‌کند، چون Wokwi اینترنت واقعی و HTTPS را شبیه‌سازی می‌کند. در Wokwi به جای <code>secrets.h</code>، خط <code>#include "secrets.h"</code> را پاک کن و بالای برنامه بنویس: <code>#define WIFI_SSID "Wokwi-GUEST"</code> و <code>#define WIFI_PASS ""</code>. کتابخانه <b>ArduinoJson</b> را از زبانه Library Manager ی Wokwi اضافه کن. برد تنهاست و قطعه دیگری لازم نیست.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h3>setInsecure یا گواهی؟ حقیقت کامل</h3>
+<div class="table-wrap"><table>
+<tr><th>روش</th><th>چه می‌کند</th><th>کی استفاده کنم</th></tr>
+<tr><td><code>setInsecure()</code></td><td>رمزنگاری دارد، ولی هویت سرور را بررسی نمی‌کند</td><td>فقط تست و داده عمومی بی‌خطر</td></tr>
+<tr><td><code>setCACert(ROOT_CA)</code></td><td>فقط به سروری اعتماد می‌کند که گواهی‌اش با این ریشه امضا شده (درس ۵.۱)</td><td>وقتی فقط با یک سرویس کار داری؛ ولی اگر سرویس صادرکننده گواهی‌اش را عوض کند، باید برنامه را آپدیت کنی (یک دلیل دیگر برای OTA!)</td></tr>
+<tr><td><code>useBuiltinCACertBundle()</code></td><td>از بسته حدود ۲۰۰ گواهی ریشه معتبر دنیا که داخل core است استفاده می‌کند (مثل مرورگرها)</td><td>بهترین تعادل برای بیشتر پروژه‌ها؛ در core 3.3.12 موجود است (در نسخه‌های قدیمی‌تر core نیست). حدود ۶۰ کیلوبایت به اندازه برنامه اضافه می‌کند.</td></tr>
+</table></div>
+
+<h3>هشدار به گوشی: POST با JSON به ntfy</h3>
+<p>حالا برعکس: ESP32 خبری را <b>ارسال</b> می‌کند. <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy.sh</a> یک سرویس اعلان رایگان و بدون ثبت‌نام است: اپ ntfy را روی گوشی (اندروید یا iOS) نصب می‌کنی، یک «Topic» با اسم دلخواه را Subscribe می‌کنی، و هر پیامی که به آن Topic فرستاده شود، به شکل نوتیفیکیشن روی گوشی‌ات ظاهر می‌شود.</p>
+<div class="callout warn"><div class="ct">اسم Topic همان رمز است</div>
+<p>در ntfy.sh ثبت‌نامی نیست، پس هر کس اسم Topic تو را بداند می‌تواند پیام‌هایت را بخواند و برایت پیام جعلی بفرستد. اسمی مثل <code>test</code> یا <code>ali</code> انتخاب نکن؛ یک اسم طولانی و تصادفی مثل <code>home-alert-7f3k9q</code> بگذار و آن را در <code>secrets.h</code> نگه دار. محدودیت ntfy.sh رایگان: حدود ۲۵۰ پیام در روز و هر پیام حداکثر ۴۰۹۶ بایت.</p></div>
+<p>مدار: یک دکمه فشاری بین <b>GPIO15</b> و <b>GND</b> (مقاومت Pull-up داخلی را روشن می‌کنیم؛ درس <a href="3-1.html">۳.۱</a>).</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"BTN1","name":"دکمه فشاری ۴ پایه","img":"button.svg","pins":[["1","کنتاکت اول"],["2","کنتاکت دوم (قطری مقابل)"]]}
+  ],
+  "wires":[["GPIO15","BTN1.1","blue"],["BTN1.2","GND","black"]]
+}</script><figcaption>دکمه «زنگ در»: فشردن آن GPIO15 را به زمین وصل می‌کند (LOW). Pull-up داخلی در حالت عادی پین را HIGH نگه می‌دارد.</figcaption></div>
+
+<div class="code" data-file="DoorAlert_ntfy.ino" id="ntfy"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WiFiClientSecure.h&gt;
+#include &lt;HTTPClient.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#include "secrets.h"
+#ifndef NTFY_TOPIC
+#warning "NTFY_TOPIC is not defined in secrets.h"
+#define NTFY_TOPIC "change-me-to-a-random-name"
+#endif
+
+const int BUTTON_PIN = 15;          // دکمه بین GPIO15 و GND
+
+bool sendAlert(const char *title, const char *message) {
+  WiFiClientSecure client;
+  client.useBuiltinCACertBundle();  // بررسی واقعی هویت سرور
+  HTTPClient http;
+  http.setTimeout(5000);
+  if (!http.begin(client, "https://ntfy.sh/")) return false;
+  http.addHeader("Content-Type", "application/json");
+
+  JsonDocument msg;                 // {"topic":..,"title":..,"message":..}
+  msg["topic"] = NTFY_TOPIC;
+  msg["title"] = title;
+  msg["message"] = message;
+  msg["priority"] = 4;              // ۱ تا ۵؛ ۴ یعنی «مهم»
+  msg["tags"].add("warning");
+  String body;
+  serializeJson(msg, body);
+
+  int code = http.POST(body);
+  http.end();
+  Serial.printf("ntfy -&gt; %d\n", code);
+  return code == 200;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.println("Press the button to send an alert");
+}
+
+void loop() {
+  static unsigned long lastSent = 0;
+  if (digitalRead(BUTTON_PIN) == LOW &amp;&amp; millis() - lastSent &gt; 30000) {
+    lastSent = millis();            // حداکثر هر ۳۰ ثانیه یک هشدار
+    sendAlert("Door", "Front door opened!");
+  }
+  delay(20);
+}
+</pre></div>
+<ol class="walk" data-for="ntfy">
+  <li data-lines="15"><b class="what">useBuiltinCACertBundle.</b> این بار هویت سرور ntfy.sh واقعا بررسی می‌شود.
+    <span class="why">این پیام به گوشی تو می‌رود و ممکن است روزی «در باز شد» یا «نشت گاز» باشد؛ نمی‌خواهی کسی وسط راه آن را عوض کند.</span></li>
+  <li data-lines="18-19"><b class="what">آدرس ریشه و نوع محتوا.</b> برای فرستادن JSON باید به آدرس <b>ریشه</b> <code>https://ntfy.sh/</code> POST کنی (نه <code>https://ntfy.sh/topic</code>) و بگویی بدنه JSON است.
+    <span class="why">طبق مستندات ntfy، JSON فقط در آدرس ریشه پذیرفته می‌شود و اسم Topic داخل خود JSON می‌آید. روش ساده‌تر هم هست: POST متن خام به <code>https://ntfy.sh/اسم-topic</code> که کل متن می‌شود پیام.</span></li>
+  <li data-lines="21-28"><b class="what">ساختن JSON.</b> این بار برعکس deserialize: سند را پر می‌کنیم و <code>serializeJson</code> آن را به متن تبدیل می‌کند. <code>msg["tags"].add("warning")</code> یک آرایه می‌سازد که ntfy آن را به ایموجی ⚠️ تبدیل می‌کند.
+    <span class="why">هرگز JSON را با چسباندن رشته‌ها دستی نساز (<code>"{\"title\":\"" + ...</code>)؛ اگر متن پیام یک <code>"</code> داشته باشد، JSON خراب می‌شود. ArduinoJson علامت‌های خاص را خودش درست می‌کند.</span></li>
+  <li data-lines="25"><b class="what">اولویت ۱ تا ۵.</b> ۳ پیش‌فرض است، ۴ «بالا» با لرزش طولانی، ۵ «فوری».
+    <span class="why">برای هشدار واقعی ۴ یا ۵؛ برای گزارش روزانه ۲ که بی‌صدا در لیست اعلان‌ها می‌نشیند. اگر همه چیز فوری باشد، دیگر هیچ چیز فوری نیست.</span></li>
+  <li data-lines="30-33"><b class="what">POST و کد جواب.</b> ntfy در صورت موفقیت 200 برمی‌گرداند.
+    <span class="why">اگر 429 دیدی، یعنی از سقف درخواست عبور کرده‌ای؛ اگر عدد منفی، مشکل از شبکه یا گواهی است.</span></li>
+  <li data-lines="45-49"><b class="what">محدودیت ارسال.</b> بعد از هر هشدار تا ۳۰ ثانیه هشدار دیگری فرستاده نمی‌شود، حتی اگر دکمه نگه داشته شود.
+    <span class="why">بدون این، نگه داشتن دکمه برای ۲ ثانیه یعنی ده‌ها درخواست و ده‌ها نوتیفیکیشن، و چند دقیقه بعد سرویس تو را مسدود می‌کند. هر دستگاهی که به سرویس بیرونی پیام می‌دهد باید «ترمز» داشته باشد (Rate limiting).</span></li>
+</ol>
+
+<div class="callout info"><div class="ct">تلگرام، و یک واقعیت درباره ایران</div>
+<p>کتابخانه <b>UniversalTelegramBot</b> (از Brian Lough) امکان ساختن ربات تلگرام با ESP32 را می‌دهد تا با پیام دادن به ربات، رله را خاموش و روشن کنی. ولی سرورهای تلگرام (<code>api.telegram.org</code>) و گاهی سرویس‌های دیگر مثل ntfy.sh از داخل ایران ممکن است بدون فیلترشکن در دسترس نباشند، و ESP32 نمی‌تواند به‌سادگی از فیلترشکن استفاده کند. قبل از ساختن پروژه، آدرس سرویس را از همان شبکه‌ای که دستگاه به آن وصل می‌شود در مرورگر امتحان کن. جایگزین‌های مطمئن‌تر: MQTT روی سرور شخصی (درس <a href="5-1.html#mosquitto">۵.۱</a>)، یا نصب ntfy روی سرور خودت (ntfy متن‌باز است).</p></div>
+
+<!-- ======================= Robustness ======================= -->
+<h2 id="robust">بخش ۵: چک‌لیست دستگاهی که ماه‌ها روشن می‌ماند</h2>
+<p>برنامه‌ای که ۱۰ دقیقه روی میز کار می‌کند با برنامه‌ای که ۶ ماه بدون دخالت کار می‌کند فرق دارد. مشکلاتی که در ۱۰ دقیقه دیده نمی‌شوند: حافظه‌ای که ذره‌ذره تکه‌تکه می‌شود، Wi-Fi ای که ساعت ۳ صبح قطع می‌شود، برقی که وسط نوشتن فایل می‌رود. قانون مهندسی: <b>فرض کن هر چیزی که ممکن است خراب شود، بالاخره خراب می‌شود</b>، و دستگاه باید خودش را جمع کند.</p>
+
+<div class="table-wrap"><table>
+<tr><th>خطر</th><th>علامت</th><th>درمان</th></tr>
+<tr><td>گیر کردن برنامه در یک حلقه یا انتظار</td><td>دستگاه «زنده» است ولی جواب نمی‌دهد</td><td><b>Watchdog</b>: loop و Taskهای مهم را به نگهبان معرفی کن تا در صورت گیر کردن، ریست شود</td></tr>
+<tr><td>قطع Wi-Fi یا اینترنت</td><td>بعد از قطعی مودم، دیگر داده نمی‌فرستد</td><td>اتصال دوباره خودکار با رویدادها و نگهبان millis (درس <a href="4-1.html#robust">۴.۱</a>)؛ هر عمل شبکه‌ای سقف زمان داشته باشد</td></tr>
+<tr><td>تکه‌تکه شدن حافظه (Heap fragmentation)</td><td>بعد از چند روز کرش یا خطای NoMemory، در حالی که «حافظه آزاد» زیاد به نظر می‌رسد</td><td>در کد طولانی‌مدت از ساختن و خراب کردن مداوم <code>String</code> بپرهیز؛ <code>reserve()</code> کن یا از <code>char[]</code> و <code>snprintf</code> استفاده کن</td></tr>
+<tr><td>برق ضعیف (Brownout)</td><td>ریست هنگام روشن شدن Wi-Fi یا رله</td><td>منبع ۵ ولت ۱ آمپر، کابل کوتاه، خازن ۱۰۰ تا ۴۷۰ میکروفاراد (درس <a href="4-1.html#power">۴.۱</a>)؛ هرگز Brownout Detector را خاموش نکن</td></tr>
+<tr><td>قطع برق وسط نوشتن فایل</td><td>فایل تنظیمات نصفه، دستگاه با تنظیمات خراب بالا می‌آید</td><td>اول در فایل موقت بنویس، بعد rename کن؛ همیشه مقدار پیش‌فرض داشته باش</td></tr>
+<tr><td>ندانستن علت ریست‌ها</td><td>«گاهی خودش ریست می‌شود» بدون سرنخ</td><td><code>esp_reset_reason()</code> را در شروع بخوان، چاپ کن و شمارنده‌اش را در Preferences نگه دار</td></tr>
+</table></div>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره: جعبه سیاه هواپیما</div>
+<p>هواپیما بعد از هر حادثه می‌گوید چه شد، چون جعبه سیاه دارد. دستگاه تو هم باید «جعبه سیاه» داشته باشد: هر بار که روشن می‌شود بگوید چرا ریست شده و تا حالا چند بار کرش کرده. بدون این، عیب‌یابی دستگاهی که در سقف است یعنی حدس زدن.</p></div>
+
+<div class="code" data-file="RobustBoot.ino" id="robust"><pre>
+#include &lt;Preferences.h&gt;
+#include "esp_system.h"
+#include "esp_task_wdt.h"
+
+Preferences prefs;
+
+const char *resetReasonText(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON:   return "power on";
+    case ESP_RST_SW:        return "software (ESP.restart)";
+    case ESP_RST_PANIC:     return "PANIC (crash / Guru Meditation)";
+    case ESP_RST_INT_WDT:   return "interrupt watchdog";
+    case ESP_RST_TASK_WDT:  return "TASK WATCHDOG";
+    case ESP_RST_WDT:       return "other watchdog";
+    case ESP_RST_DEEPSLEEP: return "wake from deep sleep";
+    case ESP_RST_BROWNOUT:  return "BROWNOUT (weak power)";
+    default:                return "other/unknown";
+  }
+}
+
+void workerTask(void *param) {
+  esp_task_wdt_add(NULL);                      // این Task را به نگهبان معرفی کن
+  for (;;) {
+    // ... کار اصلی Task اینجاست ...
+    esp_task_wdt_reset();                      // «من زنده‌ام»
+    vTaskDelay(pdMS_TO_TICKS(1000));
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  esp_reset_reason_t why = esp_reset_reason();
+
+  prefs.begin("sys", false);                   // فضای نام "sys" در NVS
+  uint32_t boots = prefs.getUInt("boots", 0) + 1;
+  prefs.putUInt("boots", boots);
+  if (why == ESP_RST_PANIC || why == ESP_RST_TASK_WDT || why == ESP_RST_BROWNOUT) {
+    prefs.putUInt("crashes", prefs.getUInt("crashes", 0) + 1);
+  }
+  Serial.printf("Boot #%lu, reason: %s, crashes so far: %lu\n",
+                (unsigned long)boots, resetReasonText(why),
+                (unsigned long)prefs.getUInt("crashes", 0));
+  prefs.end();
+
+  enableLoopWDT();                             // اگر loop بیش از ۵ ثانیه گیر کرد: ریست
+  xTaskCreatePinnedToCore(workerTask, "worker", 3072, NULL, 1, NULL, 1);
+}
+
+String line;                                   // سراسری، یک بار رزرو شده
+
+void loop() {
+  line.reserve(64);                            // بعد از اولین بار کاری نمی‌کند
+  line = "uptime=";
+  line += millis() / 1000;
+  line += "s heap=";
+  line += ESP.getFreeHeap();
+  Serial.println(line);
+  delay(2000);                                 // اگر این را 6000 کنی، WDT ریست می‌کند
+}
+</pre></div>
+<ol class="walk" data-for="robust">
+  <li data-lines="7-19"><b class="what">ترجمه علت ریست به متن.</b> <code>esp_reset_reason()</code> یک عدد از نوع <code>esp_reset_reason_t</code> برمی‌گرداند و ما مهم‌ترین‌ها را به متن خوانا تبدیل می‌کنیم.
+    <span class="why">سه علت که همیشه باید نگرانت کنند: <code>PANIC</code> (کرش، مثل Guru Meditation یا Stack overflow)، <code>TASK_WDT</code> (یک Task گیر کرده)، و <code>BROWNOUT</code> (برق ضعیف). <code>POWERON</code> یعنی برق وصل شد و <code>SW</code> یعنی خود برنامه <code>ESP.restart()</code> زده (مثلا بعد از OTA). نکته: فشار دادن دکمه EN روی ESP32 معمولا به شکل <code>POWERON</code> گزارش می‌شود.</span></li>
+  <li data-lines="21-28"><b class="what">معرفی یک Task به نگهبان.</b> <code>esp_task_wdt_add(NULL)</code> یعنی «Task فعلی را زیر نظر بگیر» و <code>esp_task_wdt_reset()</code> یعنی «من زنده‌ام».
+    <span class="why">از این لحظه اگر این Task بیش از ۵ ثانیه reset نکند، برد ریست می‌شود. reset را در جایی بگذار که <b>فقط وقتی کار واقعا جلو می‌رود</b> اجرا شود، نه در یک Task جداگانه که همیشه زنده است (آن وقت نگهبان را فریب داده‌ای). Taskی که کار طولانی مثل HTTPS دارد را با دقت اضافه کن، چون یک درخواست کند ممکن است از ۵ ثانیه بیشتر شود.</span></li>
+  <li data-lines="35-44"><b class="what">شمارنده‌ها در Preferences.</b> تعداد کل روشن شدن‌ها و تعداد ریست‌های «بد» در NVS ذخیره می‌شوند و با قطع برق پاک نمی‌شوند.
+    <span class="why">اگر بعد از یک هفته دیدی <code>crashes</code> عدد ۴۰ است، می‌دانی مشکلی هست، حتی اگر دستگاه «ظاهرا کار می‌کند». فقط در بوت می‌نویسیم، نه در loop، تا فلش فرسوده نشود. در پروژه واقعی این عددها را در صفحه وب یا با MQTT گزارش کن.</span></li>
+  <li data-lines="46"><b class="what">enableLoopWDT.</b> تابع آماده core که <code>loopTask</code> را به نگهبان معرفی می‌کند. خود core قبل از هر دور <code>loop()</code> نگهبان را reset می‌کند.
+    <span class="why">پس اگر یک دور loop بیش از ۵ ثانیه طول بکشد (مثلا در یک <code>while</code> منتظر سنسوری که قطع شده گیر کند)، برد خودش ریست می‌شود و کار از نو شروع می‌شود. ریست بهتر از یخ زدن همیشگی است.</span></li>
+  <li data-lines="50-58"><b class="what">String با reserve.</b> متغیر سراسری <code>line</code> یک بار ۶۴ بایت جا می‌گیرد و هر دور همان جا دوباره پر می‌شود.
+    <span class="why">هر بار که یک <code>String</code> بزرگ‌تر می‌شود، ممکن است جای جدیدی در Heap بگیرد و جای قبلی را خالی بگذارد. بعد از هزاران بار، Heap مثل پنیر سوراخ‌سوراخ می‌شود: جمع فضای آزاد زیاد است ولی هیچ تکه بزرگ پیوسته‌ای نمانده (و HTTPS یک تکه پیوسته چند ده کیلوبایتی لازم دارد). <code>reserve</code> جا را یک بار و از اول می‌گیرد. برای رشته‌های ثابت هم <code>char buf[64]</code> با <code>snprintf</code> امن‌ترین است. برای دیدن مشکل، علاوه بر <code>ESP.getFreeHeap()</code> عدد <code>ESP.getMaxAllocHeap()</code> (بزرگ‌ترین تکه آزاد) را هم چاپ کن.</span></li>
+  <li data-lines="59"><b class="what">آزمایش نگهبان.</b> اگر delay را به 6000 تغییر دهی، هر دور loop بیش از ۵ ثانیه می‌شود و برد ریست می‌شود؛ بعد از ریست، پیام <code>reason: TASK WATCHDOG</code> را می‌بینی.
+    <span class="why">هر مکانیزم ایمنی را یک بار عمدا تحریک کن تا مطمئن شوی واقعا کار می‌کند. نگهبانی که هرگز تست نشده، نگهبان نیست.</span></li>
+</ol>
+<div class="serial">Boot #1, reason: power on, crashes so far: 0
+uptime=0s heap=301244
+uptime=2s heap=301244
+...
+(بعد از تغییر delay به 6000)
+E (5412) task_wdt: Task watchdog got triggered. ...
+Boot #7, reason: TASK WATCHDOG, crashes so far: 1</div>
+
+<div class="callout tip"><div class="ct">نوشتن امن در برابر قطع برق</div>
+<p>فرض کن داری <code>config.json</code> را بازنویسی می‌کنی و درست وسط کار برق می‌رود. حالت "w" فایل قبلی را اول خالی کرده بود؛ حالا نه تنظیمات قدیمی داری نه جدید. الگوی درست (در پروژه پایین می‌بینی): ۱) در <code>config.tmp</code> بنویس، ۲) ببند، ۳) قبلی را پاک کن و <code>tmp</code> را به <code>config.json</code> تغییر نام بده. تغییر نام در LittleFS تقریبا لحظه‌ای است. و در هر حال، برنامه وقتی فایل تنظیمات نبود یا خراب بود، باید با <b>مقدار پیش‌فرض</b> بالا بیاید، نه این که کرش کند. برای مقدارهای کوچک، Preferences خودش این امنیت را دارد.</p></div>
+
+<!-- ======================= Project ======================= -->
+<h2 id="project">بخش ۶: پروژه ترکیبی، ایستگاه هوای بی‌سیم</h2>
+<p>حالا همه را کنار هم می‌گذاریم. دستگاهی که:</p>
+<ul>
+  <li>صفحه تنظیماتش را از <b>LittleFS</b> سرو می‌کند و مختصات شهر را در یک فایل JSON ذخیره می‌کند؛</li>
+  <li>هر ۱۰ دقیقه در <b>Task</b> خودش هوا را از <b>Open-Meteo</b> می‌گیرد (و بلافاصله بعد از تغییر تنظیمات)؛</li>
+  <li>در یک Task دیگر آخرین مقدار را روی <b>OLED</b> نشان می‌دهد؛</li>
+  <li>با <b>ArduinoOTA</b> از راه دور آپدیت می‌شود.</li>
+</ul>
+
+<pre class="mermaid">flowchart LR
+  FS[("LittleFS<br/>index.html<br/>config.json")] --> LOOP["loopTask<br/>OTA و وب سرور"]
+  BROWSER(["مرورگر گوشی"]) <--> LOOP
+  IDE(["Arduino IDE<br/>آپدیت OTA"]) --> LOOP
+  LOOP <--> CFG{{"تنظیمات<br/>با Mutex"}}
+  CFG <--> WT["weatherTask<br/>هر ۱۰ دقیقه"]
+  LOOP -- "xTaskNotifyGive" --> WT
+  WT -- "HTTPS GET" --> API(["Open-Meteo"])
+  WT -- "xQueueOverwrite" --> BOX[("weatherBox<br/>صف یک‌خانه‌ای")]
+  BOX -- "xQueuePeek" --> DT["displayTask<br/>هر ۲ ثانیه"]
+  BOX -- "xQueuePeek" --> LOOP
+  DT --> OLED["OLED"]</pre>
+<p>هر سه Task روی هسته ۱ هستند؛ هسته ۰ برای Taskهای Wi-Fi و شبکه خود سیستم آزاد می‌ماند.</p>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"OLED","name":"OLED ۰٫۹۶ اینچ SSD1306 (I2C)","pins":[["GND","زمین"],["VCC","تغذیه ۳٫۳ ولت"],["SCL","ساعت I2C"],["SDA","داده I2C"]]}
+  ],
+  "wires":[["GND","OLED.GND","black"],["3V3","OLED.VCC","red"],["GPIO22","OLED.SCL","green"],["GPIO21","OLED.SDA","yellow"]]
+}</script><figcaption>همان سیم‌کشی درس ۳.۳: SDA به GPIO21، SCL به GPIO22، آدرس 0x3C.</figcaption></div>
+
+<ol class="steps">
+  <li><b>کتابخانه‌ها.</b> از Library Manager: <b>ArduinoJson by Benoit Blanchon</b> (نسخه ۷)، <b>Adafruit SSD1306 by Adafruit</b> (موقع نصب بپرس «Install all» تا <b>Adafruit GFX Library</b> و <b>Adafruit BusIO</b> هم نصب شوند).</li>
+  <li><b>Partition Scheme.</b> <code>Tools › Partition Scheme › Minimal SPIFFS (1.9MB APP with OTA/128KB SPIFFS)</code>. این برنامه روی core 3.3.12 حدود ۱٫۲۸ مگابایت است: با Default (سقف ۱٫۲۵ مگابایت یعنی ۱٬۳۱۰٬۷۲۰ بایت) به ۹۷٪ می‌رسد و با اولین ویژگی جدید «Sketch too big» می‌گیری. Minimal SPIFFS هم OTA دارد و هم جای رشد.</li>
+  <li><b>پوشه data</b> با فایل <code>index.html</code> پایین را بساز و با افزونه LittleFS آپلود کن (با همان Partition Scheme).</li>
+  <li><b>برنامه را بار اول با USB</b> آپلود کن. از این به بعد پورت شبکه <code>weather-station</code> را در منوی Port می‌بینی.</li>
+</ol>
+
+<div class="code" data-file="data/index.html" data-lang="text" id="stationHtml"><pre>
+&lt;!doctype html&gt;
+&lt;html lang="fa" dir="rtl"&gt;
+&lt;head&gt;
+  &lt;meta charset="utf-8"&gt;
+  &lt;meta name="viewport" content="width=device-width,initial-scale=1"&gt;
+  &lt;title&gt;ایستگاه هوا&lt;/title&gt;
+&lt;/head&gt;
+&lt;body style="font-family:sans-serif;max-width:420px;margin:2em auto"&gt;
+  &lt;h2&gt;ایستگاه هوا&lt;/h2&gt;
+  &lt;p&gt;دما: &lt;b id="temp"&gt;...&lt;/b&gt; °C ، باد: &lt;b id="wind"&gt;...&lt;/b&gt; km/h&lt;/p&gt;
+  &lt;form method="POST" action="/api/config"&gt;
+    &lt;label&gt;عرض جغرافیایی &lt;input name="lat" id="lat"&gt;&lt;/label&gt;&lt;br&gt;
+    &lt;label&gt;طول جغرافیایی &lt;input name="lon" id="lon"&gt;&lt;/label&gt;&lt;br&gt;
+    &lt;button&gt;ذخیره&lt;/button&gt;
+  &lt;/form&gt;
+  &lt;script&gt;
+    fetch('/api/state').then(r =&gt; r.json()).then(s =&gt; {
+      for (const k of ['temp', 'wind', 'lat', 'lon']) {
+        const el = document.getElementById(k);
+        if (el.tagName === 'INPUT') el.value = s[k]; else el.textContent = s[k];
+      }
+    });
+  &lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</pre></div>
+<ol class="walk" data-for="stationHtml">
+  <li data-lines="11-15"><b class="what">فرم تنظیمات.</b> با زدن «ذخیره»، مرورگر مقدارهای <code>lat</code> و <code>lon</code> را با POST به <code>/api/config</code> می‌فرستد.
+    <span class="why">فرم HTML ساده بدون هیچ JavaScript کار می‌کند؛ حتی در ضعیف‌ترین مرورگر گوشی. سادگی یعنی پایداری.</span></li>
+  <li data-lines="16-23"><b class="what">پر کردن صفحه با داده زنده.</b> <code>/api/state</code> را می‌خواند و هر فیلد را در عنصر هم‌نامش می‌گذارد؛ برای input در <code>value</code> و برای بقیه در متن.
+    <span class="why">اگر هنوز هوایی گرفته نشده باشد، دما و باد <code>null</code> نشان داده می‌شوند (ArduinoJson مقدار NAN را به <code>null</code> تبدیل می‌کند، چون JSON استاندارد NaN ندارد).</span></li>
+</ol>
+
+<div class="code" data-file="WeatherStation.ino" id="station"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;ArduinoOTA.h&gt;
+#include &lt;LittleFS.h&gt;
+#include &lt;WiFiClientSecure.h&gt;
+#include &lt;HTTPClient.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include "secrets.h"
+#ifndef OTA_PASS
+#warning "OTA_PASS is not defined in secrets.h"
+#define OTA_PASS "change-me"
+#endif
+
+struct Weather { float temp; float wind; unsigned long at; };
+struct Config  { float lat; float lon; };
+
+WebServer server(80);
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+QueueHandle_t weatherBox;          // صندوق یک‌خانه‌ای: همیشه آخرین هوا
+SemaphoreHandle_t cfgMutex;        // قفل تنظیمات مشترک
+TaskHandle_t weatherHandle = NULL;
+Config cfg = {35.69, 51.39};       // پیش‌فرض: تهران
+
+// ---------- LittleFS: خواندن و ذخیره امن تنظیمات ----------
+void loadConfig() {
+  File f = LittleFS.open("/config.json", "r");
+  if (!f) return;                                  // هنوز ذخیره نشده
+  JsonDocument doc;
+  if (!deserializeJson(doc, f)) {
+    cfg.lat = doc["lat"] | cfg.lat;
+    cfg.lon = doc["lon"] | cfg.lon;
+  }
+  f.close();
+}
+
+bool saveConfig(const Config &amp;c) {
+  JsonDocument doc;
+  doc["lat"] = c.lat;
+  doc["lon"] = c.lon;
+  File f = LittleFS.open("/config.tmp", "w");      // اول در فایل موقت
+  if (!f) return false;
+  bool ok = serializeJson(doc, f) &gt; 0;
+  f.close();
+  if (!ok) return false;
+  LittleFS.remove("/config.json");
+  return LittleFS.rename("/config.tmp", "/config.json");  // بعد جابه‌جا
+}
+
+// ---------- Task هوا: هر ۱۰ دقیقه یا وقتی تنظیمات عوض شد ----------
+bool fetchWeather(float lat, float lon, Weather &amp;w) {
+  char url[160];
+  snprintf(url, sizeof(url),
+           "https://api.open-meteo.com/v1/forecast?latitude=%.2f&amp;longitude=%.2f"
+           "&amp;current=temperature_2m,wind_speed_10m", lat, lon);
+  WiFiClientSecure client;
+  client.useBuiltinCACertBundle();
+  HTTPClient http;
+  http.setConnectTimeout(5000);
+  http.setTimeout(5000);
+  http.useHTTP10(true);
+  if (!http.begin(client, url)) return false;
+  int code = http.GET();
+  bool ok = false;
+  if (code == HTTP_CODE_OK) {
+    JsonDocument filter;
+    filter["current"]["temperature_2m"] = true;
+    filter["current"]["wind_speed_10m"] = true;
+    JsonDocument doc;
+    if (!deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter))) {
+      w.temp = doc["current"]["temperature_2m"] | NAN;
+      w.wind = doc["current"]["wind_speed_10m"] | NAN;
+      w.at = millis();
+      ok = !isnan(w.temp);
+    }
+  }
+  http.end();
+  return ok;
+}
+
+void weatherTask(void *param) {
+  for (;;) {
+    if (WiFi.status() == WL_CONNECTED) {
+      xSemaphoreTake(cfgMutex, portMAX_DELAY);
+      Config c = cfg;                              // کپی، بعد قفل را پس بده
+      xSemaphoreGive(cfgMutex);
+      Weather w;
+      if (fetchWeather(c.lat, c.lon, w)) {
+        xQueueOverwrite(weatherBox, &amp;w);           // جای مقدار قبلی
+      }
+    }
+    // ۱۰ دقیقه بخواب، مگر این که کسی زودتر بیدارمان کند
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10UL * 60 * 1000));
+  }
+}
+
+// ---------- Task نمایش: هر ۲ ثانیه آخرین هوا روی OLED ----------
+void displayTask(void *param) {
+  Weather w;
+  for (;;) {
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.println(WiFi.localIP());
+    if (xQueuePeek(weatherBox, &amp;w, 0) == pdPASS) {  // نگاه کن، برندار
+      display.setTextSize(2);
+      display.printf("%.1f C\n", w.temp);
+      display.setTextSize(1);
+      display.printf("wind %.1f km/h\n", w.wind);
+      display.printf("%lu min ago", (millis() - w.at) / 60000);
+    } else {
+      display.println("waiting for data...");
+    }
+    display.display();
+    vTaskDelay(pdMS_TO_TICKS(2000));
+  }
+}
+
+// ---------- وب: صفحه از LittleFS، داده از کد ----------
+void handleState() {
+  Weather w = {NAN, NAN, 0};
+  xQueuePeek(weatherBox, &amp;w, 0);
+  JsonDocument doc;
+  xSemaphoreTake(cfgMutex, portMAX_DELAY);
+  doc["lat"] = cfg.lat;
+  doc["lon"] = cfg.lon;
+  xSemaphoreGive(cfgMutex);
+  doc["temp"] = w.temp;
+  doc["wind"] = w.wind;
+  String out;
+  serializeJson(doc, out);
+  server.send(200, "application/json", out);
+}
+
+void handleSave() {
+  Config c = {server.arg("lat").toFloat(), server.arg("lon").toFloat()};
+  if (c.lat &lt; -90 || c.lat &gt; 90 || c.lon &lt; -180 || c.lon &gt; 180) {
+    return server.send(400, "text/plain", "bad lat/lon");
+  }
+  xSemaphoreTake(cfgMutex, portMAX_DELAY);
+  cfg = c;
+  xSemaphoreGive(cfgMutex);
+  saveConfig(c);
+  xTaskNotifyGive(weatherHandle);                  // «همین الان دوباره بگیر»
+  server.sendHeader("Location", "/");
+  server.send(303);
+}
+
+void setup() {
+  Serial.begin(115200);
+  LittleFS.begin(true);
+  loadConfig();
+  weatherBox = xQueueCreate(1, sizeof(Weather));
+  cfgMutex = xSemaphoreCreateMutex();
+
+  Wire.begin(21, 22);
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.setTextColor(SSD1306_WHITE);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - t0 &lt; 20000) delay(250);
+
+  ArduinoOTA.setHostname("weather-station");
+  ArduinoOTA.setPassword(OTA_PASS);
+  ArduinoOTA.begin();
+
+  server.serveStatic("/", LittleFS, "/index.html");
+  server.on("/api/state", HTTP_GET, handleState);
+  server.on("/api/config", HTTP_POST, handleSave);
+  server.begin();
+
+  xTaskCreatePinnedToCore(weatherTask, "weather", 12288, NULL, 1, &amp;weatherHandle, 1);
+  xTaskCreatePinnedToCore(displayTask, "display", 4096, NULL, 1, NULL, 1);
+}
+
+void loop() {
+  ArduinoOTA.handle();
+  server.handleClient();
+  delay(2);
+}
+</pre></div>
+<ol class="walk" data-for="station">
+  <li data-lines="17-18"><b class="what">دو struct.</b> <code>Weather</code> یک بسته از دما، باد و زمان گرفتن است؛ <code>Config</code> مختصات.
+    <span class="why">بسته‌بندی داده‌های مرتبط در یک struct باعث می‌شود با یک <code>xQueueOverwrite</code> همه را با هم و یک‌جا جابه‌جا کنیم؛ هیچ‌وقت دمای جدید با زمان قدیمی قاطی نمی‌شود.</span></li>
+  <li data-lines="22"><b class="what">صف یک‌خانه‌ای به عنوان «صندوق نامه» (Mailbox).</b> صفی با طول ۱ که با <code>xQueueOverwrite</code> پر می‌شود و با <code>xQueuePeek</code> خوانده می‌شود.
+    <span class="why">در صف معمولی (بخش ۱) هر داده یک بار خوانده و برداشته می‌شد. این‌جا دو خواننده داریم (OLED و وب) و هر دو فقط «آخرین هوا» را می‌خواهند؛ Peek نگاه می‌کند و برنمی‌دارد، Overwrite همیشه جای قبلی را می‌گیرد و هرگز «صف پر» نمی‌شود.</span></li>
+  <li data-lines="28-37"><b class="what">خواندن تنظیمات در بوت.</b> اگر فایل نبود یا JSON خراب بود، مقدار پیش‌فرض تهران (خط ۲۵) می‌ماند.
+    <span class="why">همان اصل بخش ۵: دستگاه همیشه باید با تنظیمات ناقص هم بالا بیاید.</span></li>
+  <li data-lines="39-50"><b class="what">ذخیره امن.</b> اول <code>config.tmp</code>، بعد پاک کردن قبلی و تغییر نام.
+    <span class="why">اگر برق وسط <code>serializeJson</code> برود، config.json قبلی سالم است. <code>serializeJson(doc, f)</code> مستقیم در فایل می‌نویسد و تعداد بایت‌ها را برمی‌گرداند؛ صفر یعنی شکست.</span></li>
+  <li data-lines="53-81"><b class="what">fetchWeather.</b> همان کد بخش ۴، با دو تفاوت: آدرس با <code>snprintf</code> از مختصات ساخته می‌شود، و این بار <code>useBuiltinCACertBundle</code> داریم.
+    <span class="why">snprintf در یک آرایه ثابت ۱۶۰ بایتی می‌نویسد و هرگز از آن بیرون نمی‌زند؛ هیچ String موقتی در Heap ساخته نمی‌شود. این Task ماه‌ها هر ۱۰ دقیقه اجرا می‌شود، پس دقیقا جایی است که تکه‌تکه شدن حافظه مهم است.</span></li>
+  <li data-lines="83-97"><b class="what">weatherTask.</b> تنظیمات را زیر قفل <b>کپی</b> می‌کند، قفل را فورا پس می‌دهد، بعد درخواست کند HTTPS را انجام می‌دهد و نتیجه را در صندوق می‌گذارد.
+    <span class="why">هرگز قفل را در طول یک کار کند (چند ثانیه HTTPS) نگه ندار، وگرنه صفحه وب هم که cfg را می‌خواهد همان‌قدر منتظر می‌ماند. «کپی کن، رها کن، بعد کار کن».</span></li>
+  <li data-lines="95"><b class="what">ulTaskNotifyTake با سقف ۱۰ دقیقه.</b> Task می‌خوابد تا یا ۱۰ دقیقه بگذرد، یا کسی با <code>xTaskNotifyGive</code> بیدارش کند.
+    <span class="why">«اعلان Task» (Task Notification) سبک‌ترین ابزار FreeRTOS برای «هی، بیدار شو» است. با vTaskDelay ی ساده، بعد از تغییر شهر باید تا ۱۰ دقیقه منتظر هوای جدید می‌ماندی.</span></li>
+  <li data-lines="100-118"><b class="what">displayTask.</b> هر ۲ ثانیه صفحه را از نو می‌کشد: IP، دما با حروف درشت، باد، و این که داده چند دقیقه پیش گرفته شده.
+    <span class="why">فقط همین Task به OLED (و I2C) دست می‌زند، پس برای نمایشگر Mutex لازم نیست. قانون ساده‌تر از قفل: <b>هر سخت‌افزار یک صاحب</b>. نمایش «چند دقیقه پیش» مهم است: اگر اینترنت یک روز قطع باشد، کاربر دمای دیروز را به جای امروز باور نمی‌کند.</span></li>
+  <li data-lines="121-134"><b class="what">/api/state.</b> آخرین هوا را از صندوق Peek می‌کند و تنظیمات را زیر قفل می‌خواند و همه را به شکل JSON برمی‌گرداند.
+    <span class="why">این تابع در loopTask اجرا می‌شود (داخل <code>server.handleClient</code>)، در حالی که weatherTask ممکن است هم‌زمان cfg را بخواند یا عوض شدنش را منتظر باشد؛ برای همین قفل لازم است.</span></li>
+  <li data-lines="136-148"><b class="what">/api/config.</b> ورودی را <b>اعتبارسنجی</b> می‌کند، در cfg و فایل ذخیره می‌کند، weatherTask را بیدار می‌کند و مرورگر را با کد 303 به صفحه اصلی برمی‌گرداند.
+    <span class="why">هرگز به ورودی کاربر اعتماد نکن: <code>toFloat()</code> برای متن نامعتبر صفر برمی‌گرداند و عرض جغرافیایی ۵۰۰ معنی ندارد. 303 باعث می‌شود رفرش صفحه فرم را دوباره نفرستد.</span></li>
+  <li data-lines="150-178"><b class="what">setup به ترتیب درست.</b> LittleFS و تنظیمات، بعد صف و قفل (قبل از هر Task)، OLED، Wi-Fi با سقف ۲۰ ثانیه، OTA، وب سرور، و در آخر Taskها.
+    <span class="why">اگر Wi-Fi در ۲۰ ثانیه وصل نشد، دستگاه متوقف نمی‌شود: <code>setAutoReconnect</code> بعدا وصلش می‌کند و weatherTask تا وصل شدن فقط منتظر می‌ماند. Stack ی weatherTask عمدا ۱۲ کیلوبایت است چون HTTPS سنگین است؛ بعد از چند روز با <code>uxTaskGetStackHighWaterMark</code> مقدار واقعی را اندازه بگیر.</span></li>
+  <li data-lines="180-184"><b class="what">loop کوچک.</b> فقط OTA و وب سرور، با یک <code>delay(2)</code>.
+    <span class="why">چون کار کند در Task جداست، loop همیشه در چند میلی‌ثانیه می‌چرخد و OTA و صفحه وب همیشه سریع جواب می‌دهند، حتی وسط یک درخواست HTTPS کند. این همان مشکلی بود که درس را با آن شروع کردیم.</span></li>
+</ol>
+
+<div class="callout example"><div class="ct">در Wokwi چه چیزی را می‌توانی امتحان کنی؟</div>
+<p>Wokwi Wi-Fi (با <code>Wokwi-GUEST</code>)، HTTPS، OLED و FreeRTOS را شبیه‌سازی می‌کند، پس بخش هوا و نمایش کار می‌کند. ولی OTA و آپلود پوشه data در Wokwi وجود ندارند؛ بدون فایل index.html، صفحه اصلی خالی است ولی <code>/api/state</code> جواب می‌دهد. پروژه کامل را روی برد واقعی بساز.</p></div>
+
+<!-- ======================= Video ======================= -->
+<h2 id="video">ویدیوی کمکی</h2>
+<div class="video" data-yt="JIr7Xm_riRs" data-title="Introduction to RTOS Part 2 - Getting Started with FreeRTOS | Digi-Key Electronics" data-channel="DigiKey" data-lang="انگلیسی">
+  <div class="sum"><ul>
+    <li>قسمت دوم از مجموعه مشهور «Introduction to RTOS» شرکت DigiKey (مدرس: Shawn Hymel) که دقیقا با ESP32 و Arduino IDE کار می‌کند.</li>
+    <li>دنبال همان هفت ورودی <code>xTaskCreatePinnedToCore</code> بگرد و آن‌ها را با جدول این درس مقایسه کن. دقت کن مدرس درباره واحد اندازه Stack در ESP32 چه می‌گوید.</li>
+    <li>ویدیو با core قدیمی‌تر ضبط شده؛ اگر جایی با core 3.x فرق داشت، ملاک این درس است.</li>
+  </ul></div>
+</div>
+<div class="video" data-yt="pHJ3lxOoWeI" data-title="Introduction to RTOS Part 5 - Queue | Digi-Key Electronics" data-channel="DigiKey" data-lang="انگلیسی">
+  <div class="sum"><ul>
+    <li>قسمت پنجم همان مجموعه، درباره صف (Queue). بعد از دیدن آن، مثال پتانسیومتر این درس را دوباره بخوان.</li>
+    <li>به این نکته توجه کن که داده <b>کپی</b> می‌شود، نه اشاره‌گرش؛ و به زمان صبر (timeout) در ارسال و دریافت.</li>
+    <li>این مجموعه تمرین‌های خوبی در انتهای هر قسمت دارد؛ اگر وقت داری، تمرین قسمت ۵ را روی برد خودت انجام بده.</li>
+  </ul></div>
+</div>
+
+<!-- ======================= Debug ======================= -->
+<h2 id="debug">وقتی کار نمی‌کند: عیب‌یابی قدم به قدم</h2>
+<div class="table-wrap"><table>
+<tr><th>علامت</th><th>علت محتمل</th><th>راه حل</th></tr>
+<tr><td>پورت شبکه (OTA) در منوی Port دیده نمی‌شود</td><td>کامپیوتر و برد در یک شبکه نیستند (شبکه مهمان، اینترنت گوشی)؛ فایروال ویندوز mDNS را بسته؛ مودم ارتباط دستگاه‌ها را جدا کرده (AP/Client Isolation)؛ برنامه روی برد کد OTA ندارد</td><td>Serial Monitor را ببین که «OTA ready» چاپ شده باشد. هر دو را به یک مودم وصل کن. یک بار که Arduino IDE اجازه شبکه خواست، «Allow» بزن. IP برد را ping کن. منو را بعد از ۳۰ ثانیه دوباره باز کن.</td></tr>
+<tr><td>OTA شروع می‌شود ولی با <code>No response from device</code> یا <code>Authentication Failed</code> قطع می‌شود</td><td>loop جایی گیر کرده و <code>ArduinoOTA.handle()</code> دیر صدا زده می‌شود؛ رمز غلط؛ Wi-Fi ضعیف</td><td>delay طولانی را از loop بردار؛ رمز را بررسی کن؛ برد را نزدیک مودم ببر.</td></tr>
+<tr><td><code>Sketch too big</code> یا <code>text section exceeds available space</code></td><td>برنامه از جای برنامه در Partition Scheme بزرگ‌تر است</td><td>برای حفظ OTA: <b>Minimal SPIFFS</b>. فقط اگر OTA لازم نیست: Huge APP. تغییر پارتیشن را با USB آپلود کن.</td></tr>
+<tr><td>آپدیت وب: <code>Not Enough Space</code> یا خطا در <code>Update.begin</code></td><td>Partition Scheme بدون OTA انتخاب شده</td><td>پارتیشن با دو app (Default یا Minimal SPIFFS) انتخاب کن و یک بار با USB آپلود کن.</td></tr>
+<tr><td><code>LittleFS mount failed</code></td><td>بار اول و فرمت‌نشده (با <code>begin(false)</code>)؛ Partition Scheme موقع آپلود LittleFS با آپلود برنامه فرق دارد؛ پارتیشنی به اسم spiffs وجود ندارد (No FS)</td><td><code>LittleFS.begin(true)</code>؛ هر دو آپلود با یک Partition Scheme؛ پارتیشنی با فضای فایل انتخاب کن.</td></tr>
+<tr><td>صفحه وب «Not found» می‌دهد ولی LittleFS سوار شده</td><td>پوشه data آپلود نشده یا اسم فایل فرق دارد (Index.html، index.htm)؛ serveStatic قبل از LittleFS.begin</td><td>با برنامه LittleFS_Basics فهرست فایل‌ها را ببین؛ ترتیب setup را درست کن.</td></tr>
+<tr><td>HTTPS: کد <code>-1</code> (connection refused) یا پیام <code>X509 - Certificate verification failed</code></td><td>DNS یا اینترنت نیست؛ سرویس از شبکه تو در دسترس نیست (مثلا فیلتر)؛ گواهی ریشه غلط یا منقضی؛ Heap کم برای TLS</td><td>آدرس را در مرورگر گوشیِ روی همان Wi-Fi امتحان کن. برای تشخیص یک بار <code>setInsecure()</code> بگذار: اگر وصل شد، مشکل از گواهی است؛ <code>useBuiltinCACertBundle()</code> را امتحان کن. <code>ESP.getMaxAllocHeap()</code> را چاپ کن (TLS حدود ۴۰ کیلوبایت پیوسته می‌خواهد). ساعت: در core آردوینو بررسی تاریخ گواهی به طور پیش‌فرض خاموش است، پس ساعت غلط معمولا علت نیست؛ ولی داشتن ساعت درست با NTP (درس ۴.۱) عادت خوبی است و برخی کتابخانه‌ها و سرویس‌ها به آن نیاز دارند.</td></tr>
+<tr><td><code>JSON error: IncompleteInput</code> یا <code>InvalidInput</code></td><td>جواب chunked بوده؛ timeout وسط خواندن؛ سرور به جای JSON صفحه خطای HTML فرستاده</td><td><code>http.useHTTP10(true)</code>؛ timeout را بیشتر کن؛ کد HTTP را قبل از تجزیه بررسی کن.</td></tr>
+<tr><td><code>Task watchdog got triggered</code> و ریست</td><td>یک Task (یا loop با enableLoopWDT) بیش از ۵ ثانیه بدون وقفه کار کرده؛ حلقه انتظار <code>while(...){}</code></td><td>اسم Task مجرم در خط <code>CPU 0: ...</code> هست. در حلقه‌اش <code>vTaskDelay</code> بگذار یا کار را به تکه‌های کوچک‌تر بشکن؛ نگهبان را خاموش نکن.</td></tr>
+<tr><td><code>Guru Meditation Error ... panic'ed</code> یا <code>A stack overflow in task</code></td><td>Stack کم برای Task (مخصوصا با printf یا HTTPS)؛ استفاده از صف/قفلی که NULL است یا هنوز ساخته نشده</td><td>Stack را دو برابر کن و با <code>uxTaskGetStackHighWaterMark</code> اندازه بگیر؛ صف و قفل را قبل از Taskها بساز و NULL نبودنشان را بررسی کن.</td></tr>
+<tr><td>Serial Monitor خط‌های درهم و قاطی نشان می‌دهد</td><td>دو Task هم‌زمان چاپ می‌کنند</td><td>Serial را با Mutex محافظت کن یا فقط یک Task مسئول چاپ باشد (بقیه از صف پیام بفرستند).</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>این درس ابزارهای قدرتمندی به تو داد و قدرت خطرناک است. سه قانون من: <b>یک</b>، هر Task، هر صف و هر قفل جدید باید دلیل داشته باشد؛ اگر نمی‌توانی در یک جمله بگویی چرا این کار Task جدا می‌خواهد، نمی‌خواهد. <b>دو</b>، هیچ‌وقت برنامه‌ای را با OTA روی دستگاهی که به آن دسترسی نداری نفرست که قبلا همان برنامه را روی یک برد روی میز، با قطع و وصل Wi-Fi و قطع برق، تست نکرده‌ای. من دستگاه‌هایی دیده‌ام که به خاطر یک خط اشتباه در setup، مجبور شدند از پشت‌بام پایین بیاورند. <b>سه</b>، دستگاهی که علت ریست‌هایش را ثبت نمی‌کند، دستگاه حرفه‌ای نیست. از امروز در هر پروژه‌ای که بیش از یک روز روشن می‌ماند، کد «جعبه سیاه» بخش ۵ را بگذار. بعد از یک هفته که شمارنده کرش صفر ماند، آن وقت می‌توانی بگویی «کار می‌کند».</p></div>
+
+<!-- ======================= Quiz ======================= -->
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">در ESP32، خط <code>xTaskCreatePinnedToCore(f, "t", 2048, NULL, 1, NULL, 1);</code> چقدر Stack به Task می‌دهد؟</p>
+  <ol><li data-why="این در FreeRTOS استاندارد درست است (word چهاربایتی)، ولی نسخه ESP-IDF به بایت حساب می‌کند.">۲۰۴۸ word یعنی ۸ کیلوبایت</li><li>۲۰۴۸ بایت یعنی ۲ کیلوبایت</li><li data-why="ESP32 چنین پیش‌فرضی را جایگزین عدد تو نمی‌کند.">همیشه ۸ کیلوبایت، مثل loopTask</li><li data-why="عدد سوم اندازه Stack است، نه اولویت یا هسته.">بستگی به اولویت دارد</li></ol>
+  <div class="fb">در FreeRTOS ی ESP-IDF اندازه Stack به <b>بایت</b> است. کدهای کپی‌شده از پلتفرم‌های دیگر با عدد کوچک مثل 512 روی ESP32 کرش می‌کنند.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">Task ای روی هسته ۰ داری که در یک حلقه <code>for(;;)</code> بدون هیچ vTaskDelay عددی را زیاد می‌کند. حدود ۵ ثانیه بعد چه می‌شود؟</p>
+  <ol><li data-why="هسته دارد کار می‌کند، ولی Task بیکار نوبت نمی‌گیرد؛ نگهبان دقیقا برای همین است.">هیچ اتفاقی نمی‌افتد</li><li data-why="Stack با شمردن پر نمی‌شود؛ متغیر جدیدی ساخته نمی‌شود.">Stack overflow رخ می‌دهد</li><li>Task Watchdog فعال می‌شود چون IDLE0 نوبت اجرا نگرفته، و برد ریست می‌شود</li><li data-why="Brownout به ولتاژ تغذیه مربوط است، نه به برنامه.">Brownout detector برد را ریست می‌کند</li></ol>
+  <div class="fb">نگهبان Task در core آردوینو IDLE0 را با مهلت ۵ ثانیه زیر نظر دارد. درمان: یک <code>vTaskDelay</code> کوتاه در حلقه.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">Task حسگر هر ۲۰۰ میلی‌ثانیه عددی می‌خواند و Task نمایش باید آن را نشان دهد. امن‌ترین و تمیزترین راه انتقال چیست؟</p>
+  <ol><li>یک صف (Queue) با <code>xQueueSend</code> و <code>xQueueReceive</code></li><li data-why="برای داده چندبخشی خطر Race Condition دارد و Task نمایش نمی‌فهمد داده جدید کی رسیده.">یک متغیر سراسری معمولی</li><li data-why="Mutex برای محافظت از یک منبع مشترک است، نه برای انتقال داده؛ و این‌جا لازم نیست.">فقط یک Mutex بدون متغیر</li><li data-why="Serial برای انسان است و انتقال بین Taskها از طریق آن بی‌معنی است.">نوشتن در Serial و خواندن از آن</li></ol>
+  <div class="fb">صف داده را کپی می‌کند، نصفه جابه‌جا نمی‌کند، و Task گیرنده را تا رسیدن داده می‌خواباند.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">برنامه‌ات «Sketch too big» می‌دهد و دستگاه باید OTA داشته باشد. کدام Partition Scheme را انتخاب می‌کنی؟</p>
+  <ol><li data-why="Huge APP فقط یک جای برنامه دارد؛ OTA دیگر کار نمی‌کند.">Huge APP (3MB No OTA/1MB SPIFFS)</li><li data-why="No OTA همان‌طور که از اسمش پیداست جای دوم ندارد.">No OTA (2MB APP/2MB SPIFFS)</li><li data-why="همین الان هم پیش‌فرض است و جا نشده.">Default 4MB with spiffs</li><li>Minimal SPIFFS (1.9MB APP with OTA/128KB SPIFFS)</li></ol>
+  <div class="fb">Minimal SPIFFS دو جای برنامه ۱٫۹ مگابایتی دارد: هم برنامه بزرگ‌تر جا می‌شود هم OTA می‌ماند. فقط فضای فایل ۱۲۸ کیلوبایت می‌شود.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">چرا در مثال هوا قبل از <code>deserializeJson(doc, http.getStream(), ...)</code> خط <code>http.useHTTP10(true)</code> را گذاشتیم؟</p>
+  <ol><li data-why="HTTP/1.0 سرعت را بیشتر نمی‌کند؛ هدف چیز دیگری است.">چون HTTP 1.0 سریع‌تر است</li><li>تا سرور جواب را chunked (تکه‌تکه با عددهای اندازه) نفرستد و JSON خوانده‌شده از جریان خراب نشود</li><li data-why="رمزنگاری به WiFiClientSecure مربوط است، نه نسخه HTTP.">چون HTTPS فقط با HTTP 1.0 کار می‌کند</li><li data-why="useHTTP10 ربطی به گواهی ندارد.">تا گواهی سرور بررسی نشود</li></ol>
+  <div class="fb">وقتی مستقیم از <code>getStream()</code> می‌خوانی، HTTPClient تکه‌ها را سرهم نمی‌کند. HTTP/1.0 این مشکل را از ریشه حذف می‌کند.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">دستگاهت در سقف است. بعد از یک آپدیت OTA دیگر در منوی Port دیده نمی‌شود و Wi-Fi هم وصل نیست. کدام کار از قبل می‌توانست جلوی این را بگیرد؟</p>
+  <ol><li data-why="رمز OTA ربطی به وصل نشدن Wi-Fi برنامه جدید ندارد.">برداشتن رمز OTA</li><li data-why="Huge APP اصلا OTA ندارد و وضع را بدتر می‌کرد.">انتخاب Huge APP</li><li>تست برنامه جدید روی یک برد روی میز، و استفاده از Rollback که فقط بعد از وصل شدن Wi-Fi نسخه جدید را تأیید می‌کند</li><li data-why="خاموش کردن نگهبان مشکل را پنهان می‌کند، حل نمی‌کند.">خاموش کردن Watchdog</li></ol>
+  <div class="fb">با <code>verifyRollbackLater()</code> و تأیید دستی بعد از وصل شدن Wi-Fi، نسخه خراب خودبه‌خود به نسخه قبلی برمی‌گردد. و هیچ چیز جای تست روی میز را نمی‌گیرد.</div>
+</div>
+
+<!-- ======================= Exercises ======================= -->
+<h2 id="practice">تمرین‌ها</h2>
+<div class="exercise"><div class="ct">تمرین ۱: سه آشپز</div>
+<p>برنامه صف (پتانسیومتر و LED) را گسترش بده: یک Task سوم بساز که LED دوم روی GPIO5 را چشمک بزند، و سرعت چشمکش به عدد پتانسیومتر بستگی داشته باشد (عدد ۰ یعنی هر ۱۰۰۰ میلی‌ثانیه و ۴۰۹۵ یعنی هر ۱۰۰ میلی‌ثانیه). Task نمایش باید عدد را برای Task سوم هم بفرستد. Stack هر سه Task را هر ۵ ثانیه چاپ کن و Stack ها را تا جای ممکن کم کن، با حداقل ۵۰۰ بایت حاشیه.</p>
+<details><summary>راهنمایی</summary><p>یک صف دوم بساز. Task چشمک‌زن می‌تواند با <code>xQueueReceive(q2, &amp;v, 0)</code> بدون صبر بپرسد «عدد جدید داری؟» و اگر نبود با عدد قبلی ادامه دهد. برای تبدیل عدد از <code>map(v, 0, 4095, 1000, 100)</code> استفاده کن.</p></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۲: هشدار گرما</div>
+<p>برنامه هوا و ntfy را ترکیب کن: اگر دمای تهران از ۳۵ درجه بیشتر شد، یک هشدار ntfy بفرست، ولی فقط <b>یک بار</b> تا وقتی دما دوباره زیر ۳۳ درجه نیامده. وضعیت «هشدار فرستاده شده» باید بعد از ریست هم یادش بماند.</p>
+<details><summary>راهنمایی</summary><p>فاصله ۳۵ و ۳۳ همان «هیسترزیس» است تا دمای ۳۵ و ۳۴٫۹ پشت سر هم ده‌ها هشدار نسازد. برای به یاد ماندن بعد از ریست، یک <code>bool</code> در Preferences کافی است؛ فقط وقتی مقدارش <b>عوض</b> شد بنویس.</p></details>
+<details><summary>جواب (بخش کلیدی)</summary>
+<div class="code" data-file="HeatAlert_part.ino"><pre>
+prefs.begin("alert", false);
+bool sent = prefs.getBool("sent", false);
+if (!sent &amp;&amp; t &gt; 35.0) {
+  if (sendAlert("Heat", "Tehran above 35 C")) {
+    prefs.putBool("sent", true);   // فقط وقتی واقعا فرستاده شد
+  }
+} else if (sent &amp;&amp; t &lt; 33.0) {
+  prefs.putBool("sent", false);    // آماده برای هشدار بعدی
+}
+prefs.end();
+</pre></div></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۳: جعبه سیاه در صفحه وب</div>
+<p>به پروژه ایستگاه هوا بخش ۵ را اضافه کن: علت آخرین ریست، تعداد بوت‌ها و تعداد کرش‌ها را در <code>/api/state</code> برگردان و در index.html نشان بده. سپس با تغییر عمدی (مثلا یک حلقه بی‌پایان در loop بعد از ۱ دقیقه با enableLoopWDT) یک ریست نگهبان بساز و ببین در صفحه ثبت می‌شود. در آخر نسخه سالم را <b>با OTA</b> بفرست.</p>
+<details><summary>راهنمایی</summary><p>علت ریست را یک بار در setup بخوان و در یک متغیر سراسری <code>const char *</code> نگه دار؛ در handleState فقط آن را در JSON بگذار. برای تست OTA، مطمئن شو نسخه خراب هم هنوز <code>ArduinoOTA.handle()</code> را در ۱ دقیقه اول صدا می‌زند، وگرنه باید با کابل درستش کنی. (همین تجربه، حرف مربی را برایت واقعی می‌کند.)</p></details>
+</div>
+
+<div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
+<p>FreeRTOS کارهای کند را در Taskهای جدا اجرا می‌کند؛ داده را با صف و منبع مشترک را با Mutex جابه‌جا کن، Stack را به بایت بده و هر حلقه را جایی بخوابان تا نگهبان ریست نکند. OTA با دو پارتیشن برنامه (Default یا Minimal SPIFFS) و رمز، دستگاه را از راه دور به‌روز نگه می‌دارد و LittleFS فایل‌ها و تنظیمات را جدا از برنامه نگه می‌دارد. API ها را با HTTPS، سقف زمان، فیلتر JSON و فاصله منطقی صدا بزن، و با ثبت علت ریست، Watchdog و ذخیره امن، دستگاهی بساز که ماه‌ها بدون تو کار کند.</p></div>
+
+</article>
+</body>
+</html>

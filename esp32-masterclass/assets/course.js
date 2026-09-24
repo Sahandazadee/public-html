@@ -28,7 +28,8 @@ window.COURSE = {
     { n: 5, title: "اینترنت اشیا و پروژه‌های پیشرفته", color: "#d6457a", lessons: [
       { id: "5-1", title: "پروتکل MQTT با HiveMQ و Adafruit IO", min: 60, level: "پیشرفته" },
       { id: "5-2", title: "ESP-NOW: ارتباط مستقیم دو ESP32 بدون مودم", min: 50, level: "پیشرفته" },
-      { id: "5-3", title: "ESP32-CAM: پخش زنده تصویر و ذخیره عکس روی کارت SD", min: 65, level: "پیشرفته" }
+      { id: "5-3", title: "ESP32-CAM: پخش زنده تصویر و ذخیره عکس روی کارت SD", min: 65, level: "پیشرفته" },
+      { id: "5-4", title: "ابزارهای پروژه واقعی: FreeRTOS، آپدیت بی‌سیم OTA، LittleFS و فراخوانی API", min: 75, level: "پیشرفته" }
     ]},
     { n: 6, title: "مدیریت انرژی، هوش مصنوعی و پروژه نهایی", color: "#0f8fa8", lessons: [
       { id: "6-1", title: "خواب عمیق و خواب سبک برای دستگاه‌های باتری‌خور", min: 50, level: "پیشرفته" },
