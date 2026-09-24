@@ -924,35 +924,571 @@ mosquitto_sub -h localhost -t "esp32course/#" -v
 <div class="exercise"><div class="ct">Exercise 1: only send when it changes</div>
 <p>Change the part A program so it reads the temperature every 2 seconds, but only publishes when it differs by at least 0.3 degrees from the last published value, or when 60 seconds have passed since the last publish (so the dashboard knows the device is alive).</p>
 <details><summary>Hint</summary><p>Keep a global variable <code>float lastSent = -100;</code>. The publish condition: <code>fabs(t - lastSent) &gt;= 0.3 || millis() - lastPublish &gt;= 60000</code>. After publishing, <code>lastSent = t</code>.</p></details>
-<details><summary>Answer</summary>
-<div class="code" data-file="PublishOnChange.ino"><pre>
-float lastSent = -100;
-unsigned long lastRead = 0;
+<details class="expect"><summary>What should you see?</summary>
+<p>With the Wokwi circuit from part A (DHT22 left at 24.5 °C), the Serial Monitor shows something like this. Your IP, Client ID and uptime numbers will differ:</p>
+<pre class="serial">WiFi..... connected, IP: 10.10.0.2
+MQTT: connecting as esp32-240AC4000110-3A9C ... OK
+(change) -> {"temp":24.5,"hum":40.0,"uptime":6}
+(heartbeat) -> {"temp":24.5,"hum":40.0,"uptime":66}
+(change) -> {"temp":27.0,"hum":40.0,"uptime":81}
+(heartbeat) -> {"temp":27.0,"hum":40.0,"uptime":141}</pre>
+<ul>
+<li>The first message comes right after <code>OK</code> and says <code>(change)</code>, because <code>lastSent</code> starts at -100.</li>
+<li>If nobody touches the sensor, a <code>(heartbeat)</code> line appears about every 60 seconds (the uptime grows by 60 or 61), never every 2 or 10 seconds.</li>
+<li>Click the DHT22 and move the temperature by 0.5 °C or more: a <code>(change)</code> line appears within 2 seconds. Move it by only 0.1 or 0.2 °C: nothing is published.</li>
+<li>In MQTTX, the messages on <code>esp32course/ali1234/sensor/climate</code> arrive at exactly the same moments as the Serial lines.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>This is the complete part A program; only two new global variables and the end of <code>loop()</code> have changed.</p>
+<div class="code" data-file="PublishOnChange.ino" id="ex1ans"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#include &lt;DHT.h&gt;
+
+// ---- Wi-Fi (keep this as is in Wokwi) ----
+const char* WIFI_SSID = "Wokwi-GUEST";
+const char* WIFI_PASS = "";
+
+// ---- Public HiveMQ broker ----
+const char* MQTT_HOST = "broker.hivemq.com";
+const int   MQTT_PORT = 1883;
+
+// Unique prefix: replace ali1234 with your own name and number
+#define BASE "esp32course/ali1234"
+const char* TOPIC_CLIMATE = BASE "/sensor/climate";
+const char* TOPIC_CMD     = BASE "/led/set";
+const char* TOPIC_STATUS  = BASE "/status";
+
+const int LED_PIN = 4;
+const int DHT_PIN = 13;
+
+DHT dht(DHT_PIN, DHT22);
+WiFiClient net;              // a raw TCP pipe
+PubSubClient mqtt(net);      // MQTT over that same pipe
+
+char clientId[40];
+unsigned long lastPublish = 0;
+unsigned long lastTry = 0;
+float lastSent = -100;       // last published temperature (-100 = nothing yet)
+unsigned long lastRead = 0;  // when we last read the sensor
+
+// Called whenever a message arrives on a subscribed Topic
+void onMessage(char* topic, byte* payload, unsigned int length) {
+  char msg[32];
+  unsigned int n = (length &lt; sizeof(msg) - 1) ? length : sizeof(msg) - 1;
+  memcpy(msg, payload, n);
+  msg[n] = '\0';             // payload has no '\0' of its own!
+  Serial.printf("&lt;- [%s] %s\n", topic, msg);
+
+  if (strcmp(topic, TOPIC_CMD) == 0) {
+    if (strcmp(msg, "ON") == 0) {
+      digitalWrite(LED_PIN, HIGH);
+    } else if (strcmp(msg, "OFF") == 0) {
+      digitalWrite(LED_PIN, LOW);
+    } else {
+      Serial.println("Unknown command (use ON or OFF)");
+    }
+  }
+}
+
+void connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.print(" connected, IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+bool connectMqtt() {
+  Serial.printf("MQTT: connecting as %s ... ", clientId);
+  // Last will: if we drop without warning, the Broker writes offline to status
+  if (mqtt.connect(clientId, TOPIC_STATUS, 1, true, "offline")) {
+    Serial.println("OK");
+    mqtt.publish(TOPIC_STATUS, "online", true);   // true means retained
+    mqtt.subscribe(TOPIC_CMD, 1);
+    return true;
+  }
+  Serial.printf("failed, state=%d\n", mqtt.state());
+  return false;
+}
+
+void publishClimate() {
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) {
+    Serial.println("DHT22 read failed");
+    return;
+  }
+  JsonDocument doc;
+  doc["temp"] = serialized(String(t, 1));   // 24.3, with one decimal place
+  doc["hum"] = serialized(String(h, 1));
+  doc["uptime"] = millis() / 1000;
+  char buf[128];
+  serializeJson(doc, buf, sizeof(buf));
+  bool ok = mqtt.publish(TOPIC_CLIMATE, buf);
+  Serial.printf("-&gt; %s %s\n", buf, ok ? "" : "(publish FAILED)");
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  dht.begin();
+  connectWiFi();
+  // Unique Client ID: the board's MAC + a random number
+  String mac = WiFi.macAddress();   // like 24:6F:28:AB:CD:EF
+  mac.replace(":", "");
+  snprintf(clientId, sizeof(clientId), "esp32-%s-%04X", mac.c_str(), (unsigned)(esp_random() &amp; 0xFFFF));
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  mqtt.setCallback(onMessage);
+}
 
 void loop() {
-  // ... the connection part, same as before ...
-  mqtt.loop();
-  if (millis() - lastRead &gt;= 2000) {
+  if (WiFi.status() != WL_CONNECTED) {
+    return;                  // Wi-Fi reconnects by itself (lesson 4.1)
+  }
+  if (!mqtt.connected()) {
+    if (lastTry == 0 || millis() - lastTry &gt; 5000) {   // one attempt every 5 seconds
+      lastTry = millis();
+      connectMqtt();
+    }
+    return;                  // do nothing else until we're connected
+  }
+  mqtt.loop();               // read incoming messages + send PINGs
+
+  if (millis() - lastRead &gt;= 2000) {             // read every 2 seconds
     lastRead = millis();
     float t = dht.readTemperature();
-    if (isnan(t)) return;
-    if (fabs(t - lastSent) &gt;= 0.3 || millis() - lastPublish &gt;= 60000) {
+    if (isnan(t)) return;                        // failed read: try again in 2 s
+    bool changed = fabs(t - lastSent) &gt;= 0.3;          // moved at least 0.3 degrees?
+    bool heartbeat = millis() - lastPublish &gt;= 60000;  // 60 s without a publish?
+    if (changed || heartbeat) {
+      Serial.print(changed ? "(change) " : "(heartbeat) ");
       lastPublish = millis();
       lastSent = t;
       publishClimate();
     }
   }
 }
-</pre></div></details>
+</pre></div>
+<ol class="walk" data-for="ex1ans">
+  <li data-lines="1-29"><b class="what">Same as part A.</b> Libraries, Wi-Fi, Broker, Topics, pins and the objects are unchanged.
+    <span class="why">The exercise only changes <i>when</i> we publish, not <i>what</i> or <i>where</i>, so everything else stays as it was.</span></li>
+  <li data-lines="30-31"><b class="what">Two new memories.</b> <code>lastSent</code> holds the last temperature we published, and <code>lastRead</code> holds the time of the last sensor reading.
+    <span class="why">To decide "has it changed enough?" we need the old value. Starting at -100 (a temperature a room never has) makes sure the very first reading counts as a change and is published at once.</span></li>
+  <li data-lines="33-118"><b class="what">Functions, setup() and the start of loop(), unchanged.</b> <code>publishClimate()</code> still reads the sensor itself and builds the JSON.
+    <span class="why">It reads the sensor a second time, but the DHT library returns its saved value if you ask again within 2 seconds, so the published number is the same one we just compared.</span></li>
+  <li data-lines="120-123"><b class="what">A reading every 2 seconds.</b> Timed with <code>millis()</code>, like the 10-second publish in part A; a failed reading simply waits for the next round.
+    <span class="why">The DHT22 can't give a fresh value faster than every 2 seconds. With <code>millis()</code> instead of <code>delay()</code>, <code>mqtt.loop()</code> keeps running and LED commands still arrive at once.</span></li>
+  <li data-lines="124-125"><b class="what">The two reasons to publish.</b> <code>changed</code> is true when the difference (without its sign, thanks to <code>fabs</code>) is at least 0.3; <code>heartbeat</code> is true when 60 seconds have passed since the last publish.
+    <span class="why"><code>fabs</code> catches a rise and a drop alike. Without the heartbeat, a room with a steady temperature would stay silent for hours and the dashboard couldn't tell "nothing changed" from "the device is dead".</span></li>
+  <li data-lines="126-131"><b class="what">Publish, remember, and say why.</b> We print the reason, save the time and the value, and call <code>publishClimate()</code>.
+    <span class="why"><code>lastSent</code> must be updated only when we really publish; otherwise a slow drift of 0.1 degrees per reading would never add up to 0.3 and would never be reported. The printed reason lets you check the logic in the Serial Monitor.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="ex1ans">
+<p>Try it in Wokwi with the part A circuit (same libraries: <code>PubSubClient</code>, <code>ArduinoJson</code>, <code>DHT sensor library</code>). Click the DHT22 and drag the temperature slider to test both rules.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -110, "left": 180, "attrs": { "temperature": "24.5", "humidity": "40" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 150, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 70, "left": 250, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 <div class="exercise"><div class="ct">Exercise 2: report the LED state</div>
 <p>After every command, have the ESP32 publish the LED's real state on the Topic <code>.../led/state</code> with retain (<code>ON</code> or <code>OFF</code>). Why must this Topic be different from <code>.../led/set</code>?</p>
 <details><summary>Hint</summary><p>Inside <code>onMessage</code>, after <code>digitalWrite</code>, call <code>mqtt.publish(TOPIC_STATE, msg, true)</code>. Think about what would happen after publishing if state and set were the same Topic and the ESP32 were subscribed to it.</p></details>
-<details><summary>Answer</summary><p>If it were one Topic, the ESP32 would receive its own message again (because it's subscribed to it), run it again and publish again: an endless loop. Keeping "commands" (set, without retain) separate from "state" (state, with retain) is the standard pattern in systems like Home Assistant.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>Subscribe in MQTTX to <code>esp32course/ali1234/led/#</code> (your own prefix) and send <code>ON</code>, then <code>OFF</code>, then <code>BLINK</code> to <code>.../led/set</code>. The Serial Monitor shows (your Client ID differs; the climate lines every 10 seconds are left out here):</p>
+<pre class="serial">MQTT: connecting as esp32-240AC4000110-3A9C ... OK
+-> [esp32course/ali1234/led/state] OFF
+&lt;- [esp32course/ali1234/led/set] ON
+-> [esp32course/ali1234/led/state] ON
+&lt;- [esp32course/ali1234/led/set] OFF
+-> [esp32course/ali1234/led/state] OFF
+&lt;- [esp32course/ali1234/led/set] BLINK
+Unknown command (use ON or OFF)
+-> [esp32course/ali1234/led/state] OFF</pre>
+<ul>
+<li>Every <code>&lt;-</code> line is followed by exactly one <code>-&gt;</code> state line, and the LED on GPIO4 matches it.</li>
+<li>An unknown command still produces a state message, with the unchanged state.</li>
+<li>Disconnect MQTTX and connect again: the last state appears immediately, marked as <b>retained</b>, although the ESP32 sent nothing new.</li>
+<li>The ESP32 never receives its own state message (you never see <code>&lt;- [.../led/state]</code>).</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p><b>Why two Topics:</b> if state and set were the same Topic, the ESP32 (which is subscribed to it) would receive its own message again, carry it out again and publish again: an endless loop. There's a second problem too: the state is retained, so a retained "ON" on the command Topic would switch the LED on again at every reconnect, even if someone switched it off in the meantime. Keeping "commands" (set, without retain) apart from "state" (state, with retain) is the standard pattern used by systems like Home Assistant.</p>
+<div class="code" data-file="LedState.ino" id="ex2ans"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#include &lt;DHT.h&gt;
+
+// ---- Wi-Fi (keep this as is in Wokwi) ----
+const char* WIFI_SSID = "Wokwi-GUEST";
+const char* WIFI_PASS = "";
+
+// ---- Public HiveMQ broker ----
+const char* MQTT_HOST = "broker.hivemq.com";
+const int   MQTT_PORT = 1883;
+
+// Unique prefix: replace ali1234 with your own name and number
+#define BASE "esp32course/ali1234"
+const char* TOPIC_CLIMATE = BASE "/sensor/climate";
+const char* TOPIC_CMD     = BASE "/led/set";
+const char* TOPIC_STATUS  = BASE "/status";
+const char* TOPIC_STATE   = BASE "/led/state";   // ★ the real state (retained)
+
+const int LED_PIN = 4;
+const int DHT_PIN = 13;
+
+DHT dht(DHT_PIN, DHT22);
+WiFiClient net;              // a raw TCP pipe
+PubSubClient mqtt(net);      // MQTT over that same pipe
+
+char clientId[40];
+unsigned long lastPublish = 0;
+unsigned long lastTry = 0;
+
+// ★ Publish the LED's real state, read back from the pin, as retained
+void publishLedState() {
+  const char* s = digitalRead(LED_PIN) == HIGH ? "ON" : "OFF";
+  bool ok = mqtt.publish(TOPIC_STATE, s, true);   // true = retained
+  Serial.printf("-&gt; [%s] %s %s\n", TOPIC_STATE, s, ok ? "" : "(publish FAILED)");
+}
+
+// Called whenever a message arrives on a subscribed Topic
+void onMessage(char* topic, byte* payload, unsigned int length) {
+  char msg[32];
+  unsigned int n = (length &lt; sizeof(msg) - 1) ? length : sizeof(msg) - 1;
+  memcpy(msg, payload, n);
+  msg[n] = '\0';             // payload has no '\0' of its own!
+  Serial.printf("&lt;- [%s] %s\n", topic, msg);
+
+  if (strcmp(topic, TOPIC_CMD) == 0) {
+    if (strcmp(msg, "ON") == 0) {
+      digitalWrite(LED_PIN, HIGH);
+    } else if (strcmp(msg, "OFF") == 0) {
+      digitalWrite(LED_PIN, LOW);
+    } else {
+      Serial.println("Unknown command (use ON or OFF)");
+    }
+    publishLedState();       // ★ after every command: report what the LED really is
+  }
+}
+
+void connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.print(" connected, IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+bool connectMqtt() {
+  Serial.printf("MQTT: connecting as %s ... ", clientId);
+  // Last will: if we drop without warning, the Broker writes offline to status
+  if (mqtt.connect(clientId, TOPIC_STATUS, 1, true, "offline")) {
+    Serial.println("OK");
+    mqtt.publish(TOPIC_STATUS, "online", true);   // true means retained
+    mqtt.subscribe(TOPIC_CMD, 1);
+    publishLedState();       // ★ right after (re)connecting, too
+    return true;
+  }
+  Serial.printf("failed, state=%d\n", mqtt.state());
+  return false;
+}
+
+void publishClimate() {
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) {
+    Serial.println("DHT22 read failed");
+    return;
+  }
+  JsonDocument doc;
+  doc["temp"] = serialized(String(t, 1));   // 24.3, with one decimal place
+  doc["hum"] = serialized(String(h, 1));
+  doc["uptime"] = millis() / 1000;
+  char buf[128];
+  serializeJson(doc, buf, sizeof(buf));
+  bool ok = mqtt.publish(TOPIC_CLIMATE, buf);
+  Serial.printf("-&gt; %s %s\n", buf, ok ? "" : "(publish FAILED)");
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  dht.begin();
+  connectWiFi();
+  // Unique Client ID: the board's MAC + a random number
+  String mac = WiFi.macAddress();   // like 24:6F:28:AB:CD:EF
+  mac.replace(":", "");
+  snprintf(clientId, sizeof(clientId), "esp32-%s-%04X", mac.c_str(), (unsigned)(esp_random() &amp; 0xFFFF));
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  mqtt.setCallback(onMessage);
+}
+
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return;                  // Wi-Fi reconnects by itself (lesson 4.1)
+  }
+  if (!mqtt.connected()) {
+    if (lastTry == 0 || millis() - lastTry &gt; 5000) {   // one attempt every 5 seconds
+      lastTry = millis();
+      connectMqtt();
+    }
+    return;                  // do nothing else until we're connected
+  }
+  mqtt.loop();               // read incoming messages + send PINGs
+
+  if (millis() - lastPublish &gt;= 10000) {
+    lastPublish = millis();
+    publishClimate();
+  }
+}
+</pre></div>
+<ol class="walk" data-for="ex2ans">
+  <li data-lines="19"><b class="what">A separate state Topic.</b> <code>.../led/state</code> sits next to <code>.../led/set</code>, and we never subscribe to it.
+    <span class="why">The ESP32 only listens on <code>set</code> and only talks on <code>state</code>, so its own messages can never come back to it.</span></li>
+  <li data-lines="32-37"><b class="what">publishLedState().</b> Reads the pin back with <code>digitalRead</code>, publishes <code>ON</code> or <code>OFF</code> with <code>retain = true</code>, and prints what it sent.
+    <span class="why">Reading the pin reports what the LED really does, not what we think we told it. On the ESP32 you can read back a pin set as <code>OUTPUT</code>. Retain makes the Broker keep the last state for anyone who subscribes later, like a dashboard that opens an hour from now.</span></li>
+  <li data-lines="55"><b class="what">A report after every command.</b> The call sits inside the <code>TOPIC_CMD</code> block, after the if/else, so it also runs for unknown commands.
+    <span class="why">Publishing from inside the callback is safe here because we copied the payload into <code>msg</code> first; PubSubClient reuses one internal buffer for incoming and outgoing messages.</span></li>
+  <li data-lines="78"><b class="what">A report after every (re)connection.</b> Right after subscribing, we publish the current state once.
+    <span class="why">After a reboot or a lost connection the retained state on the Broker may be old. One message at connect time puts the truth back.</span></li>
+  <li data-lines="115-132"><b class="what">loop() unchanged.</b> Reconnecting, <code>mqtt.loop()</code> and the climate publish every 10 seconds are exactly as in part A.
+    <span class="why">The state report is event-driven (on a command or a connect), so it needs no timer of its own.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="ex2ans">
+<p>Try it in Wokwi with the part A circuit and libraries, and send the commands from MQTTX while you watch the red LED.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -110, "left": 180, "attrs": { "temperature": "24.5", "humidity": "40" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 150, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 70, "left": 250, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 <div class="exercise"><div class="ct">Exercise 3: two devices, one dashboard</div>
 <p>If you have two ESP32s (or two Wokwi tabs), run both with the prefixes <code>.../room1</code> and <code>.../room2</code>. In MQTTX, see the temperature of both rooms with just <b>one</b> Subscribe.</p>
-<details><summary>Answer</summary><p>Structure the Topics as <code>esp32course/ali1234/room1/sensor/climate</code> and <code>.../room2/sensor/climate</code>, and in the tool subscribe to <code>esp32course/ali1234/+/sensor/climate</code>. Don't forget that the two devices' Client IDs must differ; our code guarantees that automatically.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>In MQTTX, one subscription to <code>esp32course/ali1234/+/sensor/climate</code> (with your own prefix) shows messages from both rooms, each with its full Topic, for example:</p>
+<pre class="serial">esp32course/ali1234/room1/sensor/climate  {"temp":24.5,"hum":40.0,"uptime":42}
+esp32course/ali1234/room2/sensor/climate  {"temp":19.0,"hum":55.0,"uptime":37}
+esp32course/ali1234/room1/sensor/climate  {"temp":24.5,"hum":40.0,"uptime":52}
+esp32course/ali1234/room2/sensor/climate  {"temp":19.0,"hum":55.0,"uptime":47}</pre>
+<ul>
+<li>Each board's Serial Monitor shows only its own <code>-&gt;</code> lines, one every 10 seconds.</li>
+<li>Set a different temperature on each DHT22 (in Wokwi: click the sensor) so you can tell the rooms apart.</li>
+<li>Both boards stay connected. If one keeps dropping and reconnecting, the two have the same Client ID; our code builds it from the MAC plus a random number, so this only happens if you typed a fixed ID.</li>
+<li>Sending <code>ON</code> to <code>.../room1/led/set</code> switches on only room 1's LED.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>Put the room name into the Topic, one level below your prefix: <code>esp32course/ali1234/room1/sensor/climate</code> and <code>.../room2/sensor/climate</code>. The <code>+</code> wildcard matches exactly one level, so in MQTTX you subscribe to <code>esp32course/ali1234/+/sensor/climate</code>. (<code>esp32course/ali1234/#</code> would also work, but it also brings the status and LED messages.) The same program runs on both boards; only one line differs.</p>
+<div class="code" data-file="TwoRooms.ino" id="ex3ans"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#include &lt;DHT.h&gt;
+
+// ---- Wi-Fi (keep this as is in Wokwi) ----
+const char* WIFI_SSID = "Wokwi-GUEST";
+const char* WIFI_PASS = "";
+
+// ---- Public HiveMQ broker ----
+const char* MQTT_HOST = "broker.hivemq.com";
+const int   MQTT_PORT = 1883;
+
+// Unique prefix: replace ali1234 with your own name and number
+#define BASE "esp32course/ali1234"
+#define ROOM "room1"         // ★ on the second board (or tab): "room2"
+const char* TOPIC_CLIMATE = BASE "/" ROOM "/sensor/climate";
+const char* TOPIC_CMD     = BASE "/" ROOM "/led/set";
+const char* TOPIC_STATUS  = BASE "/" ROOM "/status";
+
+const int LED_PIN = 4;
+const int DHT_PIN = 13;
+
+DHT dht(DHT_PIN, DHT22);
+WiFiClient net;              // a raw TCP pipe
+PubSubClient mqtt(net);      // MQTT over that same pipe
+
+char clientId[40];
+unsigned long lastPublish = 0;
+unsigned long lastTry = 0;
+
+// Called whenever a message arrives on a subscribed Topic
+void onMessage(char* topic, byte* payload, unsigned int length) {
+  char msg[32];
+  unsigned int n = (length &lt; sizeof(msg) - 1) ? length : sizeof(msg) - 1;
+  memcpy(msg, payload, n);
+  msg[n] = '\0';             // payload has no '\0' of its own!
+  Serial.printf("&lt;- [%s] %s\n", topic, msg);
+
+  if (strcmp(topic, TOPIC_CMD) == 0) {
+    if (strcmp(msg, "ON") == 0) {
+      digitalWrite(LED_PIN, HIGH);
+    } else if (strcmp(msg, "OFF") == 0) {
+      digitalWrite(LED_PIN, LOW);
+    } else {
+      Serial.println("Unknown command (use ON or OFF)");
+    }
+  }
+}
+
+void connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.print(" connected, IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+bool connectMqtt() {
+  Serial.printf("MQTT: connecting as %s ... ", clientId);
+  // Last will: if we drop without warning, the Broker writes offline to status
+  if (mqtt.connect(clientId, TOPIC_STATUS, 1, true, "offline")) {
+    Serial.println("OK");
+    mqtt.publish(TOPIC_STATUS, "online", true);   // true means retained
+    mqtt.subscribe(TOPIC_CMD, 1);
+    return true;
+  }
+  Serial.printf("failed, state=%d\n", mqtt.state());
+  return false;
+}
+
+void publishClimate() {
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) {
+    Serial.println("DHT22 read failed");
+    return;
+  }
+  JsonDocument doc;
+  doc["temp"] = serialized(String(t, 1));   // 24.3, with one decimal place
+  doc["hum"] = serialized(String(h, 1));
+  doc["uptime"] = millis() / 1000;
+  char buf[128];
+  serializeJson(doc, buf, sizeof(buf));
+  bool ok = mqtt.publish(TOPIC_CLIMATE, buf);
+  Serial.printf("-&gt; %s %s\n", buf, ok ? "" : "(publish FAILED)");
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  dht.begin();
+  connectWiFi();
+  // Unique Client ID: the board's MAC + a random number
+  String mac = WiFi.macAddress();   // like 24:6F:28:AB:CD:EF
+  mac.replace(":", "");
+  snprintf(clientId, sizeof(clientId), "esp32-%s-%04X", mac.c_str(), (unsigned)(esp_random() &amp; 0xFFFF));
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  mqtt.setCallback(onMessage);
+}
+
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return;                  // Wi-Fi reconnects by itself (lesson 4.1)
+  }
+  if (!mqtt.connected()) {
+    if (lastTry == 0 || millis() - lastTry &gt; 5000) {   // one attempt every 5 seconds
+      lastTry = millis();
+      connectMqtt();
+    }
+    return;                  // do nothing else until we're connected
+  }
+  mqtt.loop();               // read incoming messages + send PINGs
+
+  if (millis() - lastPublish &gt;= 10000) {
+    lastPublish = millis();
+    publishClimate();
+  }
+}
+</pre></div>
+<ol class="walk" data-for="ex3ans">
+  <li data-lines="16"><b class="what">The room name.</b> <code>ROOM</code> is <code>"room1"</code> on the first board; before uploading to the second board (or starting the second Wokwi tab), change it to <code>"room2"</code>.
+    <span class="why">A <code>#define</code> at the top is the one place to change, so the rest of the code stays identical on every device.</span></li>
+  <li data-lines="17-19"><b class="what">Topics with the room inside.</b> The compiler glues neighbouring strings together, so <code>BASE "/" ROOM "/sensor/climate"</code> becomes <code>"esp32course/ali1234/room1/sensor/climate"</code>.
+    <span class="why">The room goes <i>in the middle</i> so that a single <code>+</code> can stand in for it. The command and status Topics get the room too, so each LED listens only to its own room and each Last Will reports the right device.</span></li>
+  <li data-lines="98-101"><b class="what">A unique Client ID (unchanged).</b> MAC address plus a random number.
+    <span class="why">The Broker allows only one connection per Client ID. Two boards with the same ID would kick each other off endlessly. With the MAC in the ID, two boards (or two Wokwi tabs, which get different random numbers) never collide.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="ex3ans">
+<p>No second board? Open this project in two browser tabs. Start the first as it is; in the second, change <code>ROOM</code> to <code>"room2"</code> and set the DHT22 to a different temperature before pressing ▶.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -110, "left": 180, "attrs": { "temperature": "24.5", "humidity": "40" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 150, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 70, "left": 250, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">The lesson in three lines</div>

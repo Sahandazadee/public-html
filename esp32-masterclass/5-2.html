@@ -715,64 +715,420 @@ esp_now_init();
 <div class="exercise"><div class="ct">تمرین ۱: قدرت سیگنال</div>
 <p>در برد B، قدرت سیگنال (RSSI) هر پیام را چاپ کن و در خانه راه برو: چند متر و چند دیوار طول می‌کشد تا RSSI به حدود <code>-85</code> dBm برسد و پیام‌ها گم شوند؟</p>
 <details><summary>راهنمایی</summary><p>در Callback دریافت، <code>info-&gt;rx_ctrl-&gt;rssi</code> یک عدد منفی (مثلا <code>-52</code>) است. آن را در یک متغیر <code>volatile int</code> سراسری بریز و در loop چاپ کن. هر چه به صفر نزدیک‌تر، سیگنال قوی‌تر.</p></details>
-<details><summary>جواب</summary>
-<div class="code" data-file="RSSI.ino (تکه)"><pre>
-volatile int lastRssi = 0;
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>روی برد A همان <code>Sender_OneWay.ino</code> بدون تغییر اجرا می‌شود و روی برد B جواب پایین. هر بار دکمه A را بزنی، یک خط روی B می‌آید. MAC و عددهای RSSI تو فرق دارند:</p>
+<pre class="serial">Receiver MAC: 24:6F:28:AB:CD:EF
+Got #1 -> LED ON, RSSI -38 dBm
+Got #2 -> LED OFF, RSSI -41 dBm
+Got #3 -> LED ON, RSSI -67 dBm
+Got #4 -> LED OFF, RSSI -86 dBm</pre>
+<p>گشتن در خانه باید جدولی شبیه این جواب نمونه بدهد (مقدارهای معمول داخل ساختمان؛ عدد واقعی را دیوارها و وسایل خانه تو تعیین می‌کنند):</p>
+<div class="table-wrap"><table>
+<tr><th>جای برد B</th><th>RSSI معمول</th><th>پیام‌ها</th></tr>
+<tr><td>روی همان میز، ۰٫۵ متر</td><td>‎-25 تا ‎-45 dBm</td><td>همه می‌رسند</td></tr>
+<tr><td>همان اتاق، ۵ متر</td><td>‎-45 تا ‎-60 dBm</td><td>همه می‌رسند</td></tr>
+<tr><td>اتاق بغلی، ۱ دیوار</td><td>‎-60 تا ‎-75 dBm</td><td>همه می‌رسند</td></tr>
+<tr><td>۲ تا ۳ دیوار یا یک طبقه، ۱۰ تا ۲۰ متر</td><td>‎-80 تا ‎-90 dBm</td><td>بعضی گم می‌شوند</td></tr>
+</table></div>
+<ul>
+<li>RSSI همیشه منفی است و با دور شدن یا گذاشتن دیوار در میان، منفی‌تر (ضعیف‌تر) می‌شود.</li>
+<li>حدود ‎-85 تا ‎-90 dBm، برد A شروع به چاپ <code>delivery FAILED</code> می‌کند و در شماره‌های B جای خالی می‌بینی (مثلا ‎#7 و بعد ‎#9).</li>
+<li>دیوار بتنی، سقف یا یخچال فلزی خیلی بیشتر از یک دیوار گچی نازک سیگنال را می‌خورد؛ حتی اگر بدنت بین دو برد باشد چند dB کم می‌شود.</li>
+<li>معیار نمره: جدولت حداقل چهار مکان دارد، هر کدام با فاصله، تعداد دیوار، RSSI و «می‌رسد / گم می‌شود»؛ و RSSI‌ای را که گم شدن از آن شروع می‌شود پیدا کرده‌ای.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>این همان گیرنده کامل پروژه ۱ (<code>Receiver_OneWay.ino</code>) است با سه اضافه کوچک.</p>
+<div class="code" data-file="Receiver_RSSI.ino — برد B" id="ex1ans"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
 
+const int LED_PIN = 4;
+
+typedef struct {
+  uint32_t seq;
+  bool ledOn;
+} CommandMsg;
+
+CommandMsg incoming;
+volatile bool gotMsg = false;
+volatile int lastRssi = 0;      // ★ قدرت سیگنال آخرین پیام (dBm)
+
+// امضای هسته 3.x: اطلاعات فرستنده + داده + طول
 void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
-  if (len != sizeof(CommandMsg)) return;
+  if (len != sizeof(CommandMsg)) return;   // اندازه اشتباه؟ نادیده بگیر
   memcpy(&amp;incoming, data, sizeof(incoming));
-  lastRssi = info-&gt;rx_ctrl-&gt;rssi;
-  gotMsg = true;
+  lastRssi = info-&gt;rx_ctrl-&gt;rssi;        // ★ منفی؛ هرچه به صفر نزدیک‌تر، قوی‌تر
+  gotMsg = true;                          // کار اصلی را loop انجام می‌دهد
 }
-// در loop:  Serial.printf("RSSI: %d dBm\n", lastRssi);
-</pre></div></details>
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  Serial.print("Receiver MAC: ");
+  Serial.println(WiFi.macAddress());
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_recv_cb(onRecv);
+}
+
+void loop() {
+  if (gotMsg) {
+    gotMsg = false;
+    digitalWrite(LED_PIN, incoming.ledOn ? HIGH : LOW);
+    Serial.printf("Got #%lu -&gt; LED %s, RSSI %d dBm\n", (unsigned long)incoming.seq,
+                  incoming.ledOn ? "ON" : "OFF", lastRssi);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="ex1ans">
+  <li data-lines="13"><b class="what">یک متغیر مشترک برای RSSI.</b> یک <code>volatile int</code> سراسری.
+    <span class="why">callback آن را می‌نویسد و loop آن را می‌خواند. <code>volatile</code> به کامپایلر می‌گوید این مقدار ممکن است «پشت سرش» (در تسک Wi-Fi) عوض شود، پس باید هر بار واقعا از حافظه بخواندش.</span></li>
+  <li data-lines="19"><b class="what">خواندن قدرت سیگنال همین بسته.</b> <code>info-&gt;rx_ctrl</code> جزئیات رادیویی بسته دریافتی را دارد و <code>rssi</code> قدرت آن به dBm است.
+    <span class="why">فقط یک عدد کپی می‌کنیم، پس callback کوتاه می‌ماند. RSSI مال <i>همین</i> بسته است؛ برای همین باید همین‌جا خوانده شود، نه بعدا در loop.</span></li>
+  <li data-lines="42-43"><b class="what">چاپ کنار پیام.</b> شماره، وضعیت LED و RSSI در یک خط.
+    <span class="why">با شماره پیام در همان خط، جای خالی (پیام گم‌شده) و قدرت سیگنال را هم‌زمان می‌بینی.</span></li>
+</ol>
+<p>مقیاس dBm لگاریتمی است: هر ۱۰ dB کمتر یعنی ده برابر توان کمتر. برای همین فاصله ‎-60 تا ‎-90 dBm (هزار برابر ضعیف‌تر) همان جایی است که ارتباط از هم می‌پاشد.</p>
+</details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۲: ارسال دوباره (Retry)</div>
 <p>در برد A پروژه ۲، اگر در ۵۰۰ میلی‌ثانیه جواب نیامد، <b>همان</b> فرمان (با همان seq) را حداکثر ۳ بار دوباره بفرست و فقط بعد از شکست سوم اعلام خطا کن. چرا باید seq ثابت بماند؟</p>
 <details><summary>راهنمایی</summary><p>یک شمارنده <code>int tries</code> اضافه کن. در بخش Timeout اگر <code>tries &lt; 3</code> بود، <code>esp_now_send</code> را با همان <code>cmd</code> صدا بزن، <code>tries++</code> و <code>sentAt = millis()</code>. در <code>sendCommand</code>، <code>tries = 0</code>.</p></details>
-<details><summary>جواب</summary><p>seq ثابت می‌ماند تا اگر پیام اول رسیده بود ولی فقط جوابش گم شده بود، B بفهمد این همان فرمان قبلی است و آن را دوباره اجرا نکند. در پروژه ما فرمان حالت مطلق را می‌برد («LED روشن»)، پس تکرارش اتفاقا بی‌ضرر است؛ ولی فرمانی مثل «برعکس کن» یا «زنگ را یک بار بزن» دو بار اجرا می‌شد. به این ویژگی «Idempotent» (تکرار بی‌ضرر) می‌گویند؛ همان مشکلی که QoS 2 در MQTT حل می‌کند. روی برد B آخرین seq اجراشده را نگه دار؛ اگر همان seq دوباره آمد، کار را انجام نده ولی <b>باز هم جواب بفرست</b>، چون به احتمال زیاد همان جواب بوده که گم شده:</p>
-<div class="code" data-file="BoardB_Dedupe.ino (loop برد B، پروژه ۲)"><pre>
-uint32_t lastSeq = 0;                     // سراسری: آخرین فرمان اجراشده
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>حالت عادی (هر دو برد روشن): یک بار زدن دکمه A، یک فرمان و یک تأیید (دما و زمان تو فرق دارد):</p>
+<pre class="serial">-> #1 ledOn=1
+&lt;- ack #1, LED on B is ON, temp 23.4 C (4 ms)</pre>
+<p>حالا برد B را از برق بکش و دکمه A را یک بار بزن. حدود ۲ ثانیه بعد (۴ تلاش × ۵۰۰ میلی‌ثانیه) A تسلیم می‌شود:</p>
+<pre class="serial">-> #2 ledOn=0
+  radio: not delivered
+-> #2 again (retry 1 of 3)
+  radio: not delivered
+-> #2 again (retry 2 of 3)
+  radio: not delivered
+-> #2 again (retry 3 of 3)
+  radio: not delivered
+!! no reply from B after 3 retries</pre>
+<ul>
+<li>همه تکرارها <b>همان</b> شماره (‎#2) را دارند و قبل از تکرار سوم هیچ خط «no reply» نمی‌آید.</li>
+<li>B را دوباره وصل کن و دکمه را بزن: A شماره ‎#3 را می‌فرستد و فورا تأیید می‌گیرد؛ B چاپ می‌کند <code>#3 new: done, replied temp=23.4</code>.</li>
+<li>برای دیدن مسیر «تکراری»، روی B درست بعد از بلوک <code>if (!repeat) { ... }</code> این خط را اضافه کن: <code>if (!repeat &amp;&amp; incoming.seq % 2 == 0) return;</code> (اولین جواب فرمان‌های زوج را قورت می‌دهد). آن وقت B چاپ می‌کند <code>#4 repeat: reply only</code>، A چاپ می‌کند <code>-&gt; #4 again (retry 1 of 3)</code> و بعد تأیید را، و LED برد B فقط یک بار عوض شده است. بعد این خط را پاک کن.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p><b>چرا seq باید ثابت بماند:</b> اگر پیام اول رسیده بود و فقط جوابش گم شده بود، B باید بفهمد این همان فرمان قبلی است و دوباره اجرایش نکند. در پروژه ما فرمان وضعیت مطلق را می‌برد («LED روشن»)، پس تکرارش اتفاقا بی‌ضرر است؛ ولی فرمانی مثل «toggle» یا «یک بار زنگ بزن» دو بار اجرا می‌شد. به فرمانی که تکرارش ضرری ندارد «idempotent» می‌گویند؛ همان مشکلی است که QoS 2 در MQTT حل می‌کند. پس B آخرین seq اجراشده را به خاطر می‌سپارد؛ اگر همان seq دوباره آمد، کار را انجام نمی‌دهد ولی <b>جواب را باز هم می‌فرستد</b>، چون احتمالا همان جواب گم شده بود.</p>
+<p>برد A (پروژه ۲، با تکرار):</p>
+<div class="code" data-file="BoardA_Retry.ino — برد A" id="ex2ansA"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+
+uint8_t boardB[] = {0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF};   // MAC برد B
+const int BUTTON_PIN = 27;
+const int STATUS_LED = 4;      // LED وضعیت دوره (+۲۲۰ اهم)
+
+typedef struct {
+  uint32_t seq;
+  bool ledOn;
+} CommandMsg;
+
+typedef struct {
+  uint32_t seq;      // شماره فرمانی که این جواب مال آن است
+  bool ledOn;        // وضعیت واقعی LED روی B
+  float tempC;       // دمای B (یا NAN اگر سنسور خطا داد)
+} ReplyMsg;
+
+CommandMsg cmd = {0, false};
+ReplyMsg reply;
+volatile bool gotReply = false;
+bool waiting = false;
+unsigned long sentAt = 0;
+int lastReading = HIGH, stableState = HIGH;
+unsigned long lastChange = 0;
+int tries = 0;                 // ★ این فرمان چند بار دوباره فرستاده شده
+
+void onSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+  if (status != ESP_NOW_SEND_SUCCESS) Serial.println("  radio: not delivered");
+}
+
+void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len != sizeof(ReplyMsg)) return;
+  if (memcmp(info-&gt;src_addr, boardB, 6) != 0) return;   // فقط از B قبول کن
+  memcpy(&amp;reply, data, sizeof(reply));
+  gotReply = true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(STATUS_LED, OUTPUT);
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_send_cb(onSent);
+  esp_now_register_recv_cb(onRecv);
+  esp_now_peer_info_t peer = {};
+  memcpy(peer.peer_addr, boardB, 6);
+  peer.channel = 0;
+  peer.encrypt = false;
+  esp_now_add_peer(&amp;peer);
+}
+
+void sendCommand() {
+  cmd.seq++;
+  cmd.ledOn = !cmd.ledOn;
+  digitalWrite(STATUS_LED, LOW);            // تا تایید نیامده، خاموش
+  esp_now_send(boardB, (uint8_t *)&amp;cmd, sizeof(cmd));
+  Serial.printf("-&gt; #%lu ledOn=%d\n", (unsigned long)cmd.seq, cmd.ledOn);
+  waiting = true;
+  sentAt = millis();
+  tries = 0;                                // ★ فرمان تازه: هنوز تکراری نداشته
+}
+
+void loop() {
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChange = millis(); lastReading = reading; }
+  if (millis() - lastChange &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) sendCommand();
+  }
+
+  if (gotReply) {
+    gotReply = false;
+    if (waiting &amp;&amp; reply.seq == cmd.seq) {
+      waiting = false;
+      digitalWrite(STATUS_LED, HIGH);         // تایید رسید
+      Serial.printf("&lt;- ack #%lu, LED on B is %s, temp %.1f C (%lu ms)\n",
+                    (unsigned long)reply.seq, reply.ledOn ? "ON" : "OFF",
+                    reply.tempC, millis() - sentAt);
+    }
+  }
+  if (waiting &amp;&amp; millis() - sentAt &gt; 500) {   // نیم ثانیه برای جواب
+    if (tries &lt; 3) {                          // ★ همان cmd را دوباره بفرست (همان seq)
+      tries++;
+      esp_now_send(boardB, (uint8_t *)&amp;cmd, sizeof(cmd));
+      Serial.printf("-&gt; #%lu again (retry %d of 3)\n", (unsigned long)cmd.seq, tries);
+      sentAt = millis();                      // ۵۰۰ میلی‌ثانیه تازه برای این تلاش
+    } else {
+      waiting = false;
+      Serial.println("!! no reply from B after 3 retries");
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="ex2ansA">
+  <li data-lines="26"><b class="what">شمارنده تکرار.</b> <code>tries</code> می‌شمارد فرمان فعلی چند بار دوباره فرستاده شده.
+    <span class="why">باید سراسری باشد، چون تکرارها در چند دور loop پشت سر هم اتفاق می‌افتند، نه یک‌جا.</span></li>
+  <li data-lines="58-67"><b class="what">فرمان تازه شمارنده را صفر می‌کند.</b> <code>sendCommand()</code> مثل قبل کار می‌کند و حالا <code>tries = 0</code> را هم می‌گذارد.
+    <span class="why">فقط فشار واقعی دکمه seq تازه می‌سازد. تکرارها هرگز <code>sendCommand()</code> را صدا نمی‌زنند، چون آن seq را بالا می‌برد و <code>ledOn</code> را برعکس می‌کند.</span></li>
+  <li data-lines="87-92"><b class="what">وقت تمام شد: دوباره امتحان کن.</b> اگر کمتر از ۳ تکرار انجام شده، دقیقا همان بایت‌های <code>cmd</code> را دوباره بفرست و یک پنجره ۵۰۰ میلی‌ثانیه‌ای تازه شروع کن.
+    <span class="why">بایت‌های یکسان یعنی seq و <code>ledOn</code> یکسان. صفر کردن دوباره <code>sentAt</code> به هر تلاش نیم ثانیه خودش را می‌دهد، پس کل کار حداکثر ۴ × ۵۰۰ = ۲ ثانیه طول می‌کشد، و loop آزاد می‌ماند (بدون <code>delay</code>)، پس دکمه همچنان کار می‌کند.</span></li>
+  <li data-lines="93-96"><b class="what">فقط حالا خطا را گزارش کن.</b> وقتی تکرار سوم هم بی‌جواب ماند، انتظار را تمام کن و خطا را یک بار چاپ کن.
+    <span class="why">گم شدن یک بسته در رادیو عادی است؛ کاربر فقط وقتی باید خبردار شود که واقعا مشکلی هست.</span></li>
+  <li data-lines="77-86"><b class="what">بررسی تأیید بدون تغییر.</b> جواب فقط وقتی پذیرفته می‌شود که seq آن با <code>cmd.seq</code> بخواند.
+    <span class="why">جواب دیررسیده یک فرمان قدیمی با جواب فرمان فعلی اشتباه گرفته نمی‌شود. زمانی که چاپ می‌شود از آخرین تلاش حساب می‌شود.</span></li>
+</ol>
+<p>برد B (پروژه ۲، با نادیده گرفتن تکرارها):</p>
+<div class="code" data-file="BoardB_Dedupe.ino — برد B" id="ex2ansB"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+#include &lt;DHT.h&gt;
+
+const int LED_PIN = 4;
+DHT dht(13, DHT22);
+
+typedef struct {
+  uint32_t seq;
+  bool ledOn;
+} CommandMsg;
+
+typedef struct {
+  uint32_t seq;
+  bool ledOn;
+  float tempC;
+} ReplyMsg;
+
+CommandMsg incoming;
+uint8_t senderMac[6];
+volatile bool gotMsg = false;
+uint32_t lastSeq = 0;          // ★ آخرین فرمانی که اجرا کردیم
+
+void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len != sizeof(CommandMsg)) return;
+  memcpy(&amp;incoming, data, sizeof(incoming));
+  memcpy(senderMac, info-&gt;src_addr, 6);   // جواب را به همین آدرس می‌فرستیم
+  gotMsg = true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  dht.begin();
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  Serial.println(WiFi.macAddress());
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_recv_cb(onRecv);
+}
 
 void loop() {
   if (!gotMsg) return;
   gotMsg = false;
-  bool repeat = (incoming.seq == lastSeq);
-  if (!repeat) {                          // فرمان جدید: فقط یک بار اجرا کن
+  bool repeat = (incoming.seq == lastSeq);   // ★ این شماره را قبلا دیده‌ایم؟
+  if (!repeat) {                             // ★ فرمان تازه: فقط یک بار اجرا کن
     lastSeq = incoming.seq;
     digitalWrite(LED_PIN, incoming.ledOn ? HIGH : LOW);
   }
-  // ... اضافه کردن A به دفترچه در بار اول، دقیقا مثل قبل ...
-  ReplyMsg reply;                         // هر بار جواب بده، حتی برای تکراری
+
+  if (!esp_now_is_peer_exist(senderMac)) {   // بار اول؟ A را به دفترچه اضافه کن
+    esp_now_peer_info_t peer = {};
+    memcpy(peer.peer_addr, senderMac, 6);
+    peer.channel = 0;
+    peer.encrypt = false;
+    esp_now_add_peer(&amp;peer);
+  }
+
+  ReplyMsg reply;
   reply.seq = incoming.seq;
-  reply.ledOn = digitalRead(LED_PIN);     // وضعیت واقعی پایه LED
-  reply.tempC = dht.readTemperature();
+  reply.ledOn = digitalRead(LED_PIN);        // ★ وضعیت واقعی پایه LED
+  reply.tempC = dht.readTemperature();       // اگر خطا: NAN
   esp_now_send(senderMac, (uint8_t *)&amp;reply, sizeof(reply));
-  Serial.printf("#%lu %s\n", (unsigned long)incoming.seq, repeat ? "repeat: reply only" : "new: done");
+  Serial.printf("#%lu %s, replied temp=%.1f\n", (unsigned long)reply.seq,
+                repeat ? "repeat: reply only" : "new: done", reply.tempC);
 }
 </pre></div>
-<p>seq در A از ۱ شروع می‌شود، پس <code>lastSeq = 0</code> هیچ‌وقت با یک فرمان واقعی یکی نیست. اگر B ریست شود، <code>lastSeq</code> به ۰ برمی‌گردد و اشکالی ندارد: فرمان بعدی A به هر حال شماره تازه دارد.</p></details>
+<ol class="walk" data-for="ex2ansB">
+  <li data-lines="22"><b class="what">آخرین فرمان اجراشده.</b> <code>lastSeq</code> از ۰ شروع می‌شود.
+    <span class="why">seq برد A از ۱ شروع می‌شود (قبل از اولین ارسال یکی زیاد می‌شود)، پس ۰ هیچ‌وقت با فرمان واقعی یکی نمی‌شود. اگر B ریست شود، <code>lastSeq</code> به ۰ برمی‌گردد که مشکلی ندارد: فرمان بعدی A به هر حال شماره تازه دارد.</span></li>
+  <li data-lines="48-52"><b class="what">تازه یا تکراری؟</b> فقط شماره تازه LED را عوض می‌کند و به خاطر سپرده می‌شود.
+    <span class="why">همین کار فرمان را برای تکرار بی‌خطر می‌کند: فرمان هر کاری بکند، برای هر seq فقط یک بار انجام می‌شود.</span></li>
+  <li data-lines="62-66"><b class="what">همیشه جواب بده.</b> برای فرمان تازه و تکراری یکسان؛ وضعیت LED از خود پایه خوانده می‌شود.
+    <span class="why">اگر B برای تکرار ساکت بماند، A باز هم تکرار می‌کند و آخر سر خطا می‌دهد، با اینکه فرمان اجرا شده بود. خواندن پایه گزارش می‌دهد واقعا چه اتفاقی افتاده.</span></li>
+  <li data-lines="67-68"><b class="what">بگو کدام حالت بود.</b> <code>new: done</code> یا <code>repeat: reply only</code>.
+    <span class="why">این‌طوری در Serial Monitor وارسی می‌کنی که تکرار واقعا از اجرای کار رد شده است.</span></li>
+</ol>
+</details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۳: پیدا کردن خودکار کانال</div>
 <p>برد A را طوری بنویس که در setup شبکه مودم را با <code>WiFi.scanNetworks()</code> پیدا کند، کانالش را بخواند و خودش روی آن برود. دیگر لازم نیست عدد کانال را دستی بنویسی.</p>
 <details><summary>راهنمایی</summary><p><code>int n = WiFi.scanNetworks();</code> سپس در یک حلقه <code>for</code> اگر <code>WiFi.SSID(i) == "YourWiFi"</code> بود، <code>WiFi.channel(i)</code> کانال آن شبکه است. بعد <code>WiFi.setChannel(ch)</code> و سپس <code>esp_now_init()</code>.</p></details>
-<details><summary>جواب</summary>
-<div class="code" data-file="AutoChannel.ino (تکه setup برد A)"><pre>
-WiFi.mode(WIFI_STA);
-while (!WiFi.STA.started()) delay(10);
-int ch = 1;                              // اگر مودم پیدا نشد، کانال ۱
-int n = WiFi.scanNetworks();             // حدود ۲ تا ۳ ثانیه طول می‌کشد
-for (int i = 0; i &lt; n; i++) {
-  if (WiFi.SSID(i) == "YourWiFi") { ch = WiFi.channel(i); break; }
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>برد B گیرنده پروژه ۱ است با خط‌های Wi-Fi از بخش مودم، پس کانال مودم را چاپ می‌کند. برد A با جواب پایین باید خودش همان عدد را پیدا کند (عددهای تو فرق دارند):</p>
+<pre class="serial">board B:  Router channel: 6
+board A:  Found 9 networks, using channel 6
+          Sender ready. Press the button.
+          Sent #1 ledOn=1 (queued)
+            delivered</pre>
+<ul>
+<li>عدد بعد از «using channel» روی A با «Router channel» روی B یکی است.</li>
+<li>بین ریست و «Sender ready» حدود ۲ تا ۳ ثانیه مکث هست: این همان اسکن است.</li>
+<li><code>ROUTER_SSID</code> را به یک اسم غلط (یا با یک حرف بزرگ/کوچک متفاوت) عوض کن: A چاپ می‌کند <code>using channel 1</code> و اگر مودمت از قضا روی کانال ۱ نباشد، هر ارسال با <code>delivery FAILED</code> تمام می‌شود. این ثابت می‌کند واقعا اسکن است که کانال را تعیین می‌کند.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>این همان فرستنده یک‌طرفه کامل پروژه ۱ است با یک اسکن در setup. گیرنده (برد B) همان گیرنده پروژه ۱ است که اتصال Wi-Fi مثل بخش مودم به آن اضافه شده است.</p>
+<div class="code" data-file="AutoChannel.ino — برد A" id="ex3ans"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+
+// MAC برد B را اینجا بنویس (از برنامه GetMac)
+uint8_t receiverMac[] = {0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF};
+
+const int BUTTON_PIN = 27;
+const char* ROUTER_SSID = "YourWiFi";   // ★ شبکه‌ای که برد B به آن وصل است
+
+// قالب پیام: باید در فرستنده و گیرنده دقیقا یکی باشد
+typedef struct {
+  uint32_t seq;     // شماره پیام
+  bool ledOn;       // LED روشن باشد یا نه
+} CommandMsg;
+
+CommandMsg cmd = {0, false};
+int lastReading = HIGH;
+int stableState = HIGH;
+unsigned long lastChange = 0;
+
+// هسته 3.3 به بعد: ورودی اول از نوع wifi_tx_info_t است
+void onSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "  delivered" : "  delivery FAILED");
 }
-WiFi.scanDelete();                       // آزاد کردن حافظه نتیجه اسکن
-WiFi.setChannel(ch);
-Serial.printf("Using channel %d\n", ch);
-esp_now_init();
-// ... ثبت Callback و Peer مثل قبل
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  int ch = 1;                              // ★ اگر مودم پیدا نشد، کانال ۱
+  int n = WiFi.scanNetworks();             // ★ حدود ۲ تا ۳ ثانیه طول می‌کشد
+  for (int i = 0; i &lt; n; i++) {
+    if (WiFi.SSID(i) == ROUTER_SSID) {     // ★ اسم دقیق، حساس به حروف کوچک و بزرگ
+      ch = WiFi.channel(i);
+      break;
+    }
+  }
+  WiFi.scanDelete();                       // ★ حافظه نتیجه اسکن را آزاد کن
+  WiFi.setChannel(ch);                     // ★ رادیو را قبل از esp_now_init جابه‌جا کن
+  Serial.printf("Found %d networks, using channel %d\n", n, ch);
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_send_cb(onSent);
+
+  esp_now_peer_info_t peer = {};
+  memcpy(peer.peer_addr, receiverMac, 6);
+  peer.channel = 0;          // 0 یعنی همان کانالی که الان رویش هستیم
+  peer.encrypt = false;
+  if (esp_now_add_peer(&amp;peer) != ESP_OK) {
+    Serial.println("Failed to add peer");
+    while (true) delay(1000);
+  }
+  Serial.println("Sender ready. Press the button.");
+}
+
+void loop() {
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) {        // تغییر جدید: زمان‌سنج لرزش از نو
+    lastChange = millis();
+    lastReading = reading;
+  }
+  if (millis() - lastChange &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) {          // دکمه واقعا فشرده شد
+      cmd.seq++;
+      cmd.ledOn = !cmd.ledOn;
+      esp_err_t r = esp_now_send(receiverMac, (uint8_t *)&amp;cmd, sizeof(cmd));
+      Serial.printf("Sent #%lu ledOn=%d (%s)\n", (unsigned long)cmd.seq, cmd.ledOn, r == ESP_OK ? "queued" : esp_err_to_name(r));
+    }
+  }
+}
 </pre></div>
-<p>اسم شبکه به حروف بزرگ و کوچک حساس است. اگر مودم بعدا کانال عوض کند، کافی است A را ریست کنی تا دوباره اسکن کند (یا در Timeoutهای پشت سر هم، دوباره اسکن کن).</p></details>
+<ol class="walk" data-for="ex3ans">
+  <li data-lines="8"><b class="what">اسم مودم.</b> SSID دقیقی که برد B به آن وصل می‌شود.
+    <span class="why">A به مودم وصل نمی‌شود (رمز لازم ندارد)؛ فقط اسم را می‌خواهد تا خط درست را در نتیجه اسکن پیدا کند.</span></li>
+  <li data-lines="30-32"><b class="what">رادیو روشن، با یک پیش‌فرض امن.</b> صبر کن STA شروع شود و فرض کن کانال ۱ است.
+    <span class="why">فقط وقتی رادیو روشن است می‌شود اسکن کرد. اگر مودم خاموش یا خارج از برد باشد، کانال ۱ جایگزین معقولی است و برنامه باز هم شروع می‌شود.</span></li>
+  <li data-lines="33-39"><b class="what">اسکن و پیدا کردن مودم.</b> <code>scanNetworks()</code> تعداد شبکه‌هایی را که شنیده برمی‌گرداند؛ برای هر کدام <code>WiFi.SSID(i)</code> اسمش و <code>WiFi.channel(i)</code> کانالش است.
+    <span class="why">مودم کانالش را در هر beacon اعلام می‌کند، پس اسکن راه مطمئنی برای خواندنش است. <code>break</code> در اولین تطابق متوقف می‌شود. مقایسه اسم به حروف کوچک و بزرگ حساس است: «MyWifi» با «MyWiFi» فرق دارد.</span></li>
+  <li data-lines="40-42"><b class="what">تمیزکاری و عوض کردن کانال.</b> <code>scanDelete()</code> نتیجه‌ها را آزاد می‌کند؛ <code>setChannel(ch)</code> رادیو را جابه‌جا می‌کند.
+    <span class="why">این کار باید <b>قبل از</b> <code>esp_now_init()</code> و قبل از اضافه کردن peer با <code>channel = 0</code> («کانال فعلی») انجام شود، تا همه چیز روی کانال مودم تنظیم شود.</span></li>
+  <li data-lines="44-59"><b class="what">ESP-NOW دقیقا مثل قبل.</b> init، callback، peer و پیام آماده.
+    <span class="why">هیچ چیز دیگری عوض نمی‌شود: ESP-NOW روی هر کانالی که رادیو باشد کار می‌کند.</span></li>
+</ol>
+<p>اگر مودم بعدا کانالش را عوض کند (خیلی‌ها شب‌ها خودکار این کار را می‌کنند)، کافی است A را ریست کنی تا دوباره اسکن کند. نسخه پیشرفته‌تر بعد از چند <code>delivery FAILED</code> پشت سر هم دوباره اسکن می‌کند.</p>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>

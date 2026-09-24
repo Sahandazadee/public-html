@@ -579,10 +579,177 @@ void loop() {
 <div class="exercise"><div class="ct">تمرین ۱: دفترچه بوت در صفحه وب</div>
 <p>LittleFS_Basics و LittleFS_Web را ترکیب کن: در هر بوت یک خط با شماره بوت به آخر <code>/log.txt</code> اضافه کن، و یک آدرس <code>/log</code> بساز که کل فایل را به صورت متن ساده در مرورگر نشان بدهد. چند بار EN را بزن و صفحه را تازه کن: فهرست باید هر بار یک خط بلندتر شود.</p>
 <details><summary>راهنمایی</summary><p>برای پیدا کردن شماره بوت، فایل را یک بار موقع روشن شدن بخوان و خط‌هایش را بشمار (هر <code>'\n'</code> یک خط است)، بعد یکی اضافه کن. برای <code>/log</code> فایل را با "r" باز کن و با <code>server.streamFile(f, "text/plain")</code> بفرست، بعد <code>f.close()</code>. آن را کش نکن، چون عوض می‌شود.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>روی برد واقعی (نسخه رایگان Wokwi نمی‌تواند صفحه وب را برای مرورگر تو باز کند). بعد از آپلود، Serial Monitor این را نشان می‌دهد (شماره روشن شدن و IP تو فرق دارد):</p>
+<pre class="serial">This is boot #1
+Open http://192.168.1.42/log</pre>
+<p>آن آدرس را باز کن. مرورگر فایل را به صورت متن ساده نشان می‌دهد؛ بعد از دو بار زدن EN و تازه کردن صفحه:</p>
+<pre class="serial">boot #1 at 312 ms
+boot #2 at 309 ms
+boot #3 at 311 ms</pre>
+<ul>
+<li>هر بار زدن EN و تازه کردن صفحه دقیقا یک خط اضافه می‌کند و شماره‌ها بدون جای خالی یکی یکی بالا می‌روند.</li>
+<li>زمان‌ها همه کوچک‌اند (چند صد میلی‌ثانیه)، چون خط درست در ابتدای setup و قبل از Wi-Fi نوشته می‌شود.</li>
+<li>اگر قبلا <code>LittleFS_Basics</code> را اجرا کرده‌ای، خط‌های آن (<code>boot at ... ms</code>) از قبل در فایل هستند و آن‌ها هم شمرده می‌شوند، پس دفترچه‌ات شاید از ‎#2 یا ‎#3 شروع شود. این درست است: شماره یعنی «خط‌های فایل + ۱».</li>
+<li>صفحه اصلی (<code>/</code>) هم کار می‌کند، اگر پوشه <code>data</code> از LittleFS_Web روی برد باشد. عیب‌یابی: <code>no log yet</code> یعنی فایل نوشته نشده؛ خط <code>LittleFS mount failed</code> و Partition Scheme را بررسی کن.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>برنامه کامل: LittleFS_Web به اضافه یک شمارنده خط، یک خط اضافه در هر روشن شدن و آدرس <code>/log</code>.</p>
+<div class="code" data-file="BootDiary.ino" id="ex1ans"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;LittleFS.h&gt;
+#include "secrets.h"
+
+WebServer server(80);
+
+int countLines(const char *path) {           // هر '\n' یعنی پایان یک خط
+  File f = LittleFS.open(path, "r");
+  if (!f) return 0;                          // هنوز فایلی نیست: ۰ خط
+  int lines = 0;
+  while (f.available()) {
+    if (f.read() == '\n') lines++;
+  }
+  f.close();
+  return lines;
+}
+
+void handleLog() {
+  File f = LittleFS.open("/log.txt", "r");
+  if (!f) {
+    server.send(404, "text/plain", "no log yet");
+    return;
+  }
+  server.sendHeader("Cache-Control", "no-store");   // عوض می‌شود: هرگز کش نکن
+  server.streamFile(f, "text/plain");        // فایل را تکه‌تکه می‌فرستد
+  f.close();
+}
+
+void setup() {
+  Serial.begin(115200);
+  if (!LittleFS.begin(true)) {
+    Serial.println("LittleFS mount failed");
+  }
+  int boot = countLines("/log.txt") + 1;     // خط‌های تا حالا + ۱
+  File f = LittleFS.open("/log.txt", "a");   // a یعنی اضافه به آخر
+  if (f) {
+    f.printf("boot #%d at %lu ms\n", boot, millis());
+    f.close();                               // بسته شد = ذخیره شد
+  }
+  Serial.printf("This is boot #%d\n", boot);
+
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.printf("Open http://%s/log\n", WiFi.localIP().toString().c_str());
+
+  server.serveStatic("/", LittleFS, "/index.html");
+  server.serveStatic("/style.css", LittleFS, "/style.css", "max-age=3600");
+  server.on("/api/temp", []() {
+    float t = temperatureRead();             // دمای داخلی تراشه (تقریبی)
+    server.send(200, "application/json", "{\"t\":" + String(t, 1) + "}");
+  });
+  server.on("/log", HTTP_GET, handleLog);    // ★ دفترچه روشن شدن‌ها
+  server.onNotFound([]() { server.send(404, "text/plain", "Not found"); });
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();
+}
+</pre></div>
+<ol class="walk" data-for="ex1ans">
+  <li data-lines="8-17"><b class="what">شمردن خط‌ها.</b> فایل را بایت به بایت بخوان و کاراکترهای <code>'\n'</code> را بشمار. اگر فایل هنوز نیست، جواب ۰ است.
+    <span class="why">هیچ شمارنده جدایی ذخیره نکردیم: خود فایل حافظه است. هر خطی که می‌نویسیم با <code>\n</code> تمام می‌شود، پس «تعداد خط‌جدیدها» همان «تعداد روشن شدن‌ها تا حالا» است. خواندن چند صد بایت یکی یکی برای یک لاگ کوچک به اندازه کافی سریع است.</span></li>
+  <li data-lines="19-28"><b class="what">فرستادن فایل به مرورگر.</b> با "r" بازش کن؛ اگر نیست، 404 جواب بده؛ وگرنه <code>streamFile</code> آن را به صورت <code>text/plain</code> می‌فرستد و بعد می‌بندیمش.
+    <span class="why"><code>streamFile</code> فایل را تکه‌تکه می‌فرستد، پس حتی لاگ بلند هم لازم نیست در RAM جا شود. <code>Cache-Control: no-store</code> به مرورگر می‌گوید هرگز نسخه قدیمی نگه ندارد، چون فایل در هر روشن شدن عوض می‌شود؛ فایل استایل که هیچ‌وقت عوض نمی‌شود به جایش <code>max-age</code> می‌گیرد.</span></li>
+  <li data-lines="35-41"><b class="what">یک خط برای هر روشن شدن.</b> شماره = خط‌ها + ۱؛ با "a" (اضافه به آخر) باز کن، <code>boot #N at T ms</code> را بنویس و ببند.
+    <span class="why">"a" به آخر فایل اضافه می‌کند و خط‌های قبلی را نگه می‌دارد ("w" فایل را پاک می‌کرد). <code>close()</code> لحظه‌ای است که داده واقعا در فلش است؛ LittleFS در برابر قطع برق مقاوم است، پس قطع برق یا فایل قدیمی را باقی می‌گذارد یا جدید را، هرگز فایل خراب.</span></li>
+  <li data-lines="47-52"><b class="what">LittleFS_Web، بدون تغییر.</b> صفحه ثابت، فایل استایل و <code>/api/temp</code>.
+    <span class="why">تمرین یک قابلیت اضافه می‌کند؛ هر چیزی که قبلا کار می‌کرد همان‌طور می‌ماند.</span></li>
+  <li data-lines="53"><b class="what">آدرس تازه.</b> <code>/log</code> برای درخواست‌های GET، با <code>handleLog</code>.
+    <span class="why">مثل بقیه مسیرها باید قبل از <code>server.begin()</code> ثبت شود.</span></li>
+</ol>
+</details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۲: اولین تعمیر بی‌سیم واقعی</div>
 <p>ArduinoOTA را به LittleFS_Web اضافه کن (نام میزبان <code>esp32-files</code> و رمز از <code>secrets.h</code>) و یک بار با USB آپلودش کن. بعد برد را با شارژر گوشی و دور از کامپیوتر روشن کن. با OTA آدرس <code>/api/temp</code> را طوری تغییر بده که زمان روشن بودن (به ثانیه) را هم برگرداند، و در مرورگر بررسی کن صفحه هنوز باز می‌شود. این آزمایش درباره فایل‌های LittleFS چه چیزی را ثابت می‌کند؟</p>
 <details><summary>راهنمایی</summary><p><code>ArduinoOTA.begin()</code> را بعد از وصل شدن Wi-Fi صدا بزن و <code>ArduinoOTA.handle()</code> را کنار <code>server.handleClient()</code> در loop بگذار. Partition Scheme را بین آپلود USB و آپلودهای OTA عوض نکن. JSON می‌تواند این شکلی شود: <code>{"t":41.2,"up":1234}</code>.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>بعد از اولین آپلود با USB، Serial Monitor آدرس را چاپ می‌کند؛ در Arduino IDE، منوی <b>Tools → Port</b> حالا یک پورت شبکه هم دارد، مثل <code>esp32-files at 192.168.1.42</code>. در حین آپلود OTA، IDE رمز را می‌پرسد و برد (اگر هنوز به یک Serial Monitor وصل باشد) چاپ می‌کند:</p>
+<pre class="serial">OTA start
+OTA done, rebooting
+Open http://192.168.1.42/</pre>
+<p>بعد از آپدیت، <code>http://192.168.1.42/api/temp</code> چیزی شبیه این برمی‌گرداند (عددهای تو فرق دارند):</p>
+<pre class="serial">{"t":47.3,"up":12}</pre>
+<ul>
+<li>صفحه <code>/</code> هنوز با عنوان آبی‌اش (فایل استایل از LittleFS) باز می‌شود، با اینکه پوشه data را دوباره آپلود نکرده‌ای.</li>
+<li><code>up</code> بلافاصله بعد از آپدیت کوچک است (برد ریست شده) و با هر بار تازه کردن، ثانیه‌ای یکی بالا می‌رود.</li>
+<li>عیب‌یابی: پورت شبکه نیست؟ کامپیوتر و برد باید روی یک شبکه Wi-Fi باشند و بعضی شبکه‌های مهمان یا مدرسه جلوی آن را می‌گیرند. <code>OTA error</code> یا رد شدن رمز: <code>OTA_PASS</code> را در <code>secrets.h</code> بررسی کن. <code>LittleFS mount failed</code> بعد از آپدیت: Partition Scheme بین دو آپلود عوض شده است.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p><b>چه چیزی ثابت می‌شود:</b> آپدیت OTA (مثل آپلود با USB) فقط پارتیشن برنامه را بازنویسی می‌کند. پارتیشن LittleFS با index.html و style.css بخش جدایی از فلش است که کسی به آن دست نزده، پس فایل‌ها با هر برنامه تازه باقی می‌مانند. آن‌ها فقط وقتی عوض می‌شوند که یک ایمیج LittleFS تازه آپلود کنی، به شرطی که Partition Scheme ثابت بماند.</p>
+<p>این نسخه نهایی است، همانی که با OTA فرستاده می‌شود. نسخه اول USB همین برنامه است بدون خط ۳۵ و با جواب اصلی <code>/api/temp</code>.</p>
+<div class="code" data-file="OtaFiles.ino" id="ex2ans"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;LittleFS.h&gt;
+#include &lt;ArduinoOTA.h&gt;                      // ★
+#include "secrets.h"                         // WIFI_SSID, WIFI_PASS, OTA_PASS
+#ifndef OTA_PASS
+#warning "OTA_PASS is not defined in secrets.h"
+#define OTA_PASS "change-me"
+#endif
+
+WebServer server(80);
+
+void setup() {
+  Serial.begin(115200);
+  if (!LittleFS.begin(true)) {
+    Serial.println("LittleFS mount failed");
+  }
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.printf("Open http://%s/\n", WiFi.localIP().toString().c_str());
+
+  ArduinoOTA.setHostname("esp32-files");     // ★ اسم در منوی Port
+  ArduinoOTA.setPassword(OTA_PASS);          // ★ بدون آن هر کسی می‌تواند فلش کند
+  ArduinoOTA
+    .onStart([]() { Serial.println("OTA start"); })
+    .onEnd([]() { Serial.println("\nOTA done, rebooting"); })
+    .onError([](ota_error_t err) { Serial.printf("OTA error %u\n", err); });
+  ArduinoOTA.begin();                        // ★ بعد از وصل شدن Wi-Fi
+
+  server.serveStatic("/", LittleFS, "/index.html");
+  server.serveStatic("/style.css", LittleFS, "/style.css", "max-age=3600");
+  server.on("/api/temp", []() {
+    float t = temperatureRead();             // دمای داخلی تراشه (تقریبی)
+    unsigned long up = millis() / 1000;      // ★ تازه در نسخه OTA: زمان روشن بودن به ثانیه
+    server.send(200, "application/json",
+                "{\"t\":" + String(t, 1) + ",\"up\":" + String(up) + "}");
+  });
+  server.onNotFound([]() { server.send(404, "text/plain", "Not found"); });
+  server.begin();
+}
+
+void loop() {
+  ArduinoOTA.handle();                       // ★ هر دور: «آپدیتی هست؟»
+  server.handleClient();
+}
+</pre></div>
+<ol class="walk" data-for="ex2ans">
+  <li data-lines="4-9"><b class="what">کتابخانه OTA و رمز.</b> اگر <code>OTA_PASS</code> در <code>secrets.h</code> نباشد، کامپایلر هشدار می‌دهد و یک مقدار موقت می‌گذارد.
+    <span class="why">رمز بیرون از اسکچ می‌ماند، پس می‌توانی کد را به اشتراک بگذاری بدون اینکه کلید بردت را به کسی بدهی.</span></li>
+  <li data-lines="23-29"><b class="what">راه‌اندازی OTA، بعد از Wi-Fi.</b> اسم میزبان، رمز، سه پیام کوتاه و بعد <code>begin()</code>.
+    <span class="why"><code>begin()</code> برای اعلام برد با اسمش به شبکه‌ای فعال نیاز دارد، پس بعد از حلقه Wi-Fi می‌آید. پیام‌ها کمک می‌کنند وقتی Serial Monitor وصل است آپدیت را دنبال کنی.</span></li>
+  <li data-lines="33-38"><b class="what">اصلاح کوچکی که بی‌سیم فرستاده می‌شود.</b> <code>/api/temp</code> حالا زمان روشن بودن را هم به ثانیه برمی‌گرداند.
+    <span class="why">یک تغییر قابل دیدن ثابت می‌کند برنامه تازه واقعا رسیده: کلید <code>up</code> فقط در نسخه تازه هست و مقدار کوچکش نشان می‌دهد برد همین الان ریست شده.</span></li>
+  <li data-lines="44-45"><b class="what">هر دو کار در loop.</b> <code>ArduinoOTA.handle()</code> کنار <code>server.handleClient()</code>، بدون <code>delay</code>.
+    <span class="why">برد فقط وقتی درخواست آپدیت را می‌بیند که <code>handle()</code> اجرا شود. هر نسخه بعدی باید این خط‌ها را نگه دارد، وگرنه آپدیت بعدی باید دوباره با USB انجام شود.</span></li>
+</ol>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>

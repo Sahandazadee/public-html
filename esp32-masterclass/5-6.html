@@ -703,23 +703,465 @@ void loop() {
 <div class="exercise"><div class="ct">تمرین ۱: هشدار گرما</div>
 <p>برنامه هوا و ntfy را ترکیب کن: اگر دمای شهرت از ۳۰ درجه بیشتر شد، یک هشدار ntfy بفرست، ولی فقط <b>یک بار</b> تا وقتی دما دوباره زیر ۲۸ درجه نیامده. وضعیت «هشدار فرستاده شده» باید بعد از ریست هم یادش بماند.</p>
 <details><summary>راهنمایی</summary><p>فاصله ۳۰ و ۲۸ همان «هیسترزیس» است تا دمای ۳۰ و ۲۹٫۹ پشت سر هم ده‌ها هشدار نسازد. برای به یاد ماندن بعد از ریست، یک <code>bool</code> در Preferences کافی است؛ فقط وقتی مقدارش <b>عوض</b> شد بنویس.</p></details>
-<details><summary>جواب (بخش کلیدی)</summary>
-<div class="code" data-file="HeatAlert_part.ino"><pre>
-prefs.begin("alert", false);
-bool sent = prefs.getBool("sent", false);
-if (!sent &amp;&amp; t &gt; 30.0) {
-  if (sendAlert("Heat", "Above 30 C")) {
-    prefs.putBool("sent", true);   // فقط وقتی واقعا فرستاده شد
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>در یک روز گرم در شهر انتخاب‌شده، Serial Monitor این را نشان می‌دهد (عددهای تو فرق دارند):</p>
+<pre class="serial">Wi-Fi OK, alert already sent: no
+Now: 31.2 C, wind 12.4 km/h
+ntfy -> 200
+Alert sent; next one after it drops below 28.0 C
+Now: 31.6 C, wind 11.9 km/h
+Now: 29.4 C, wind 10.2 km/h
+Now: 27.8 C, wind 9.6 km/h
+Cooled down: ready for the next alert</pre>
+<p>روی گوشی، برنامه ntfy یک اعلان با اولویت بالا نشان می‌دهد با عنوان <b>Heat</b>، متن <code>It is 31.2 C outside</code> و یک آیکون هشدار.</p>
+<ul>
+<li>دقیقا یک اعلان، با اینکه دما ساعت‌ها بالای ۳۰ می‌ماند؛ ۲۹٫۴ (بین ۲۸ و ۳۰) چیزی را عوض نمی‌کند.</li>
+<li>بعد از هشدار EN را بزن: خط اول می‌گوید <code>alert already sent: yes</code> و اعلان دومی نمی‌آید.</li>
+<li>جای تو ۳۰ درجه نیست؟ برای آزمایش، <code>ALERT_ABOVE</code> را ۱ درجه کمتر از دمای اولین خط <code>Now:</code> بگذار، <code>REARM_BELOW</code> را ۲ درجه کمتر از آن، و <code>CHECK_MS</code> را <code>60000</code> (یک دقیقه). بعد مقدارهای واقعی را برگردان.</li>
+<li>عیب‌یابی: <code>ntfy -&gt; -1</code> یعنی اتصال برقرار نشد (Wi-Fi و محدودیت زمان را بررسی کن)؛ اگر کد 200 است ولی اعلانی نمی‌آید، گوشی در Topic دیگری غیر از <code>NTFY_TOPIC</code> مشترک است.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>برنامه کامل: <code>fetchWeather</code> از WeatherNow، <code>sendAlert</code> از برنامه ntfy، و یک <code>checkHeat</code> کوچک که تصمیم می‌گیرد. در Wokwi هم با همان ترفند <code>secrets.h</code> برنامه WeatherNow اجرا می‌شود (به اضافه یک خط <code>#define NTFY_TOPIC</code>).</p>
+<div class="code" data-file="HeatAlert.ino" id="ex1ans"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WiFiClientSecure.h&gt;
+#include &lt;HTTPClient.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#include &lt;Preferences.h&gt;
+#include "secrets.h"
+#ifndef NTFY_TOPIC
+#warning "NTFY_TOPIC is not defined in secrets.h"
+#define NTFY_TOPIC "change-me-to-a-random-name"
+#endif
+
+const char *URL =
+  "https://api.open-meteo.com/v1/forecast"
+  "?latitude=43.65&amp;longitude=-79.38"
+  "&amp;current=temperature_2m,wind_speed_10m";
+const float ALERT_ABOVE = 30.0;          // وقتی گرم‌تر از این شد هشدار بده
+const float REARM_BELOW = 28.0;          // وقتی خنک‌تر از این شد دوباره آماده
+const unsigned long CHECK_MS = 10UL * 60 * 1000;   // هر ۱۰ دقیقه
+
+Preferences prefs;
+
+bool fetchWeather(float &amp;temp, float &amp;wind) {
+  WiFiClientSecure client;
+  client.useBuiltinCACertBundle();       // بررسی هویت سرور
+  HTTPClient http;
+  http.setConnectTimeout(5000);
+  http.setTimeout(5000);
+  http.useHTTP10(true);
+  if (!http.begin(client, URL)) return false;
+  int code = http.GET();
+  if (code != HTTP_CODE_OK) {
+    Serial.printf("HTTP error: %d %s\n", code, http.errorToString(code).c_str());
+    http.end();
+    return false;
   }
-} else if (sent &amp;&amp; t &lt; 28.0) {
-  prefs.putBool("sent", false);    // آماده برای هشدار بعدی
+  JsonDocument filter;
+  filter["current"]["temperature_2m"] = true;
+  filter["current"]["wind_speed_10m"] = true;
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, http.getStream(),
+                               DeserializationOption::Filter(filter));
+  http.end();
+  if (err) {
+    Serial.printf("JSON error: %s\n", err.c_str());
+    return false;
+  }
+  temp = doc["current"]["temperature_2m"] | NAN;
+  wind = doc["current"]["wind_speed_10m"] | NAN;
+  return !isnan(temp);
 }
-prefs.end();
-</pre></div></details>
+
+bool sendAlert(const char *title, const char *message) {
+  WiFiClientSecure client;
+  client.useBuiltinCACertBundle();
+  HTTPClient http;
+  http.setTimeout(5000);
+  if (!http.begin(client, "https://ntfy.sh/")) return false;
+  http.addHeader("Content-Type", "application/json");
+  JsonDocument msg;
+  msg["topic"] = NTFY_TOPIC;
+  msg["title"] = title;
+  msg["message"] = message;
+  msg["priority"] = 4;
+  msg["tags"].add("warning");
+  String body;
+  serializeJson(msg, body);
+  int code = http.POST(body);
+  http.end();
+  Serial.printf("ntfy -&gt; %d\n", code);
+  return code == 200;
+}
+
+void checkHeat(float t) {
+  prefs.begin("alert", false);
+  bool sent = prefs.getBool("sent", false);     // بعد از ریست هم می‌ماند
+  if (!sent &amp;&amp; t &gt; ALERT_ABOVE) {
+    char text[48];
+    snprintf(text, sizeof(text), "It is %.1f C outside", t);
+    if (sendAlert("Heat", text)) {
+      prefs.putBool("sent", true);              // فقط وقتی واقعا فرستاده شد
+      Serial.printf("Alert sent; next one after it drops below %.1f C\n", REARM_BELOW);
+    }
+  } else if (sent &amp;&amp; t &lt; REARM_BELOW) {
+    prefs.putBool("sent", false);               // آماده هشدار بعدی
+    Serial.println("Cooled down: ready for the next alert");
+  }
+  prefs.end();
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  prefs.begin("alert", false);                  // false یعنی خواندن/نوشتن (بار اول می‌سازدش)
+  Serial.printf("Wi-Fi OK, alert already sent: %s\n", prefs.getBool("sent", false) ? "yes" : "no");
+  prefs.end();
+}
+
+void loop() {
+  float t, w;
+  if (fetchWeather(t, w)) {
+    Serial.printf("Now: %.1f C, wind %.1f km/h\n", t, w);
+    checkHeat(t);
+  }
+  delay(CHECK_MS);                              // هوا آرام عوض می‌شود
+}
+</pre></div>
+<ol class="walk" data-for="ex1ans">
+  <li data-lines="16-18"><b class="what">دو حد و فاصله زمانی.</b> هشدار بالای ۳۰، آماده شدن دوباره زیر ۲۸، بررسی هر ۱۰ دقیقه.
+    <span class="why">فاصله بین ۳۰ و ۲۸ همان «پسماند» (hysteresis) است: دمایی که حول ۳۰ نوسان می‌کند (۳۰٫۱، ۲۹٫۹، ۳۰٫۲...) نمی‌تواند ده‌ها هشدار بسازد، چون بعد از هشدار باید اول ۲ درجه کامل پایین بیاید. ثابت‌های اسم‌دار آزمایش را راحت می‌کنند.</span></li>
+  <li data-lines="22-50"><b class="what">گرفتن آب‌وهوا، مثل WeatherNow.</b> یک فرق: <code>useBuiltinCACertBundle()</code> به جای <code>setInsecure()</code>.
+    <span class="why">این برنامه بر اساس داده کاری انجام می‌دهد (به تو هشدار می‌دهد)، پس ارزش دارد بررسی کنیم جواب واقعا از Open-Meteo می‌آید. بسته گواهی‌ها برای ntfy به هر حال هست.</span></li>
+  <li data-lines="52-71"><b class="what">فرستادن، مثل برنامه ntfy.</b> فقط وقتی <code>true</code> برمی‌گرداند که سرور 200 جواب داده باشد.
+    <span class="why">صدازننده باید بداند هشدار واقعا رفته یا نه، تا «فرستاده شد» فقط بعد از موفقیت ذخیره شود.</span></li>
+  <li data-lines="74-75"><b class="what">حافظه‌ای که از ریست جان سالم به در می‌برد.</b> پرچم «فرستاده شد» در Preferences، در namespace به اسم <code>alert</code> است.
+    <span class="why">یک متغیر معمولی با هر ریست به <code>false</code> برمی‌گردد و بردی که وسط موج گرما ریست شود بارها و بارها هشدار می‌داد. یک <code>bool</code> در NVS کافی است.</span></li>
+  <li data-lines="76-82"><b class="what">گرم و هنوز فرستاده‌نشده: هشدار.</b> متن را با دمای واقعی بساز و بفرست؛ فقط در صورت موفقیت <code>sent = true</code> را ذخیره کن.
+    <span class="why">اگر اینترنت لحظه‌ای قطع باشد، پرچم <code>false</code> می‌ماند و بررسی بعدی دوباره امتحان می‌کند: هیچ هشداری گم نمی‌شود.</span></li>
+  <li data-lines="83-86"><b class="what">دوباره خنک: آماده شو.</b> فقط وقتی <code>sent</code> درست است و دما زیر ۲۸ است.
+    <span class="why">فلش فقط وقتی نوشته می‌شود که مقدار <b>عوض شود</b>، نه هر ۱۰ دقیقه؛ خانه‌های فلش تعداد محدودی نوشتن را تحمل می‌کنند، پس بهتر است از نوشتن بی‌فایده پرهیز کرد.</span></li>
+  <li data-lines="94-96"><b class="what">نشان دادن وضعیت ذخیره‌شده در شروع.</b>
+    <span class="why">به تو اجازه می‌دهد بخش «بعد از ریست هم یادش می‌ماند» تمرین را مستقیم وارسی کنی.</span></li>
+  <li data-lines="99-106"><b class="what">یک loop ساده.</b> بگیر، چاپ کن، تصمیم بگیر، ۱۰ دقیقه صبر کن.
+    <span class="why">برنامه کار دیگری ندارد، پس یک <code>delay</code> طولانی اینجا اشکالی ندارد؛ سرویس هواشناسی تقریبا هر ۱۵ دقیقه به‌روز می‌شود، پس پرسیدن بیشتر فایده‌ای ندارد.</span></li>
+</ol>
+</details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۲: جعبه سیاه در صفحه وب</div>
 <p>«جعبه سیاه» چک‌لیست پایداری را به پروژه ایستگاه هوا اضافه کن: علت آخرین ریست، تعداد بوت‌ها و تعداد کرش‌ها را در <code>/api/state</code> برگردان و در index.html نشان بده. سپس با تغییر عمدی (مثلا یک حلقه بی‌پایان در loop بعد از ۱ دقیقه با enableLoopWDT) یک ریست نگهبان بساز و ببین در صفحه ثبت می‌شود. در آخر نسخه سالم را <b>با OTA</b> بفرست.</p>
 <details><summary>راهنمایی</summary><p>علت ریست را یک بار در setup بخوان و در یک متغیر سراسری <code>const char *</code> نگه دار؛ در handleState فقط آن را در JSON بگذار. برای تست OTA، مطمئن شو نسخه خراب هم هنوز <code>ArduinoOTA.handle()</code> را در ۱ دقیقه اول صدا می‌زند، وگرنه باید با کابل درستش کنی. (همین تجربه، توصیه مربی درباره OTA در درس <a href="5-5.html">۵.۵</a> را برایت واقعی می‌کند.)</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>اولین روشن شدن بعد از آپلود با USB، با <code>CRASH_TEST 1</code> (بقیه مقدارهای صفحه فرق دارند):</p>
+<p>صفحه: <code>آخرین ریست: power on ، روشن شدن‌ها: 1 ، کرش‌ها: 0</code></p>
+<p>حدود ۶۵ ثانیه بعد Serial Monitor گیر کردن عمدی و نگهبان را نشان می‌دهد (خط‌های وسط گزارش خطا هستند و ممکن است کمی فرق داشته باشند):</p>
+<pre class="serial">CRASH_TEST: loop is stuck now
+E (65023) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (65023) task_wdt:  - loopTask (CPU 1)
+...
+Boot #2, reason: TASK WATCHDOG, crashes: 1</pre>
+<p>صفحه حالا <code>آخرین ریست: TASK WATCHDOG ، روشن شدن‌ها: 2 ، کرش‌ها: 1</code> را نشان می‌دهد. <code>CRASH_TEST</code> را ۰ کن و در همان دقیقه اول بعد از یک ریست، با OTA (پورت <code>weather-station</code>) آپلود کن. بعد از آپدیت:</p>
+<p>صفحه: <code>آخرین ریست: software (ESP.restart) ، روشن شدن‌ها: 4 ، کرش‌ها: 2</code></p>
+<ul>
+<li>هر ریست نگهبان هم به boots و هم به crashes یکی اضافه می‌کند؛ ریست OTA فقط به boots.</li>
+<li>با <code>CRASH_TEST 0</code> برد دقیقه‌ها بدون ریست کار می‌کند و عددها ثابت می‌مانند.</li>
+<li>شمارش دقیق بستگی دارد قبل از OTA چند دور «یک دقیقه، گیر، ریست» گذشته باشد؛ مهم متن دلیل است و اینکه crashes دیگر بالا نرود.</li>
+<li>عیب‌یابی: اگر خود آپلود OTA با ریست نگهبان تمام می‌شود، خط‌های <code>onProgress</code> را جا انداخته‌ای. اگر آپلود شروع می‌شود ولی برد سر دقیقه یک ریست می‌شود، آپلود را درست بعد از یک ریست شروع کن.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>ایستگاه کامل با جعبه سیاه. بیشتر برنامه بدون تغییر است؛ توضیح خط‌به‌خط فقط بخش‌های تازه را پوشش می‌دهد. یک تله که خوب است بدانی: <code>ArduinoOTA.handle()</code> کل برنامه تازه را در یک فراخوانی دریافت می‌کند که ۱۰ تا ۳۰ ثانیه طول می‌کشد. در این مدت loop برنمی‌گردد، پس با <code>enableLoopWDT()</code> نگهبان وسط آپدیت برد را ریست می‌کرد، مگر اینکه در حین آپلود سیرش کنیم.</p>
+<div class="code" data-file="WeatherStation_BlackBox.ino" id="ex2ans"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;ArduinoOTA.h&gt;
+#include &lt;LittleFS.h&gt;
+#include &lt;WiFiClientSecure.h&gt;
+#include &lt;HTTPClient.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;Preferences.h&gt;                   // ★ جعبه سیاه: شمارنده‌ها در NVS
+#include "esp_system.h"                    // ★ esp_reset_reason()
+#include "secrets.h"
+#ifndef OTA_PASS
+#warning "OTA_PASS is not defined in secrets.h"
+#define OTA_PASS "change-me"
+#endif
+#define CRASH_TEST 1   // ★ ۱ = نسخه عمدا خراب؛ ۰ = نسخه درست (با OTA)
+
+struct Weather { float temp; float wind; unsigned long at; };
+struct Config  { float lat; float lon; };
+
+WebServer server(80);
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+QueueHandle_t weatherBox;          // صندوق یک‌خانه‌ای: همیشه آخرین هوا
+SemaphoreHandle_t cfgMutex;        // قفل تنظیمات مشترک
+TaskHandle_t weatherHandle = NULL;
+Config cfg = {43.65, -79.38};      // پیش‌فرض: تورنتو
+const char *resetText = "?";       // ★ این بار چرا (دوباره) روشن شدیم
+uint32_t bootCount = 0, crashCount = 0;
+
+const char *resetReasonText(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON:   return "power on";
+    case ESP_RST_SW:        return "software (ESP.restart)";
+    case ESP_RST_PANIC:     return "PANIC (crash / Guru Meditation)";
+    case ESP_RST_INT_WDT:   return "interrupt watchdog";
+    case ESP_RST_TASK_WDT:  return "TASK WATCHDOG";
+    case ESP_RST_WDT:       return "other watchdog";
+    case ESP_RST_DEEPSLEEP: return "wake from deep sleep";
+    case ESP_RST_BROWNOUT:  return "BROWNOUT (weak power)";
+    default:                return "other/unknown";
+  }
+}
+
+void recordBoot() {                 // ★ یک بار، در ابتدای setup
+  esp_reset_reason_t why = esp_reset_reason();
+  resetText = resetReasonText(why);
+  Preferences prefs;
+  prefs.begin("sys", false);
+  bootCount = prefs.getUInt("boots", 0) + 1;
+  prefs.putUInt("boots", bootCount);
+  crashCount = prefs.getUInt("crashes", 0);
+  if (why == ESP_RST_PANIC || why == ESP_RST_TASK_WDT || why == ESP_RST_BROWNOUT) {
+    crashCount++;
+    prefs.putUInt("crashes", crashCount);
+  }
+  prefs.end();
+  Serial.printf("Boot #%lu, reason: %s, crashes: %lu\n", (unsigned long)bootCount,
+                resetText, (unsigned long)crashCount);
+}
+
+// ---------- LittleFS: خواندن و ذخیره امن تنظیمات ----------
+void loadConfig() {
+  File f = LittleFS.open("/config.json", "r");
+  if (!f) return;                                  // هنوز ذخیره نشده
+  JsonDocument doc;
+  if (!deserializeJson(doc, f)) {
+    cfg.lat = doc["lat"] | cfg.lat;
+    cfg.lon = doc["lon"] | cfg.lon;
+  }
+  f.close();
+}
+
+bool saveConfig(const Config &amp;c) {
+  JsonDocument doc;
+  doc["lat"] = c.lat;
+  doc["lon"] = c.lon;
+  File f = LittleFS.open("/config.tmp", "w");      // اول در فایل موقت
+  if (!f) return false;
+  bool ok = serializeJson(doc, f) &gt; 0;
+  f.close();
+  if (!ok) return false;
+  LittleFS.remove("/config.json");
+  return LittleFS.rename("/config.tmp", "/config.json");  // بعد جابه‌جا
+}
+
+// ---------- Task هوا: هر ۱۰ دقیقه یا وقتی تنظیمات عوض شد ----------
+bool fetchWeather(float lat, float lon, Weather &amp;w) {
+  char url[160];
+  snprintf(url, sizeof(url),
+           "https://api.open-meteo.com/v1/forecast?latitude=%.2f&amp;longitude=%.2f"
+           "&amp;current=temperature_2m,wind_speed_10m", lat, lon);
+  WiFiClientSecure client;
+  client.useBuiltinCACertBundle();
+  HTTPClient http;
+  http.setConnectTimeout(5000);
+  http.setTimeout(5000);
+  http.useHTTP10(true);
+  if (!http.begin(client, url)) return false;
+  int code = http.GET();
+  bool ok = false;
+  if (code == HTTP_CODE_OK) {
+    JsonDocument filter;
+    filter["current"]["temperature_2m"] = true;
+    filter["current"]["wind_speed_10m"] = true;
+    JsonDocument doc;
+    if (!deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter))) {
+      w.temp = doc["current"]["temperature_2m"] | NAN;
+      w.wind = doc["current"]["wind_speed_10m"] | NAN;
+      w.at = millis();
+      ok = !isnan(w.temp);
+    }
+  }
+  http.end();
+  return ok;
+}
+
+void weatherTask(void *param) {
+  for (;;) {
+    if (WiFi.status() == WL_CONNECTED) {
+      xSemaphoreTake(cfgMutex, portMAX_DELAY);
+      Config c = cfg;                              // کپی، بعد قفل را پس بده
+      xSemaphoreGive(cfgMutex);
+      Weather w;
+      if (fetchWeather(c.lat, c.lon, w)) {
+        xQueueOverwrite(weatherBox, &amp;w);           // جای مقدار قبلی
+      }
+    }
+    // ۱۰ دقیقه بخواب، مگر این که کسی زودتر بیدارمان کند
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10UL * 60 * 1000));
+  }
+}
+
+// ---------- Task نمایش: هر ۲ ثانیه آخرین هوا روی OLED ----------
+void displayTask(void *param) {
+  Weather w;
+  for (;;) {
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.println(WiFi.localIP());
+    if (xQueuePeek(weatherBox, &amp;w, 0) == pdPASS) {  // نگاه کن، برندار
+      display.setTextSize(2);
+      display.printf("%.1f C\n", w.temp);
+      display.setTextSize(1);
+      display.printf("wind %.1f km/h\n", w.wind);
+      display.printf("%lu min ago", (millis() - w.at) / 60000);
+    } else {
+      display.println("waiting for data...");
+    }
+    display.display();
+    vTaskDelay(pdMS_TO_TICKS(2000));
+  }
+}
+
+// ---------- وب: صفحه از LittleFS، داده از کد ----------
+void handleState() {
+  Weather w = {NAN, NAN, 0};
+  xQueuePeek(weatherBox, &amp;w, 0);
+  JsonDocument doc;
+  xSemaphoreTake(cfgMutex, portMAX_DELAY);
+  doc["lat"] = cfg.lat;
+  doc["lon"] = cfg.lon;
+  xSemaphoreGive(cfgMutex);
+  doc["temp"] = w.temp;
+  doc["wind"] = w.wind;
+  doc["reset"] = resetText;                         // ★ جعبه سیاه
+  doc["boots"] = bootCount;
+  doc["crashes"] = crashCount;
+  String out;
+  serializeJson(doc, out);
+  server.send(200, "application/json", out);
+}
+
+void handleSave() {
+  Config c = {server.arg("lat").toFloat(), server.arg("lon").toFloat()};
+  if (c.lat &lt; -90 || c.lat &gt; 90 || c.lon &lt; -180 || c.lon &gt; 180) {
+    return server.send(400, "text/plain", "bad lat/lon");
+  }
+  xSemaphoreTake(cfgMutex, portMAX_DELAY);
+  cfg = c;
+  xSemaphoreGive(cfgMutex);
+  saveConfig(c);
+  xTaskNotifyGive(weatherHandle);                  // «همین الان دوباره بگیر»
+  server.sendHeader("Location", "/");
+  server.send(303);
+}
+
+void setup() {
+  Serial.begin(115200);
+  recordBoot();                                    // ★ اولین کار بعد از Serial
+  LittleFS.begin(true);
+  loadConfig();
+  weatherBox = xQueueCreate(1, sizeof(Weather));
+  cfgMutex = xSemaphoreCreateMutex();
+
+  Wire.begin(21, 22);
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.setTextColor(SSD1306_WHITE);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - t0 &lt; 20000) delay(250);
+
+  ArduinoOTA.setHostname("weather-station");
+  ArduinoOTA.setPassword(OTA_PASS);
+  ArduinoOTA.onProgress([](unsigned int done, unsigned int total) {
+    feedLoopWDT();                                 // ★ OTA جلوی loop را می‌گیرد: نگهبان را سیر نگه دار
+  });
+  ArduinoOTA.begin();
+
+  server.serveStatic("/", LittleFS, "/index.html");
+  server.on("/api/state", HTTP_GET, handleState);
+  server.on("/api/config", HTTP_POST, handleSave);
+  server.begin();
+
+  xTaskCreatePinnedToCore(weatherTask, "weather", 12288, NULL, 1, &amp;weatherHandle, 1);
+  xTaskCreatePinnedToCore(displayTask, "display", 4096, NULL, 1, NULL, 1);
+  enableLoopWDT();                                 // ★ اگر loop بیش از ۵ ثانیه گیر کرد: ریست
+}
+
+void loop() {
+  ArduinoOTA.handle();
+  server.handleClient();
+#if CRASH_TEST
+  if (millis() &gt; 60000) {                          // ★ بعد از یک دقیقه...
+    Serial.println("CRASH_TEST: loop is stuck now");
+    while (true) {}                                // ★ ...برای همیشه گیر، بدون سیر کردن
+  }
+#endif
+  delay(2);
+}
+</pre></div>
+<ol class="walk" data-for="ex2ans">
+  <li data-lines="11-12"><b class="what">دو هدر بیشتر.</b> Preferences برای شمارنده‌ها و <code>esp_system.h</code> برای دلیل ریست.
+    <span class="why">شمارنده‌هایی که باید از ریست جان سالم به در ببرند در NVS زندگی می‌کنند، دقیقا مثل چک‌لیست قابلیت اطمینان.</span></li>
+  <li data-lines="18"><b class="what">یک کلید برای آزمایش.</b> <code>CRASH_TEST 1</code> نسخه خراب را می‌سازد و ۰ نسخه درست را.
+    <span class="why">یک عدد تعیین می‌کند باگ کامپایل شود یا نه (<code>#if</code> کد را کاملا حذف می‌کند)، پس نسخه درست همان برنامه است، نه یک کپی که ممکن است به‌روز کردنش یادت برود.</span></li>
+  <li data-lines="29-30"><b class="what">جعبه سیاه در RAM.</b> متن دلیل و دو شمارنده به صورت سراسری.
+    <span class="why">یک بار در setup خوانده می‌شوند و بعد فقط فرستاده می‌شوند. <code>handleState</code> در loop اجرا می‌شود، پس بدون قفل می‌تواند آن‌ها را بخواند.</span></li>
+  <li data-lines="32-44"><b class="what">کد دلیل به متن.</b> کپی از RobustBoot.
+    <span class="why">صفحه باید بگوید «TASK WATCHDOG»، نه «6».</span></li>
+  <li data-lines="46-61"><b class="what">recordBoot()‎.</b> دلیل را بخوان، به boots یکی اضافه کن، و فقط برای panic، نگهبان یا brownout به crashes یکی اضافه کن؛ بعد یک خط خلاصه چاپ کن.
+    <span class="why">روشن شدن، ریست نرم‌افزاری (OTA) یا بیدار شدن از خواب عادی است؛ فقط خرابی‌های واقعی باید کرش حساب شوند. شمارنده فقط وقتی عوض می‌شود نوشته می‌شود.</span></li>
+  <li data-lines="167-169"><b class="what">سه فیلد بیشتر در ‎/api/state.</b>
+    <span class="why">صفحه همین حالا این JSON را می‌گیرد، پس جعبه سیاه آدرس تازه لازم ندارد؛ صفحه فقط باید کلیدهای تازه را نشان دهد.</span></li>
+  <li data-lines="191"><b class="what">اول ثبت کن.</b> <code>recordBoot()</code> اولین کار بعد از <code>Serial.begin</code> است.
+    <span class="why">اگر چیزی بعدا در setup کرش کند، این روشن شدن از قبل شمرده شده است.</span></li>
+  <li data-lines="209-211"><b class="what">سیر کردن نگهبان در حین OTA.</b> <code>onProgress</code> بعد از هر تکه دریافتی صدا زده می‌شود؛ <code>feedLoopWDT()</code> به نگهبان می‌گوید «loop زنده است».
+    <span class="why">بدون این خط‌ها نسخه درست هرگز نمی‌توانست بی‌سیم برسد: نگهبان هر آپلود را بعد از ۵ ثانیه قطع می‌کرد. سیر کردن (به جای خاموش کردن نگهبان) محافظت را نگه می‌دارد: گیر کردن واقعی در حین آپلود باز هم ریست می‌کند.</span></li>
+  <li data-lines="221"><b class="what">روشن کردن نگهبان loop.</b> از این به بعد اگر loop یک دورش را در ۵ ثانیه تمام نکند، برد ریست می‌شود.
+    <span class="why">در آخر setup می‌آید، چون انتظار Wi-Fi بالاتر ممکن است تا ۲۰ ثانیه طول بکشد.</span></li>
+  <li data-lines="227-232"><b class="what">باگ عمدی.</b> بعد از یک دقیقه، loop در یک <code>while</code> بی‌پایان گیر می‌کند.
+    <span class="why">در دقیقه اول <code>ArduinoOTA.handle()</code> هنوز اجرا می‌شود، پس نسخه درست هنوز می‌تواند با OTA برسد؛ بعد از آن، نگهبان حدود ۵ ثانیه بعد برد را ریست می‌کند و دقیقه بعدی شروع می‌شود.</span></li>
+</ol>
+<p>و صفحه (<code>data/index.html</code>) با یک خط تازه و سه کلید بیشتر. آن را با ابزار آپلود LittleFS بفرست (این کار کل ایمیج LittleFS را عوض می‌کند، پس <code>config.json</code> هم پاک می‌شود: بعدش مختصات را دوباره وارد کن):</p>
+<div class="code" data-file="data/index.html" data-lang="text" id="ex2html"><pre>
+&lt;!doctype html&gt;
+&lt;html lang="fa" dir="rtl"&gt;
+&lt;head&gt;
+  &lt;meta charset="utf-8"&gt;
+  &lt;meta name="viewport" content="width=device-width,initial-scale=1"&gt;
+  &lt;title&gt;ایستگاه هوا&lt;/title&gt;
+&lt;/head&gt;
+&lt;body style="font-family:sans-serif;max-width:420px;margin:2em auto"&gt;
+  &lt;h2&gt;ایستگاه هوا&lt;/h2&gt;
+  &lt;p&gt;دما: &lt;b id="temp"&gt;...&lt;/b&gt; °C ، باد: &lt;b id="wind"&gt;...&lt;/b&gt; km/h&lt;/p&gt;
+  &lt;p&gt;آخرین ریست: &lt;b id="reset"&gt;...&lt;/b&gt; ، روشن شدن‌ها: &lt;b id="boots"&gt;...&lt;/b&gt; ، کرش‌ها: &lt;b id="crashes"&gt;...&lt;/b&gt;&lt;/p&gt;
+  &lt;form method="POST" action="/api/config"&gt;
+    &lt;label&gt;عرض جغرافیایی &lt;input name="lat" id="lat"&gt;&lt;/label&gt;&lt;br&gt;
+    &lt;label&gt;طول جغرافیایی &lt;input name="lon" id="lon"&gt;&lt;/label&gt;&lt;br&gt;
+    &lt;button&gt;ذخیره&lt;/button&gt;
+  &lt;/form&gt;
+  &lt;script&gt;
+    fetch('/api/state').then(r =&gt; r.json()).then(s =&gt; {
+      for (const k of ['temp', 'wind', 'lat', 'lon', 'reset', 'boots', 'crashes']) {
+        const el = document.getElementById(k);
+        if (el.tagName === 'INPUT') el.value = s[k]; else el.textContent = s[k];
+      }
+    });
+  &lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</pre></div>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>

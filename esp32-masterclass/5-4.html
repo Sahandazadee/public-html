@@ -665,10 +665,282 @@ Rebooting...</div>
 <div class="exercise"><div class="ct">تمرین ۱: سه آشپز</div>
 <p>برنامه صف (پتانسیومتر و LED) را گسترش بده: یک Task سوم بساز که LED دوم روی GPIO26 را چشمک بزند، و سرعت چشمکش به عدد پتانسیومتر بستگی داشته باشد (عدد ۰ یعنی هر ۱۰۰۰ میلی‌ثانیه و ۴۰۹۵ یعنی هر ۱۰۰ میلی‌ثانیه). Task نمایش باید عدد را برای Task سوم هم بفرستد. Stack هر سه Task را هر ۵ ثانیه چاپ کن و Stackها را تا جای ممکن کم کن، با حداقل ۵۰۰ بایت حاشیه.</p>
 <details><summary>راهنمایی</summary><p>یک صف دوم بساز. Task چشمک‌زن می‌تواند با <code>xQueueReceive(q2, &amp;v, 0)</code> بدون صبر بپرسد «عدد جدید داری؟» و اگر نبود با عدد قبلی ادامه دهد. برای تبدیل عدد از <code>map(v, 0, 4095, 1000, 100)</code> استفاده کن.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>در هر ثانیه پنج خط <code>pot=</code>، و هر ۵ ثانیه یک گزارش استک. عددهای استک و heap پایین فقط نمونه‌اند؛ مال تو کمی فرق دارد:</p>
+<pre class="serial">pot=   0  led=  0
+pot=   0  led=  0
+pot=2048  led=128
+pot=4095  led=255
+[stack free] sensor=940 B, display=1290 B, blink=1310 B, heap=288900 B</pre>
+<ul>
+<li>پتانسیومتر روی ۰: LED سبز روی GPIO26 یک ثانیه روشن و یک ثانیه خاموش است. پتانسیومتر وسط (حدود ۲۰۴۸): هر ۵۵۰ میلی‌ثانیه عوض می‌شود. پتانسیومتر ته (۴۰۹۵): هر ۱۰۰ میلی‌ثانیه، یک سوسوی تند.</li>
+<li>بعد از چرخاندن پتانسیومتر، سرعت تازه از تغییر بعدی LED شروع می‌شود (حداکثر ۱ ثانیه بعد)، و LED قرمز روی GPIO4 هم‌زمان نورش عوض می‌شود.</li>
+<li>همه عددهای استک در گزارش حداقل ۵۰۰ هستند. اگر یکی زیر ۵۰۰ بود، استک همان تسک را بزرگ‌تر کن؛ اگر یکی خیلی بالاتر بود (بیش از ۱۵۰۰)، می‌توانی کوچک‌ترش کنی.</li>
+<li>هیچ خطی با خط دیگر قاطی نمی‌شود: mutex هنوز از Serial Monitor محافظت می‌کند.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>برنامه کامل: مثال صف همین درس، به اضافه یک صف دوم و یک تسک سوم.</p>
+<div class="code" data-file="ThreeCooks.ino" id="ex1ans"><pre>
+// سه آشپز: سنسور -&gt; صف -&gt; نمایش -&gt; صف -&gt; چشمک‌زن
+const int POT_PIN = 34;          // پتانسیومتر (ADC1، فقط ورودی)
+const int LED_PIN = 4;           // LED با نور متغیر (PWM)
+const int LED2_PIN = 26;         // ★ LED دوم: سرعت چشمک از پتانسیومتر
+
+QueueHandle_t potQueue;          // سنسور -&gt; نمایش
+QueueHandle_t blinkQueue;        // ★ نمایش -&gt; چشمک‌زن
+SemaphoreHandle_t serialMutex;   // قفل Serial Monitor
+TaskHandle_t sensorHandle = NULL;
+TaskHandle_t displayHandle = NULL;
+TaskHandle_t blinkHandle = NULL;
+
+void sensorTask(void *param) {
+  for (;;) {
+    int raw = analogRead(POT_PIN);                  // ۰ تا ۴۰۹۵
+    xQueueSend(potQueue, &amp;raw, 0);                  // صف پر است؟ این نمونه را دور بریز
+    vTaskDelay(pdMS_TO_TICKS(200));                 // ۵ بار در ثانیه
+  }
+}
+
+void displayTask(void *param) {
+  int value;
+  for (;;) {
+    if (xQueueReceive(potQueue, &amp;value, pdMS_TO_TICKS(1000)) == pdPASS) {
+      ledcWrite(LED_PIN, value / 16);               // 0..4095 -&gt; 0..255
+      xQueueSend(blinkQueue, &amp;value, 0);            // ★ به بعدی بده، هرگز صبر نکن
+      if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        Serial.printf("pot=%4d  led=%3d\n", value, value / 16);
+        xSemaphoreGive(serialMutex);
+      }
+    }
+  }
+}
+
+void blinkTask(void *param) {                       // ★ آشپز سوم
+  pinMode(LED2_PIN, OUTPUT);
+  int period = 1000;                                // تا وقتی اولین عدد برسد
+  int v;
+  bool on = false;
+  for (;;) {
+    while (xQueueReceive(blinkQueue, &amp;v, 0) == pdPASS) {  // صف را خالی کن، بدون انتظار
+      period = map(v, 0, 4095, 1000, 100);               // تازه‌ترین عدد برنده است
+    }
+    on = !on;
+    digitalWrite(LED2_PIN, on);
+    vTaskDelay(pdMS_TO_TICKS(period));
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  ledcAttach(LED_PIN, 5000, 8);                     // ۵ کیلوهرتز، ۸ بیت
+  potQueue = xQueueCreate(10, sizeof(int));
+  blinkQueue = xQueueCreate(10, sizeof(int));
+  serialMutex = xSemaphoreCreateMutex();
+  if (potQueue == NULL || blinkQueue == NULL || serialMutex == NULL) {
+    Serial.println("Out of memory!");
+    while (true) delay(1000);
+  }
+  // استک‌ها بعد از اندازه‌گیری کوچک شدند (قبلا 3072 و 4096)
+  xTaskCreatePinnedToCore(sensorTask, "sensor", 2048, NULL, 2, &amp;sensorHandle, 1);
+  xTaskCreatePinnedToCore(displayTask, "display", 3072, NULL, 1, &amp;displayHandle, 1);
+  xTaskCreatePinnedToCore(blinkTask, "blink", 2048, NULL, 1, &amp;blinkHandle, 1);
+}
+
+void loop() {
+  delay(5000);
+  if (xSemaphoreTake(serialMutex, portMAX_DELAY) == pdTRUE) {
+    Serial.printf("[stack free] sensor=%u B, display=%u B, blink=%u B, heap=%u B\n",
+                  (unsigned)uxTaskGetStackHighWaterMark(sensorHandle),
+                  (unsigned)uxTaskGetStackHighWaterMark(displayHandle),
+                  (unsigned)uxTaskGetStackHighWaterMark(blinkHandle),
+                  (unsigned)ESP.getFreeHeap());
+    xSemaphoreGive(serialMutex);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="ex1ans">
+  <li data-lines="4-11"><b class="what">یک پایه، یک صف و یک handle بیشتر.</b> GPIO26 برای LED دوم، <code>blinkQueue</code> بین تسک نمایش و تسک چشمک، و <code>blinkHandle</code> برای گزارش استک.
+    <span class="why">هر جفت آشپز صف خودش را دارد. یک صف دقیقا یک کار دارد (بردن عدد از A به B) و این برنامه را راحت‌فهم نگه می‌دارد.</span></li>
+  <li data-lines="13-19"><b class="what">تسک سنسور، بدون تغییر.</b> پتانسیومتر را ۵ بار در ثانیه می‌خواند و اگر صف پر باشد نمونه را دور می‌ریزد.
+    <span class="why">کارش عوض نشده؛ فقط استکش حالا کوچک‌تر است (setup را ببین).</span></li>
+  <li data-lines="26"><b class="what">تسک نمایش عدد را به بعدی می‌دهد.</b> بلافاصله بعد از تنظیم LED قرمز، همان عدد را با زمان انتظار ۰ در <code>blinkQueue</code> می‌گذارد.
+    <span class="why">تسک نمایش هرگز نباید به خاطر کند بودن چشمک‌زن گیر کند. با ۰، اگر صف روزی پر باشد، عدد فقط دور ریخته می‌شود؛ عدد تازه‌تر ۲۰۰ میلی‌ثانیه بعد می‌رسد.</span></li>
+  <li data-lines="40-43"><b class="what">خالی کردن صف بدون انتظار.</b> <code>while</code> هر عددی را که رسیده برمی‌دارد؛ فقط آخری (تازه‌ترین) <code>period</code> را تعیین می‌کند. اگر چیزی نرسیده، دوره قبلی می‌ماند.
+    <span class="why">در هر ثانیه حدود ۵ عدد می‌رسد، ولی با سرعت کند تسک فقط ثانیه‌ای یک بار سر می‌زند. اگر هر دور فقط یک عدد برمی‌داشت، مدام عددهای کهنه را پردازش می‌کرد و چند ثانیه از پیچ عقب می‌ماند. <code>map</code> بازه ۰..۴۰۹۵ را به ۱۰۰۰..۱۰۰ تبدیل می‌کند: <code>map(2048, 0, 4095, 1000, 100)</code> = 550.</span></li>
+  <li data-lines="44-46"><b class="what">چشمک، بعد خواب.</b> LED را برعکس کن و <code>period</code> میلی‌ثانیه با <code>vTaskDelay</code> صبر کن.
+    <span class="why"><code>vTaskDelay</code> در مدت انتظار CPU را برای بقیه تسک‌ها آزاد می‌کند. برای همین هم سرعت تازه فقط بعد از تمام شدن انتظار فعلی شروع می‌شود.</span></li>
+  <li data-lines="53-58"><b class="what">ساختن صف دوم و بررسی آن.</b> هر سه شیء قبل از شروع هر تسکی از نظر NULL بررسی می‌شوند.
+    <span class="why">تسکی که از صف ساخته‌نشده استفاده کند برد را کرش می‌دهد. اول ساختن همه چیز و بعد تسک‌ها، جلوی این را می‌گیرد.</span></li>
+  <li data-lines="60-63"><b class="what">استک‌های کوچک‌تر.</b> در درس برای تسک سنسور حدود ۱۹۶۴ بایت آزاد از ۳۰۷۲ اندازه‌گیری شد (یعنی حدود ۱۱۰۰ مصرف) و برای تسک نمایش ۲۳۱۲ آزاد از ۴۰۹۶ (حدود ۱۸۰۰ مصرف). پس ۲۰۴۸ حدود ۹۴۰ و ۳۰۷۲ حدود ۱۲۹۰ بایت آزاد باقی می‌گذارند، هر دو بالای حاشیه ۵۰۰ بایتی. تسک چشمک کار کمتری دارد و ۲۰۴۸ می‌گیرد.
+    <span class="why">اندازه استک = مصرف واقعی تسک + حاشیه اطمینان. دقیقا تا ۵۰۰ کم نکن: یک مسیر نادر (پیام خطا، یک printf بلندتر) می‌تواند بیشتر از هر چیزی که اندازه گرفته‌ای مصرف کند.</span></li>
+  <li data-lines="68-72"><b class="what">گزارش برای سه تسک.</b> برای هر handle یک <code>uxTaskGetStackHighWaterMark</code>، داخل mutex.
+    <span class="why">high-water mark کمترین استک آزادی است که تا حالا دیده شده، پس قبل از اعتماد به عددها بگذار برنامه مدتی کار کند و پیچ را بچرخان.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="ex1ans">
+<p>در Wokwi امتحانش کن: پتانسیومتر را از یک سر تا سر دیگر بچرخان و ببین سرعت LED سبز و نور LED قرمز با هم عوض می‌شوند. کتابخانه اضافه‌ای لازم نیست.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": -110, "left": 180, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 130, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 50, "left": 210, "attrs": { "color": "red" } },
+    { "type": "wokwi-resistor", "id": "r2", "top": 130, "left": -130, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led2", "top": 50, "left": -110, "attrs": { "color": "green" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ],
+    [ "esp:26", "r2:2", "green", [] ],
+    [ "r2:1", "led2:A", "green", [] ],
+    [ "led2:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۲: شمارنده فشار با ضربان قلب</div>
 <p>دو مثال آخر را ترکیب کن. ISR فشارها را مثل <code>ButtonISR</code> از طریق صف به <code>pressTask</code> می‌فرستد. بعد از هر ۵ فشار، <code>pressTask</code> به یک Task دوم اعلان می‌دهد که LED روی GPIO26 را ۵ بار سریع چشمک بزند. Task چشمک‌زن باید خودش هم هر ۱۰ ثانیه یک بار LED را چشمک بزند، به عنوان «ضربان قلب»، حتی اگر کسی دکمه نزند.</p>
 <details><summary>راهنمایی</summary><p>در Task چشمک‌زن از <code>ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10000))</code> استفاده کن: مقدار برگشتی ۰ یعنی ۱۰ ثانیه تمام شده (ضربان: یک چشمک)، و بیشتر از ۰ یعنی زنگ خورده (پنج چشمک). Handle ی Task چشمک‌زن را در یک متغیر سراسری نگه دار و هر دو Task را قبل از <code>attachInterrupt</code> بساز.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>چند بار دکمه را بزن. عددهای میلی‌ثانیه تو فرق دارند:</p>
+<pre class="serial">Press #1 at 4210 ms
+Press #2 at 4780 ms
+Press #3 at 5302 ms
+Press #4 at 5840 ms
+Press #5 at 6391 ms
+  5 presses: ringing blinkTask</pre>
+<ul>
+<li>بدون زدن هیچ دکمه‌ای، LED روی GPIO26 تقریبا هر ۱۰ ثانیه یک چشمک کوتاه (۰٫۱ ثانیه) می‌زند: ضربان.</li>
+<li>فشارهای ۱ تا ۴ چشمکی نمی‌سازند. فشار پنجم پنج چشمک سریع می‌دهد (در مجموع یک ثانیه)، و همین‌طور فشار دهم، پانزدهم و...</li>
+<li>هر فشار دقیقا یک بار شمرده می‌شود، چه تند بزنی چه آرام (عددها یکی یکی بالا می‌روند، هرگز ۲ یا ۳ تا نمی‌پرند).</li>
+<li>بعد از پنج چشمک، ضربان بعدی حدود ۱۰ ثانیه بعد می‌آید، چون انتظار از نو شروع می‌شود.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>برنامه کامل: <code>ButtonISR</code> به اضافه یک تسک چشمک‌زن که منتظر notification می‌ماند، مثل تسک گزارش در <code>NotifyDemo</code>.</p>
+<div class="code" data-file="PressHeartbeat.ino" id="ex2ans"><pre>
+// وقفه دکمه -&gt; صف -&gt; pressTask -&gt; هر ۵ فشار -&gt; blinkTask
+const int BUTTON_PIN = 27;                 // دکمه بین GPIO27 و GND
+const int LED2_PIN = 26;                   // LED دوم (+۲۲۰ اهم)
+
+QueueHandle_t pressQueue;                  // زمان فشارها، از ISR به pressTask
+TaskHandle_t blinkHandle = NULL;           // «شماره تلفن» blinkTask
+
+void IRAM_ATTR onPress() {                 // ISR: کوچک و سریع
+  uint32_t now = millis();
+  BaseType_t wokeHigher = pdFALSE;
+  xQueueSendFromISR(pressQueue, &amp;now, &amp;wokeHigher);
+  portYIELD_FROM_ISR(wokeHigher);
+}
+
+void blink(int times, int ms) {            // روشن و خاموش، به تعداد times
+  for (int i = 0; i &lt; times; i++) {
+    digitalWrite(LED2_PIN, HIGH);
+    vTaskDelay(pdMS_TO_TICKS(ms));
+    digitalWrite(LED2_PIN, LOW);
+    vTaskDelay(pdMS_TO_TICKS(ms));
+  }
+}
+
+void blinkTask(void *param) {
+  pinMode(LED2_PIN, OUTPUT);
+  for (;;) {
+    // بخواب تا زنگ بخورد، یا حداکثر ۱۰ ثانیه
+    uint32_t rings = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10000));
+    if (rings &gt; 0) {
+      blink(5, 100);                       // ۵ فشار: پنج چشمک سریع
+    } else {
+      blink(1, 100);                       // ۱۰ ثانیه سکوت: یک ضربان
+    }
+  }
+}
+
+void pressTask(void *param) {
+  uint32_t t;
+  int count = 0;
+  for (;;) {
+    xQueueReceive(pressQueue, &amp;t, portMAX_DELAY);  // بخواب تا یک لبه برسد
+    vTaskDelay(pdMS_TO_TICKS(30));         // صبر کن لرزش کنتاکت تمام شود
+    xQueueReset(pressQueue);               // لبه‌های لرزش را دور بریز
+    if (digitalRead(BUTTON_PIN) != LOW) continue;  // نگه داشته نشده: رها کردن بود
+    count++;
+    Serial.printf("Press #%d at %lu ms\n", count, (unsigned long)t);
+    if (count % 5 == 0) {                  // هر پنجمین فشار
+      Serial.println("  5 presses: ringing blinkTask");
+      xTaskNotifyGive(blinkHandle);        // زنگ را بزن
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pressQueue = xQueueCreate(20, sizeof(uint32_t));
+  if (pressQueue == NULL) {
+    Serial.println("Out of memory!");
+    while (true) delay(1000);
+  }
+  xTaskCreatePinnedToCore(blinkTask, "blink", 2048, NULL, 1, &amp;blinkHandle, 1);
+  xTaskCreatePinnedToCore(pressTask, "press", 3072, NULL, 2, NULL, 1);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), onPress, FALLING);  // در آخر!
+}
+
+void loop() {
+  delay(1000);                             // loop اینجا کاری ندارد
+}
+</pre></div>
+<ol class="walk" data-for="ex2ans">
+  <li data-lines="5-6"><b class="what">یک صف و یک handle.</b> صف زمان فشارها را از ISR به <code>pressTask</code> می‌برد؛ handle سراسری به <code>pressTask</code> اجازه می‌دهد زنگ <code>blinkTask</code> را بزند.
+    <span class="why">داده (یک زمان) از صف می‌رود؛ یک «بیدار شو» ساده از notification، که به چیزی جز handle نیاز ندارد.</span></li>
+  <li data-lines="8-13"><b class="what">ISR، بدون تغییر.</b> فقط زمان را ثبت می‌کند و با تابع <code>FromISR</code> به صف می‌دهد.
+    <span class="why">ISR باید خیلی کوچک باشد؛ شمردن و چشمک زدن کار تسک‌هاست.</span></li>
+  <li data-lines="15-22"><b class="what">یک تابع کمکی کوچک برای چشمک.</b> روشن و خاموش، به تعدادی که خواسته شده، با <code>vTaskDelay</code> برای انتظارها.
+    <span class="why">یک تابع هم به کار ضربان می‌آید هم به جشن. <code>vTaskDelay</code> (نه انتظار مشغول) باعث می‌شود تسک فشار در حین چشمک زدن همچنان بشمارد.</span></li>
+  <li data-lines="28-33"><b class="what">یک انتظار، دو معنی.</b> <code>ulTaskNotifyTake</code> می‌خوابد تا زنگ بخورد یا ۱۰ ثانیه بگذرد. ۰ یعنی «وقت تمام شد»: یک ضربان؛ بیشتر از ۰ یعنی «زنگ خورد»: پنج چشمک سریع.
+    <span class="why">مقدار برگشتی دو حالت را از هم جدا می‌کند، پس یک تسک بدون تایمر و متغیر اضافه هر دو کار را انجام می‌دهد. <code>pdTRUE</code> شمارش را صفر می‌کند، پس چند زنگ در حین چشمک فقط یک دور دیگر می‌سازند، نه یک صف طولانی.</span></li>
+  <li data-lines="41-46"><b class="what">شمردن، مثل ButtonISR.</b> منتظر لبه بمان، بگذار لرزش بخوابد، صف را خالی کن، بررسی کن دکمه هنوز پایین است، بشمار.
+    <span class="why">همین باعث می‌شود هر فشار دقیقا یک بار شمرده شود، پس «هر پنجمین فشار» واقعا یعنی پنج فشار.</span></li>
+  <li data-lines="47-50"><b class="what">هر پنجمین فشار زنگ را می‌زند.</b> <code>count % 5 == 0</code> در ۵، ۱۰، ۱۵ و... درست است.
+    <span class="why"><code>%</code> باقی‌مانده تقسیم را می‌دهد؛ دقیقا در مضرب‌های ۵ صفر است، پس شمارنده دومی لازم نیست که صفرش کنیم.</span></li>
+  <li data-lines="62-64"><b class="what">اول تسک‌ها، آخر از همه وقفه.</b> <code>blinkTask</code> اول ساخته می‌شود تا <code>blinkHandle</code> قبل از اینکه کسی زنگش را بزند مقدار داشته باشد؛ <code>attachInterrupt</code> در آخر می‌آید.
+    <span class="why">فشاری که در حین setup اتفاق بیفتد نباید به صف یا handle‌ای برسد که هنوز وجود ندارد. <code>pressTask</code> اولویت بالاتری (۲) دارد تا فشار حتی وسط یک چشمک فورا رسیدگی شود.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="ex2ans">
+<p>در Wokwi امتحانش کن: منتظر یک ضربان بمان، بعد پنج بار روی دکمه سبز کلیک کن. کتابخانه اضافه‌ای لازم نیست.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 150, "left": -150, "attrs": { "color": "green" } },
+    { "type": "wokwi-resistor", "id": "r2", "top": 130, "left": -130, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led2", "top": 50, "left": -110, "attrs": { "color": "green" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:27", "btn1:1.r", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:26", "r2:2", "green", [] ],
+    [ "r2:1", "led2:A", "green", [] ],
+    [ "led2:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>

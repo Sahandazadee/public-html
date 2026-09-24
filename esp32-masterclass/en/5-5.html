@@ -579,10 +579,177 @@ void loop() {
 <div class="exercise"><div class="ct">Exercise 1: a boot diary on a web page</div>
 <p>Combine LittleFS_Basics and LittleFS_Web: at every boot, append one line to <code>/log.txt</code> with the boot number, and add a <code>/log</code> address that shows the whole file in the browser as plain text. Press EN a few times and refresh the page: the list should grow by one line each time.</p>
 <details><summary>Hint</summary><p>To find the boot number, read the file once at startup and count its lines (every <code>'\n'</code> is one line), then add one. For <code>/log</code>, open the file with "r" and send it with <code>server.streamFile(f, "text/plain")</code>, then <code>f.close()</code>. Don't cache it, because it changes.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>On a real board (Wokwi's free version can't open a web page from your browser). After the upload, the Serial Monitor shows (your boot number and IP differ):</p>
+<pre class="serial">This is boot #1
+Open http://192.168.1.42/log</pre>
+<p>Open that address. The browser shows the file as plain text; after pressing EN twice and refreshing:</p>
+<pre class="serial">boot #1 at 312 ms
+boot #2 at 309 ms
+boot #3 at 311 ms</pre>
+<ul>
+<li>Each press of EN plus a refresh adds exactly one line, and the numbers go up by 1 without gaps.</li>
+<li>The times are all small (a few hundred ms), because the line is written right at the start of setup, before Wi-Fi.</li>
+<li>If you ran <code>LittleFS_Basics</code> before, its lines (<code>boot at ... ms</code>) are already in the file and count too, so your diary may start at #2 or #3. That's correct: the number is "lines in the file + 1".</li>
+<li>The main page (<code>/</code>) still works if the <code>data</code> folder from LittleFS_Web is on the board. Troubleshooting: <code>no log yet</code> means the file couldn't be written; check the <code>LittleFS mount failed</code> line and the Partition Scheme.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>The complete program: LittleFS_Web plus a line counter, one appended line per boot and a <code>/log</code> address.</p>
+<div class="code" data-file="BootDiary.ino" id="ex1ans"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;LittleFS.h&gt;
+#include "secrets.h"
+
+WebServer server(80);
+
+int countLines(const char *path) {           // every '\n' ends one line
+  File f = LittleFS.open(path, "r");
+  if (!f) return 0;                          // no file yet: 0 lines
+  int lines = 0;
+  while (f.available()) {
+    if (f.read() == '\n') lines++;
+  }
+  f.close();
+  return lines;
+}
+
+void handleLog() {
+  File f = LittleFS.open("/log.txt", "r");
+  if (!f) {
+    server.send(404, "text/plain", "no log yet");
+    return;
+  }
+  server.sendHeader("Cache-Control", "no-store");   // it changes: never cache
+  server.streamFile(f, "text/plain");        // sends the file piece by piece
+  f.close();
+}
+
+void setup() {
+  Serial.begin(115200);
+  if (!LittleFS.begin(true)) {
+    Serial.println("LittleFS mount failed");
+  }
+  int boot = countLines("/log.txt") + 1;     // lines so far + 1
+  File f = LittleFS.open("/log.txt", "a");   // a = add to the end
+  if (f) {
+    f.printf("boot #%d at %lu ms\n", boot, millis());
+    f.close();                               // closed = saved
+  }
+  Serial.printf("This is boot #%d\n", boot);
+
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.printf("Open http://%s/log\n", WiFi.localIP().toString().c_str());
+
+  server.serveStatic("/", LittleFS, "/index.html");
+  server.serveStatic("/style.css", LittleFS, "/style.css", "max-age=3600");
+  server.on("/api/temp", []() {
+    float t = temperatureRead();             // chip's internal temperature (rough)
+    server.send(200, "application/json", "{\"t\":" + String(t, 1) + "}");
+  });
+  server.on("/log", HTTP_GET, handleLog);    // ★ the boot diary
+  server.onNotFound([]() { server.send(404, "text/plain", "Not found"); });
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();
+}
+</pre></div>
+<ol class="walk" data-for="ex1ans">
+  <li data-lines="8-17"><b class="what">Count the lines.</b> Read the file byte by byte and count the <code>'\n'</code> characters. If the file doesn't exist yet, the answer is 0.
+    <span class="why">We never saved a separate counter: the file itself is the memory. Every line we write ends with <code>\n</code>, so "number of newlines" is "number of boots so far". Reading a few hundred bytes one at a time is fast enough for a small log.</span></li>
+  <li data-lines="19-28"><b class="what">Send the file to the browser.</b> Open it with "r"; if it's missing, answer 404; otherwise <code>streamFile</code> sends it as <code>text/plain</code>, then we close it.
+    <span class="why"><code>streamFile</code> sends the file in pieces, so even a long log never has to fit in RAM. <code>Cache-Control: no-store</code> tells the browser never to keep an old copy, because the file changes at every boot; the style sheet, which never changes, gets <code>max-age</code> instead.</span></li>
+  <li data-lines="35-41"><b class="what">One line per boot.</b> Boot number = lines + 1; open with "a" (append) and write <code>boot #N at T ms</code>; close.
+    <span class="why">"a" adds to the end and keeps the old lines ("w" would wipe the file). <code>close()</code> is the moment the data is really in flash; LittleFS is safe against power loss, so a power cut leaves either the old file or the new one, never a broken one.</span></li>
+  <li data-lines="47-52"><b class="what">LittleFS_Web, unchanged.</b> The static page, the style sheet and <code>/api/temp</code>.
+    <span class="why">The exercise adds a feature; everything that already worked stays as it was.</span></li>
+  <li data-lines="53"><b class="what">The new address.</b> <code>/log</code>, for GET requests, handled by <code>handleLog</code>.
+    <span class="why">It must be registered before <code>server.begin()</code>, like every other route.</span></li>
+</ol>
+</details>
 </div>
 <div class="exercise"><div class="ct">Exercise 2: your first real wireless fix</div>
 <p>Add ArduinoOTA to LittleFS_Web (hostname <code>esp32-files</code>, password from <code>secrets.h</code>) and upload it once over USB. Then power the board from a phone charger, away from the computer. Over OTA, change <code>/api/temp</code> so it also returns the uptime in seconds, and check in the browser that the page still loads. What does this prove about the LittleFS files?</p>
 <details><summary>Hint</summary><p>Call <code>ArduinoOTA.begin()</code> after Wi-Fi connects, and put <code>ArduinoOTA.handle()</code> next to <code>server.handleClient()</code> in loop. Don't change the Partition Scheme between the USB upload and the OTA uploads. The JSON can become <code>{"t":41.2,"up":1234}</code>.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>After the first USB upload, the Serial Monitor prints the address; in the Arduino IDE, <b>Tools → Port</b> now also lists a network port such as <code>esp32-files at 192.168.1.42</code>. During the OTA upload the IDE asks for the password and the board (if it's still connected to a Serial Monitor) prints:</p>
+<pre class="serial">OTA start
+OTA done, rebooting
+Open http://192.168.1.42/</pre>
+<p>After the update, <code>http://192.168.1.42/api/temp</code> returns something like this (your numbers differ):</p>
+<pre class="serial">{"t":47.3,"up":12}</pre>
+<ul>
+<li>The page at <code>/</code> still loads with its blue heading (the style sheet from LittleFS), although you never uploaded the data folder again.</li>
+<li><code>up</code> is small right after the update (the board restarted) and grows by 1 per second when you refresh.</li>
+<li>Troubleshooting: no network port? The computer and the board must be on the same Wi-Fi network, and some guest or school networks block it. <code>OTA error</code> or a refused password: check <code>OTA_PASS</code> in <code>secrets.h</code>. <code>LittleFS mount failed</code> after the update: the Partition Scheme was changed between uploads.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p><b>What it proves:</b> an OTA update (like a USB upload) only rewrites the program partition. The LittleFS partition, with index.html and style.css, is a separate area of flash that nobody touched, so the files survive every new program. They are only replaced when you upload a new LittleFS image, as long as the Partition Scheme stays the same.</p>
+<p>This is the final version, the one sent over OTA. The first USB version is the same program without line 35 and with the original <code>/api/temp</code> answer.</p>
+<div class="code" data-file="OtaFiles.ino" id="ex2ans"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;LittleFS.h&gt;
+#include &lt;ArduinoOTA.h&gt;                      // ★
+#include "secrets.h"                         // WIFI_SSID, WIFI_PASS, OTA_PASS
+#ifndef OTA_PASS
+#warning "OTA_PASS is not defined in secrets.h"
+#define OTA_PASS "change-me"
+#endif
+
+WebServer server(80);
+
+void setup() {
+  Serial.begin(115200);
+  if (!LittleFS.begin(true)) {
+    Serial.println("LittleFS mount failed");
+  }
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.printf("Open http://%s/\n", WiFi.localIP().toString().c_str());
+
+  ArduinoOTA.setHostname("esp32-files");     // ★ name in the Port menu
+  ArduinoOTA.setPassword(OTA_PASS);          // ★ without it, anyone can flash
+  ArduinoOTA
+    .onStart([]() { Serial.println("OTA start"); })
+    .onEnd([]() { Serial.println("\nOTA done, rebooting"); })
+    .onError([](ota_error_t err) { Serial.printf("OTA error %u\n", err); });
+  ArduinoOTA.begin();                        // ★ after Wi-Fi is connected
+
+  server.serveStatic("/", LittleFS, "/index.html");
+  server.serveStatic("/style.css", LittleFS, "/style.css", "max-age=3600");
+  server.on("/api/temp", []() {
+    float t = temperatureRead();             // chip's internal temperature (rough)
+    unsigned long up = millis() / 1000;      // ★ new in the OTA version: uptime in s
+    server.send(200, "application/json",
+                "{\"t\":" + String(t, 1) + ",\"up\":" + String(up) + "}");
+  });
+  server.onNotFound([]() { server.send(404, "text/plain", "Not found"); });
+  server.begin();
+}
+
+void loop() {
+  ArduinoOTA.handle();                       // ★ every pass: "any update?"
+  server.handleClient();
+}
+</pre></div>
+<ol class="walk" data-for="ex2ans">
+  <li data-lines="4-9"><b class="what">The OTA library and the password.</b> If <code>OTA_PASS</code> is missing from <code>secrets.h</code>, the compiler warns and uses a placeholder.
+    <span class="why">The password stays out of the sketch, so you can share the code without sharing the key to your board.</span></li>
+  <li data-lines="23-29"><b class="what">OTA set-up, after Wi-Fi.</b> Hostname, password, three short messages, then <code>begin()</code>.
+    <span class="why"><code>begin()</code> needs a working network to announce the board under its name, so it comes after the Wi-Fi loop. The messages let you follow the update when a Serial Monitor is attached.</span></li>
+  <li data-lines="33-38"><b class="what">The small fix sent over the air.</b> <code>/api/temp</code> now also returns the uptime in seconds.
+    <span class="why">A visible change lets you prove that the new program really arrived: the key <code>up</code> is only in the new version, and its small value shows the board just restarted.</span></li>
+  <li data-lines="44-45"><b class="what">Both jobs in loop.</b> <code>ArduinoOTA.handle()</code> next to <code>server.handleClient()</code>, with no <code>delay</code>.
+    <span class="why">The board only notices an update request when <code>handle()</code> runs. Every future version must keep these lines, or the next update has to go over USB again.</span></li>
+</ol>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">The lesson in three lines</div>

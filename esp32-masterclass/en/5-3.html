@@ -615,16 +615,357 @@ Sleeping 5 minutes...</div>
 <h2 id="practice">Exercises</h2>
 <div class="exercise"><div class="ct">Exercise 1: a flash photo at night</div>
 <p>Change the time-lapse program (the first version, <code>TimeLapse_Simple.ino</code>) so it switches the flash on 200 milliseconds before taking the real photo and switches it off right after. Why don't we have to worry about the flash clashing with the SD card anymore?</p>
-<details><summary>Hint</summary><p><code>pinMode(FLASH_LED, OUTPUT)</code> is already in setup. In <code>takePhoto()</code>, before the real <code>esp_camera_fb_get()</code> (and after throwing away the frames), add <code>digitalWrite(FLASH_LED, HIGH); delay(200);</code>, and after taking the photo, <code>digitalWrite(FLASH_LED, LOW);</code>. (The same works in the sleep version; just put the <code>pinMode</code> after <code>rtc_gpio_hold_dis</code>.)</p></details>
-<details><summary>Answer</summary><p>Because the card is in 1-bit mode and doesn't use GPIO4, GPIO4 is entirely ours. Note: the flash draws a lot of current; if you get a brownout when the flash fires, it's a power problem again. For a better photo, take the throw-away frames with the flash on as well, so auto-exposure adjusts to the flash light.</p></details>
+<details><summary>Hint</summary><p><code>pinMode(FLASH_LED, OUTPUT)</code> is already in setup. In <code>takePhoto()</code>, at the very start, before the old frame is thrown away, add <code>digitalWrite(FLASH_LED, HIGH); delay(200);</code>, and after taking the photo, <code>digitalWrite(FLASH_LED, LOW);</code>. (The same works in the sleep version; just put the <code>pinMode</code> after <code>rtc_gpio_hold_dis</code>.)</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>Wokwi can't simulate the camera, so this one runs on the real ESP32-CAM. The Serial Monitor (115200) shows the same lines as before; the file sizes vary with the scene:</p>
+<pre class="serial">Next photo: #1
+Saved /img_00001.jpg (98304 bytes)
+Saved /img_00002.jpg (101722 bytes)</pre>
+<ul>
+<li>Every 30 seconds the bright white LED on the board flashes for about a quarter of a second (the 200 ms wait plus the capture), then goes fully dark until the next photo.</li>
+<li>Take the card out and open the photos: a shot of a dark room is now lit and recognisable, instead of almost black.</li>
+<li>The card keeps working with the flash; no <code>Failed to open file</code> appears.</li>
+<li>Troubleshooting: if the board resets exactly when the flash fires (<code>Brownout detector was triggered</code>), the power supply or cable is too weak; use a strong 5 V supply and a short cable. If the photo is still dark, check that the flash goes on <i>before</i> the old frame is thrown away.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p><b>Why there's no clash:</b> the card runs in 1-bit mode (<code>SD_MMC.begin("/sdcard", true)</code>), which only uses GPIO2, GPIO14 and GPIO15. GPIO4 would be data line D1 in 4-bit mode; in 1-bit mode it's free, so the flash LED on GPIO4 is entirely ours. Note that the flash draws a lot of current, so a brownout when it fires is a power problem again.</p>
+<div class="code" data-file="TimeLapse_Flash.ino" id="ex1ans"><pre>
+#include "esp_camera.h"
+#include "FS.h"
+#include "SD_MMC.h"
+
+// Camera pins for the AI-Thinker ESP32-CAM board
+#define PWDN_GPIO_NUM  32
+#define RESET_GPIO_NUM -1
+#define XCLK_GPIO_NUM   0
+#define SIOD_GPIO_NUM  26
+#define SIOC_GPIO_NUM  27
+#define Y9_GPIO_NUM    35
+#define Y8_GPIO_NUM    34
+#define Y7_GPIO_NUM    39
+#define Y6_GPIO_NUM    36
+#define Y5_GPIO_NUM    21
+#define Y4_GPIO_NUM    19
+#define Y3_GPIO_NUM    18
+#define Y2_GPIO_NUM     5
+#define VSYNC_GPIO_NUM 25
+#define HREF_GPIO_NUM  23
+#define PCLK_GPIO_NUM  22
+
+const int FLASH_LED = 4;
+const unsigned long INTERVAL_MS = 30000;   // 30 s for testing; 5 minutes = 300000
+
+unsigned long lastShot = 0;
+uint32_t photoNum = 0;
+
+bool initCamera() {
+  camera_config_t config = {};
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = Y2_GPIO_NUM;
+  config.pin_d1 = Y3_GPIO_NUM;
+  config.pin_d2 = Y4_GPIO_NUM;
+  config.pin_d3 = Y5_GPIO_NUM;
+  config.pin_d4 = Y6_GPIO_NUM;
+  config.pin_d5 = Y7_GPIO_NUM;
+  config.pin_d6 = Y8_GPIO_NUM;
+  config.pin_d7 = Y9_GPIO_NUM;
+  config.pin_xclk = XCLK_GPIO_NUM;
+  config.pin_pclk = PCLK_GPIO_NUM;
+  config.pin_vsync = VSYNC_GPIO_NUM;
+  config.pin_href = HREF_GPIO_NUM;
+  config.pin_sccb_sda = SIOD_GPIO_NUM;
+  config.pin_sccb_scl = SIOC_GPIO_NUM;
+  config.pin_pwdn = PWDN_GPIO_NUM;
+  config.pin_reset = RESET_GPIO_NUM;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG;
+  config.frame_size = FRAMESIZE_UXGA;      // 1600x1200
+  config.jpeg_quality = 10;                // 0 to 63; lower = better
+  config.fb_count = 1;
+  config.fb_location = CAMERA_FB_IN_PSRAM;
+  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+
+  esp_err_t err = esp_camera_init(&amp;config);
+  if (err != ESP_OK) {
+    Serial.printf("Camera init failed: 0x%x\n", err);
+    return false;
+  }
+  return true;
+}
+
+uint32_t findNextNumber() {
+  char path[32];
+  uint32_t n = 1;
+  while (true) {
+    snprintf(path, sizeof(path), "/img_%05lu.jpg", (unsigned long)n);
+    if (!SD_MMC.exists(path)) return n;
+    n++;
+  }
+}
+
+void takePhoto() {
+  digitalWrite(FLASH_LED, HIGH);            // ★ flash on first...
+  delay(200);                               // ★ ...and 200 ms of light for auto-exposure
+  camera_fb_t *old = esp_camera_fb_get();   // may be an old frame: throw it away
+  if (old) esp_camera_fb_return(old);
+  camera_fb_t *fb = esp_camera_fb_get();    // ★ this frame is taken with the flash on
+  digitalWrite(FLASH_LED, LOW);             // ★ flash off right after the capture
+  if (!fb) {
+    Serial.println("Capture failed");
+    return;
+  }
+  char path[32];
+  snprintf(path, sizeof(path), "/img_%05lu.jpg", (unsigned long)photoNum);
+  File file = SD_MMC.open(path, FILE_WRITE);
+  if (file) {
+    file.write(fb-&gt;buf, fb-&gt;len);
+    file.close();
+    Serial.printf("Saved %s (%u bytes)\n", path, (unsigned)fb-&gt;len);
+    photoNum++;
+  } else {
+    Serial.println("Failed to open file");
+  }
+  esp_camera_fb_return(fb);
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(FLASH_LED, OUTPUT);
+  digitalWrite(FLASH_LED, LOW);            // flash off
+  if (!psramFound()) {
+    Serial.println("No PSRAM! Check board selection.");
+    while (true) delay(1000);
+  }
+  if (!initCamera()) {
+    while (true) delay(1000);
+  }
+  if (!SD_MMC.begin("/sdcard", true)) {    // true = 1-bit mode
+    Serial.println("SD card mount failed");
+    while (true) delay(1000);
+  }
+  photoNum = findNextNumber();
+  Serial.printf("Next photo: #%lu\n", (unsigned long)photoNum);
+  delay(2000);                             // let auto-exposure settle
+}
+
+void loop() {
+  if (lastShot == 0 || millis() - lastShot &gt;= INTERVAL_MS) {
+    lastShot = millis();
+    takePhoto();
+  }
+}
+</pre></div>
+<ol class="walk" data-for="ex1ans">
+  <li data-lines="1-74"><b class="what">Same as TimeLapse_Simple.</b> Pins, settings, <code>initCamera()</code> and <code>findNextNumber()</code> are unchanged.
+    <span class="why"><code>FLASH_LED</code> (GPIO4) is already defined, and setup already makes it an output and switches it off.</span></li>
+  <li data-lines="76-77"><b class="what">Flash on, then wait 200 ms.</b> The LED lights the scene before any frame we keep is captured.
+    <span class="why">The sensor measures the light all the time and adjusts its exposure; 200 ms gives it several frames to adapt to the flash. Without the wait, the photo would be exposed for the dark room and come out burned white or still too dark.</span></li>
+  <li data-lines="78-80"><b class="what">Throw away the old frame, then take the real one.</b> The first frame in the buffer was captured long ago (before the flash); the second is captured now, with the light on.
+    <span class="why">This is why the flash must come on <i>before</i> the old frame is returned: as soon as it's returned, the driver starts capturing the next frame. If the flash came on only after that, the saved frame could have been exposed partly in the dark.</span></li>
+  <li data-lines="81"><b class="what">Flash off at once.</b> Right after the capture, before the slow SD write.
+    <span class="why">Writing 100 KB to the card takes a moment; the light is no longer needed then. A shorter flash means less current, less heat and less chance of a brownout.</span></li>
+  <li data-lines="82-98"><b class="what">Saving is unchanged.</b> Error check, file name, write, number up, buffer returned.
+    <span class="why">The flash only changes how the photo is taken, not how it's stored.</span></li>
+</ol>
+<p>The same idea works in the sleep version (<code>TimeLapse_SD.ino</code>): put <code>pinMode(FLASH_LED, OUTPUT)</code> after <code>rtc_gpio_hold_dis</code>, switch the flash on before the three throw-away frames, and off after the real capture.</p>
+</details>
 </div>
 <div class="exercise"><div class="ct">Exercise 2: a folder for each day</div>
 <p>Instead of saving every photo in the root of the card, make a separate folder for every 288 photos (one day at 5-minute intervals): <code>/day001/img_00001.jpg</code>.</p>
 <details><summary>Hint</summary><p>Day number = <code>(photoNum - 1) / 288 + 1</code>. Build the folder name with <code>snprintf</code>; if <code>!SD_MMC.exists(dir)</code>, call <code>SD_MMC.mkdir(dir)</code>; then build the full file path.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>On the real ESP32-CAM, each wake-up now saves into a day folder. If the Preferences counter starts from zero, the first boots show (sizes vary):</p>
+<pre class="serial">Boot #1
+Saved /day001/img_00001.jpg (98304 bytes)
+Sleeping 5 minutes...</pre>
+<p>Photo 288 still goes into <code>/day001</code>; photo 289 creates <code>/day002</code> and is saved as <code>/day002/img_00289.jpg</code>.</p>
+<ul>
+<li>Quick test without waiting a day: set <code>PHOTOS_PER_DAY</code> to 3 and <code>SLEEP_MINUTES</code> to 1. After 7 minutes the card has <code>/day001</code> (photos 1 to 3), <code>/day002</code> (4 to 6) and <code>/day003</code> (7).</li>
+<li>If you already ran <code>TimeLapse_SD.ino</code>, numbering continues from the stored number (for example photo 57 with 3 per day goes into <code>/day019</code>, because (57 − 1) ÷ 3 + 1 = 19 with whole-number division). That's correct behaviour.</li>
+<li>No <code>mkdir ... failed</code> line appears; the folder is created only once, by the first photo of the day.</li>
+<li>Set both constants back to 288 and 5 when you're done.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>This is the complete deep-sleep version (<code>TimeLapse_SD.ino</code>) with one new constant and a new way of building the path.</p>
+<div class="code" data-file="TimeLapse_Days.ino" id="ex2ans"><pre>
+#include "esp_camera.h"
+#include "FS.h"
+#include "SD_MMC.h"
+#include &lt;Preferences.h&gt;
+#include "driver/rtc_io.h"
+
+// Camera pins for the AI-Thinker ESP32-CAM board
+#define PWDN_GPIO_NUM  32
+#define RESET_GPIO_NUM -1
+#define XCLK_GPIO_NUM   0
+#define SIOD_GPIO_NUM  26
+#define SIOC_GPIO_NUM  27
+#define Y9_GPIO_NUM    35
+#define Y8_GPIO_NUM    34
+#define Y7_GPIO_NUM    39
+#define Y6_GPIO_NUM    36
+#define Y5_GPIO_NUM    21
+#define Y4_GPIO_NUM    19
+#define Y3_GPIO_NUM    18
+#define Y2_GPIO_NUM     5
+#define VSYNC_GPIO_NUM 25
+#define HREF_GPIO_NUM  23
+#define PCLK_GPIO_NUM  22
+
+const int FLASH_LED = 4;
+const uint64_t SLEEP_MINUTES = 5;
+const uint32_t PHOTOS_PER_DAY = 288;     // ★ 24 h × 12 photos per hour
+
+RTC_DATA_ATTR int bootCount = 0;   // survives deep sleep
+Preferences prefs;
+
+bool initCamera() {
+  camera_config_t config = {};
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = Y2_GPIO_NUM;
+  config.pin_d1 = Y3_GPIO_NUM;
+  config.pin_d2 = Y4_GPIO_NUM;
+  config.pin_d3 = Y5_GPIO_NUM;
+  config.pin_d4 = Y6_GPIO_NUM;
+  config.pin_d5 = Y7_GPIO_NUM;
+  config.pin_d6 = Y8_GPIO_NUM;
+  config.pin_d7 = Y9_GPIO_NUM;
+  config.pin_xclk = XCLK_GPIO_NUM;
+  config.pin_pclk = PCLK_GPIO_NUM;
+  config.pin_vsync = VSYNC_GPIO_NUM;
+  config.pin_href = HREF_GPIO_NUM;
+  config.pin_sccb_sda = SIOD_GPIO_NUM;
+  config.pin_sccb_scl = SIOC_GPIO_NUM;
+  config.pin_pwdn = PWDN_GPIO_NUM;
+  config.pin_reset = RESET_GPIO_NUM;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG;
+  config.frame_size = FRAMESIZE_UXGA;      // 1600x1200
+  config.jpeg_quality = 10;                // 0 to 63; lower = better
+  config.fb_count = 1;
+  config.fb_location = CAMERA_FB_IN_PSRAM;
+  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+
+  esp_err_t err = esp_camera_init(&amp;config);
+  if (err != ESP_OK) {
+    Serial.printf("Camera init failed: 0x%x\n", err);
+    return false;
+  }
+  return true;
+}
+
+void goToSleep() {
+  Serial.printf("Sleeping %llu minutes...\n", SLEEP_MINUTES);
+  pinMode(FLASH_LED, OUTPUT);
+  digitalWrite(FLASH_LED, LOW);
+  rtc_gpio_hold_en(GPIO_NUM_4);            // keep the flash off during sleep
+  esp_sleep_enable_timer_wakeup(SLEEP_MINUTES * 60ULL * 1000000ULL);
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+void setup() {
+  Serial.begin(115200);
+  bootCount++;
+  Serial.printf("\nBoot #%d\n", bootCount);
+  rtc_gpio_hold_dis(GPIO_NUM_4);
+
+  if (!psramFound()) {
+    Serial.println("No PSRAM! Check board selection.");
+    goToSleep();
+  }
+  if (!initCamera()) goToSleep();
+
+  if (!SD_MMC.begin("/sdcard", true)) {    // true = 1-bit mode
+    Serial.println("SD card mount failed");
+    goToSleep();
+  }
+
+  // Throw away the first few frames so auto-exposure can settle
+  for (int i = 0; i &lt; 3; i++) {
+    camera_fb_t *tmp = esp_camera_fb_get();
+    if (tmp) esp_camera_fb_return(tmp);
+  }
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    Serial.println("Capture failed");
+    goToSleep();
+  }
+
+  prefs.begin("timelapse", false);
+  uint32_t photoNum = prefs.getUInt("num", 0) + 1;
+
+  uint32_t day = (photoNum - 1) / PHOTOS_PER_DAY + 1;   // ★ photos 1..288 = day 1
+  char dir[16];
+  snprintf(dir, sizeof(dir), "/day%03lu", (unsigned long)day);   // ★ like /day001
+  if (!SD_MMC.exists(dir) &amp;&amp; !SD_MMC.mkdir(dir)) {               // ★ create it once
+    Serial.printf("mkdir %s failed\n", dir);
+  }
+  char path[40];
+  snprintf(path, sizeof(path), "%s/img_%05lu.jpg", dir, (unsigned long)photoNum);
+  File file = SD_MMC.open(path, FILE_WRITE);
+  if (file) {
+    file.write(fb-&gt;buf, fb-&gt;len);
+    file.close();
+    prefs.putUInt("num", photoNum);        // only after a successful save
+    Serial.printf("Saved %s (%u bytes)\n", path, (unsigned)fb-&gt;len);
+  } else {
+    Serial.println("Failed to open file");
+  }
+  prefs.end();
+  esp_camera_fb_return(fb);
+  goToSleep();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="ex2ans">
+  <li data-lines="27"><b class="what">Photos per day.</b> One photo every 5 minutes is 12 per hour, and 12 × 24 = 288.
+    <span class="why">A named constant explains the number and gives you one place to change it (for example to 3 while testing, or to 144 for a photo every 10 minutes).</span></li>
+  <li data-lines="109"><b class="what">Which day?</b> <code>(photoNum - 1) / PHOTOS_PER_DAY + 1</code> with whole-number division.
+    <span class="why">The <code>- 1</code> makes photos 1 to 288 give 0, and the <code>+ 1</code> turns that into day 1; photo 288 gives 287 / 288 = 0, so it stays in day 1, and photo 289 gives 1, so day 2. Without the <code>- 1</code>, photo 288 would wrongly open day 2.</span></li>
+  <li data-lines="110-111"><b class="what">The folder name.</b> <code>%03lu</code> writes the day with three digits: <code>/day001</code>, <code>/day012</code>.
+    <span class="why">Leading zeros keep the folders in the right order when a computer sorts them by name (day002 before day010).</span></li>
+  <li data-lines="112-114"><b class="what">Create the folder if it's missing.</b> <code>exists</code> first, <code>mkdir</code> only if needed; a failure is reported.
+    <span class="why">After deep sleep the program starts from zero and doesn't know whether the folder is already there; asking the card is the reliable way. If <code>mkdir</code> fails, the file open below fails too and prints its own error, so nothing is silently lost.</span></li>
+  <li data-lines="115-116"><b class="what">The full path.</b> Folder plus file name, in a bigger buffer (40 bytes).
+    <span class="why"><code>/day001/img_00001.jpg</code> is 21 characters; 40 leaves room even for very large numbers. The file keeps the global photo number, so every name on the card stays unique.</span></li>
+  <li data-lines="117-129"><b class="what">Saving and sleeping, unchanged.</b> The counter is still stored only after a successful write.
+    <span class="why">If the card fails, the same number is tried again at the next wake-up, and the day calculation stays right.</span></li>
+</ol>
+</details>
 </div>
 <div class="exercise"><div class="ct">Exercise 3: think (no code)</div>
 <p>Your friend wants to leave an ESP32-CAM in the garden with a 2000 mAh battery and take a photo every 5 minutes. Assume each wake-up lasts 3 seconds at 200 mA and the sleep current is 5 mA. Roughly how many days will the battery last? Which part uses more?</p>
-<details><summary>Answer</summary><p>12 wake-ups per hour: <code>12 × 3s × 200mA = 7200 mA·s = 2 mAh</code>. Sleep takes up almost the whole hour: about <code>5 mAh</code>. That's about 7 mAh per hour in total; <code>2000 ÷ 7 ≈ 285</code> hours, or about 12 days (less in practice, because the battery's real capacity and the regulator's efficiency are below ideal). The bigger part is <b>the board's sleep current</b>, not taking photos; that's why a serious battery project needs a low-power regulator or a transistor to cut power to the camera.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>Your answer should reach these numbers (rounded):</p>
+<div class="table-wrap"><table>
+<tr><th>Part</th><th>Per hour</th></tr>
+<tr><td>Wake-ups: 12 × 3 s × 200 mA</td><td>2 mAh</td></tr>
+<tr><td>Sleep: 5 mA for almost the whole hour</td><td>about 5 mAh</td></tr>
+<tr><td>Total</td><td>about 7 mAh</td></tr>
+<tr><td>Battery life: 2000 ÷ 7</td><td>about 285 hours ≈ 12 days</td></tr>
+</table></div>
+<ul>
+<li>You converted the units correctly: 7200 mA·s ÷ 3600 s per hour = 2 mAh.</li>
+<li>You named <b>sleep</b> as the bigger consumer (about 5 of the 7 mAh, over 70%).</li>
+<li>You said the real life will be shorter than 12 days (real battery capacity, regulator losses, cold weather).</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<ol>
+<li><b>Wake-ups per hour:</b> one every 5 minutes means 60 ÷ 5 = 12 wake-ups.</li>
+<li><b>Charge used while awake:</b> 12 × 3 s × 200 mA = 7200 mA·s. An hour has 3600 seconds, so 7200 ÷ 3600 = <b>2 mAh</b> per hour.</li>
+<li><b>Charge used while asleep:</b> the board is awake only 36 seconds per hour, so it sleeps almost the whole hour: 5 mA × 1 h ≈ <b>5 mAh</b> (exactly 4.95 mAh).</li>
+<li><b>Total:</b> about 7 mAh per hour.</li>
+<li><b>Battery life:</b> 2000 mAh ÷ 7 mAh per hour ≈ 285 hours; 285 ÷ 24 ≈ <b>12 days</b>. In practice less, because the battery's real capacity and the regulator's efficiency are below ideal.</li>
+</ol>
+<p>The bigger part is <b>the board's sleep current</b>, not taking photos. Even if the photos cost nothing, the battery would last only about 2000 ÷ 5 = 400 hours (17 days). The chip itself sleeps at a few µA; most of those 5 mA go into the board's regulator, the camera and the card, which stay powered. That's why a serious battery project needs a low-power regulator or a transistor that cuts the power to the camera and the card during sleep.</p>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">The lesson in three lines</div>

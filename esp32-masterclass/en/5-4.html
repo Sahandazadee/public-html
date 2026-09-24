@@ -665,10 +665,282 @@ Rebooting...</div>
 <div class="exercise"><div class="ct">Exercise 1: three cooks</div>
 <p>Extend the queue program (potentiometer and LED): create a third task that blinks the second LED on GPIO26, with a blink speed that depends on the potentiometer value (0 means every 1000 milliseconds and 4095 means every 100 milliseconds). The display task must also send the value on to the third task. Print the stack of all three tasks every 5 seconds, and shrink the stacks as far as you can while keeping at least 500 bytes of margin.</p>
 <details><summary>Hint</summary><p>Create a second queue. The blinking task can ask "got a new number?" without waiting, using <code>xQueueReceive(q2, &amp;v, 0)</code>, and carry on with the previous number if there isn't one. To convert the number, use <code>map(v, 0, 4095, 1000, 100)</code>.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>Five <code>pot=</code> lines per second, and every 5 seconds one stack report. The stack and heap numbers below are an example; yours will be a little different:</p>
+<pre class="serial">pot=   0  led=  0
+pot=   0  led=  0
+pot=2048  led=128
+pot=4095  led=255
+[stack free] sensor=940 B, display=1290 B, blink=1310 B, heap=288900 B</pre>
+<ul>
+<li>Pot at 0: the green LED on GPIO26 is on for 1 second, off for 1 second. Pot in the middle (about 2048): it changes every 550 ms. Pot at the end (4095): every 100 ms, a fast flicker.</li>
+<li>After you turn the pot, the new speed starts at the next change of the LED (at most 1 second later), and the red LED on GPIO4 changes its brightness at the same time.</li>
+<li>Every stack number in the report is at least 500. If one is below 500, make that task's stack bigger; if one is far above (over 1500), you can make it smaller.</li>
+<li>No line is ever jumbled with another: the mutex still protects the Serial Monitor.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>The complete program: the queue example from this lesson plus a second queue and a third task.</p>
+<div class="code" data-file="ThreeCooks.ino" id="ex1ans"><pre>
+// Three cooks: sensor -&gt; queue -&gt; display -&gt; queue -&gt; blinker
+const int POT_PIN = 34;          // potentiometer (ADC1, input only)
+const int LED_PIN = 4;           // LED with variable brightness (PWM)
+const int LED2_PIN = 26;         // ★ second LED: blink speed follows the pot
+
+QueueHandle_t potQueue;          // sensor -&gt; display
+QueueHandle_t blinkQueue;        // ★ display -&gt; blinker
+SemaphoreHandle_t serialMutex;   // lock for the Serial Monitor
+TaskHandle_t sensorHandle = NULL;
+TaskHandle_t displayHandle = NULL;
+TaskHandle_t blinkHandle = NULL;
+
+void sensorTask(void *param) {
+  for (;;) {
+    int raw = analogRead(POT_PIN);                  // 0 to 4095
+    xQueueSend(potQueue, &amp;raw, 0);                  // queue full? drop this sample
+    vTaskDelay(pdMS_TO_TICKS(200));                 // 5 times per second
+  }
+}
+
+void displayTask(void *param) {
+  int value;
+  for (;;) {
+    if (xQueueReceive(potQueue, &amp;value, pdMS_TO_TICKS(1000)) == pdPASS) {
+      ledcWrite(LED_PIN, value / 16);               // 0..4095 -&gt; 0..255
+      xQueueSend(blinkQueue, &amp;value, 0);            // ★ pass it on, never wait
+      if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        Serial.printf("pot=%4d  led=%3d\n", value, value / 16);
+        xSemaphoreGive(serialMutex);
+      }
+    }
+  }
+}
+
+void blinkTask(void *param) {                       // ★ the third cook
+  pinMode(LED2_PIN, OUTPUT);
+  int period = 1000;                                // until the first number arrives
+  int v;
+  bool on = false;
+  for (;;) {
+    while (xQueueReceive(blinkQueue, &amp;v, 0) == pdPASS) {  // empty the queue, no waiting
+      period = map(v, 0, 4095, 1000, 100);               // the newest number wins
+    }
+    on = !on;
+    digitalWrite(LED2_PIN, on);
+    vTaskDelay(pdMS_TO_TICKS(period));
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  ledcAttach(LED_PIN, 5000, 8);                     // 5 kHz, 8 bits
+  potQueue = xQueueCreate(10, sizeof(int));
+  blinkQueue = xQueueCreate(10, sizeof(int));
+  serialMutex = xSemaphoreCreateMutex();
+  if (potQueue == NULL || blinkQueue == NULL || serialMutex == NULL) {
+    Serial.println("Out of memory!");
+    while (true) delay(1000);
+  }
+  // stacks shrunk after measuring (were 3072 and 4096)
+  xTaskCreatePinnedToCore(sensorTask, "sensor", 2048, NULL, 2, &amp;sensorHandle, 1);
+  xTaskCreatePinnedToCore(displayTask, "display", 3072, NULL, 1, &amp;displayHandle, 1);
+  xTaskCreatePinnedToCore(blinkTask, "blink", 2048, NULL, 1, &amp;blinkHandle, 1);
+}
+
+void loop() {
+  delay(5000);
+  if (xSemaphoreTake(serialMutex, portMAX_DELAY) == pdTRUE) {
+    Serial.printf("[stack free] sensor=%u B, display=%u B, blink=%u B, heap=%u B\n",
+                  (unsigned)uxTaskGetStackHighWaterMark(sensorHandle),
+                  (unsigned)uxTaskGetStackHighWaterMark(displayHandle),
+                  (unsigned)uxTaskGetStackHighWaterMark(blinkHandle),
+                  (unsigned)ESP.getFreeHeap());
+    xSemaphoreGive(serialMutex);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="ex1ans">
+  <li data-lines="4-11"><b class="what">One more pin, queue and handle.</b> GPIO26 for the second LED, <code>blinkQueue</code> between the display and the blink task, and <code>blinkHandle</code> for the stack report.
+    <span class="why">Each pair of cooks gets its own queue. A queue has exactly one job (carry numbers from A to B), which keeps the program easy to follow.</span></li>
+  <li data-lines="13-19"><b class="what">The sensor task, unchanged.</b> Reads the pot 5 times per second and drops the sample if the queue is full.
+    <span class="why">Its job hasn't changed; only its stack is smaller now (see setup).</span></li>
+  <li data-lines="26"><b class="what">The display task passes the value on.</b> Right after setting the red LED, it puts the same number into <code>blinkQueue</code>, with a waiting time of 0.
+    <span class="why">The display task must never get stuck because the blinker is slow. With 0, if the queue were ever full, the number is simply dropped; a newer one follows 200 ms later.</span></li>
+  <li data-lines="40-43"><b class="what">Empty the queue without waiting.</b> The <code>while</code> takes every number that has arrived; only the last one (the newest) sets <code>period</code>. If nothing has arrived, the old period stays.
+    <span class="why">About 5 numbers arrive per second, but at the slow speed the task only looks once per second. Taking just one number per round would leave it working through old values, several seconds behind the knob. <code>map</code> turns 0..4095 into 1000..100: <code>map(2048, 0, 4095, 1000, 100)</code> = 550.</span></li>
+  <li data-lines="44-46"><b class="what">Blink, then sleep.</b> Toggle the LED and wait <code>period</code> milliseconds with <code>vTaskDelay</code>.
+    <span class="why"><code>vTaskDelay</code> frees the CPU for the other tasks during the wait. This is also why a new speed starts only after the current wait ends.</span></li>
+  <li data-lines="53-58"><b class="what">Create the second queue and check it.</b> All three objects are checked for NULL before any task starts.
+    <span class="why">A task that uses a queue that was never created crashes the board. Creating everything first, then the tasks, avoids that.</span></li>
+  <li data-lines="60-63"><b class="what">Smaller stacks.</b> The lesson measured about 1964 bytes free out of 3072 for the sensor task (so about 1100 used), and 2312 free out of 4096 for the display task (about 1800 used). So 2048 leaves about 940 and 3072 about 1290 free, both above the 500-byte margin. The blink task does even less and gets 2048.
+    <span class="why">Stack size = what the task really uses + a safety margin. Don't cut it to exactly 500: a rare path (an error message, a longer printf) can use more than you ever measured.</span></li>
+  <li data-lines="68-72"><b class="what">A report for three tasks.</b> One <code>uxTaskGetStackHighWaterMark</code> per handle, inside the mutex.
+    <span class="why">The high-water mark is the smallest free stack ever seen, so let the program run a while and turn the knob before you trust the numbers.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="ex1ans">
+<p>Try it in Wokwi: turn the potentiometer from one end to the other and watch the green LED's speed and the red LED's brightness change together. No extra library is needed.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": -110, "left": 180, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 130, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 50, "left": 210, "attrs": { "color": "red" } },
+    { "type": "wokwi-resistor", "id": "r2", "top": 130, "left": -130, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led2", "top": 50, "left": -110, "attrs": { "color": "green" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ],
+    [ "esp:26", "r2:2", "green", [] ],
+    [ "r2:1", "led2:A", "green", [] ],
+    [ "led2:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 <div class="exercise"><div class="ct">Exercise 2: a press counter with a heartbeat</div>
 <p>Combine the last two examples. The ISR sends presses to <code>pressTask</code> through the queue, as in <code>ButtonISR</code>. After every 5 presses, <code>pressTask</code> notifies a second task, which blinks the LED on GPIO26 five times quickly. The blinking task must also blink the LED once every 10 seconds on its own, as a "heartbeat", even if nobody presses anything.</p>
 <details><summary>Hint</summary><p>In the blinking task use <code>ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10000))</code>: a return value of 0 means the 10 seconds ran out (heartbeat: one blink), and more than 0 means the bell rang (five blinks). Keep the blinking task's handle in a global variable, and create both tasks before <code>attachInterrupt</code>.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>Press the button a few times. Your millisecond numbers will differ:</p>
+<pre class="serial">Press #1 at 4210 ms
+Press #2 at 4780 ms
+Press #3 at 5302 ms
+Press #4 at 5840 ms
+Press #5 at 6391 ms
+  5 presses: ringing blinkTask</pre>
+<ul>
+<li>Without pressing anything, the LED on GPIO26 gives one short flash (0.1 s) about every 10 seconds: the heartbeat.</li>
+<li>Presses 1 to 4 make no blink. The 5th press gives five quick blinks (one second in total), and so does the 10th, the 15th...</li>
+<li>Each press is counted exactly once, whether you press fast or slowly (the numbers go up by 1, never jump by 2 or 3).</li>
+<li>After the five blinks, the next heartbeat comes about 10 seconds later, because the wait starts again.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>The complete program: <code>ButtonISR</code> plus a blinking task that waits for a notification, like the report task in <code>NotifyDemo</code>.</p>
+<div class="code" data-file="PressHeartbeat.ino" id="ex2ans"><pre>
+// Button ISR -&gt; queue -&gt; pressTask -&gt; every 5 presses -&gt; blinkTask
+const int BUTTON_PIN = 27;                 // button between GPIO27 and GND
+const int LED2_PIN = 26;                   // second LED (+220 Ω)
+
+QueueHandle_t pressQueue;                  // press times, from the ISR to pressTask
+TaskHandle_t blinkHandle = NULL;           // blinkTask's "phone number"
+
+void IRAM_ATTR onPress() {                 // the ISR: tiny and fast
+  uint32_t now = millis();
+  BaseType_t wokeHigher = pdFALSE;
+  xQueueSendFromISR(pressQueue, &amp;now, &amp;wokeHigher);
+  portYIELD_FROM_ISR(wokeHigher);
+}
+
+void blink(int times, int ms) {            // on and off, `times` times
+  for (int i = 0; i &lt; times; i++) {
+    digitalWrite(LED2_PIN, HIGH);
+    vTaskDelay(pdMS_TO_TICKS(ms));
+    digitalWrite(LED2_PIN, LOW);
+    vTaskDelay(pdMS_TO_TICKS(ms));
+  }
+}
+
+void blinkTask(void *param) {
+  pinMode(LED2_PIN, OUTPUT);
+  for (;;) {
+    // sleep until the bell rings, or for at most 10 seconds
+    uint32_t rings = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10000));
+    if (rings &gt; 0) {
+      blink(5, 100);                       // 5 presses: five quick blinks
+    } else {
+      blink(1, 100);                       // 10 s of quiet: one heartbeat
+    }
+  }
+}
+
+void pressTask(void *param) {
+  uint32_t t;
+  int count = 0;
+  for (;;) {
+    xQueueReceive(pressQueue, &amp;t, portMAX_DELAY);  // sleep until an edge arrives
+    vTaskDelay(pdMS_TO_TICKS(30));         // let the contact bounce die down
+    xQueueReset(pressQueue);               // throw away the bounce edges
+    if (digitalRead(BUTTON_PIN) != LOW) continue;  // not held: it was a release
+    count++;
+    Serial.printf("Press #%d at %lu ms\n", count, (unsigned long)t);
+    if (count % 5 == 0) {                  // every 5th press
+      Serial.println("  5 presses: ringing blinkTask");
+      xTaskNotifyGive(blinkHandle);        // ring the bell
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pressQueue = xQueueCreate(20, sizeof(uint32_t));
+  if (pressQueue == NULL) {
+    Serial.println("Out of memory!");
+    while (true) delay(1000);
+  }
+  xTaskCreatePinnedToCore(blinkTask, "blink", 2048, NULL, 1, &amp;blinkHandle, 1);
+  xTaskCreatePinnedToCore(pressTask, "press", 3072, NULL, 2, NULL, 1);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), onPress, FALLING);  // last!
+}
+
+void loop() {
+  delay(1000);                             // loop has nothing to do here
+}
+</pre></div>
+<ol class="walk" data-for="ex2ans">
+  <li data-lines="5-6"><b class="what">A queue and a handle.</b> The queue carries press times from the ISR to <code>pressTask</code>; the global handle lets <code>pressTask</code> ring <code>blinkTask</code>.
+    <span class="why">Data (a time) goes through a queue; a plain "wake up" goes through a notification, which needs nothing but the handle.</span></li>
+  <li data-lines="8-13"><b class="what">The ISR, unchanged.</b> It only records the time and hands it to the queue with the <code>FromISR</code> function.
+    <span class="why">An ISR must be tiny; the counting and the blinking are work for tasks.</span></li>
+  <li data-lines="15-22"><b class="what">A small blink helper.</b> On and off, as many times as asked, with <code>vTaskDelay</code> for the waits.
+    <span class="why">One function serves both the heartbeat and the celebration. <code>vTaskDelay</code> (not a busy wait) lets the press task keep counting while the LED blinks.</span></li>
+  <li data-lines="28-33"><b class="what">One wait, two meanings.</b> <code>ulTaskNotifyTake</code> sleeps until the bell rings or 10 seconds pass. 0 means "time ran out": one heartbeat; more than 0 means "the bell rang": five quick blinks.
+    <span class="why">The return value tells the two cases apart, so a single task handles both jobs with no timer and no extra variable. <code>pdTRUE</code> clears the count, so several rings during the blinking lead to one more round, not a pile-up.</span></li>
+  <li data-lines="41-46"><b class="what">Counting, as in ButtonISR.</b> Wait for an edge, let the bounce settle, empty the queue, check that the button is still held, count.
+    <span class="why">This is what makes every press count exactly once, so "every 5th press" really means five presses.</span></li>
+  <li data-lines="47-50"><b class="what">Every 5th press rings the bell.</b> <code>count % 5 == 0</code> is true at 5, 10, 15...
+    <span class="why"><code>%</code> gives the remainder of the division; it's 0 exactly on multiples of 5, so there's no second counter to reset.</span></li>
+  <li data-lines="62-64"><b class="what">Tasks first, interrupt last.</b> <code>blinkTask</code> is created first, so <code>blinkHandle</code> is set before anyone can ring it; <code>attachInterrupt</code> comes at the very end.
+    <span class="why">A press during setup must not reach a queue or a handle that doesn't exist yet. <code>pressTask</code> has the higher priority (2) so a press is handled at once, even in the middle of a blink.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="ex2ans">
+<p>Try it in Wokwi: wait for a heartbeat, then click the green button five times. No extra library is needed.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 150, "left": -150, "attrs": { "color": "green" } },
+    { "type": "wokwi-resistor", "id": "r2", "top": 130, "left": -130, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led2", "top": 50, "left": -110, "attrs": { "color": "green" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:27", "btn1:1.r", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:26", "r2:2", "green", [] ],
+    [ "r2:1", "led2:A", "green", [] ],
+    [ "led2:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">The lesson in three lines</div>

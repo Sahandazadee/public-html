@@ -615,16 +615,357 @@ Sleeping 5 minutes...</div>
 <h2 id="practice">تمرین‌ها</h2>
 <div class="exercise"><div class="ct">تمرین ۱: عکس با فلش در شب</div>
 <p>برنامه زمان‌گذر (نسخه اول، <code>TimeLapse_Simple.ino</code>) را طوری تغییر بده که فلش را ۲۰۰ میلی‌ثانیه قبل از گرفتن عکس اصلی روشن و بلافاصله بعد از آن خاموش کند. چرا حالا دیگر نگران تداخل فلش با کارت SD نیستیم؟</p>
-<details><summary>راهنمایی</summary><p><code>pinMode(FLASH_LED, OUTPUT)</code> از قبل در setup هست. در <code>takePhoto()</code>، قبل از <code>esp_camera_fb_get()</code> اصلی (و بعد از دور ریختن فریم‌ها)، <code>digitalWrite(FLASH_LED, HIGH); delay(200);</code> و بعد از گرفتن عکس <code>digitalWrite(FLASH_LED, LOW);</code>. (در نسخه خواب هم همین کار را بکن، فقط <code>pinMode</code> را بعد از <code>rtc_gpio_hold_dis</code> بگذار.)</p></details>
-<details><summary>جواب</summary><p>چون کارت در حالت ۱ بیتی است و از GPIO4 استفاده نمی‌کند، GPIO4 کاملا در اختیار ماست. نکته: فلش جریان زیادی می‌کشد؛ اگر هم‌زمان با فلش Brownout گرفتی، باز هم مشکل تغذیه است. برای عکس بهتر، فریم‌های دور ریختنی را هم با فلش روشن بگیر تا نوردهی خودکار با نور فلش تنظیم شود.</p></details>
+<details><summary>راهنمایی</summary><p><code>pinMode(FLASH_LED, OUTPUT)</code> از قبل در setup هست. در <code>takePhoto()</code>، در همان ابتدای تابع و قبل از دور ریختن فریم کهنه، <code>digitalWrite(FLASH_LED, HIGH); delay(200);</code> و بعد از گرفتن عکس <code>digitalWrite(FLASH_LED, LOW);</code>. (در نسخه خواب هم همین کار را بکن، فقط <code>pinMode</code> را بعد از <code>rtc_gpio_hold_dis</code> بگذار.)</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>Wokwi دوربین را شبیه‌سازی نمی‌کند، پس این یکی روی ESP32-CAM واقعی اجرا می‌شود. Serial Monitor (115200) همان خط‌های قبل را نشان می‌دهد؛ اندازه فایل‌ها با صحنه عوض می‌شود:</p>
+<pre class="serial">Next photo: #1
+Saved /img_00001.jpg (98304 bytes)
+Saved /img_00002.jpg (101722 bytes)</pre>
+<ul>
+<li>هر ۳۰ ثانیه LED سفید و پرنور روی برد حدود یک چهارم ثانیه روشن می‌شود (۲۰۰ میلی‌ثانیه انتظار به اضافه گرفتن عکس) و بعد تا عکس بعدی کاملا خاموش می‌ماند.</li>
+<li>کارت را دربیاور و عکس‌ها را باز کن: عکس یک اتاق تاریک حالا روشن و قابل تشخیص است، نه تقریبا سیاه.</li>
+<li>کارت با وجود فلش کار می‌کند؛ هیچ <code>Failed to open file</code> نمی‌آید.</li>
+<li>عیب‌یابی: اگر برد درست در لحظه فلش ریست می‌شود (<code>Brownout detector was triggered</code>)، منبع تغذیه یا کابل ضعیف است؛ از یک منبع ۵ ولت قوی و کابل کوتاه استفاده کن. اگر عکس هنوز تاریک است، بررسی کن فلش <i>قبل از</i> دور ریختن فریم کهنه روشن می‌شود.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p><b>چرا تداخلی نیست:</b> کارت در حالت ۱ بیتی کار می‌کند (<code>SD_MMC.begin("/sdcard", true)</code>) که فقط از GPIO2، GPIO14 و GPIO15 استفاده می‌کند. GPIO4 در حالت ۴ بیتی خط داده D1 می‌شد؛ در حالت ۱ بیتی آزاد است، پس LED فلش روی GPIO4 کاملا در اختیار ماست. یادت باشد فلش جریان زیادی می‌کشد؛ اگر هم‌زمان با فلش Brownout گرفتی، باز هم مشکل تغذیه است.</p>
+<div class="code" data-file="TimeLapse_Flash.ino" id="ex1ans"><pre>
+#include "esp_camera.h"
+#include "FS.h"
+#include "SD_MMC.h"
+
+// پین‌های دوربین برد AI-Thinker ESP32-CAM
+#define PWDN_GPIO_NUM  32
+#define RESET_GPIO_NUM -1
+#define XCLK_GPIO_NUM   0
+#define SIOD_GPIO_NUM  26
+#define SIOC_GPIO_NUM  27
+#define Y9_GPIO_NUM    35
+#define Y8_GPIO_NUM    34
+#define Y7_GPIO_NUM    39
+#define Y6_GPIO_NUM    36
+#define Y5_GPIO_NUM    21
+#define Y4_GPIO_NUM    19
+#define Y3_GPIO_NUM    18
+#define Y2_GPIO_NUM     5
+#define VSYNC_GPIO_NUM 25
+#define HREF_GPIO_NUM  23
+#define PCLK_GPIO_NUM  22
+
+const int FLASH_LED = 4;
+const unsigned long INTERVAL_MS = 30000;   // ۳۰ ثانیه برای تست؛ ۵ دقیقه = 300000
+
+unsigned long lastShot = 0;
+uint32_t photoNum = 0;
+
+bool initCamera() {
+  camera_config_t config = {};
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = Y2_GPIO_NUM;
+  config.pin_d1 = Y3_GPIO_NUM;
+  config.pin_d2 = Y4_GPIO_NUM;
+  config.pin_d3 = Y5_GPIO_NUM;
+  config.pin_d4 = Y6_GPIO_NUM;
+  config.pin_d5 = Y7_GPIO_NUM;
+  config.pin_d6 = Y8_GPIO_NUM;
+  config.pin_d7 = Y9_GPIO_NUM;
+  config.pin_xclk = XCLK_GPIO_NUM;
+  config.pin_pclk = PCLK_GPIO_NUM;
+  config.pin_vsync = VSYNC_GPIO_NUM;
+  config.pin_href = HREF_GPIO_NUM;
+  config.pin_sccb_sda = SIOD_GPIO_NUM;
+  config.pin_sccb_scl = SIOC_GPIO_NUM;
+  config.pin_pwdn = PWDN_GPIO_NUM;
+  config.pin_reset = RESET_GPIO_NUM;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG;
+  config.frame_size = FRAMESIZE_UXGA;      // 1600x1200
+  config.jpeg_quality = 10;                // 0 تا 63؛ کمتر = بهتر
+  config.fb_count = 1;
+  config.fb_location = CAMERA_FB_IN_PSRAM;
+  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+
+  esp_err_t err = esp_camera_init(&amp;config);
+  if (err != ESP_OK) {
+    Serial.printf("Camera init failed: 0x%x\n", err);
+    return false;
+  }
+  return true;
+}
+
+uint32_t findNextNumber() {
+  char path[32];
+  uint32_t n = 1;
+  while (true) {
+    snprintf(path, sizeof(path), "/img_%05lu.jpg", (unsigned long)n);
+    if (!SD_MMC.exists(path)) return n;
+    n++;
+  }
+}
+
+void takePhoto() {
+  digitalWrite(FLASH_LED, HIGH);            // ★ اول فلش روشن...
+  delay(200);                               // ★ ...و ۲۰۰ میلی‌ثانیه نور برای نوردهی خودکار
+  camera_fb_t *old = esp_camera_fb_get();   // شاید فریم کهنه باشد: دورش بریز
+  if (old) esp_camera_fb_return(old);
+  camera_fb_t *fb = esp_camera_fb_get();    // ★ این فریم با فلش روشن گرفته می‌شود
+  digitalWrite(FLASH_LED, LOW);             // ★ فلش بلافاصله بعد از عکس خاموش
+  if (!fb) {
+    Serial.println("Capture failed");
+    return;
+  }
+  char path[32];
+  snprintf(path, sizeof(path), "/img_%05lu.jpg", (unsigned long)photoNum);
+  File file = SD_MMC.open(path, FILE_WRITE);
+  if (file) {
+    file.write(fb-&gt;buf, fb-&gt;len);
+    file.close();
+    Serial.printf("Saved %s (%u bytes)\n", path, (unsigned)fb-&gt;len);
+    photoNum++;
+  } else {
+    Serial.println("Failed to open file");
+  }
+  esp_camera_fb_return(fb);
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(FLASH_LED, OUTPUT);
+  digitalWrite(FLASH_LED, LOW);            // فلاش خاموش
+  if (!psramFound()) {
+    Serial.println("No PSRAM! Check board selection.");
+    while (true) delay(1000);
+  }
+  if (!initCamera()) {
+    while (true) delay(1000);
+  }
+  if (!SD_MMC.begin("/sdcard", true)) {    // true = حالت ۱ بیتی
+    Serial.println("SD card mount failed");
+    while (true) delay(1000);
+  }
+  photoNum = findNextNumber();
+  Serial.printf("Next photo: #%lu\n", (unsigned long)photoNum);
+  delay(2000);                             // صبر تا نوردهی خودکار جا بیفتد
+}
+
+void loop() {
+  if (lastShot == 0 || millis() - lastShot &gt;= INTERVAL_MS) {
+    lastShot = millis();
+    takePhoto();
+  }
+}
+</pre></div>
+<ol class="walk" data-for="ex1ans">
+  <li data-lines="1-74"><b class="what">مثل TimeLapse_Simple.</b> پایه‌ها، تنظیمات، <code>initCamera()</code> و <code>findNextNumber()</code> دست نخورده‌اند.
+    <span class="why"><code>FLASH_LED</code> (GPIO4) از قبل تعریف شده و setup آن را خروجی و خاموش می‌کند.</span></li>
+  <li data-lines="76-77"><b class="what">فلش روشن، بعد ۲۰۰ میلی‌ثانیه صبر.</b> LED صحنه را قبل از گرفتن هر فریمی که نگه می‌داریم روشن می‌کند.
+    <span class="why">سنسور مدام نور را اندازه می‌گیرد و نوردهی‌اش را تنظیم می‌کند؛ ۲۰۰ میلی‌ثانیه به آن چند فریم فرصت می‌دهد تا با نور فلش جور شود. بدون این انتظار، نوردهی عکس برای اتاق تاریک تنظیم شده و عکس یا سفیدِ سوخته درمی‌آید یا هنوز تاریک است.</span></li>
+  <li data-lines="78-80"><b class="what">فریم کهنه را دور بریز، بعد عکس اصلی را بگیر.</b> اولین فریم بافر مدت‌ها پیش (قبل از فلش) گرفته شده؛ دومی همین حالا با نور روشن گرفته می‌شود.
+    <span class="why">برای همین فلش باید <i>قبل از</i> پس دادن فریم کهنه روشن شود: به محض پس دادن، درایور گرفتن فریم بعدی را شروع می‌کند. اگر فلش بعد از آن روشن می‌شد، ممکن بود فریم ذخیره‌شده بخشی از نوردهی‌اش را در تاریکی گرفته باشد.</span></li>
+  <li data-lines="81"><b class="what">فلش فورا خاموش.</b> درست بعد از گرفتن عکس، قبل از نوشتن کند روی کارت.
+    <span class="why">نوشتن ۱۰۰ کیلوبایت روی کارت کمی طول می‌کشد و دیگر نوری لازم نیست. فلش کوتاه‌تر یعنی جریان کمتر، گرمای کمتر و احتمال کمتر Brownout.</span></li>
+  <li data-lines="82-98"><b class="what">ذخیره بدون تغییر.</b> بررسی خطا، اسم فایل، نوشتن، بالا بردن شماره و پس دادن بافر.
+    <span class="why">فلش فقط نحوه گرفتن عکس را عوض می‌کند، نه نحوه ذخیره آن را.</span></li>
+</ol>
+<p>همین ایده در نسخه خواب (<code>TimeLapse_SD.ino</code>) هم کار می‌کند: <code>pinMode(FLASH_LED, OUTPUT)</code> را بعد از <code>rtc_gpio_hold_dis</code> بگذار، فلش را قبل از سه فریم دور ریختنی روشن کن و بعد از عکس اصلی خاموش.</p>
+</details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۲: پوشه برای هر روز</div>
 <p>به جای ذخیره همه عکس‌ها در ریشه کارت، برای هر ۲۸۸ عکس (یک روز با فاصله ۵ دقیقه) یک پوشه جدا بساز: <code>/day001/img_00001.jpg</code>.</p>
 <details><summary>راهنمایی</summary><p>شماره روز = <code>(photoNum - 1) / 288 + 1</code>. اسم پوشه را با <code>snprintf</code> بساز، اگر <code>!SD_MMC.exists(dir)</code> بود <code>SD_MMC.mkdir(dir)</code>، بعد مسیر کامل فایل را بساز.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>روی ESP32-CAM واقعی، هر بیدار شدن حالا در پوشه روز ذخیره می‌کند. اگر شمارنده Preferences از صفر شروع کند، اولین بیدار شدن‌ها این را نشان می‌دهند (اندازه‌ها فرق دارند):</p>
+<pre class="serial">Boot #1
+Saved /day001/img_00001.jpg (98304 bytes)
+Sleeping 5 minutes...</pre>
+<p>عکس ۲۸۸ هنوز در <code>/day001</code> می‌رود؛ عکس ۲۸۹ پوشه <code>/day002</code> را می‌سازد و با اسم <code>/day002/img_00289.jpg</code> ذخیره می‌شود.</p>
+<ul>
+<li>آزمایش سریع بدون یک روز انتظار: <code>PHOTOS_PER_DAY</code> را ۳ و <code>SLEEP_MINUTES</code> را ۱ بگذار. بعد از ۷ دقیقه روی کارت <code>/day001</code> (عکس‌های ۱ تا ۳)، <code>/day002</code> (۴ تا ۶) و <code>/day003</code> (۷) هست.</li>
+<li>اگر قبلا <code>TimeLapse_SD.ino</code> را اجرا کرده‌ای، شماره‌گذاری از عدد ذخیره‌شده ادامه پیدا می‌کند (مثلا عکس ۵۷ با ۳ عکس در روز به <code>/day019</code> می‌رود، چون با تقسیم صحیح ‎(57 − 1) ÷ 3 + 1 = 19). این رفتار درست است.</li>
+<li>هیچ خط <code>mkdir ... failed</code> نمی‌آید؛ پوشه فقط یک بار، با اولین عکس آن روز، ساخته می‌شود.</li>
+<li>بعد از آزمایش هر دو ثابت را به ۲۸۸ و ۵ برگردان.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>این همان نسخه کامل خواب عمیق (<code>TimeLapse_SD.ino</code>) است با یک ثابت تازه و روش تازه ساختن مسیر.</p>
+<div class="code" data-file="TimeLapse_Days.ino" id="ex2ans"><pre>
+#include "esp_camera.h"
+#include "FS.h"
+#include "SD_MMC.h"
+#include &lt;Preferences.h&gt;
+#include "driver/rtc_io.h"
+
+// پین‌های دوربین برد AI-Thinker ESP32-CAM
+#define PWDN_GPIO_NUM  32
+#define RESET_GPIO_NUM -1
+#define XCLK_GPIO_NUM   0
+#define SIOD_GPIO_NUM  26
+#define SIOC_GPIO_NUM  27
+#define Y9_GPIO_NUM    35
+#define Y8_GPIO_NUM    34
+#define Y7_GPIO_NUM    39
+#define Y6_GPIO_NUM    36
+#define Y5_GPIO_NUM    21
+#define Y4_GPIO_NUM    19
+#define Y3_GPIO_NUM    18
+#define Y2_GPIO_NUM     5
+#define VSYNC_GPIO_NUM 25
+#define HREF_GPIO_NUM  23
+#define PCLK_GPIO_NUM  22
+
+const int FLASH_LED = 4;
+const uint64_t SLEEP_MINUTES = 5;
+const uint32_t PHOTOS_PER_DAY = 288;     // ★ ۲۴ ساعت × ۱۲ عکس در ساعت
+
+RTC_DATA_ATTR int bootCount = 0;   // در خواب عمیق زنده می‌ماند
+Preferences prefs;
+
+bool initCamera() {
+  camera_config_t config = {};
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = Y2_GPIO_NUM;
+  config.pin_d1 = Y3_GPIO_NUM;
+  config.pin_d2 = Y4_GPIO_NUM;
+  config.pin_d3 = Y5_GPIO_NUM;
+  config.pin_d4 = Y6_GPIO_NUM;
+  config.pin_d5 = Y7_GPIO_NUM;
+  config.pin_d6 = Y8_GPIO_NUM;
+  config.pin_d7 = Y9_GPIO_NUM;
+  config.pin_xclk = XCLK_GPIO_NUM;
+  config.pin_pclk = PCLK_GPIO_NUM;
+  config.pin_vsync = VSYNC_GPIO_NUM;
+  config.pin_href = HREF_GPIO_NUM;
+  config.pin_sccb_sda = SIOD_GPIO_NUM;
+  config.pin_sccb_scl = SIOC_GPIO_NUM;
+  config.pin_pwdn = PWDN_GPIO_NUM;
+  config.pin_reset = RESET_GPIO_NUM;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG;
+  config.frame_size = FRAMESIZE_UXGA;      // 1600x1200
+  config.jpeg_quality = 10;                // 0 تا 63؛ کمتر = بهتر
+  config.fb_count = 1;
+  config.fb_location = CAMERA_FB_IN_PSRAM;
+  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+
+  esp_err_t err = esp_camera_init(&amp;config);
+  if (err != ESP_OK) {
+    Serial.printf("Camera init failed: 0x%x\n", err);
+    return false;
+  }
+  return true;
+}
+
+void goToSleep() {
+  Serial.printf("Sleeping %llu minutes...\n", SLEEP_MINUTES);
+  pinMode(FLASH_LED, OUTPUT);
+  digitalWrite(FLASH_LED, LOW);
+  rtc_gpio_hold_en(GPIO_NUM_4);            // فلش در خواب خاموش بماند
+  esp_sleep_enable_timer_wakeup(SLEEP_MINUTES * 60ULL * 1000000ULL);
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+void setup() {
+  Serial.begin(115200);
+  bootCount++;
+  Serial.printf("\nBoot #%d\n", bootCount);
+  rtc_gpio_hold_dis(GPIO_NUM_4);
+
+  if (!psramFound()) {
+    Serial.println("No PSRAM! Check board selection.");
+    goToSleep();
+  }
+  if (!initCamera()) goToSleep();
+
+  if (!SD_MMC.begin("/sdcard", true)) {    // true = حالت ۱ بیتی
+    Serial.println("SD card mount failed");
+    goToSleep();
+  }
+
+  // چند فریم اول را دور بریز تا نوردهی خودکار تنظیم شود
+  for (int i = 0; i &lt; 3; i++) {
+    camera_fb_t *tmp = esp_camera_fb_get();
+    if (tmp) esp_camera_fb_return(tmp);
+  }
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    Serial.println("Capture failed");
+    goToSleep();
+  }
+
+  prefs.begin("timelapse", false);
+  uint32_t photoNum = prefs.getUInt("num", 0) + 1;
+
+  uint32_t day = (photoNum - 1) / PHOTOS_PER_DAY + 1;   // ★ عکس‌های ۱ تا ۲۸۸ = روز ۱
+  char dir[16];
+  snprintf(dir, sizeof(dir), "/day%03lu", (unsigned long)day);   // ★ مثل /day001
+  if (!SD_MMC.exists(dir) &amp;&amp; !SD_MMC.mkdir(dir)) {               // ★ فقط بار اول بساز
+    Serial.printf("mkdir %s failed\n", dir);
+  }
+  char path[40];
+  snprintf(path, sizeof(path), "%s/img_%05lu.jpg", dir, (unsigned long)photoNum);
+  File file = SD_MMC.open(path, FILE_WRITE);
+  if (file) {
+    file.write(fb-&gt;buf, fb-&gt;len);
+    file.close();
+    prefs.putUInt("num", photoNum);        // فقط بعد از ذخیره موفق
+    Serial.printf("Saved %s (%u bytes)\n", path, (unsigned)fb-&gt;len);
+  } else {
+    Serial.println("Failed to open file");
+  }
+  prefs.end();
+  esp_camera_fb_return(fb);
+  goToSleep();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="ex2ans">
+  <li data-lines="27"><b class="what">عکس در هر روز.</b> هر ۵ دقیقه یک عکس یعنی ۱۲ عکس در ساعت، و ۱۲ × ۲۴ = ۲۸۸.
+    <span class="why">یک ثابت با اسم، عدد را توضیح می‌دهد و یک جا برای تغییرش می‌دهد (مثلا ۳ برای آزمایش، یا ۱۴۴ برای هر ۱۰ دقیقه یک عکس).</span></li>
+  <li data-lines="109"><b class="what">کدام روز؟</b> <code>(photoNum - 1) / PHOTOS_PER_DAY + 1</code> با تقسیم صحیح.
+    <span class="why"><code>- 1</code> باعث می‌شود عکس‌های ۱ تا ۲۸۸ عدد ۰ بدهند و <code>+ 1</code> آن را روز ۱ می‌کند؛ عکس ۲۸۸ می‌دهد 287 / 288 = 0 پس در روز ۱ می‌ماند، و عکس ۲۸۹ می‌دهد ۱ یعنی روز ۲. بدون <code>- 1</code>، عکس ۲۸۸ اشتباهی روز ۲ را باز می‌کرد.</span></li>
+  <li data-lines="110-111"><b class="what">اسم پوشه.</b> <code>%03lu</code> روز را سه‌رقمی می‌نویسد: <code>/day001</code>، <code>/day012</code>.
+    <span class="why">صفرهای اول باعث می‌شوند وقتی کامپیوتر پوشه‌ها را بر اساس اسم مرتب می‌کند، ترتیب درست بماند (day002 قبل از day010).</span></li>
+  <li data-lines="112-114"><b class="what">اگر پوشه نیست، بسازش.</b> اول <code>exists</code>، فقط در صورت نیاز <code>mkdir</code>؛ شکست گزارش می‌شود.
+    <span class="why">بعد از خواب عمیق برنامه از صفر شروع می‌شود و نمی‌داند پوشه از قبل هست یا نه؛ پرسیدن از خود کارت راه مطمئن است. اگر <code>mkdir</code> شکست بخورد، باز کردن فایل پایین‌تر هم شکست می‌خورد و خطای خودش را چاپ می‌کند، پس چیزی بی‌صدا گم نمی‌شود.</span></li>
+  <li data-lines="115-116"><b class="what">مسیر کامل.</b> پوشه به اضافه اسم فایل، در یک بافر بزرگ‌تر (۴۰ بایت).
+    <span class="why"><code>/day001/img_00001.jpg</code> ۲۱ کاراکتر است؛ ۴۰ حتی برای عددهای خیلی بزرگ جا دارد. فایل شماره سراسری عکس را نگه می‌دارد، پس هر اسم روی کارت یکتا می‌ماند.</span></li>
+  <li data-lines="117-129"><b class="what">ذخیره و خواب، بدون تغییر.</b> شمارنده هنوز فقط بعد از نوشتن موفق ذخیره می‌شود.
+    <span class="why">اگر کارت خطا بدهد، بیدار شدن بعدی همان شماره را دوباره امتحان می‌کند و حساب روز درست می‌ماند.</span></li>
+</ol>
+</details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۳: فکر کن (بدون کد)</div>
 <p>دوستت می‌خواهد ESP32-CAM را با یک باتری ۲۰۰۰ میلی‌آمپر ساعتی در باغ بگذارد و هر ۵ دقیقه عکس بگیرد. فرض کن هر بیدار شدن ۳ ثانیه با ۲۰۰ میلی‌آمپر طول بکشد و مصرف در خواب ۵ میلی‌آمپر باشد. باتری تقریبا چند روز دوام می‌آورد؟ کدام بخش مصرف بزرگ‌تر است؟</p>
-<details><summary>جواب</summary><p>در هر ساعت ۱۲ بیدار شدن: <code>12 × 3s × 200mA = 7200 mA·s = 2 mAh</code>. خواب تقریبا تمام ساعت: حدود <code>5 mAh</code>. جمع حدود ۷ میلی‌آمپر ساعت در ساعت؛ <code>2000 ÷ 7 ≈ 285</code> ساعت، یعنی حدود ۱۲ روز (در عمل کمتر، چون ظرفیت واقعی باتری و راندمان رگولاتور کمتر از ایده‌آل است). بخش بزرگ‌تر <b>مصرف خواب برد</b> است، نه عکس‌برداری؛ برای همین برای پروژه باتری‌خور جدی، رگولاتور کم‌مصرف یا قطع برق دوربین با ترانزیستور لازم است.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>جوابت باید به این عددها برسد (گردشده):</p>
+<div class="table-wrap"><table>
+<tr><th>بخش</th><th>در هر ساعت</th></tr>
+<tr><td>بیدار شدن‌ها: ۱۲ × ۳ ثانیه × ۲۰۰ میلی‌آمپر</td><td>۲ میلی‌آمپر ساعت</td></tr>
+<tr><td>خواب: ۵ میلی‌آمپر تقریبا در تمام ساعت</td><td>حدود ۵ میلی‌آمپر ساعت</td></tr>
+<tr><td>جمع</td><td>حدود ۷ میلی‌آمپر ساعت</td></tr>
+<tr><td>عمر باتری: ۲۰۰۰ ÷ ۷</td><td>حدود ۲۸۵ ساعت ≈ ۱۲ روز</td></tr>
+</table></div>
+<ul>
+<li>واحدها را درست تبدیل کرده‌ای: ۷۲۰۰ میلی‌آمپر ثانیه ÷ ۳۶۰۰ ثانیه در ساعت = ۲ میلی‌آمپر ساعت.</li>
+<li><b>خواب</b> را مصرف‌کننده بزرگ‌تر دانسته‌ای (حدود ۵ از ۷ میلی‌آمپر ساعت، بیش از ۷۰٪).</li>
+<li>گفته‌ای عمر واقعی کمتر از ۱۲ روز است (ظرفیت واقعی باتری، تلفات رگولاتور، هوای سرد).</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<ol>
+<li><b>بیدار شدن در هر ساعت:</b> هر ۵ دقیقه یکی یعنی ۶۰ ÷ ۵ = ۱۲ بار.</li>
+<li><b>بار مصرفی در بیداری:</b> <code>12 × 3s × 200mA = 7200 mA·s</code>. هر ساعت ۳۶۰۰ ثانیه است، پس ۷۲۰۰ ÷ ۳۶۰۰ = <b>۲ میلی‌آمپر ساعت</b> در ساعت.</li>
+<li><b>بار مصرفی در خواب:</b> برد در هر ساعت فقط ۳۶ ثانیه بیدار است، پس تقریبا تمام ساعت خواب است: ۵ میلی‌آمپر × ۱ ساعت ≈ <b>۵ میلی‌آمپر ساعت</b> (دقیقا ۴٫۹۵).</li>
+<li><b>جمع:</b> حدود ۷ میلی‌آمپر ساعت در ساعت.</li>
+<li><b>عمر باتری:</b> <code>2000 ÷ 7 ≈ 285</code> ساعت؛ ۲۸۵ ÷ ۲۴ ≈ <b>۱۲ روز</b>. در عمل کمتر، چون ظرفیت واقعی باتری و راندمان رگولاتور کمتر از ایده‌آل است.</li>
+</ol>
+<p>بخش بزرگ‌تر <b>مصرف خواب برد</b> است، نه عکس‌برداری. حتی اگر عکس‌ها هیچ مصرفی نداشتند، باتری فقط حدود ۲۰۰۰ ÷ ۵ = ۴۰۰ ساعت (۱۷ روز) دوام می‌آورد. خود تراشه در خواب فقط چند میکروآمپر مصرف دارد؛ بیشتر این ۵ میلی‌آمپر به رگولاتور برد، دوربین و کارت می‌رسد که روشن می‌مانند. برای همین پروژه باتری‌خور جدی به رگولاتور کم‌مصرف یا ترانزیستوری نیاز دارد که در خواب برق دوربین و کارت را قطع کند.</p>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>

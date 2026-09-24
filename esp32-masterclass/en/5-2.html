@@ -715,64 +715,420 @@ esp_now_init();
 <div class="exercise"><div class="ct">Exercise 1: signal strength</div>
 <p>On board B, print the signal strength (RSSI) of every message and walk around the house: how many meters and how many walls does it take for the RSSI to reach about <code>-85</code> dBm and for messages to get lost?</p>
 <details><summary>Hint</summary><p>In the receive callback, <code>info-&gt;rx_ctrl-&gt;rssi</code> is a negative number (for example <code>-52</code>). Store it in a global <code>volatile int</code> variable and print it in loop. The closer to zero, the stronger the signal.</p></details>
-<details><summary>Answer</summary>
-<div class="code" data-file="RSSI.ino (snippet)"><pre>
-volatile int lastRssi = 0;
+<details class="expect"><summary>What should you see?</summary>
+<p>Board A runs <code>Sender_OneWay.ino</code> unchanged; board B runs the answer below. Every button press on A gives one line on B. Your MAC and RSSI numbers will differ:</p>
+<pre class="serial">Receiver MAC: 24:6F:28:AB:CD:EF
+Got #1 -> LED ON, RSSI -38 dBm
+Got #2 -> LED OFF, RSSI -41 dBm
+Got #3 -> LED ON, RSSI -67 dBm
+Got #4 -> LED OFF, RSSI -86 dBm</pre>
+<p>Your walk around the house should give a table like this model answer (typical indoor values; your walls and furniture decide the real ones):</p>
+<div class="table-wrap"><table>
+<tr><th>Where B is</th><th>Typical RSSI</th><th>Messages</th></tr>
+<tr><td>Same desk, 0.5 m</td><td>-25 to -45 dBm</td><td>all arrive</td></tr>
+<tr><td>Same room, 5 m</td><td>-45 to -60 dBm</td><td>all arrive</td></tr>
+<tr><td>Next room, 1 wall</td><td>-60 to -75 dBm</td><td>all arrive</td></tr>
+<tr><td>2 to 3 walls or a floor, 10 to 20 m</td><td>-80 to -90 dBm</td><td>some lost</td></tr>
+</table></div>
+<ul>
+<li>The RSSI is always negative, and it gets more negative (weaker) as you move away or put walls in between.</li>
+<li>Around -85 to -90 dBm, A starts printing <code>delivery FAILED</code> and B shows gaps in the numbers (for example #7 then #9).</li>
+<li>A concrete wall, a floor or a metal fridge costs far more than a thin drywall; turning your body so it's between the boards costs a few dB too.</li>
+<li>Grading: your table has at least four places, each with distance, number of walls, RSSI and "arrives / lost"; and you found the RSSI where losses begin.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>This is the complete receiver from project 1 (<code>Receiver_OneWay.ino</code>) with three small additions.</p>
+<div class="code" data-file="Receiver_RSSI.ino — board B" id="ex1ans"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
 
+const int LED_PIN = 4;
+
+typedef struct {
+  uint32_t seq;
+  bool ledOn;
+} CommandMsg;
+
+CommandMsg incoming;
+volatile bool gotMsg = false;
+volatile int lastRssi = 0;      // ★ signal strength of the last message (dBm)
+
+// Core 3.x signature: sender info + data + length
 void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
-  if (len != sizeof(CommandMsg)) return;
+  if (len != sizeof(CommandMsg)) return;   // wrong size? ignore it
   memcpy(&amp;incoming, data, sizeof(incoming));
-  lastRssi = info-&gt;rx_ctrl-&gt;rssi;
-  gotMsg = true;
+  lastRssi = info-&gt;rx_ctrl-&gt;rssi;        // ★ negative; closer to 0 = stronger
+  gotMsg = true;                          // loop does the real work
 }
-// in loop:  Serial.printf("RSSI: %d dBm\n", lastRssi);
-</pre></div></details>
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  Serial.print("Receiver MAC: ");
+  Serial.println(WiFi.macAddress());
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_recv_cb(onRecv);
+}
+
+void loop() {
+  if (gotMsg) {
+    gotMsg = false;
+    digitalWrite(LED_PIN, incoming.ledOn ? HIGH : LOW);
+    Serial.printf("Got #%lu -&gt; LED %s, RSSI %d dBm\n", (unsigned long)incoming.seq,
+                  incoming.ledOn ? "ON" : "OFF", lastRssi);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="ex1ans">
+  <li data-lines="13"><b class="what">A shared variable for the RSSI.</b> A global <code>volatile int</code>.
+    <span class="why">The callback writes it and loop reads it. <code>volatile</code> tells the compiler that the value can change "behind its back" (in the Wi-Fi task), so it must really read it from memory every time.</span></li>
+  <li data-lines="19"><b class="what">Read the signal strength of this packet.</b> <code>info-&gt;rx_ctrl</code> holds the radio details of the received packet, and <code>rssi</code> is its strength in dBm.
+    <span class="why">We only copy one number, so the callback stays short. The RSSI belongs to <i>this</i> packet, which is why it must be read here and not later in loop.</span></li>
+  <li data-lines="42-43"><b class="what">Print it next to the message.</b> The number, the LED state and the RSSI on one line.
+    <span class="why">With the message number on the same line, you can spot gaps (lost messages) and the signal strength at the same moment.</span></li>
+</ol>
+<p>A dBm scale is logarithmic: every 10 dB less is ten times less power. That's why the step from -60 to -90 dBm (a thousand times weaker) is where the links fall apart.</p>
+</details>
 </div>
 <div class="exercise"><div class="ct">Exercise 2: retries</div>
 <p>On board A in project 2, if no reply arrives within 500 milliseconds, resend <b>the same</b> command (with the same seq) up to 3 times, and only report an error after the third failure. Why must seq stay the same?</p>
 <details><summary>Hint</summary><p>Add a counter <code>int tries</code>. In the timeout section, if <code>tries &lt; 3</code>, call <code>esp_now_send</code> with the same <code>cmd</code>, then <code>tries++</code> and <code>sentAt = millis()</code>. In <code>sendCommand</code>, set <code>tries = 0</code>.</p></details>
-<details><summary>Answer</summary><p>seq stays the same so that if the first message did arrive and only its reply got lost, B can tell it's the same command as before and doesn't carry it out a second time. In our project the command carries the absolute state ("LED on"), so repeating it happens to be harmless; but a command like "toggle" or "ring the bell once" would run twice. This property is called "idempotent" (repeating it does no harm); it's the same problem QoS 2 solves in MQTT. On board B, remember the last seq you carried out; if the same seq comes again, skip the action but <b>still send the reply</b>, because the reply is probably what got lost:</p>
-<div class="code" data-file="BoardB_Dedupe.ino (loop of board B, project 2)"><pre>
-uint32_t lastSeq = 0;                     // global: the last command carried out
+<details class="expect"><summary>What should you see?</summary>
+<p>Normal case (both boards on): one press on A, one command, one ack (your temperature and time differ):</p>
+<pre class="serial">-> #1 ledOn=1
+&lt;- ack #1, LED on B is ON, temp 23.4 C (4 ms)</pre>
+<p>Now unplug board B and press A's button once. About 2 seconds later (4 tries × 500 ms) A gives up:</p>
+<pre class="serial">-> #2 ledOn=0
+  radio: not delivered
+-> #2 again (retry 1 of 3)
+  radio: not delivered
+-> #2 again (retry 2 of 3)
+  radio: not delivered
+-> #2 again (retry 3 of 3)
+  radio: not delivered
+!! no reply from B after 3 retries</pre>
+<ul>
+<li>All retries carry the <b>same</b> number (#2), and there's no "no reply" line before the third retry.</li>
+<li>Plug B back in and press again: A sends #3 and gets the ack at once; B prints <code>#3 new: done, replied temp=23.4</code>.</li>
+<li>To see the repeat path, add this line on B right after the <code>if (!repeat) { ... }</code> block: <code>if (!repeat &amp;&amp; incoming.seq % 2 == 0) return;</code> (it swallows the first reply of even commands). B then prints <code>#4 repeat: reply only</code>, A prints <code>-&gt; #4 again (retry 1 of 3)</code> followed by the ack, and B's LED changed only once. Remove the line afterwards.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p><b>Why seq must stay the same:</b> if the first message did arrive and only its reply got lost, B must be able to tell it's the same command as before, so it doesn't carry it out a second time. In our project the command carries the absolute state ("LED on"), so repeating it happens to be harmless; but a command like "toggle" or "ring the bell once" would run twice. A command that does no harm when repeated is called "idempotent"; it's the same problem QoS 2 solves in MQTT. So B remembers the last seq it carried out; if the same seq comes again, it skips the action but <b>still sends the reply</b>, because the reply is probably what got lost.</p>
+<p>Board A (project 2, with retries):</p>
+<div class="code" data-file="BoardA_Retry.ino — board A" id="ex2ansA"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+
+uint8_t boardB[] = {0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF};   // board B's MAC
+const int BUTTON_PIN = 27;
+const int STATUS_LED = 4;      // the course's status LED (+220 Ω)
+
+typedef struct {
+  uint32_t seq;
+  bool ledOn;
+} CommandMsg;
+
+typedef struct {
+  uint32_t seq;      // number of the command this reply belongs to
+  bool ledOn;        // the real LED state on B
+  float tempC;       // B's temperature (or NAN if the sensor failed)
+} ReplyMsg;
+
+CommandMsg cmd = {0, false};
+ReplyMsg reply;
+volatile bool gotReply = false;
+bool waiting = false;
+unsigned long sentAt = 0;
+int lastReading = HIGH, stableState = HIGH;
+unsigned long lastChange = 0;
+int tries = 0;                 // ★ how many times this command was re-sent
+
+void onSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+  if (status != ESP_NOW_SEND_SUCCESS) Serial.println("  radio: not delivered");
+}
+
+void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len != sizeof(ReplyMsg)) return;
+  if (memcmp(info-&gt;src_addr, boardB, 6) != 0) return;   // only accept from B
+  memcpy(&amp;reply, data, sizeof(reply));
+  gotReply = true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(STATUS_LED, OUTPUT);
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_send_cb(onSent);
+  esp_now_register_recv_cb(onRecv);
+  esp_now_peer_info_t peer = {};
+  memcpy(peer.peer_addr, boardB, 6);
+  peer.channel = 0;
+  peer.encrypt = false;
+  esp_now_add_peer(&amp;peer);
+}
+
+void sendCommand() {
+  cmd.seq++;
+  cmd.ledOn = !cmd.ledOn;
+  digitalWrite(STATUS_LED, LOW);            // off until the ack arrives
+  esp_now_send(boardB, (uint8_t *)&amp;cmd, sizeof(cmd));
+  Serial.printf("-&gt; #%lu ledOn=%d\n", (unsigned long)cmd.seq, cmd.ledOn);
+  waiting = true;
+  sentAt = millis();
+  tries = 0;                                // ★ a new command: no retries yet
+}
+
+void loop() {
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChange = millis(); lastReading = reading; }
+  if (millis() - lastChange &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) sendCommand();
+  }
+
+  if (gotReply) {
+    gotReply = false;
+    if (waiting &amp;&amp; reply.seq == cmd.seq) {
+      waiting = false;
+      digitalWrite(STATUS_LED, HIGH);         // ack received
+      Serial.printf("&lt;- ack #%lu, LED on B is %s, temp %.1f C (%lu ms)\n",
+                    (unsigned long)reply.seq, reply.ledOn ? "ON" : "OFF",
+                    reply.tempC, millis() - sentAt);
+    }
+  }
+  if (waiting &amp;&amp; millis() - sentAt &gt; 500) {   // half a second to reply
+    if (tries &lt; 3) {                          // ★ send the SAME cmd again (same seq)
+      tries++;
+      esp_now_send(boardB, (uint8_t *)&amp;cmd, sizeof(cmd));
+      Serial.printf("-&gt; #%lu again (retry %d of 3)\n", (unsigned long)cmd.seq, tries);
+      sentAt = millis();                      // a fresh 500 ms for this try
+    } else {
+      waiting = false;
+      Serial.println("!! no reply from B after 3 retries");
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="ex2ansA">
+  <li data-lines="26"><b class="what">A retry counter.</b> <code>tries</code> counts how many times the current command has been re-sent.
+    <span class="why">It must be global, because the retries happen across many passes of loop, not in one go.</span></li>
+  <li data-lines="58-67"><b class="what">A new command resets the counter.</b> <code>sendCommand()</code> works as before and now also sets <code>tries = 0</code>.
+    <span class="why">Only a real button press makes a new seq. Retries never call <code>sendCommand()</code>, because that would increase seq and flip <code>ledOn</code>.</span></li>
+  <li data-lines="87-92"><b class="what">Time is up: try again.</b> If fewer than 3 retries have been made, send the very same <code>cmd</code> bytes again and start a fresh 500 ms window.
+    <span class="why">Same bytes means same seq and same <code>ledOn</code>. Restarting <code>sentAt</code> gives each try its own half second, so the whole attempt takes at most 4 × 500 ms = 2 seconds, and loop stays free (no <code>delay</code>), so the button still works.</span></li>
+  <li data-lines="93-96"><b class="what">Only now report an error.</b> After the third retry has also timed out, stop waiting and print the error once.
+    <span class="why">A single lost packet is normal in radio; the user should only hear about it when something is really wrong.</span></li>
+  <li data-lines="77-86"><b class="what">The ack check is unchanged.</b> A reply is accepted only if its seq matches <code>cmd.seq</code>.
+    <span class="why">A late reply to an old command can't be mistaken for a reply to the current one. The time shown is measured from the last try.</span></li>
+</ol>
+<p>Board B (project 2, ignoring repeats):</p>
+<div class="code" data-file="BoardB_Dedupe.ino — board B" id="ex2ansB"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+#include &lt;DHT.h&gt;
+
+const int LED_PIN = 4;
+DHT dht(13, DHT22);
+
+typedef struct {
+  uint32_t seq;
+  bool ledOn;
+} CommandMsg;
+
+typedef struct {
+  uint32_t seq;
+  bool ledOn;
+  float tempC;
+} ReplyMsg;
+
+CommandMsg incoming;
+uint8_t senderMac[6];
+volatile bool gotMsg = false;
+uint32_t lastSeq = 0;          // ★ the last command we carried out
+
+void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len != sizeof(CommandMsg)) return;
+  memcpy(&amp;incoming, data, sizeof(incoming));
+  memcpy(senderMac, info-&gt;src_addr, 6);   // we send the reply to this address
+  gotMsg = true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  dht.begin();
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  Serial.println(WiFi.macAddress());
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_recv_cb(onRecv);
+}
 
 void loop() {
   if (!gotMsg) return;
   gotMsg = false;
-  bool repeat = (incoming.seq == lastSeq);
-  if (!repeat) {                          // a new command: carry it out once
+  bool repeat = (incoming.seq == lastSeq);   // ★ seen this number before?
+  if (!repeat) {                             // ★ a new command: carry it out once
     lastSeq = incoming.seq;
     digitalWrite(LED_PIN, incoming.ledOn ? HIGH : LOW);
   }
-  // ... add A as a peer the first time, exactly as before ...
-  ReplyMsg reply;                         // reply every time, even for a repeat
+
+  if (!esp_now_is_peer_exist(senderMac)) {   // first time? add A to the address book
+    esp_now_peer_info_t peer = {};
+    memcpy(peer.peer_addr, senderMac, 6);
+    peer.channel = 0;
+    peer.encrypt = false;
+    esp_now_add_peer(&amp;peer);
+  }
+
+  ReplyMsg reply;
   reply.seq = incoming.seq;
-  reply.ledOn = digitalRead(LED_PIN);     // the real state of the LED pin
-  reply.tempC = dht.readTemperature();
+  reply.ledOn = digitalRead(LED_PIN);        // ★ the real state of the LED pin
+  reply.tempC = dht.readTemperature();       // on error: NAN
   esp_now_send(senderMac, (uint8_t *)&amp;reply, sizeof(reply));
-  Serial.printf("#%lu %s\n", (unsigned long)incoming.seq, repeat ? "repeat: reply only" : "new: done");
+  Serial.printf("#%lu %s, replied temp=%.1f\n", (unsigned long)reply.seq,
+                repeat ? "repeat: reply only" : "new: done", reply.tempC);
 }
 </pre></div>
-<p>A's seq starts at 1, so <code>lastSeq = 0</code> never matches a real command. If B restarts, <code>lastSeq</code> goes back to 0, which is fine: the next command from A has a new number anyway.</p></details>
+<ol class="walk" data-for="ex2ansB">
+  <li data-lines="22"><b class="what">The last command carried out.</b> <code>lastSeq</code> starts at 0.
+    <span class="why">A's seq starts at 1 (it's increased before the first send), so 0 never matches a real command. If B restarts, <code>lastSeq</code> goes back to 0, which is fine: A's next command has a new number anyway.</span></li>
+  <li data-lines="48-52"><b class="what">New or repeat?</b> Only a new number switches the LED and is remembered.
+    <span class="why">This is what makes the command safe to repeat: whatever the command does, it happens once per seq.</span></li>
+  <li data-lines="62-66"><b class="what">Always reply.</b> For a new command and for a repeat alike; the LED state is read from the pin itself.
+    <span class="why">If B stays silent on a repeat, A keeps retrying and finally reports an error, although the command was carried out. Reading the pin reports what really happened.</span></li>
+  <li data-lines="67-68"><b class="what">Say which case it was.</b> <code>new: done</code> or <code>repeat: reply only</code>.
+    <span class="why">This is how you check in the Serial Monitor that a repeat really skipped the action.</span></li>
+</ol>
+</details>
 </div>
 <div class="exercise"><div class="ct">Exercise 3: finding the channel automatically</div>
 <p>Write board A so that in setup it finds the router's network with <code>WiFi.scanNetworks()</code>, reads its channel and moves to it by itself. Then you no longer need to type the channel number by hand.</p>
 <details><summary>Hint</summary><p><code>int n = WiFi.scanNetworks();</code> then, in a <code>for</code> loop, if <code>WiFi.SSID(i) == "YourWiFi"</code>, <code>WiFi.channel(i)</code> is that network's channel. Then <code>WiFi.setChannel(ch)</code>, and after that <code>esp_now_init()</code>.</p></details>
-<details><summary>Answer</summary>
-<div class="code" data-file="AutoChannel.ino (board A setup snippet)"><pre>
-WiFi.mode(WIFI_STA);
-while (!WiFi.STA.started()) delay(10);
-int ch = 1;                              // channel 1 if the router isn't found
-int n = WiFi.scanNetworks();             // takes about 2 to 3 seconds
-for (int i = 0; i &lt; n; i++) {
-  if (WiFi.SSID(i) == "YourWiFi") { ch = WiFi.channel(i); break; }
+<details class="expect"><summary>What should you see?</summary>
+<p>Board B is the project 1 receiver with the Wi-Fi lines from the router section, so it prints the router's channel. Board A, with the answer below, must find the same number by itself (your numbers differ):</p>
+<pre class="serial">board B:  Router channel: 6
+board A:  Found 9 networks, using channel 6
+          Sender ready. Press the button.
+          Sent #1 ledOn=1 (queued)
+            delivered</pre>
+<ul>
+<li>The number after "using channel" on A is the same as "Router channel" on B.</li>
+<li>Between reset and "Sender ready" there is a pause of about 2 to 3 seconds: that's the scan.</li>
+<li>Change <code>ROUTER_SSID</code> to a wrong name (or a different capital letter): A prints <code>using channel 1</code>, and unless your router happens to be on channel 1, every send ends with <code>delivery FAILED</code>. That proves the scan really decides the channel.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>This is the complete one-way sender from project 1 with a scan in setup. The receiver (board B) is the one from project 1 with the Wi-Fi connection added, as in the router section.</p>
+<div class="code" data-file="AutoChannel.ino — board A" id="ex3ans"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+
+// Put board B's MAC here (from the GetMac program)
+uint8_t receiverMac[] = {0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF};
+
+const int BUTTON_PIN = 27;
+const char* ROUTER_SSID = "YourWiFi";   // ★ the network board B is connected to
+
+// Message layout: must be exactly the same on sender and receiver
+typedef struct {
+  uint32_t seq;     // message number
+  bool ledOn;       // should the LED be on?
+} CommandMsg;
+
+CommandMsg cmd = {0, false};
+int lastReading = HIGH;
+int stableState = HIGH;
+unsigned long lastChange = 0;
+
+// Core 3.3 and later: the first parameter is a wifi_tx_info_t
+void onSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "  delivered" : "  delivery FAILED");
 }
-WiFi.scanDelete();                       // free the scan results' memory
-WiFi.setChannel(ch);
-Serial.printf("Using channel %d\n", ch);
-esp_now_init();
-// ... register the callbacks and the peer as before
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  int ch = 1;                              // ★ channel 1 if the router isn't found
+  int n = WiFi.scanNetworks();             // ★ takes about 2 to 3 seconds
+  for (int i = 0; i &lt; n; i++) {
+    if (WiFi.SSID(i) == ROUTER_SSID) {     // ★ exact name, case-sensitive
+      ch = WiFi.channel(i);
+      break;
+    }
+  }
+  WiFi.scanDelete();                       // ★ free the scan results' memory
+  WiFi.setChannel(ch);                     // ★ move the radio before esp_now_init
+  Serial.printf("Found %d networks, using channel %d\n", n, ch);
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_send_cb(onSent);
+
+  esp_now_peer_info_t peer = {};
+  memcpy(peer.peer_addr, receiverMac, 6);
+  peer.channel = 0;          // 0 means the channel we are on right now
+  peer.encrypt = false;
+  if (esp_now_add_peer(&amp;peer) != ESP_OK) {
+    Serial.println("Failed to add peer");
+    while (true) delay(1000);
+  }
+  Serial.println("Sender ready. Press the button.");
+}
+
+void loop() {
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) {        // new change: restart the bounce timer
+    lastChange = millis();
+    lastReading = reading;
+  }
+  if (millis() - lastChange &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) {          // the button really was pressed
+      cmd.seq++;
+      cmd.ledOn = !cmd.ledOn;
+      esp_err_t r = esp_now_send(receiverMac, (uint8_t *)&amp;cmd, sizeof(cmd));
+      Serial.printf("Sent #%lu ledOn=%d (%s)\n", (unsigned long)cmd.seq, cmd.ledOn, r == ESP_OK ? "queued" : esp_err_to_name(r));
+    }
+  }
+}
 </pre></div>
-<p>The network name is case-sensitive. If the router changes its channel later, just reset A so it scans again (or scan again after several timeouts in a row).</p></details>
+<ol class="walk" data-for="ex3ans">
+  <li data-lines="8"><b class="what">The router's name.</b> The exact SSID that board B connects to.
+    <span class="why">A doesn't connect to the router (it doesn't need the password); it only needs the name to find the right line in the scan results.</span></li>
+  <li data-lines="30-32"><b class="what">Radio on, with a safe default.</b> Wait until STA has started, and assume channel 1.
+    <span class="why">You can only scan once the radio is running. If the router is switched off or out of range, channel 1 is a reasonable fallback, and the program still starts.</span></li>
+  <li data-lines="33-39"><b class="what">Scan and pick the router.</b> <code>scanNetworks()</code> returns how many networks it heard; for each one, <code>WiFi.SSID(i)</code> is its name and <code>WiFi.channel(i)</code> its channel.
+    <span class="why">The router announces its channel in every beacon, so a scan is a reliable way to read it. <code>break</code> stops at the first match. The name comparison is case-sensitive: "MyWifi" is not "MyWiFi".</span></li>
+  <li data-lines="40-42"><b class="what">Clean up and switch channel.</b> <code>scanDelete()</code> frees the results; <code>setChannel(ch)</code> moves the radio.
+    <span class="why">This must happen <b>before</b> <code>esp_now_init()</code> and before the peer is added with <code>channel = 0</code> ("the current channel"), so everything is set up on the router's channel.</span></li>
+  <li data-lines="44-59"><b class="what">ESP-NOW exactly as before.</b> Init, callback, peer, ready message.
+    <span class="why">Nothing else changes: ESP-NOW simply works on whatever channel the radio is on.</span></li>
+</ol>
+<p>If the router changes its channel later (many do, automatically, at night), just reset A so it scans again. A more advanced version rescans after several <code>delivery FAILED</code> in a row.</p>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">The lesson in three lines</div>
