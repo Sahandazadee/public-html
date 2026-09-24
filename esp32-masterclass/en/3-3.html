@@ -1,0 +1,929 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>I2C, SPI and UART: OLED display, DHT22 sensor, SD card and GPS · ESP32 Masterclass</title>
+<meta name="description" content="The ESP32's three main serial protocols made simple: I2C with a scanner and an SSD1306 OLED display, a DHT22 sensor with the temperature on the OLED, SPI with a microSD card and CSV logging, and UART with a NEO-6M GPS module, NMEA sentences and TinyGPSPlus.">
+<link rel="alternate" hreflang="fa" href="../3-3.html"><link rel="alternate" hreflang="en" href="3-3.html">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="../assets/course.js"></script>
+<script defer src="../assets/glossary-en.js"></script>
+<script defer src="../assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="3-3">
+
+<p class="lede">So far every part had its own wire, and the ESP32 only read or wrote its "voltage". But a display, a memory card or a GPS "talks": it exchanges numbers, text and commands. There are three standard languages for this: I2C, SPI and UART. In this lesson you learn all three from the ground up and build a real project with each one. This is the longest lesson in the chapter; take it section by section and test each section before moving on to the next.</p>
+
+<div class="goals">
+  <div><h4>🎯 After this lesson you can</h4><ul>
+    <li>Say how many wires each protocol uses, how it works, and when to choose which</li>
+    <li>Find any device's address with an I2C scanner and write text and numbers on an OLED display</li>
+    <li>Read temperature and humidity with a DHT22 and show them on the OLED</li>
+    <li>Write a CSV file to a microSD card and read it back</li>
+    <li>Read the GPS's NMEA sentences, understand them, and get coordinates with TinyGPSPlus</li>
+  </ul></div>
+  <div><h4>🧰 Prerequisites and parts</h4><ul>
+    <li>Lessons <a href="3-1.html">3.1</a> (millis and pull-ups) and <a href="2-3.html">2.3</a> (Serial Monitor)</li>
+    <li>A 0.96-inch SSD1306 OLED display (I2C version, 4 pins)</li>
+    <li>A DHT22 sensor (or its 3-pin module) + a 10 kΩ resistor</li>
+    <li>A microSD card module (SPI) and a card of 32 GB or less</li>
+    <li>A NEO-6M GPS module (for example the GY-NEO6MV2) with its antenna</li>
+  </ul></div>
+</div>
+
+<div class="gallery">
+  <figure><div class="frame"><img src="../assets/img/oled-photo1.jpg" alt="A 0.96-inch OLED display"></div><figcaption>0.96-inch SSD1306 OLED<span class="src">Image: ThingPulse (esp8266-oled-ssd1306), MIT license</span></figcaption></figure>
+  <figure><div class="frame"><img src="../assets/img/dht22.svg" alt="DHT22 sensor"></div><figcaption>DHT22 temperature and humidity sensor<span class="src">Image: Fritzing, CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="../assets/img/sdmodule.svg" alt="SD card module"></div><figcaption>microSD card module with an SPI interface<span class="src">Image: Fritzing, CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="../assets/img/bme280.svg" alt="BME280 module"></div><figcaption>BME280: a genuine I2C sensor<span class="src">Image: Fritzing, CC BY-SA 3.0</span></figcaption></figure>
+</div>
+
+<h2 id="big-picture">The big picture: why a "protocol"?</h2>
+<p>A protocol is an "agreement on how to talk": how many wires there are, who speaks first, how long each bit lasts, and how devices call each other. All three protocols in this lesson are <b>serial</b>: they send bits one after another on a single wire, not eight at a time on eight wires. That keeps the number of wires down.</p>
+
+<div class="callout analogy"><div class="ct">Three kinds of conversation in everyday life</div>
+<p><b>UART</b> is like a phone call between two people: each has a mouth (TX) and an ear (RX), and only those two talk to each other. <b>I2C</b> is like a classroom: one teacher (the master) and several students on one shared line; the teacher calls each student's name (address) and only that student answers. <b>SPI</b> is like a teacher who has a separate "raise your hand" wire (CS) to each student; it's faster because nobody's name has to be called, but every extra student needs one more wire.</p></div>
+
+<div class="table-wrap"><table>
+<tr><th>Feature</th><th>I2C</th><th>SPI</th><th>UART</th></tr>
+<tr><td>Number of wires (not counting power)</td><td>2: <code>SDA</code>, <code>SCL</code></td><td>3 + one per device: <code>MOSI</code>, <code>MISO</code>, <code>SCK</code>, <code>CS</code></td><td>2: <code>TX</code>, <code>RX</code> (crossed over)</td></tr>
+<tr><td>Shared clock</td><td>Yes (SCL)</td><td>Yes (SCK)</td><td>No; both sides must use the same speed (baud rate)</td></tr>
+<tr><td>Typical speed</td><td>100 or 400 kbit/s</td><td>A few to tens of Mbit/s</td><td>9600 to 115200 bit/s (common)</td></tr>
+<tr><td>Number of devices</td><td>Dozens of devices on two wires</td><td>A few devices; one CS each</td><td>Only two devices</td></tr>
+<tr><td>How a device is selected</td><td>A 7-bit address (for example <code>0x3C</code>)</td><td>Pulling that device's CS wire low</td><td>Not needed; there are only two sides</td></tr>
+<tr><td>ESP32 default pins</td><td>SDA=<code>GPIO21</code>, SCL=<code>GPIO22</code></td><td>VSPI: MOSI=<code>23</code>, MISO=<code>19</code>, SCK=<code>18</code>, CS=<code>5</code></td><td>Serial2 with explicit pins; in this lesson RX=<code>GPIO16</code>, TX=<code>GPIO17</code></td></tr>
+<tr><td>Example parts</td><td>OLED, BME280, MPU6050, DS3231 RTC</td><td>SD card, TFT display, LoRa module</td><td>GPS, SIM (cellular) module, link to a computer</td></tr>
+</table></div>
+
+<figure><div class="frame"><svg viewBox="0 0 760 520" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="Diagram of the three buses: I2C, SPI and UART">
+  <!-- I2C -->
+  <text x="20" y="28" font-size="16" font-weight="800" fill="#152033">I2C</text>
+  <rect x="20" y="50" width="120" height="90" rx="10" fill="#1b1f2a"/><text x="80" y="100" font-size="14" font-weight="700" text-anchor="middle" fill="#fff">ESP32</text>
+  <line x1="140" y1="75" x2="720" y2="75" stroke="#e6b800" stroke-width="4"/>
+  <line x1="140" y1="115" x2="720" y2="115" stroke="#1e9e4a" stroke-width="4"/>
+  <text x="150" y="68" font-size="12" fill="#a07e00" font-weight="700">SDA (data)</text>
+  <text x="150" y="132" font-size="12" fill="#1e9e4a" font-weight="700">SCL (clock)</text>
+  <g font-size="12" text-anchor="middle" fill="#152033">
+    <rect x="300" y="150" width="110" height="46" rx="8" fill="#eef2f8" stroke="#6b7280"/><text x="355" y="170">OLED</text><text x="355" y="187" font-family="JetBrains Mono,monospace">0x3C</text>
+    <rect x="450" y="150" width="110" height="46" rx="8" fill="#eef2f8" stroke="#6b7280"/><text x="505" y="170">BME280</text><text x="505" y="187" font-family="JetBrains Mono,monospace">0x76</text>
+    <rect x="600" y="150" width="110" height="46" rx="8" fill="#eef2f8" stroke="#6b7280"/><text x="655" y="170">RTC</text><text x="655" y="187" font-family="JetBrains Mono,monospace">0x68</text>
+  </g>
+  <g stroke-width="3"><line x1="335" y1="75" x2="335" y2="150" stroke="#e6b800"/><line x1="375" y1="115" x2="375" y2="150" stroke="#1e9e4a"/><line x1="485" y1="75" x2="485" y2="150" stroke="#e6b800"/><line x1="525" y1="115" x2="525" y2="150" stroke="#1e9e4a"/><line x1="635" y1="75" x2="635" y2="150" stroke="#e6b800"/><line x1="675" y1="115" x2="675" y2="150" stroke="#1e9e4a"/></g>
+  <!-- SPI -->
+  <text x="20" y="236" font-size="16" font-weight="800" fill="#152033">SPI</text>
+  <rect x="20" y="250" width="120" height="130" rx="10" fill="#1b1f2a"/><text x="80" y="320" font-size="14" font-weight="700" text-anchor="middle" fill="#fff">ESP32</text>
+  <line x1="140" y1="265" x2="620" y2="265" stroke="#1e9e4a" stroke-width="4"/>
+  <line x1="140" y1="290" x2="620" y2="290" stroke="#f08a24" stroke-width="4"/>
+  <line x1="140" y1="315" x2="620" y2="315" stroke="#2563eb" stroke-width="4"/>
+  <text x="150" y="260" font-size="12" fill="#1e9e4a" font-weight="700">SCK</text>
+  <text x="150" y="285" font-size="12" fill="#c46a12" font-weight="700">MOSI (ESP32 → device)</text>
+  <text x="150" y="332" font-size="12" fill="#2563eb" font-weight="700">MISO (device → ESP32)</text>
+  <path d="M140 350 H360 V395" fill="none" stroke="#8b3fd6" stroke-width="3"/><text x="150" y="346" font-size="12" fill="#8b3fd6" font-weight="700">CS1</text>
+  <path d="M140 368 H560 V395" fill="none" stroke="#e0457a" stroke-width="3"/><text x="400" y="364" font-size="12" fill="#e0457a" font-weight="700">CS2</text>
+  <g font-size="12" text-anchor="middle" fill="#152033">
+    <rect x="300" y="395" width="120" height="40" rx="8" fill="#eef2f8" stroke="#6b7280"/><text x="360" y="420">SD card</text>
+    <rect x="500" y="395" width="120" height="40" rx="8" fill="#eef2f8" stroke="#6b7280"/><text x="560" y="420">TFT</text>
+  </g>
+  <g stroke-width="2.5"><line x1="320" y1="265" x2="320" y2="395" stroke="#1e9e4a"/><line x1="335" y1="290" x2="335" y2="395" stroke="#f08a24"/><line x1="385" y1="315" x2="385" y2="395" stroke="#2563eb"/><line x1="520" y1="265" x2="520" y2="395" stroke="#1e9e4a"/><line x1="535" y1="290" x2="535" y2="395" stroke="#f08a24"/><line x1="585" y1="315" x2="585" y2="395" stroke="#2563eb"/></g>
+  <!-- UART -->
+  <text x="20" y="470" font-size="16" font-weight="800" fill="#152033">UART</text>
+  <rect x="90" y="450" width="120" height="60" rx="10" fill="#1b1f2a"/><text x="150" y="486" font-size="14" font-weight="700" text-anchor="middle" fill="#fff">ESP32</text>
+  <rect x="520" y="450" width="120" height="60" rx="10" fill="#eef2f8" stroke="#6b7280"/><text x="580" y="486" font-size="14" text-anchor="middle" fill="#152033">GPS</text>
+  <text x="222" y="466" font-size="12" fill="#152033" font-family="JetBrains Mono,monospace">TX2 (17)</text>
+  <text x="222" y="503" font-size="12" fill="#152033" font-family="JetBrains Mono,monospace">RX2 (16)</text>
+  <text x="508" y="466" font-size="12" text-anchor="end" fill="#152033" font-family="JetBrains Mono,monospace">RX</text>
+  <text x="508" y="503" font-size="12" text-anchor="end" fill="#152033" font-family="JetBrains Mono,monospace">TX</text>
+  <line x1="290" y1="462" x2="480" y2="462" stroke="#e6b800" stroke-width="3" marker-end="url(#ar)"/>
+  <line x1="480" y1="499" x2="290" y2="499" stroke="#2563eb" stroke-width="3" marker-end="url(#ar)"/>
+  <defs><marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="#152033"/></marker></defs>
+</svg></div>
+<figcaption>The three buses side by side. I2C: every device on the same two wires, each with its own address. SPI: three shared wires plus a separate CS for each device. UART: only two devices, with each one's TX going to the other's RX.</figcaption></figure>
+
+<!-- ================= I2C ================= -->
+<h2 id="i2c">I2C: two wires, dozens of devices</h2>
+<p>I2C (say "I-two-C" or "I-squared-C") has two wires: <b>SDA</b> for data and <b>SCL</b> for the clock. The ESP32 plays the <b>master</b> (the boss): only it can start a conversation, and it generates the clock. The devices (called slaves or targets) only answer when their address is called.</p>
+
+<h3>An I2C conversation, step by step</h3>
+<pre class="mermaid">sequenceDiagram
+  participant M as ESP32 (Master)
+  participant O as OLED (0x3C)
+  participant B as BME280 (0x76)
+  M->>O: START + address 0x3C + write
+  O-->>M: ACK (I am here)
+  Note over B: address does not match, stays silent
+  M->>O: data bytes
+  O-->>M: ACK after each byte
+  M->>O: STOP</pre>
+<p>First the ESP32 puts the address on the line. Every device hears it, but only the device with that address answers with an "ACK" bit ("yes, I'm here"). If nobody answers, the ESP32 sees a "NACK" and knows there's no device at that address. That trick is the basis of the "I2C scanner".</p>
+
+<div class="callout why"><div class="ct">Why does I2C need pull-up resistors?</div>
+<p>On I2C, no device ever "pushes" a wire up to 3.3 V; devices can only "pull" the wire down to GND (this is called "open-drain"). So a pull-up resistor (usually 4.7 or 10 kΩ) has to bring the wire back to 3.3 V when nobody is pulling it; the same idea as in lesson 3.1. The good news: almost every ready-made module (OLED, BME280 and so on) already has these resistors on board, so you usually don't need to add anything. This design also means that if two devices try to talk at the same time, there's no short circuit.</p></div>
+
+<div class="callout warn"><div class="ct">5 V modules and I2C</div>
+<p>If you power an I2C module from 5V and its pull-ups are connected to that same 5 V, the SDA and SCL lines sit at 5 V and damage the ESP32. Always power the OLED and the BME280 from <b>3V3</b>. Modules that really need 5 V require a level shifter (<a href="1-4.html#levels">lesson 1.4</a>).</p></div>
+
+<h3 id="scanner">The I2C scanner: the first step with any new module</h3>
+<p>Before any library, first make sure the ESP32 can "see" the device. This program calls every possible address one by one and prints the ones that answer.</p>
+<div class="code" data-file="I2C_Scanner.ino" id="c1"><pre>
+// I2C scanner: which devices are on the bus?
+#include &lt;Wire.h&gt;
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(21, 22);                 // SDA=21, SCL=22 (ESP32 defaults)
+  Serial.println("I2C scanner...");
+}
+
+void loop() {
+  int found = 0;
+  for (uint8_t addr = 1; addr &lt; 127; addr++) {
+    Wire.beginTransmission(addr);     // "is anyone at this address?"
+    uint8_t err = Wire.endTransmission();
+    if (err == 0) {                   // 0 = it answered (ACK)
+      Serial.printf("Found device at 0x%02X\n", addr);
+      found++;
+    }
+  }
+  if (found == 0) Serial.println("No I2C devices found. Check wiring!");
+  Serial.println("----");
+  delay(5000);
+}
+</pre></div>
+<ol class="walk" data-for="c1">
+  <li data-lines="2"><b class="what">The Wire library.</b> Arduino's built-in I2C library. Nothing to install.
+    <span class="why">The name comes from "wire" because I2C is also called "Two-Wire".</span></li>
+  <li data-lines="6"><b class="what">Wire.begin(SDA, SCL).</b> Starts the I2C bus on pins 21 and 22 and makes the ESP32 the master.
+    <span class="why">On the ESP32 almost any pin can do I2C (thanks to the GPIO matrix). 21 and 22 are the defaults, and an empty <code>Wire.begin()</code> uses them too; but writing the pins out means that if you ever need different pins, you know where to change them.</span></li>
+  <li data-lines="12"><b class="what">A loop over every address.</b> From 1 to 126.
+    <span class="why">An I2C address is 7 bits (0 to 127); address 0 is for "everyone" (the general call), and 127 and a few other addresses are reserved. <code>uint8_t</code> means an 8-bit unsigned number (0 to 255).</span></li>
+  <li data-lines="13-14"><b class="what">Knocking on the door.</b> <code>beginTransmission</code> prepares the address and <code>endTransmission</code> actually sends it and returns the result.
+    <span class="why">Without sending any data, we only ask "are you there?". This does no harm to any device.</span></li>
+  <li data-lines="15-18"><b class="what">A result of 0 means ACK.</b> The address is printed in hexadecimal; <code>%02X</code> means "base 16, two digits, uppercase letters".
+    <span class="why">Datasheets and libraries always write addresses in hex (<code>0x3C</code>), so we print them that way too, to compare them directly. Other error codes: 2 means NACK on the address (nobody there).</span></li>
+  <li data-lines="20-22"><b class="what">Report, then repeat every 5 seconds.</b>
+    <span class="why">Repeating lets you fix a wire while it runs and see the result without resetting.</span></li>
+</ol>
+<div class="serial">I2C scanner...
+Found device at 0x3C
+----</div>
+
+<h3 id="oled">The 0.96-inch OLED display (SSD1306)</h3>
+<p>This small display has 128 × 64 pixels and every pixel makes its own light (so there's no backlight, the contrast is excellent and it uses little power). Its driver chip is the SSD1306, and the 4-pin version works over I2C. The address is almost always <code>0x3C</code>; some models become <code>0x3D</code> if you move a resistor on the back of the board. (The back of the board sometimes says "0x78"; that's the same 0x3C shifted left by one bit, i.e. the 8-bit address. In code, always write <code>0x3C</code>.)</p>
+<div class="gallery">
+  <figure><div class="frame"><img src="../assets/img/oled-photo1.jpg" alt="OLED showing text"></div><figcaption>A 0.96-inch OLED, switched on<span class="src">Image: ThingPulse, MIT license</span></figcaption></figure>
+  <figure><div class="frame"><img src="../assets/img/oled-photo2.jpg" alt="OLED connected to a board"></div><figcaption>Read the pin order on the board; they're not all the same<span class="src">Image: ThingPulse, MIT license</span></figcaption></figure>
+</div>
+<div class="callout warn"><div class="ct">Read the pin order on the module itself</div>
+<p>Some OLEDs are <code>GND VCC SCL SDA</code> and some are <code>VCC GND SCL SDA</code>. Swapping VCC and GND can burn the module out. Before you connect it, read the labels next to the pins, not a photo from the internet.</p></div>
+
+<p><b>Libraries:</b> in <code>Sketch › Include Library › Manage Libraries…</code>, search for <code>SSD1306</code> and install <a href="https://github.com/adafruit/Adafruit_SSD1306" target="_blank" rel="noopener">Adafruit SSD1306</a> <b>by Adafruit</b> (similar results such as "ESP8266 and ESP32 OLED driver for SSD1306" from ThingPulse use different commands and won't work with this lesson's code). During installation a window asks whether to also install the dependencies (<a href="https://github.com/adafruit/Adafruit-GFX-Library" target="_blank" rel="noopener">Adafruit GFX Library</a> and Adafruit BusIO); choose <b>Install All</b>. If you closed that window, install those two separately under exactly those names; otherwise you'll get the error <code>Adafruit_GFX.h: No such file or directory</code>. The SSD1306 library talks to the chip, and GFX provides the drawing tools (text, lines, rectangles, circles).</p>
+
+<h4>The screen's coordinate system</h4>
+<figure><div class="frame"><svg viewBox="0 0 640 330" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="The OLED coordinate system">
+  <defs><marker id="ax" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="#2563eb"/></marker></defs>
+  <rect x="80" y="50" width="384" height="192" fill="#0b1020" stroke="#6b7280" stroke-width="2"/>
+  <line x1="80" y1="36" x2="500" y2="36" stroke="#2563eb" stroke-width="2.5" marker-end="url(#ax)"/>
+  <line x1="66" y1="50" x2="66" y2="280" stroke="#2563eb" stroke-width="2.5" marker-end="url(#ax)"/>
+  <text x="508" y="41" font-size="14" fill="#2563eb" font-weight="700">x</text>
+  <text x="60" y="298" font-size="14" fill="#2563eb" font-weight="700">y</text>
+  <text x="80" y="28" font-size="12" fill="#152033" font-family="JetBrains Mono,monospace">(0,0)</text>
+  <text x="470" y="262" font-size="12" fill="#152033" font-family="JetBrains Mono,monospace">(127,63)</text>
+  <text x="88" y="72" font-size="18" fill="#9fe8ff" font-family="JetBrains Mono,monospace">Hello ESP32!</text>
+  <text x="88" y="140" font-size="36" fill="#9fe8ff" font-family="JetBrains Mono,monospace">n = 7</text>
+  <rect x="80" y="200" width="384" height="42" fill="none" stroke="#9fe8ff" stroke-width="2"/>
+  <rect x="86" y="206" width="84" height="30" fill="#9fe8ff"/>
+  <text x="560" y="72" font-size="12" text-anchor="middle" fill="#152033">Size 1: 6×8 pixels</text>
+  <text x="560" y="130" font-size="12" text-anchor="middle" fill="#152033">Size 2: 12×16</text>
+  <text x="560" y="224" font-size="12" text-anchor="middle" fill="#152033">drawRect + fillRect</text>
+  <text x="272" y="318" font-size="13" text-anchor="middle" fill="#4d5b70">The origin is the top-left corner; y grows downward</text>
+</svg></div>
+<figcaption>The 128 × 64 screen (drawn 3× larger). Unlike school math, y increases <b>downward</b>. This convention is the same on almost every display and in computer graphics generally.</figcaption></figure>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"OLED","name":"0.96-inch SSD1306 OLED (I2C)","pins":[["GND","ground"],["VCC","3.3 V power"],["SCL","clock"],["SDA","data"]]}
+  ],
+  "wires":[["GND","OLED.GND","black"],["3V3","OLED.VCC","red"],["GPIO22","OLED.SCL","green"],["GPIO21","OLED.SDA","yellow"]]
+}</script><figcaption>Just four wires. SDA to GPIO21 and SCL to GPIO22.</figcaption></div>
+
+<div class="code" data-file="OLED_Hello.ino" id="c2"><pre>
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+
+const int SCREEN_W = 128;
+const int SCREEN_H = 64;
+Adafruit_SSD1306 display(SCREEN_W, SCREEN_H, &amp;Wire, -1);   // -1 = no reset pin
+
+int counter = 0;
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("SSD1306 not found!");
+    while (true) delay(1000);        // stop here
+  }
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+}
+
+void loop() {
+  display.clearDisplay();             // 1) clear the buffer
+  display.setTextSize(1);             // 6×8-pixel characters
+  display.setCursor(0, 0);
+  display.println("Hello ESP32!");
+  display.setTextSize(2);             // 12×16-pixel characters
+  display.setCursor(0, 24);
+  display.print("n = ");
+  display.println(counter);
+  display.drawRect(0, 50, 128, 14, SSD1306_WHITE);                 // bar frame
+  display.fillRect(2, 52, (counter % 25) * 5, 10, SSD1306_WHITE);  // progress bar
+  display.display();                  // 2) send the buffer to the screen
+  counter++;
+  delay(500);
+}
+</pre></div>
+<ol class="walk" data-for="c2">
+  <li data-lines="1-3"><b class="what">Three libraries.</b> Wire for I2C, GFX for drawing, SSD1306 for the display itself.
+    <span class="why">This division of labor means you can use the same GFX drawing commands on dozens of other displays too (color TFTs and so on).</span></li>
+  <li data-lines="5-7"><b class="what">Creating the display object.</b> The screen size, the I2C bus (<code>&amp;Wire</code>) and the reset pin (<code>-1</code> means there isn't one).
+    <span class="why">The <code>&amp;</code> sign means "the address of" the Wire object; we're telling the library which bus to use (the ESP32 has two I2C buses). 4-pin modules have no reset pin.</span></li>
+  <li data-lines="14-17"><b class="what">Start-up with error checking.</b> <code>begin</code> takes the address <code>0x3C</code>; <code>SSD1306_SWITCHCAPVCC</code> means the module's own internal circuit generates the panel's high voltage. If it fails, it prints a message and stops in an endless loop.
+    <span class="why">Without this check, the program would carry on with a missing display and you'd just see a black screen with no clue. <code>begin</code> also reserves 1 KB of RAM for the buffer (128 × 64 ÷ 8).</span></li>
+  <li data-lines="19"><b class="what">Text color.</b> The SSD1306 is monochrome: <code>SSD1306_WHITE</code> means a lit pixel (the actual color is white, blue or yellow, depending on the model).
+    <span class="why">GFX's default text color may be the same as the background; without this line the text is invisible. Once in setup is enough.</span></li>
+  <li data-lines="23"><b class="what">Step 1: clear the buffer.</b>
+    <span class="why">All drawing commands paint on a "canvas" in the ESP32's RAM, not directly on the screen. If you don't clear it, the new number is drawn on top of the old one and becomes a mess.</span></li>
+  <li data-lines="24-30"><b class="what">Text with a size and a position.</b> <code>setTextSize</code> sets the size, <code>setCursor(x, y)</code> the top-left corner of the first character, and <code>print/println</code> the text or number itself.
+    <span class="why">Just like Serial; because the display class inherits from Print, it has the same print and println. We chose y=24 to leave a gap below the first line (8 pixels tall).</span></li>
+  <li data-lines="31-32"><b class="what">Shapes.</b> <code>drawRect(x, y, width, height, color)</code> draws a frame and <code>fillRect</code> a filled rectangle. The bar's width, <code>(counter % 25) * 5</code>, goes from 0 to 120 pixels.
+    <span class="why"><code>%</code> is the remainder of a division, so after 24 the number returns to 0 and the bar fills up again from the start. 120 + 2 is less than the frame's inner width, so the bar never pokes out of the frame.</span></li>
+  <li data-lines="33"><b class="what">Step 2: display().</b> Sends the whole buffer to the display over I2C.
+    <span class="why">Forgetting this line is the most common reason for a "blank screen". Sending 1024 bytes at 400 kHz takes about 25 milliseconds, so it's best to make all your changes in the buffer first and call display once.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="c2">
+<p>In Wokwi, add the <code>Adafruit SSD1306</code> library from the <b>Library Manager</b> tab (it brings GFX along; if you see an Adafruit_GFX error, add that one separately too). You can also run the I2C scanner code on this circuit to see <code>0x3C</code>.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled1", "top": 60, "left": 200, "attrs": { "i2cAddress": "0x3c" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="dht22">DHT22: temperature and humidity (and an honest confession)</h2>
+<p>The DHT22 (also sold as the AM2302) measures temperature from −40 to 80 °C with an accuracy of about ±0.5 °C, and relative humidity from 0 to 100% with an accuracy of about 2 to 5%. It's cheap and popular.</p>
+<div class="callout warn"><div class="ct">The DHT22 is <b>not</b> an I2C sensor</div>
+<p>In this course's outline the DHT22 sits next to I2C, because it's usually used together with an I2C OLED. But we have to be honest: the DHT22 uses its own <b>proprietary single-wire</b> protocol, which is neither I2C nor Dallas's 1-Wire protocol. The ESP32 sends a start pulse and the sensor answers with 40 bits, where each bit's value is set by the <b>length</b> of its HIGH pulse (about 26 to 28 microseconds = 0, about 70 microseconds = 1). The library measures these timings precisely. The practical result: the DHT22 needs a wire of its own and can't share SDA/SCL with other devices.</p>
+<p>If you want an environmental sensor that really is I2C, look at the <b>BME280</b>: temperature, humidity and air pressure, more accurate and faster, on the same two wires as the OLED at address <code>0x76</code> or <code>0x77</code>. (Careful: the cheaper BMP280 looks similar but has no humidity sensor.)</p></div>
+
+<div class="gallery">
+  <figure><div class="frame"><img src="../assets/img/dht22.svg" alt="DHT22"></div><figcaption>DHT22: a proprietary single-wire protocol<span class="src">Image: Fritzing, CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="../assets/img/bme280.svg" alt="BME280"></div><figcaption>BME280: genuine I2C<span class="src">Image: Fritzing, CC BY-SA 3.0</span></figcaption></figure>
+</div>
+
+<p><b>The bare four-pin DHT22's pins</b> (from the left, with the grille facing you): 1 = VCC, 2 = DATA, 3 = not connected (NC), 4 = GND. Like I2C, the DATA line is "open-drain" and needs a 10 kΩ pull-up resistor between DATA and VCC. The 3-pin modules (the white sensor on a small board) already have that resistor; on the back of the board you'll see a tiny SMD resistor marked <code>103</code> (10 kΩ) or <code>472</code> (4.7 kΩ), so <b>don't</b> add an external one. Module pin orders vary (<code>+ out −</code>, <code>VCC DATA GND</code>, or even <code>− + S</code>); read the labels on the board. The DHT22 works from 3.3 to 6 V; we power it from 3V3 so the DATA line never goes above 3.3 V.</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"DHT","name":"Bare DHT22 (four pins)","img":"dht22.svg","pins":[["VCC","pin 1"],["DATA","pin 2"],["NC","pin 3 (leave unconnected)"],["GND","pin 4"]]},
+    {"id":"R1","name":"10 kΩ resistor (pull-up)","img":"resistor.svg","pins":[["1","to 3V3"],["2","to DATA"]]}
+  ],
+  "wires":[["3V3","DHT.VCC","red"],["GPIO4","DHT.DATA","blue"],["DHT.GND","GND","black"],["3V3","R1.1","red"],["R1.2","DHT.DATA","blue"]]
+}</script><figcaption>The bare four-pin sensor: a 10 kΩ resistor between DATA and 3V3 is required. Pin 3 stays unconnected.</figcaption></div>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"DHTM","name":"3-pin DHT22 module (pull-up on board)","img":"dht22.svg","pins":[["+","VCC"],["OUT","DATA (sometimes S)"],["-","GND"]]}
+  ],
+  "wires":[["3V3","DHTM.+","red"],["GPIO4","DHTM.OUT","blue"],["DHTM.-","GND","black"]]
+}</script><figcaption>The 3-pin module: just three wires, no extra resistor. Read the pin names on your own board.</figcaption></div>
+
+<div class="code" data-file="DHT22_Read.ino" id="c3"><pre>
+#include &lt;DHT.h&gt;
+
+const int DHT_PIN = 4;
+DHT dht(DHT_PIN, DHT22);         // sensor type: DHT22 (AM2302)
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+}
+
+void loop() {
+  delay(2000);                     // DHT22: at most one reading every 2 seconds
+  float h = dht.readHumidity();
+  float t = dht.readTemperature(); // Celsius
+  if (isnan(h) || isnan(t)) {
+    Serial.println("DHT read failed!");
+    return;                        // skip this round
+  }
+  Serial.printf("T=%.1f C  H=%.1f %%\n", t, h);
+}
+</pre></div>
+<ol class="walk" data-for="c3">
+  <li data-lines="1"><b class="what">The DHT library.</b> In the Library Manager, search for <code>DHT22</code> and install <a href="https://github.com/adafruit/DHT-sensor-library" target="_blank" rel="noopener">DHT sensor library</a> <b>by Adafruit</b>. The dependencies window suggests <b>Adafruit Unified Sensor</b>; click <b>Install All</b>. (Related libraries such as "DHT sensor library for ESPx" or "DHTesp" use different commands; don't pick those.)
+    <span class="why">Implementing the protocol's microsecond timing yourself isn't easy; a well-established library does it for you.</span></li>
+  <li data-lines="3-4"><b class="what">A sensor object on GPIO4.</b> We tell it the sensor type is <code>DHT22</code>.
+    <span class="why">The DHT11 and DHT22 use different data formats; the wrong type means meaningless numbers. GPIO4 is a safe, general-purpose pin.</span></li>
+  <li data-lines="12"><b class="what">A 2-second wait.</b>
+    <span class="why">The DHT22 takes a new measurement every 2 seconds. Reading faster either fails or repeats the previous number. (The library itself also answers reads less than 2 seconds apart with the previous value.)</span></li>
+  <li data-lines="13-14"><b class="what">Read humidity and temperature.</b> Both are <code>float</code> (decimal numbers).
+    <span class="why"><code>readTemperature(true)</code> gives Fahrenheit; with no argument it's Celsius.</span></li>
+  <li data-lines="15-18"><b class="what">Check for NaN.</b> If a reading fails, the library returns the special value <code>NaN</code> (Not a Number) instead of a number. <code>isnan</code> detects it and <code>return</code> skips the rest of loop.
+    <span class="why">Without this check, <code>nan</code> would end up on the screen and in the log, or turn every calculation into NaN. A professional rule: validate every sensor number before you use it.</span></li>
+  <li data-lines="19"><b class="what">Print with one decimal place.</b> <code>%.1f</code> means a decimal number with one digit after the point.
+    <span class="why">The sensor is accurate to about half a degree; printing 25.3471 degrees would only show false precision.</span></li>
+</ol>
+<div class="serial">T=24.6 C  H=41.2 %
+T=24.6 C  H=41.3 %
+DHT read failed!
+T=24.7 C  H=41.3 %</div>
+<p>An occasional error is normal (the protocol is sensitive to timing). If every reading fails, look at the troubleshooting table below.</p>
+
+<h3 id="weather">Project: a mini weather station (DHT22 on the OLED)</h3>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"OLED","name":"SSD1306 OLED (I2C)","pins":[["GND","ground"],["VCC","3.3 V"],["SCL","I2C clock"],["SDA","I2C data"]]},
+    {"id":"DHT","name":"DHT22 (four pins)","img":"dht22.svg","pins":[["VCC","pin 1"],["DATA","pin 2"],["NC","pin 3 (leave unconnected)"],["GND","pin 4"]]},
+    {"id":"R1","name":"10 kΩ resistor (pull-up)","img":"resistor.svg","pins":[["1","to 3V3"],["2","to DATA"]]}
+  ],
+  "wires":[["GND","OLED.GND","black"],["3V3","OLED.VCC","red"],["GPIO22","OLED.SCL","green"],["GPIO21","OLED.SDA","yellow"],["3V3","DHT.VCC","red"],["GPIO4","DHT.DATA","blue"],["DHT.GND","GND","black"],["3V3","R1.1","red"],["R1.2","DHT.DATA","blue"]]
+}</script><figcaption>The OLED on I2C (21/22) and the DHT22 on GPIO4 with a 10 kΩ pull-up. If you have the 3-pin DHT22 module, leave the resistor out.</figcaption></div>
+
+<div class="code" data-file="Weather_OLED.ino" id="c4"><pre>
+// Mini weather station: DHT22 on an OLED
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+DHT dht(4, DHT22);
+
+unsigned long lastRead = 0;
+
+void showMessage(const char *msg) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println(msg);
+  display.display();
+}
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found!");
+    while (true) delay(1000);
+  }
+  display.setTextColor(SSD1306_WHITE);
+  dht.begin();
+  showMessage("Waiting for DHT22...");
+}
+
+void loop() {
+  if (millis() - lastRead &lt; 2000) return;   // 2 seconds haven't passed yet
+  lastRead = millis();
+
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) {
+    showMessage("DHT22 read error!");
+    Serial.println("DHT22 read error");
+    return;
+  }
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("Temperature");
+  display.setTextSize(2);
+  display.setCursor(0, 12);
+  display.printf("%.1f C", t);
+  display.setTextSize(1);
+  display.setCursor(0, 36);
+  display.println("Humidity");
+  display.setTextSize(2);
+  display.setCursor(0, 48);
+  display.printf("%.1f %%", h);
+  display.display();
+
+  Serial.printf("T=%.1f C  H=%.1f %%\n", t, h);
+}
+</pre></div>
+<ol class="walk" data-for="c4">
+  <li data-lines="2-5"><b class="what">Four libraries together.</b> The same libraries as the two previous programs.
+    <span class="why">This is how projects are usually combined on a microcontroller: the includes and objects side by side, the setups one after another, the loops merged together.</span></li>
+  <li data-lines="7-8"><b class="what">Two objects: the display and the sensor.</b> This time we wrote the numbers directly (128, 64, 4).
+    <span class="why">Just to keep it short; in a bigger project, named constants are better.</span></li>
+  <li data-lines="12-18"><b class="what">The showMessage helper function.</b> Shows a short piece of text at the top of the screen. <code>const char *msg</code> means "a piece of constant text".
+    <span class="why">The "please wait" message and the "error" message both need exactly this; one function, two uses. Showing errors on the device itself matters, because the finished device won't be connected to a computer where you can watch Serial.</span></li>
+  <li data-lines="33-34"><b class="what">Timing with millis and return.</b> If 2 seconds haven't passed, leave loop immediately.
+    <span class="why">This is a short form of the millis pattern from lesson 3.1: a "guard at the door". loop stays free, and later you can add a button or another task <b>before</b> this line.</span></li>
+  <li data-lines="36-42"><b class="what">Read and validate.</b> On an error, show a message on the OLED and on Serial.
+    <span class="why">The screen must not show an old number as if it were fresh; the user needs to know the sensor has a problem.</span></li>
+  <li data-lines="44-57"><b class="what">The screen layout.</b> A small title (size 1) and a big number (size 2) for the temperature at the top and the humidity at the bottom. <code>display.printf</code> works like Serial.printf.
+    <span class="why">We worked out the y coordinates: the title at y=0 (8 tall), the number at y=12 (16 tall, down to y=28), the second title at y=36, the second number from y=48 to y=64, exactly the bottom edge of the screen. Always check that the heights add up to 64 or less.</span></li>
+  <li data-lines="59"><b class="what">A serial report.</b>
+    <span class="why">The display is for the user; Serial is for you while debugging.</span></li>
+</ol>
+<div class="callout tip"><div class="ct">The degree sign</div>
+<p>GFX's default font has a small circle at position 247. Instead of <code>"%.1f C"</code> you can write: <code>display.printf("%.1f", t); display.write(247); display.print("C");</code>.</p></div>
+<div class="wokwi" data-board="esp32" data-code-from="c4">
+<p>Add these in Wokwi's Library Manager: <code>Adafruit SSD1306</code> and <code>DHT sensor library</code> (and, if you see errors, <code>Adafruit GFX Library</code> and <code>Adafruit Unified Sensor</code>). Wokwi's DHT22 doesn't need a pull-up resistor. Click it and change the temperature and humidity with the sliders. Its data pin is called <code>SDA</code> in Wokwi, but don't be fooled: it isn't I2C.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled1", "top": 60, "left": 200, "attrs": { "i2cAddress": "0x3c" } },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -20, "left": -150, "attrs": { "temperature": "24.5", "humidity": "40" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:4", "blue", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<!-- ================= SPI ================= -->
+<h2 id="spi">SPI: fast, with a select wire for each device</h2>
+<p>SPI has four wires:</p>
+<ul>
+  <li><b>SCK</b> (clock): generated by the ESP32; one tick per bit.</li>
+  <li><b>MOSI</b> (Master Out, Slave In): data from the ESP32 to the device.</li>
+  <li><b>MISO</b> (Master In, Slave Out): data from the device to the ESP32.</li>
+  <li><b>CS</b> (Chip Select, sometimes SS): when the ESP32 pulls this wire LOW, it means "I'm talking to you". Every device has its own separate CS.</li>
+</ul>
+<p>Because data travels both ways at the same time on two separate wires (full-duplex) and no addressing is needed, SPI is much faster than I2C. That's why memory cards and color displays (which move a lot of data) use SPI. The classic ESP32 has two free SPI buses: VSPI (the Arduino default, on pins 18, 19, 23 and 5) and HSPI.</p>
+
+<h3 id="sd">The microSD card module</h3>
+<figure><div class="frame"><img src="../assets/img/sdmodule.svg" alt="A microSD card module"></div><figcaption>A microSD module with GND, VCC, MISO, MOSI, SCK and CS pins.<span class="src">Image: Fritzing, CC BY-SA 3.0</span></figcaption></figure>
+<div class="callout warn"><div class="ct">Three common traps before you start</div>
+<p><b>1) Module voltage:</b> an SD card is 3.3 V only. The common blue modules (with an AMS1117 regulator chip and a 74LVC125 level shifter on board) want <b>5 V</b> on their VCC input; if you give them 3V3, not enough voltage is left after the regulator and the card works sometimes and sometimes not. Simple modules without a regulator must get <b>3V3</b>, and 5 V burns out both the module and the card. Look at the module's board: does it have a three-pin regulator chip? → 5V. No? → 3V3.</p>
+<p><b>2) Format:</b> the ESP32's SD library needs a <b>FAT32</b> (or FAT16) card. Cards of 64 GB and up usually come formatted as exFAT and don't work. The easiest way: a 4 to 32 GB card, formatted as FAT32 with the official SD Card Formatter tool.</p>
+<p><b>3) CS:</b> the CS pin number in the code must be exactly the pin the CS wire is connected to (GPIO5 here).</p></div>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"SD","name":"microSD module (SPI)","img":"sdmodule.svg","pins":[["GND","ground"],["VCC","5V or 3V3 (check your module!)"],["MISO","data to the ESP32 (sometimes DO)"],["MOSI","data to the card (sometimes DI)"],["SCK","clock (sometimes CLK)"],["CS","chip select"]]}
+  ],
+  "wires":[["GND","SD.GND","black"],["5V","SD.VCC","red"],["GPIO19","SD.MISO","blue"],["GPIO23","SD.MOSI","orange"],["GPIO18","SD.SCK","green"],["GPIO5","SD.CS","purple"]]
+}</script><figcaption>The VSPI bus: MISO=19, MOSI=23, SCK=18, CS=5. This diagram is for the common module with a regulator (VCC to 5V). If your module has no regulator, connect VCC to 3V3.</figcaption></div>
+
+<div class="code" data-file="SD_Log.ino" id="c5"><pre>
+// Logging data to a microSD card over SPI (VSPI)
+#include &lt;SPI.h&gt;
+#include &lt;SD.h&gt;
+
+const int SD_CS = 5;              // CS; the rest: SCK=18, MISO=19, MOSI=23
+const char *LOG_FILE = "/log.csv";
+
+void setup() {
+  Serial.begin(115200);
+  if (!SD.begin(SD_CS)) {
+    Serial.println("SD mount failed! (wiring, CS, FAT32?)");
+    while (true) delay(1000);
+  }
+  uint8_t type = SD.cardType();
+  if (type == CARD_NONE) {
+    Serial.println("No SD card inserted");
+    while (true) delay(1000);
+  }
+  Serial.printf("Card size: %llu MB\n", SD.cardSize() / (1024 * 1024));
+
+  if (!SD.exists(LOG_FILE)) {                 // no file yet? write the header
+    File f = SD.open(LOG_FILE, FILE_WRITE);
+    f.println("millis,value");
+    f.close();
+  }
+
+  File f = SD.open(LOG_FILE, FILE_APPEND);    // add to the end of the file
+  if (f) {
+    f.printf("%lu,%d\n", millis(), 42);
+    f.close();                                // closing = really saving
+    Serial.println("Line appended.");
+  }
+
+  f = SD.open(LOG_FILE, FILE_READ);           // read the whole file
+  Serial.println("---- log.csv ----");
+  while (f.available()) Serial.write(f.read());
+  f.close();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="c5">
+  <li data-lines="2-3"><b class="what">Two built-in libraries.</b> SPI for the bus and SD for the FAT file system. Both come installed with the ESP32 core.
+    <span class="why">No separate installation needed. Be careful not to install the Arduino-specific "SD" library (from the Library Manager); it can get mixed up with the ESP32 version.</span></li>
+  <li data-lines="5-6"><b class="what">The CS pin and the file name.</b> On the ESP32, the file name must start with <code>/</code>.
+    <span class="why">The ESP32's SD library wants the full path from the root of the card; <code>"log.csv"</code> without the slash gives an error. The CSV extension means "comma-separated values", which Excel and Google Sheets open directly.</span></li>
+  <li data-lines="10-13"><b class="what">SD.begin(CS).</b> Starts the default SPI bus (18/19/23), talks to the card, and "mounts" the file system.
+    <span class="why">If it fails, we put the three main suspects in the message: wiring, CS and format. A good error message is half the troubleshooting.</span></li>
+  <li data-lines="14-19"><b class="what">Card type and size.</b> <code>cardType</code> gives the type (MMC, SD, SDHC) and <code>cardSize</code> the size in bytes (a 64-bit number; that's why it's <code>%llu</code>).
+    <span class="why">Seeing the right size (for example about 15,000 MB for a 16 GB card) proves the SPI link is completely healthy.</span></li>
+  <li data-lines="21-25"><b class="what">New file? Write a header.</b> If the file doesn't exist, it's created with <code>FILE_WRITE</code> and the first line (the column names) is written.
+    <span class="why">On the ESP32, <code>FILE_WRITE</code> <b>overwrites an existing file from the start</b> (it erases it). That's why we only use it when the file doesn't exist yet.</span></li>
+  <li data-lines="27-32"><b class="what">Append one line.</b> <code>FILE_APPEND</code> opens the file and adds to its end. The CSV line: the time and a sample value (42). <code>if (f)</code> means "if the file opened".
+    <span class="why">In a real logger you'd write the DHT22 temperature instead of 42 (exercise 2). <code>close()</code> is essential: the data first collects in a RAM buffer and is only really written to the card on close (or <code>flush</code>). Power loss before close = lost data.</span></li>
+  <li data-lines="34-37"><b class="what">Read and print the whole file.</b> As long as there are bytes left (<code>available</code>), read one and send it to Serial unchanged.
+    <span class="why">This proves the write really happened. <code>Serial.write</code> sends the byte exactly as it is (unlike print, which turns a number into text).</span></li>
+  <li data-lines="40"><b class="what">An empty loop.</b>
+    <span class="why">All the work was done once in setup. Every time you press the EN button, a new line is added.</span></li>
+</ol>
+<div class="serial">Card size: 15193 MB
+Line appended.
+---- log.csv ----
+millis,value
+412,42
+398,42</div>
+<p>This output is from the <b>second</b> run: the first time you see only one line of data, and every time you press EN another line is added. The millis number is about the same each time, because the line is always written a few hundred milliseconds after power-up. Put the card in your computer and open <code>log.csv</code> to see it with your own eyes.</p>
+<div class="wokwi" data-board="esp32" data-code-from="c5">
+<p>Wokwi has a virtual microSD card. In the simulator we connected the module's VCC to 3V3 (the virtual card has no regulator). No library is needed; SD and SPI are built in.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-microsd-card", "id": "sd1", "top": 40, "left": 220, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "sd1:GND", "esp:GND.2", "black", [] ],
+    [ "sd1:VCC", "esp:3V3", "red", [] ],
+    [ "sd1:DO", "esp:19", "blue", [] ],
+    [ "sd1:DI", "esp:23", "orange", [] ],
+    [ "sd1:SCK", "esp:18", "green", [] ],
+    [ "sd1:CS", "esp:5", "purple", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<!-- ================= UART ================= -->
+<h2 id="uart">UART: the oldest and simplest</h2>
+<p>You've been using UART since day one: <code>Serial.print</code> travels over UART0 (pins TX0=GPIO1 and RX0=GPIO3) to the board's USB chip and from there to the computer. UART has no shared clock; instead, both sides agree on a <b>speed</b> (the baud rate) in advance, for example 9600 bits per second. Each byte is wrapped in a start bit and a stop bit so the receiver knows where it begins and ends.</p>
+<figure><div class="frame"><svg viewBox="0 0 720 200" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="The frame of one byte on UART">
+  <path d="M40 60 H100 V140 H160 V60 H220 V140 H340 V60 H400 V140 H460 V60 H520 V140 H580 V60 H700" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <g font-size="12" text-anchor="middle" fill="#152033">
+    <text x="70" y="45">idle</text><text x="130" y="45" fill="#d6453d" font-weight="700">Start</text>
+    <text x="190" y="45">1</text><text x="250" y="45">0</text><text x="310" y="45">0</text><text x="370" y="45">1</text><text x="430" y="45">0</text><text x="490" y="45">1</text><text x="550" y="45">0</text><text x="610" y="45">1</text>
+    <text x="670" y="45" fill="#12a37f" font-weight="700">Stop</text>
+  </g>
+  <g stroke="#dbe2ec"><line x1="100" y1="30" x2="100" y2="150"/><line x1="160" y1="30" x2="160" y2="150"/><line x1="220" y1="30" x2="220" y2="150"/><line x1="280" y1="30" x2="280" y2="150"/><line x1="340" y1="30" x2="340" y2="150"/><line x1="400" y1="30" x2="400" y2="150"/><line x1="460" y1="30" x2="460" y2="150"/><line x1="520" y1="30" x2="520" y2="150"/><line x1="580" y1="30" x2="580" y2="150"/><line x1="640" y1="30" x2="640" y2="150"/><line x1="700" y1="30" x2="700" y2="150"/></g>
+  <text x="370" y="190" font-size="13" text-anchor="middle" fill="#4d5b70">Each cell ≈ 104 µs at 9600 baud; 8 data bits (LSB first) between Start and Stop</text>
+</svg></div>
+<figcaption>The <code>8N1</code> format: 1 start bit (LOW), 8 data bits, no parity bit (N), 1 stop bit (HIGH). If the two sides use different speeds, the receiver samples the bits at the wrong moments and sees garbled characters.</figcaption></figure>
+<div class="callout analogy"><div class="ct">TX to RX: mouth to ear</div>
+<p>The TX (transmitter) of one device must go to the RX (receiver) of the other, and vice versa. If you connect TX to TX, it's like two people talking mouth to mouth: neither one hears anything. This "crossover" is the most common UART mistake.</p></div>
+
+<h3 id="serial2">Serial2: a free UART for modules</h3>
+<p>The classic ESP32 has three UARTs: <code>Serial</code> (UART0, busy with USB), <code>Serial1</code> and <code>Serial2</code>. Thanks to the GPIO matrix, each UART can be routed to almost any pin. Many boards print RX2 and TX2 next to GPIO16 and GPIO17, and most tutorials use those; we also use Serial2 on 16 and 17 for the GPS.</p>
+<div class="callout warn"><div class="ct">Always write the pins explicitly</div>
+<p>In core 3, if you call <code>Serial2.begin(9600)</code> without pins, the classic ESP32's default is <b>GPIO4 and GPIO25</b>, not 16 and 17 (Serial1's default is GPIO26 and GPIO27). This change was made to stay clear of the PSRAM pins on WROVER modules. Old code that gives no pins and assumes the GPS is on 16/17 receives no data at all on core 3. So always write all four arguments:</p></div>
+<div class="code" data-file="snippet.ino" data-lang="cpp" id="c6"><pre>
+Serial2.begin(9600, SERIAL_8N1, 16, 17);   // baud, format, RX, TX
+</pre></div>
+<ol class="walk" data-for="c6">
+  <li data-lines="1"><b class="what">Four arguments.</b> A speed of 9600, the 8N1 format, the ESP32's RX pin (16) and the ESP32's TX pin (17).
+    <span class="why">The order is "RX first, then TX", written from the ESP32's point of view. 9600 is the NEO-6M's factory default speed. (On WROVER modules, GPIO16 and 17 are connected to the PSRAM; there, choose 4 and 25, for example, and change the wiring too.)</span></li>
+</ol>
+
+<h3 id="gps">The NEO-6M GPS module</h3>
+<p>The GY-NEO6MV2 module has a u-blox NEO-6M chip, a square ceramic antenna, a backup battery or capacitor (to remember satellite information) and an LED. Its output on the UART is plain text: several NMEA "sentences" every second.</p>
+<figure><div class="frame"><svg viewBox="0 0 640 300" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="The NEO-6M GPS module and its pins">
+  <rect x="120" y="40" width="300" height="200" rx="10" fill="#1f5fa8" stroke="#123f73" stroke-width="2"/>
+  <rect x="165" y="90" width="110" height="110" rx="6" fill="#d9d2b6" stroke="#8a826a" stroke-width="2"/>
+  <text x="220" y="140" font-size="13" text-anchor="middle" fill="#152033" font-weight="700">u-blox</text>
+  <text x="220" y="158" font-size="13" text-anchor="middle" fill="#152033" font-weight="700">NEO-6M</text>
+  <circle cx="335" cy="95" r="16" fill="#c0c7d2" stroke="#6b7280" stroke-width="2"/>
+  <text x="335" y="128" font-size="11" text-anchor="middle" fill="#e8eef8">battery/capacitor</text>
+  <circle cx="335" cy="165" r="6" fill="#7fe07f"/>
+  <text x="335" y="190" font-size="11" text-anchor="middle" fill="#e8eef8">LED</text>
+  <rect x="300" y="210" width="40" height="20" rx="3" fill="#d4af37"/>
+  <text x="320" y="252" font-size="11" text-anchor="middle" fill="#152033">antenna socket</text>
+  <g font-family="JetBrains Mono,monospace" font-size="13" font-weight="700">
+    <rect x="420" y="70" width="30" height="16" fill="#d4af37"/><text x="462" y="83" fill="#d6453d">VCC</text>
+    <rect x="420" y="110" width="30" height="16" fill="#d4af37"/><text x="462" y="123" fill="#2563eb">RX</text>
+    <rect x="420" y="150" width="30" height="16" fill="#d4af37"/><text x="462" y="163" fill="#a07e00">TX</text>
+    <rect x="420" y="190" width="30" height="16" fill="#d4af37"/><text x="462" y="203" fill="#222">GND</text>
+  </g>
+  <text x="630" y="83" font-size="12" text-anchor="end" fill="#152033">3.3 to 5 V</text>
+  <text x="630" y="123" font-size="12" text-anchor="end" fill="#152033">from TX2 (GPIO17)</text>
+  <text x="630" y="163" font-size="12" text-anchor="end" fill="#152033">to RX2 (GPIO16)</text>
+  <text x="630" y="203" font-size="12" text-anchor="end" fill="#152033">common ground</text>
+  <text x="270" y="280" font-size="12" text-anchor="middle" fill="#4d5b70">Simplified GY-NEO6MV2 module (the ceramic antenna plugs into the socket by cable)</text>
+</svg></div>
+<figcaption>A simplified map of the module. Check the pin order and names on your own module.</figcaption></figure>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"GPS","name":"NEO-6M GPS module","pins":[["VCC","power"],["RX","module's receiver"],["TX","module's transmitter"],["GND","ground"]]}
+  ],
+  "wires":[["3V3","GPS.VCC","red"],["GPIO17","GPS.RX","yellow"],["GPIO16","GPS.TX","blue"],["GND","GPS.GND","black"]]
+}</script><figcaption>Crossed over: the ESP32's TX2 (GPIO17) to the module's RX, and the module's TX to the ESP32's RX2 (GPIO16). The GY-NEO6MV2 module has a regulator, works from 3V3 or 5V, and its logic level is 3.3 V.</figcaption></div>
+<div class="callout tip"><div class="ct">Only reading? One wire is enough</div>
+<p>To get the position, the ESP32 only listens. So the GPIO17 → module RX wire is optional (you need it for advanced settings such as changing the speed or the update rate).</p></div>
+
+<h3>Step 1: see the raw sentences</h3>
+<div class="code" data-file="GPS_Raw.ino" id="c7"><pre>
+// Viewing the raw NMEA sentences from the GPS
+const int GPS_RX = 16;   // ESP32 RX2 ← GPS module TX
+const int GPS_TX = 17;   // ESP32 TX2 → GPS module RX
+
+void setup() {
+  Serial.begin(115200);                                  // USB to the computer
+  Serial2.begin(9600, SERIAL_8N1, GPS_RX, GPS_TX);       // UART2 to the GPS
+  Serial.println("Waiting for NMEA...");
+}
+
+void loop() {
+  while (Serial2.available()) {        // whenever a byte arrives from the GPS
+    Serial.write(Serial2.read());      // pass it unchanged to the Serial Monitor
+  }
+}
+</pre></div>
+<ol class="walk" data-for="c7">
+  <li data-lines="6-7"><b class="what">Two UARTs at two speeds.</b> Serial at 115200 to the computer and Serial2 at 9600 to the GPS.
+    <span class="why">Each UART has its own speed. The module decides the GPS speed (9600); we decide the USB speed. Because the computer side is faster, no data falls behind.</span></li>
+  <li data-lines="12-14"><b class="what">A simple bridge.</b> As long as there's a byte in Serial2's receive queue, read it and send it to Serial.
+    <span class="why"><code>while</code> (not <code>if</code>) so that every byte that has arrived is emptied in one pass. This "bridge" program is the best debugging tool for any UART module: first check whether the module is talking at all.</span></li>
+</ol>
+<div class="serial">$GPRMC,083559.00,A,3542.12345,N,05124.54321,E,0.004,,230926,,,A*6B
+$GPVTG,,T,,M,0.004,N,0.007,K,A*2C
+$GPGGA,083559.00,3542.12345,N,05124.54321,E,1,08,1.01,1190.2,M,-24.6,M,,*4E
+$GPGSA,A,3,10,23,15,20,18,24,13,29,,,,,1.83,1.01,1.52*0A
+$GPGLL,3542.12345,N,05124.54321,E,083559.00,A,A*6E</div>
+<p>(A made-up example for Tehran; the checksums aren't real.) If the module hasn't found any satellites yet, the sentences arrive with empty fields between the commas; for example <code>$GPGGA,083559.00,,,,,0,00,99.99,,,,,,*6A</code>. That means the link is fine and you just have to wait.</p>
+
+<h3 id="nmea">Dissecting a GGA sentence</h3>
+<p>Let's take apart the classic example from the NMEA documentation, field by field:</p>
+<div class="serial">$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47</div>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Field</th><th>Value</th><th>Meaning</th></tr>
+<tr><td>0</td><td>Sentence type</td><td><code>$GPGGA</code></td><td><code>GP</code> = the GPS system, <code>GGA</code> = "position data" (Global Positioning System Fix Data)</td></tr>
+<tr><td>1</td><td>UTC time</td><td><code>123519</code></td><td>12:35:19 universal time (add your time zone offset; for Iran, add 3:30)</td></tr>
+<tr><td>2</td><td>Latitude</td><td><code>4807.038</code></td><td>Format <code>ddmm.mmm</code>: 48 degrees and 07.038 minutes</td></tr>
+<tr><td>3</td><td>Hemisphere</td><td><code>N</code></td><td>North (S = south)</td></tr>
+<tr><td>4</td><td>Longitude</td><td><code>01131.000</code></td><td>Format <code>dddmm.mmm</code>: 011 degrees and 31.000 minutes</td></tr>
+<tr><td>5</td><td>East/West</td><td><code>E</code></td><td>East (W = west)</td></tr>
+<tr><td>6</td><td>Fix quality</td><td><code>1</code></td><td>0 = no position, 1 = normal GPS, 2 = DGPS</td></tr>
+<tr><td>7</td><td>Number of satellites</td><td><code>08</code></td><td>8 satellites used in the calculation</td></tr>
+<tr><td>8</td><td>HDOP</td><td><code>0.9</code></td><td>Horizontal error factor; the lower the better (under 2 is good)</td></tr>
+<tr><td>9-10</td><td>Altitude</td><td><code>545.4,M</code></td><td>545.4 meters above mean sea level</td></tr>
+<tr><td>11-12</td><td>Geoid separation</td><td><code>46.9,M</code></td><td>The difference between the Earth's ellipsoid and sea level at this point</td></tr>
+<tr><td>13-14</td><td>DGPS data</td><td>Empty</td><td>Age of the differential correction and the station ID; not used here</td></tr>
+<tr><td>—</td><td>Checksum</td><td><code>*47</code></td><td>The XOR of all characters between <code>$</code> and <code>*</code>, in hex. If it doesn't match, the sentence arrived damaged and is thrown away.</td></tr>
+</table></div>
+<div class="callout example"><div class="ct">Converting to decimal degrees (for Google Maps)</div>
+<p>NMEA gives degrees and minutes, but maps want decimal degrees. There are 60 minutes in a degree:</p>
+<p>Latitude: <code>48 + 07.038 ÷ 60 = 48 + 0.1173 = 48.1173°</code> · Longitude: <code>11 + 31.000 ÷ 60 = 11.5167°</code>.</p>
+<p>For S or W, the number becomes negative. A common mistake: reading <code>4807.038</code> as 48.07 degrees; that moves your position by several kilometers. The TinyGPSPlus library does this conversion for you.</p></div>
+
+<h3 id="tinygps">Step 2: TinyGPSPlus, automatic parsing</h3>
+<p>The <a href="https://github.com/mikalhart/TinyGPSPlus" target="_blank" rel="noopener">TinyGPSPlus</a> library (by Mikal Hart; in the Library Manager, search for <code>TinyGPSPlus</code> and install <b>TinyGPSPlus by Mikal Hart</b>; it has no dependencies) takes the characters one at a time, recognizes the sentences, checks the checksum, and hands you ready-to-use numbers.</p>
+<div class="code" data-file="GPS_TinyGPSPlus.ino" id="c8"><pre>
+#include &lt;TinyGPSPlus.h&gt;
+
+TinyGPSPlus gps;
+unsigned long lastPrint = 0;
+
+void setup() {
+  Serial.begin(115200);
+  Serial2.begin(9600, SERIAL_8N1, 16, 17);
+}
+
+void loop() {
+  while (Serial2.available()) {
+    gps.encode(Serial2.read());        // feed every character to the parser
+  }
+
+  if (millis() - lastPrint &gt;= 1000) {
+    lastPrint = millis();
+    if (gps.location.isValid()) {
+      Serial.printf("Lat=%.6f  Lon=%.6f  Sats=%lu  Alt=%.1fm\n",
+                    gps.location.lat(), gps.location.lng(),
+                    (unsigned long)gps.satellites.value(), gps.altitude.meters());
+    } else {
+      Serial.printf("No fix yet... sats=%lu chars=%lu\n",
+                    (unsigned long)gps.satellites.value(), (unsigned long)gps.charsProcessed());
+    }
+    if (millis() &gt; 5000 &amp;&amp; gps.charsProcessed() &lt; 10) {
+      Serial.println("No data from GPS: check TX->RX wiring and baud!");
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="c8">
+  <li data-lines="1-3"><b class="what">The library and the gps object.</b>
+    <span class="why">One object holds all the data: <code>gps.location</code>, <code>gps.satellites</code>, <code>gps.altitude</code>, <code>gps.time</code>, <code>gps.speed</code> and more.</span></li>
+  <li data-lines="12-14"><b class="what">Feeding the parser.</b> Every byte that arrives is handed to <code>gps.encode</code>.
+    <span class="why">This loop has to run constantly and quickly. If you put a <code>delay(1000)</code> in loop, the UART receive queue (about 128 to 256 bytes) fills up and part of the sentences get lost. That's why we timed the printing with millis, not delay.</span></li>
+  <li data-lines="16-17"><b class="what">A report every second.</b> The millis pattern.
+    <span class="why">By default the GPS gives a position once per second; printing faster is pointless.</span></li>
+  <li data-lines="18-21"><b class="what">If the position is valid.</b> <code>isValid()</code> tells you whether a correct position has been received yet. <code>lat()</code> and <code>lng()</code> give decimal degrees (negative for S and W); <code>%.6f</code> means six decimal places, about 10 centimeters.
+    <span class="why">The NEO-6M's real accuracy is about 2.5 meters, but six decimal places is the common standard for maps. Lines 19 to 21 are really one statement, split over three lines for readability.</span></li>
+  <li data-lines="22-25"><b class="what">No fix yet.</b> Shows the number of satellites seen and the number of characters processed.
+    <span class="why">If "chars" keeps going up, the wiring is correct and you just have to wait. These two numbers separate two completely different problems.</span></li>
+  <li data-lines="26-28"><b class="what">A wiring warning.</b> If fewer than 10 characters have arrived after 5 seconds, the problem is the wiring or the speed.
+    <span class="why">A specific error message beats silence. The most common cause: TX and RX swapped.</span></li>
+</ol>
+<div class="serial">No fix yet... sats=0 chars=1834
+No fix yet... sats=3 chars=2310
+Lat=35.702058  Lon=51.409054  Sats=7  Alt=1190.2m</div>
+
+<div class="callout warn"><div class="ct">GPS needs sky, and patience</div>
+<p>GPS satellite signals are extremely weak and don't pass through a concrete roof. Put the antenna next to an open window or, better, outside under open sky (ceramic side of the antenna facing up). The first start (a cold start) can take anywhere from about half a minute in ideal conditions to several minutes or more, because the module has to download the satellite list from the signal itself. Later starts (if the backup battery is charged) are much faster. On most GY-NEO6MV2 modules, the LED starts blinking once per second when it gets a fix. Indoors at your desk? You'll most likely never get a fix. That doesn't mean the module is broken.</p></div>
+
+<div class="callout info"><div class="ct">GPS in Wokwi?</div>
+<p>Wokwi has no official NEO-6M part. You can find a few user-made projects in Wokwi that use a "custom chip" (a chip written in C) to generate fake NMEA sentences; these aren't official and their quality isn't guaranteed. This course's recommendation: do the GPS section with real hardware. To practice parsing without hardware, you can put the sample sentence above in your code as a string and feed it to <code>gps.encode()</code> one character at a time.</p></div>
+
+<h2 id="video">Helpful video</h2>
+<div class="video" data-yt="G6Q_7uE9EKE" data-title="I2C with ESP32 - I2C Tricks &amp; Tips with the ESP32" data-channel="DroneBot Workshop" data-lang="English">
+  <div class="sum"><ul>
+    <li>Watch the opening part about I2C bus basics (master, addresses, pull-ups) carefully and compare it with the sequence diagram in this lesson.</li>
+    <li>Pay attention to the part that uses the ESP32's two I2C buses at the same time: when two modules have the same address, that's the solution.</li>
+    <li>Treat the part about building your own I2C device (a peripheral) as optional for now; you don't need it for this lesson.</li>
+  </ul></div>
+</div>
+<p>References: <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/i2c.html" target="_blank" rel="noopener">the I2C</a>, <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/spi.html" target="_blank" rel="noopener">SPI</a> and <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/serial.html" target="_blank" rel="noopener">Serial (UART)</a> documentation for Arduino-ESP32, and <a href="https://github.com/espressif/arduino-esp32/tree/master/libraries/SD" target="_blank" rel="noopener">the ESP32 SD library</a>.</p>
+
+<h2 id="debug">When it doesn't work: troubleshooting by protocol</h2>
+<h3>I2C and the OLED</h3>
+<div class="table-wrap"><table>
+<tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+<tr><td>Scanner: <code>No I2C devices found</code></td><td>SDA and SCL swapped, a loose wire, or the module has no power</td><td>Check SDA=21 and SCL=22; measure the module's VCC with a multimeter.</td></tr>
+<tr><td>The scanner finds the device, but you get <code>SSD1306 not found</code></td><td>The address in the code differs from the scanner's address (0x3D instead of 0x3C)</td><td>Put the address the scanner showed into <code>display.begin</code>.</td></tr>
+<tr><td>The program runs but the screen stays black</td><td><code>display.display()</code> was forgotten</td><td>Call display() after each batch of drawing.</td></tr>
+<tr><td>Text is drawn on top of itself and is a mess</td><td>No <code>clearDisplay()</code> at the start of each frame</td><td>Every time: clear → draw → display.</td></tr>
+<tr><td>The scanner shows random addresses, or every address</td><td>No pull-ups (a module without resistors) or the wires are too long</td><td>4.7 kΩ resistors from SDA and SCL to 3V3; keep wires under 30 centimeters.</td></tr>
+<tr><td>The screen lights up but the image is shifted, has a noisy strip along one edge, or is scrambled</td><td>The display chip is an SH1106, not an SSD1306 (common on 1.3-inch OLEDs and sometimes on 0.96-inch ones)</td><td>Install the <code>Adafruit SH110X</code> library and use <code>Adafruit_SH1106G</code> instead of <code>Adafruit_SSD1306</code>. Only two things differ: <code>display.begin(0x3C, true)</code> and the color <code>SH110X_WHITE</code>; the other drawing commands are the same.</td></tr>
+<tr><td>Two modules with the same address</td><td>For example two OLEDs at 0x3C</td><td>Change the address jumper on one of them, or move the second one to the second bus (<code>Wire1</code>) on other pins.</td></tr>
+</table></div>
+<h3>DHT22</h3>
+<div class="table-wrap"><table>
+<tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+<tr><td>Always <code>DHT read failed</code> or nan</td><td>No pull-up (bare sensor), the wrong pin, or the sensor type in the code is DHT11</td><td>For a bare sensor, 10 kΩ between DATA and VCC; pin 2 to GPIO4; <code>DHT22</code> in the constructor.</td></tr>
+<tr><td>The 3-pin module gets hot or never answers</td><td>You wired the pins from a photo on the internet and VCC and GND are swapped</td><td>Unplug USB immediately; read the labels on the module's board (<code>+</code>, <code>−</code>, <code>out</code>/<code>S</code>) and wire it again.</td></tr>
+<tr><td>Occasional errors, mostly fine</td><td>Reading more often than every 2 seconds, or a very long wire</td><td>Keep 2 seconds between reads; validate with isnan and ignore a single error.</td></tr>
+<tr><td>The temperature reads a few degrees too high</td><td>Heat from the ESP32 itself or the regulator reaches the sensor</td><td>Place the sensor a few centimeters away from the board.</td></tr>
+</table></div>
+<h3>SPI and the SD card</h3>
+<div class="table-wrap"><table>
+<tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+<tr><td><code>SD mount failed</code></td><td>The card is exFAT/NTFS, wrong VCC (3V3 on a module with a regulator), wrong CS, or MISO/MOSI swapped</td><td>A card of ≤32 GB formatted FAT32; VCC to match the module type; CS=5; MOSI=23, MISO=19.</td></tr>
+<tr><td>It mounts sometimes and sometimes not</td><td>Weak power (the card draws current spikes while writing) or long wires</td><td>Short wires; a module with a regulator on 5V; a 10 µF capacitor next to the module.</td></tr>
+<tr><td>The file exists but is empty</td><td><code>close()</code> wasn't called, or the power was cut before it</td><td>Call close or flush after every write.</td></tr>
+<tr><td>The file is rewritten from scratch every time</td><td><code>FILE_WRITE</code> instead of <code>FILE_APPEND</code></td><td>Use FILE_APPEND to add to it.</td></tr>
+</table></div>
+<h3>UART and the GPS</h3>
+<div class="table-wrap"><table>
+<tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+<tr><td>Nothing arrives at all (chars=0)</td><td>TX is connected to TX</td><td>Module TX → GPIO16 (RX2).</td></tr>
+<tr><td>Garbled, strange characters</td><td>Wrong speed (for example 115200 instead of 9600)</td><td><code>Serial2.begin(9600, ...)</code>.</td></tr>
+<tr><td>Sentences arrive but with empty fields and Fix=0</td><td>The module hasn't found satellites yet</td><td>Go outside, antenna facing the sky, wait 5 to 15 minutes the first time.</td></tr>
+<tr><td>The coordinates are several kilometers off</td><td>A wrong manual ddmm.mmm to degrees conversion</td><td>Divide the minutes by 60, or use the library's lat()/lng().</td></tr>
+<tr><td>In a big program, the GPS sometimes loses data</td><td>A long delay in loop, and the UART queue overflows</td><td>Remove the delay and use the millis pattern; or enlarge the queue with <code>Serial2.setRxBufferSize(1024)</code> <b>before</b> begin.</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">Coach's advice</div>
+<p>With every new module, follow my <b>fixed sequence</b> and don't skip a step: (1) The datasheet or the labels on the module: voltage and pin order. (2) Wiring with the right colors, checked against the connection table wire by wire. (3) The simplest possible program: the I2C scanner, the UART bridge, or just <code>SD.begin</code> on its own. (4) Only after you've seen an answer in step 3, move on to the full library and the project. Anyone who jumps straight from step 1 to the full project has no idea which layer the problem is in when it doesn't work. This lesson had three protocols; practice each one separately until it feels natural, then combine them.</p></div>
+
+<h2 id="quiz">Lesson quiz</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">You have an OLED and a BME280 on an I2C bus. How does the ESP32 decide which one it's talking to?</p>
+  <ol><li data-why="I2C has no separate select wire; that's how SPI works.">With a separate CS wire for each one</li><li>By sending each device's 7-bit address at the start of the message</li><li data-why="All devices are on the same SDA and SCL.">Each one has its own SDA</li><li data-why="The speed is the same for everything on the bus.">By using different speeds</li></ol>
+  <div class="fb">Every I2C device has an address (for example the OLED is <code>0x3C</code> and the BME280 <code>0x76</code>) and only answers its own address.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">The I2C scanner found address <code>0x3C</code> and the OLED code runs without errors, but the screen shows nothing. What's the most likely problem?</p>
+  <ol><li data-why="The scanner found the device, so the wires are fine.">SDA and SCL are swapped</li><li data-why="With missing pull-ups the scanner usually wouldn't find anything either.">Pull-up resistors are needed</li><li data-why="begin didn't fail, so the address is right.">The address is wrong</li><li><code>display.display()</code> isn't being called</li></ol>
+  <div class="fb">Drawing commands only paint in the RAM buffer; <code>display()</code> sends the buffer to the screen.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">Which statement about the DHT22 is true?</p>
+  <ol><li>It uses a proprietary single-wire protocol and isn't I2C; it needs at least 2 seconds between readings</li><li data-why="The DHT22 has no I2C address; it's the BME280 that sits on SDA/SCL.">It's an I2C sensor at address 0x76</li><li data-why="Reading more often than every 2 seconds either fails or repeats the last number.">You can read it every 10 milliseconds</li><li data-why="The DATA line of the 4-pin DHT22 needs a pull-up.">It never needs a pull-up resistor</li></ol>
+  <div class="fb">The DHT22 encodes bits as pulse lengths. For a genuine I2C environmental sensor, use the BME280.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">In SPI, what does the MISO wire do?</p>
+  <ol><li data-why="The clock is on SCK.">It generates the clock</li><li data-why="That's CS's job.">It selects the device</li><li>It carries data from the device to the ESP32</li><li data-why="That's MOSI: Master Out.">It carries data from the ESP32 to the device</li></ol>
+  <div class="fb">MISO = Master In, Slave Out. On the ESP32's default VSPI bus it's GPIO19.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">The SD code gives <code>SD mount failed</code> with a new 128 GB card, but the same wiring works with an old 8 GB card. Why?</p>
+  <ol><li data-why="The wiring worked with the other card, so it's correct.">MISO and MOSI are swapped</li><li>The big card is probably formatted as exFAT, and the library needs FAT32</li><li data-why="The ESP32 supports SDHC cards; the problem is the format.">The ESP32 can't read cards larger than 4 GB</li><li data-why="CS was the same in both cases.">CS must be GPIO15</li></ol>
+  <div class="fb">Cards above 32 GB are usually exFAT. A card of 32 GB or less, formatted FAT32, is the safest choice.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">With <code>Serial2.begin(9600, SERIAL_8N1, 16, 17)</code>, which ESP32 pin should the GPS module's TX pin connect to?</p>
+  <ol><li data-why="GPIO17 is the ESP32's own TX pin; TX to TX means nobody hears anything.">GPIO17</li><li data-why="GPIO1 is TX0, used for USB.">GPIO1</li><li data-why="GPIO3 is UART0's (USB's) receiver and would break uploading.">GPIO3</li><li>GPIO16</li></ol>
+  <div class="fb">The third argument (16) is the ESP32's RX. The module's transmitter → the ESP32's receiver: crossed over.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">The GPS reports <code>3542.12345,N</code>. Roughly what is the latitude in decimal degrees?</p>
+  <ol><li data-why="That's exactly the common mistake: you read the minutes directly as decimals.">35.42</li><li data-why="3542 degrees makes no sense on Earth!">3542.12</li><li>35.702</li><li data-why="The minus sign is only for S.">-35.702</li></ol>
+  <div class="fb"><code>35 + 42.12345 ÷ 60 ≈ 35.702°</code>. The NMEA format is degrees and minutes, not decimal degrees.</div>
+</div>
+
+<h2 id="practice">Exercises</h2>
+<div class="exercise"><div class="ct">Exercise 1: a temperature graph on the OLED</div>
+<p>Change the weather station project so it keeps the last 64 temperature readings in an array and draws a simple line graph in the right half of the screen (x from 64 to 127). 15 degrees should be the bottom of the graph and 35 degrees the top.</p>
+<details><summary>Hint</summary><p><code>float hist[64];</code> and shift the values along by one slot each time (or keep a circular index). For each point: <code>int y = map(t * 10, 150, 350, 63, 0);</code> (multiplied by 10 because map works with whole numbers) and <code>display.drawLine(x1, y1, x2, y2, SSD1306_WHITE)</code> between consecutive points. Keep y between 0 and 63 with <code>constrain</code>.</p></details>
+</div>
+<div class="exercise"><div class="ct">Exercise 2: a temperature logger on the SD card</div>
+<p>Combine the DHT22 and the SD card: every 10 seconds, append a <code>millis,temp,humidity</code> line to <code>/weather.csv</code>. Don't write nan readings. Later, open the file in Excel and draw a chart.</p>
+<details><summary>Hint</summary><p>The DHT22 is on GPIO4 and doesn't clash with the SPI pins (5, 18, 19, 23). In loop, with millis, every 10000 ms: read, check with isnan, <code>SD.open(..., FILE_APPEND)</code>, <code>f.printf("%lu,%.1f,%.1f\n", millis(), t, h)</code> and close.</p></details>
+<details><summary>Answer</summary>
+<div class="code" data-file="Weather_Logger.ino" id="ex2ans"><pre>
+#include &lt;SPI.h&gt;
+#include &lt;SD.h&gt;
+#include &lt;DHT.h&gt;
+
+DHT dht(4, DHT22);
+unsigned long lastLog = 0;
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  if (!SD.begin(5)) {
+    Serial.println("SD mount failed!");
+    while (true) delay(1000);
+  }
+  if (!SD.exists("/weather.csv")) {
+    File f = SD.open("/weather.csv", FILE_WRITE);
+    f.println("millis,temp,humidity");
+    f.close();
+  }
+}
+
+void loop() {
+  if (millis() - lastLog &lt; 10000) return;
+  lastLog = millis();
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) { Serial.println("DHT error, skipped"); return; }
+  File f = SD.open("/weather.csv", FILE_APPEND);
+  if (!f) { Serial.println("open failed"); return; }
+  f.printf("%lu,%.1f,%.1f\n", millis(), t, h);
+  f.close();
+  Serial.printf("logged %.1f C %.1f %%\n", t, h);
+}
+</pre></div>
+<ol class="walk" data-for="ex2ans">
+  <li data-lines="15-19"><b class="what">The header only once.</b> Just like the SD_Log program.
+    <span class="why">If you wrote the header every time, text lines would end up in the middle of the data and Excel would draw a broken chart.</span></li>
+  <li data-lines="23-24"><b class="what">A time guard.</b> Once every 10 seconds.
+    <span class="why">Every write to an SD card uses up a little of its life; logging faster than you need only makes the file bigger and wears out the card.</span></li>
+  <li data-lines="27-31"><b class="what">Safe writing.</b> nan readings are skipped, a file that won't open is skipped, and the file is closed after every line.
+    <span class="why">A logger usually runs for hours unattended; it has to cope with any single error, and a sudden power cut should lose at most one line.</span></li>
+</ol>
+</details>
+</div>
+<div class="exercise"><div class="ct">Exercise 3: a GPS speedometer on the OLED</div>
+<p>Using TinyGPSPlus, show the speed (<code>gps.speed.kmph()</code>) in text size 3 and the number of satellites in size 1 on the OLED. Until there's a fix, show "Searching..." and the number of characters received. Try it with a power bank in a car or on a bike.</p>
+<details><summary>Hint</summary><p>The OLED on I2C (21, 22) and the GPS on UART2 (16, 17) share no pins. Keep the <code>gps.encode</code> loop free of delays and update the screen only every 500 ms with millis. Use <code>gps.speed.isValid()</code> too.</p></details>
+</div>
+
+<div class="callout info"><div class="ct">The lesson in three lines</div>
+<p><b>I2C</b> has two wires (SDA=21, SCL=22) with pull-ups and an address for each device; scanner first, then the library; the OLED is at <code>0x3C</code> with the cycle clear → draw → <code>display()</code>. The DHT22 has its own single-wire protocol (not I2C), needs a 10 kΩ pull-up and at least 2 seconds between reads, and you check its output with <code>isnan</code>. <b>SPI</b> (VSPI: 23/19/18 and CS=5) is fast and is used for a FAT32 SD card with <code>FILE_APPEND</code> and <code>close()</code>. <b>UART</b> is crossed over (TX to RX), both sides must use the same speed, and the GPS on <code>Serial2.begin(9600, SERIAL_8N1, 16, 17)</code> sends NMEA sentences that TinyGPSPlus turns into decimal degrees; only under open sky.</p></div>
+
+</article>
+</body>
+</html>

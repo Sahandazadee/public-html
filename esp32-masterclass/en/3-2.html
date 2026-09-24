@@ -1,0 +1,687 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PWM: dimming an LED and driving a servo · ESP32 Masterclass</title>
+<meta name="description" content="ESP32 PWM made simple: duty cycle, the trade-off between frequency and resolution, the LEDC peripheral and the core 3 API, a breathing LED, a potentiometer dimmer, an SG90 servo with ESP32Servo and with hand-calculated pulses, and a buzzer.">
+<link rel="alternate" hreflang="fa" href="../3-2.html"><link rel="alternate" hreflang="en" href="3-2.html">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="../assets/course.js"></script>
+<script defer src="../assets/glossary-en.js"></script>
+<script defer src="../assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="3-2">
+
+<p class="lede">A digital pin has only two states: 0 or 3.3 V. So how do you make an LED glow at "half brightness", or tell a motor "go to exactly 73 degrees"? The answer is a clever trick called PWM: switch the pin on and off so fast that the outside world only feels the "average". In this lesson you'll understand PWM from the ground up, work with the ESP32's dedicated PWM hardware (LEDC), and control a servo motor precisely.</p>
+
+<div class="goals">
+  <div><h4>🎯 After this lesson you can</h4><ul>
+    <li>Explain duty cycle, frequency and resolution with real numbers</li>
+    <li>Fade an LED smoothly up and down with <code>ledcAttach</code> and <code>ledcWrite</code> (core 3)</li>
+    <li>Recognize old core 2 code (<code>ledcSetup</code>) in online tutorials and translate it</li>
+    <li>Power an SG90 servo correctly and control it both with the ESP32Servo library and without it</li>
+    <li>Make sounds and melodies with a buzzer</li>
+  </ul></div>
+  <div><h4>🧰 Prerequisites and parts</h4><ul>
+    <li>Lesson <a href="3-1.html">3.1</a> (potentiometer, millis and the ADC)</li>
+    <li>An ESP32 board, a breadboard, jumper wires</li>
+    <li>An LED + 220 Ω resistor, a 10 kΩ potentiometer</li>
+    <li>An SG90 (or MG90S) servo motor</li>
+    <li>Optional: a passive buzzer, a 5 V 2 A power supply, a 470 to 1000 µF capacitor</li>
+  </ul></div>
+</div>
+
+<div class="gallery">
+  <figure><div class="frame"><img src="../assets/img/led.svg" alt="LED"></div><figcaption>LED<span class="src">Image: Fritzing, CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="../assets/img/pot.svg" alt="Potentiometer"></div><figcaption>10 kΩ potentiometer<span class="src">Image: Fritzing, CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="../assets/img/servo.svg" alt="A small servo motor"></div><figcaption>SG90 servo motor (three wires)<span class="src">Image: Fritzing, CC BY-SA 3.0</span></figcaption></figure>
+  <figure><div class="frame"><img src="../assets/img/buzzer.svg" alt="Buzzer"></div><figcaption>Buzzer<span class="src">Image: Fritzing, CC BY-SA 3.0</span></figcaption></figure>
+</div>
+
+<h2 id="what">What is PWM? On and off, very fast</h2>
+<p>PWM stands for Pulse Width Modulation. The name sounds scary, but the idea is simple: we switch the pin on and off thousands of times per second and only change the <b>ratio</b> of on-time to the total time. That ratio is called the <b>duty cycle</b>.</p>
+
+<figure><div class="frame"><svg viewBox="0 0 700 360" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="PWM waveforms with 25, 50 and 75 percent duty cycle">
+  <g font-size="13" fill="#152033">
+    <text x="20" y="62" font-weight="800">25%</text>
+    <text x="20" y="172" font-weight="800">50%</text>
+    <text x="20" y="282" font-weight="800">75%</text>
+  </g>
+  <g stroke="#dbe2ec" stroke-width="1"><line x1="80" y1="90" x2="600" y2="90"/><line x1="80" y1="200" x2="600" y2="200"/><line x1="80" y1="310" x2="600" y2="310"/></g>
+  <path d="M80 90 V40 H110 V90 H200 V40 H230 V90 H320 V40 H350 V90 H440 V40 H470 V90 H560 V40 H590 V90 H600" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <path d="M80 200 V150 H140 V200 H200 V150 H260 V200 H320 V150 H380 V200 H440 V150 H500 V200 H560 V150 H600" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <path d="M80 310 V260 H170 V310 H200 V260 H290 V310 H320 V260 H410 V310 H440 V260 H530 V310 H560 V260 H600" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <g stroke="#e0781f" stroke-width="2.5" stroke-dasharray="7 5"><line x1="80" y1="77.5" x2="600" y2="77.5"/><line x1="80" y1="175" x2="600" y2="175"/><line x1="80" y1="272.5" x2="600" y2="272.5"/></g>
+  <g font-size="12" fill="#e0781f" font-weight="700">
+    <text x="610" y="82">≈0.83V</text><text x="610" y="180">≈1.65V</text><text x="610" y="277">≈2.48V</text>
+  </g>
+  <path d="M200 112 H320" stroke="#152033" stroke-width="1.5" marker-start="url(#a1)" marker-end="url(#a1)"/>
+  <defs><marker id="a1" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="#152033"/></marker></defs>
+  <text x="260" y="128" font-size="12" text-anchor="middle" fill="#152033">one period</text>
+  <text x="350" y="345" font-size="13" text-anchor="middle" fill="#4d5b70">Dashed orange line = the average voltage the load (an LED or a motor, say) "feels"</text>
+</svg></div>
+<figcaption>Three PWM waves with the same frequency and different duty cycles. The pin is always either 0 or 3.3 V; only the width of the "on" part changes.</figcaption></figure>
+
+<div class="callout analogy"><div class="ct">An example: a tap and a glass</div>
+<p>Imagine a tap that has only two settings: fully open or fully closed. If you want a glass to fill "slowly", you open the tap for one second, close it for three seconds, and repeat. Overall, the glass fills at a quarter of the speed. That's exactly what PWM does, just with voltage and thousands of times per second.</p></div>
+
+<div class="callout example"><div class="ct">With numbers: the average voltage</div>
+<p>Average voltage = on-voltage × duty cycle.</p>
+<p>25% duty: <code>3.3 × 0.25 ≈ 0.83V</code> · 50% duty: <code>3.3 × 0.50 = 1.65V</code> · 75% duty: <code>3.3 × 0.75 ≈ 2.48V</code>.</p>
+<p>If you put a multimeter on a PWM pin, it shows roughly these numbers, because a multimeter is slow too and takes an average. But remember: at any single instant the pin really is either 0 or 3.3 V.</p></div>
+
+<h3 id="eye">Why does the LED look dimmer?</h3>
+<p>Unlike an incandescent bulb, an LED turns on and off extremely fast (in nanoseconds). So at 25% PWM, the LED really is fully lit for 25% of the time and completely off for the other 75%. The dimming happens in <b>your eyes and brain</b>: the human eye can't separate changes faster than about 50 to 100 per second, so it averages the light. It's the same effect that turns 24 still pictures per second into a "moving picture" at the cinema.</p>
+<div class="callout why"><div class="ct">Why 5 kHz for an LED?</div>
+<p>Below about 100 Hz you can see flicker, especially out of the corner of your eye or when you move your head. A phone camera records dark bands even at a few hundred hertz. 5000 Hz is high enough that neither your eye nor a camera notices anything, and still low enough to give good resolution (next section).</p></div>
+
+<h2 id="freq-res">Frequency and resolution: a trade-off</h2>
+<p>Two numbers define a PWM signal:</p>
+<ul>
+  <li><b>Frequency:</b> how many on/off periods happen every second (for example, 5000 Hz means each period lasts 0.2 ms).</li>
+  <li><b>Resolution:</b> how many steps each period is divided into. 8 bits means <code>2<sup>8</sup> = 256</code> steps (duty from 0 to 255); 12 bits means 4096 steps (0 to 4095).</li>
+</ul>
+<p>The LEDC hardware counts those steps with an internal clock. On the classic ESP32 that clock runs at 80 MHz, so every period needs <code>2<sup>bits</sup></code> clock ticks. The golden rule:</p>
+<div class="callout info"><div class="ct">The frequency × steps rule</div>
+<p><code>frequency × 2<sup>resolution</sup> ≤ 80,000,000</code> (for the classic ESP32 with its 80 MHz clock)</p></div>
+<div class="table-wrap"><table>
+<tr><th>Frequency</th><th>Resolution</th><th>Product</th><th>Result</th><th>Use</th></tr>
+<tr><td>5,000 Hz</td><td>8 bits (256)</td><td>1.28 MHz</td><td>✅</td><td>A simple LED</td></tr>
+<tr><td>5,000 Hz</td><td>12 bits (4096)</td><td>20.48 MHz</td><td>✅</td><td>An LED with very smooth fades</td></tr>
+<tr><td>5,000 Hz</td><td>14 bits (16384)</td><td>81.92 MHz</td><td>❌ more than 80</td><td>Doesn't work; ledcAttach reports an error</td></tr>
+<tr><td>50 Hz</td><td>16 bits (65536)</td><td>3.28 MHz</td><td>✅</td><td>Servo motor</td></tr>
+<tr><td>20,000 Hz</td><td>10 bits (1024)</td><td>20.48 MHz</td><td>✅</td><td>DC motor (above human hearing)</td></tr>
+<tr><td>40 MHz</td><td>1 bit (2)</td><td>80 MHz</td><td>✅ the absolute limit</td><td>Only a 50% square wave</td></tr>
+</table></div>
+<div class="callout analogy"><div class="ct">An example: a ruler and speed</div>
+<p>Imagine you have only 80 million "ticks" to spend every second. If you split each period into 256 parts, you can fit a lot of periods into a second (high frequency). If you want each period to have 65,536 tiny parts, fewer periods fit. More resolution = lower frequency; always.</p></div>
+<div class="callout warn"><div class="ct">There's a lower frequency limit too</div>
+<p>The LEDC clock divider has a limited range, so each resolution also has a minimum frequency. For example, a very low frequency combined with a very low resolution may be rejected. According to the documentation, if you need a low frequency, <b>increase</b> the resolution, not decrease it. For the jobs in this lesson (5 kHz and 50 Hz) there's nothing to worry about.</p></div>
+
+<h2 id="ledc">LEDC: the PWM factory inside the ESP32</h2>
+<p>The ESP32 doesn't use the CPU to generate PWM; it has a separate hardware block called LEDC (LED Control). Once you set the duty, LEDC produces the wave on its own and the CPU is free to do anything else. Despite its name, LEDC is also used for motors, servos and buzzers.</p>
+<ul>
+  <li>The classic ESP32 has <b>16 channels</b> (two groups of 8, each group with 4 timers). That means up to 16 independent PWM pins at the same time. (The ESP32-S2 and ESP32-S3 have eight channels and the ESP32-C3 has six.)</li>
+  <li>Any GPIO that can be an output can do PWM. So GPIO34 to 39 (input-only) can't.</li>
+  <li>Channels with the same frequency and resolution share one timer. So if you have 5 LEDs at 5 kHz and 8 bits, they all use a single timer.</li>
+</ul>
+
+<h3 id="api">The core 3 API: just two main functions</h3>
+<div class="table-wrap"><table>
+<tr><th>Function</th><th>What it does</th><th>Example</th></tr>
+<tr><td><code>ledcAttach(pin, freq, res)</code></td><td>Connects the pin to an LEDC channel (the channel is picked automatically). Returns <code>true</code> if it succeeds.</td><td><code>ledcAttach(4, 5000, 8);</code></td></tr>
+<tr><td><code>ledcWrite(pin, duty)</code></td><td>Sets the duty, from 0 to <code>2<sup>res</sup> − 1</code>.</td><td><code>ledcWrite(4, 128);</code> → 50%</td></tr>
+<tr><td><code>ledcFade(pin, start, end, ms)</code></td><td>The hardware changes the duty smoothly by itself over the given time.</td><td><code>ledcFade(4, 0, 255, 1000);</code></td></tr>
+<tr><td><code>ledcWriteTone(pin, freq)</code></td><td>A 50% square wave at any frequency you choose (for a buzzer). The pin must already be attached.</td><td><code>ledcWriteTone(25, 440);</code></td></tr>
+<tr><td><code>ledcDetach(pin)</code></td><td>Disconnects the pin from LEDC.</td><td><code>ledcDetach(4);</code></td></tr>
+</table></div>
+
+<div class="callout warn"><div class="ct">Warning: old code from the internet (core 2) doesn't compile on core 3</div>
+<p>Most tutorials written before 2024 use the core 2 API, which worked with <b>channel numbers</b>. If you copy that code, you'll get the error <code>'ledcSetup' was not declared in this scope</code>. Here's the translation:</p>
+<div class="table-wrap"><table>
+<tr><th>Core 2 (old)</th><th>Core 3 (current, used in this course)</th></tr>
+<tr><td><code>ledcSetup(0, 5000, 8);</code><br><code>ledcAttachPin(4, 0);</code></td><td><code>ledcAttach(4, 5000, 8);</code></td></tr>
+<tr><td><code>ledcWrite(0, 128);</code> → <b>channel</b> number</td><td><code>ledcWrite(4, 128);</code> → <b>pin</b> number</td></tr>
+<tr><td><code>ledcDetachPin(4);</code></td><td><code>ledcDetach(4);</code></td></tr>
+</table></div>
+<p>The biggest trap: both versions have a function called <code>ledcWrite</code>, but in the old version the first number was the <b>channel</b> and in the new one it's the <b>pin</b>. If you want to pick the channel yourself, core 3 has <code>ledcAttachChannel(pin, freq, res, channel)</code>. Check your core version in the Arduino IDE under <code>Tools › Board › Boards Manager</code> (esp32 by Espressif Systems, version 3.x).</p></div>
+
+<h2 id="breathing">Project 1: a breathing LED</h2>
+<p>The same LED circuit as lesson 2.3: GPIO4 → 220 Ω resistor → LED → GND. No hardware changes are needed; we simply use PWM instead of digitalWrite.</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO4 side"],["2","LED side"]]},
+    {"id":"LED1","name":"Red LED","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−)"]]}
+  ],
+  "wires":[["GPIO4","R1.1","orange","PWM"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>The LED circuit with PWM on GPIO4; exactly the circuit from lesson 2.3.</figcaption></div>
+
+<div class="code" data-file="Breathing_LED.ino" id="c1"><pre>
+// Breathing LED with LEDC
+const int LED_PIN = 4;
+const int PWM_FREQ = 5000;      // 5kHz: far above what the eye can notice
+const int PWM_RES  = 8;         // 8 bits: duty from 0 to 255
+
+void setup() {
+  Serial.begin(115200);
+  if (!ledcAttach(LED_PIN, PWM_FREQ, PWM_RES)) {
+    Serial.println("ledcAttach failed!");
+  }
+}
+
+void loop() {
+  for (int duty = 0; duty &lt;= 255; duty++) {   // slowly brighter
+    ledcWrite(LED_PIN, duty);
+    delay(8);
+  }
+  for (int duty = 255; duty &gt;= 0; duty--) {   // slowly dimmer
+    ledcWrite(LED_PIN, duty);
+    delay(8);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="c1">
+  <li data-lines="3-4"><b class="what">Two PWM constants.</b> A frequency of 5000 Hz and a resolution of 8 bits.
+    <span class="why"><code>5000 × 256 = 1.28MHz</code> is far below the 80 MHz limit. 256 steps are plenty for the eye, and giving these numbers names makes them easy to change later when you experiment.</span></li>
+  <li data-lines="8-10"><b class="what">ledcAttach with error checking.</b> Connects pin 4 to an LEDC channel with the settings above. If that fails (for example, the frequency and resolution combination is impossible), it returns <code>false</code> and we print a message.
+    <span class="why"><code>!</code> means "not". Checking the return value is a good habit: if one day you set <code>PWM_RES</code> to 14, you get a clear message instead of a dark LED and a lot of confusion. Notice that <code>pinMode</code> is no longer needed; ledcAttach makes the pin an output by itself.</span></li>
+  <li data-lines="14-17"><b class="what">The brightening loop.</b> Duty goes from 0 to 255, 8 milliseconds per step.
+    <span class="why">256 steps × 8 ms ≈ 2 seconds to reach full brightness; a slow pace that looks like breathing. Make the 8 smaller and it breathes faster.</span></li>
+  <li data-lines="15"><b class="what">ledcWrite(pin, duty).</b> Sets the duty in the hardware. From that moment LEDC produces the wave by itself until the next command.
+    <span class="why">In core 3 the first number is the <b>pin</b>, not the channel. Don't mix this up with old code.</span></li>
+  <li data-lines="18-21"><b class="what">The dimming loop.</b> The reverse: from 255 down to 0. <code>duty--</code> means "subtract one".
+    <span class="why">The condition <code>duty &gt;= 0</code> (not <code>&gt; 0</code>) makes the LED really reach zero and go completely dark.</span></li>
+</ol>
+
+<div class="callout tip"><div class="ct">Why does the first half of the breath look faster?</div>
+<p>The human eye is much more sensitive to dim light than to bright light (its response is roughly logarithmic). So a change in duty from 10 to 20 is far more visible than from 210 to 220. For a more "natural" breath, use the square of the duty instead of the duty itself: <code>ledcWrite(LED_PIN, duty * duty / 255);</code>. This correction is called "gamma correction".</p></div>
+
+<h3 id="fade">The hardware version: ledcFade</h3>
+<p>In the code above the CPU changes the duty step by step and is stuck in the delays. LEDC can do this job <b>by itself</b>:</p>
+<div class="code" data-file="Hardware_Fade.ino" id="c2"><pre>
+const int LED_PIN = 4;
+
+void setup() {
+  ledcAttach(LED_PIN, 5000, 8);
+}
+
+void loop() {
+  ledcFade(LED_PIN, 0, 255, 1500);   // the hardware fades up over 1.5 seconds
+  delay(2000);                       // the CPU is free here; delay only keeps the example simple
+  ledcFade(LED_PIN, 255, 0, 1500);   // and fades down over 1.5 seconds
+  delay(2000);
+}
+</pre></div>
+<ol class="walk" data-for="c2">
+  <li data-lines="8"><b class="what">ledcFade(pin, start, end, milliseconds).</b> Tells LEDC to raise the duty smoothly from 0 to 255 over 1500 milliseconds, and returns immediately.
+    <span class="why">This function doesn't wait for the fade to finish. So in a real program, instead of delay you could read a button or answer Wi-Fi requests while the LED changes smoothly on its own.</span></li>
+  <li data-lines="9"><b class="what">A delay longer than the fade.</b> Wait 2000 ms so the fade (1500 ms) can finish and the LED stays at full brightness for half a second.
+    <span class="why">If you start the next fade before the previous one has finished, the previous one is cut short. More advanced versions (<code>ledcFadeWithInterrupt</code>) can call a function of yours when the fade is done.</span></li>
+</ol>
+
+<h3 id="analogwrite">There's analogWrite too; how does it relate to LEDC?</h3>
+<p>On the Arduino Uno you use <code>analogWrite(pin, 0..255)</code> for PWM. The ESP32's core 3 has this function too, so Arduino code runs easily. Behind the scenes, the first time you call <code>analogWrite</code> it calls <code>ledcAttach(pin, 1000, 8)</code> by itself (default: 1000 Hz, 8 bits) and then calls <code>ledcWrite</code>. You can change these settings with <code>analogWriteFrequency(pin, freq)</code> and <code>analogWriteResolution(pin, bits)</code>.</p>
+<div class="callout tip"><div class="ct">Which one should I use?</div>
+<p>For quick, Arduino-compatible code: <code>analogWrite</code>. For full control over frequency and resolution, plus error checking: <code>ledcAttach</code> + <code>ledcWrite</code>. Just don't mix the two on the same pin. (Note: the name <code>analogWrite</code> is misleading; it isn't a true analog output, it's plain PWM. The real analog outputs are the DAC on GPIO25 and 26.)</p></div>
+
+<h2 id="pot-led">Project 2: a potentiometer sets the LED brightness</h2>
+<p>The potentiometer goes on GPIO34 (as in lesson 3.1) and the LED on GPIO4. Here's a neat trick: the ADC gives a 12-bit number (0 to 4095), so if we set the PWM to 12 bits as well, we can hand that number to the LED <b>directly</b>, with no map.</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"POT","name":"10 kΩ potentiometer","img":"pot.svg","pins":[["VCC","outer leg"],["SIG","middle leg"],["GND","other outer leg"]]},
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO4 side"],["2","LED side"]]},
+    {"id":"LED1","name":"Red LED","img":"led.svg","pins":[["A","anode (+)"],["K","cathode (−)"]]}
+  ],
+  "wires":[["3V3","POT.VCC","red"],["GPIO34","POT.SIG","blue"],["POT.GND","GND","black"],["GPIO4","R1.1","orange","PWM"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>An analog input (GPIO34) and a PWM output (GPIO4) in one circuit.</figcaption></div>
+
+<div class="code" data-file="Pot_Dimmer.ino" id="c3"><pre>
+// A potentiometer sets the LED brightness
+const int POT_PIN = 34;
+const int LED_PIN = 4;
+
+void setup() {
+  Serial.begin(115200);
+  ledcAttach(LED_PIN, 5000, 12);      // 12 bits: 0 to 4095, same range as the ADC
+}
+
+void loop() {
+  int raw = analogRead(POT_PIN);      // 0 to 4095
+  ledcWrite(LED_PIN, raw);            // the same number, straight into PWM
+  Serial.printf("raw=%d  duty=%d%%\n", raw, raw * 100 / 4095);
+  delay(20);
+}
+</pre></div>
+<ol class="walk" data-for="c3">
+  <li data-lines="7"><b class="what">12-bit PWM.</b> 5 kHz with 4096 steps.
+    <span class="why"><code>5000 × 4096 = 20.48MHz</code> is under the 80 MHz limit. When the ADC and PWM have the same range, no conversion is needed and no resolution is thrown away.</span></li>
+  <li data-lines="11-12"><b class="what">Read and write directly.</b> The potentiometer's number becomes the duty.
+    <span class="why">If you had set the PWM to 8 bits, you'd have to write <code>map(raw, 0, 4095, 0, 255)</code> or <code>raw &gt;&gt; 4</code> (divide by 16). Writing 4095 to an 8-bit PWM is a common mistake: any number above 255 means "fully on", so the knob only does something in the first 6% of its travel.</span></li>
+  <li data-lines="13"><b class="what">Show the percentage.</b> <code>raw * 100 / 4095</code> calculates the duty as a percentage. <code>%%</code> prints the % sign itself.
+    <span class="why">Multiply first, then divide: if you divided first (<code>raw / 4095 * 100</code>), integer division would always give 0 (except at the very end of the range).</span></li>
+  <li data-lines="14"><b class="what">A 20 ms pause.</b>
+    <span class="why">50 updates per second are enough to feel "instant", and they don't flood the Serial Monitor.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="c3">
+<p>Turn the potentiometer and watch the LED dim and brighten smoothly. You can try the <code>Breathing_LED</code> code on this same circuit too.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": 20, "left": -170, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="servo">Servo motors: PWM for "angle"</h2>
+<p>A servo motor (like the small blue SG90) is a small DC motor, a gearbox, a built-in potentiometer and a control circuit, all packed into one case. You don't tell it "spin"; you tell it "go to 90 degrees and stay there". The internal circuit reads the current angle from its own potentiometer and turns the motor until it reaches the angle you asked for.</p>
+<div class="callout analogy"><div class="ct">An example: a car with a self-driving steering wheel</div>
+<p>You only say "steering wheel 30 degrees to the right". The driver (the internal circuit) looks at where the wheel is now, turns it, and stops when it gets there. If someone tries to force the wheel around, the driver pushes back. That's "feedback".</p></div>
+
+<h3 id="servo-signal">The servo's language: pulse width, not duty</h3>
+<p>A servo expects one pulse every 20 milliseconds (that's 50 times per second, <b>50 Hz</b>). The <b>width</b> of that pulse sets the angle. For an SG90 in practice:</p>
+
+<figure><div class="frame"><svg viewBox="0 0 700 330" style="direction:ltr" font-family="Vazirmatn, Tahoma, sans-serif" role="img" aria-label="Servo pulse width and angle">
+  <defs><marker id="a2" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="#152033"/></marker></defs>
+  <g stroke="#dbe2ec"><line x1="60" y1="90" x2="520" y2="90"/><line x1="60" y1="180" x2="520" y2="180"/><line x1="60" y1="270" x2="520" y2="270"/></g>
+  <!-- scale: 20ms = 440px -> 22px per ms ; start at x=70 -->
+  <path d="M60 90 H70 V45 H81 V90 H510 V45 H521" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <path d="M60 180 H70 V135 H103 V180 H510 V135 H521" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <path d="M60 270 H70 V225 H123 V270 H510 V225 H521" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <text x="130" y="72" font-size="13" fill="#152033">0.5 ms</text>
+  <text x="130" y="162" font-size="13" fill="#152033">1.5 ms</text>
+  <text x="130" y="252" font-size="13" fill="#152033">2.4 ms</text>
+  <path d="M70 305 H510" stroke="#152033" stroke-width="1.5" marker-start="url(#a2)" marker-end="url(#a2)"/>
+  <text x="290" y="322" font-size="12" text-anchor="middle" fill="#152033">20 milliseconds (50 Hz): the rest of the period is LOW</text>
+  <!-- servo dials -->
+  <g transform="translate(610,75)"><circle r="28" fill="#eef2f8" stroke="#6b7280"/><line x1="0" y1="0" x2="-24" y2="0" stroke="#d6453d" stroke-width="5" stroke-linecap="round"/><circle r="4" fill="#152033"/><text x="0" y="46" font-size="13" text-anchor="middle" fill="#152033">0°</text></g>
+  <g transform="translate(610,165)"><circle r="28" fill="#eef2f8" stroke="#6b7280"/><line x1="0" y1="0" x2="0" y2="-24" stroke="#d6453d" stroke-width="5" stroke-linecap="round"/><circle r="4" fill="#152033"/><text x="0" y="46" font-size="13" text-anchor="middle" fill="#152033">90°</text></g>
+  <g transform="translate(610,255)"><circle r="28" fill="#eef2f8" stroke="#6b7280"/><line x1="0" y1="0" x2="24" y2="0" stroke="#d6453d" stroke-width="5" stroke-linecap="round"/><circle r="4" fill="#152033"/><text x="0" y="46" font-size="13" text-anchor="middle" fill="#152033">180°</text></g>
+</svg></div>
+<figcaption>The servo signal: one pulse every 20 ms. A 0.5 ms pulse ≈ 0 degrees, 1.5 ms ≈ 90 degrees (center), 2.4 ms ≈ 180 degrees. The pulses in the picture are drawn to scale; notice how narrow they are.</figcaption></figure>
+
+<div class="callout warn"><div class="ct">Datasheet numbers differ from reality</div>
+<p>SG90 datasheets usually quote 1 to 2 milliseconds for full travel, but in practice that range only moves the arm about 90 degrees. Most makers and libraries use 0.5 to 2.4 milliseconds for 0 to 180 degrees. Every servo is a little different; if your servo "buzzes" at one of the two ends, the pulse has gone past its mechanical limit and you should narrow the range a little (see troubleshooting below).</p></div>
+
+<h3 id="servo-power">Powering the servo: the most important part of this lesson</h3>
+<div class="table-wrap"><table>
+<tr><th>SG90 spec (approximate)</th><th>Value</th></tr>
+<tr><td>Operating voltage</td><td>4.8 to 6 V (5 V is ideal)</td></tr>
+<tr><td>Torque</td><td>About 1.8 kg·cm at 4.8 V</td></tr>
+<tr><td>Current at rest</td><td>A few mA up to a few tens of mA</td></tr>
+<tr><td>Current while moving and when starting to move</td><td>Several hundred mA in short bursts; even more when it stalls</td></tr>
+<tr><td>Wires</td><td><b>Brown</b> = GND · <b>Red</b> = +5 V · <b>Orange</b> = signal (on some servos: black = GND, red = +, white or yellow = signal)</td></tr>
+</table></div>
+<p>The ESP32's 3.3 V signal is enough to command an SG90. But the servo's <b>power</b> must never come from the 3V3 pin or from a GPIO. There are two ways to do it:</p>
+
+<h4>Method 1 (only for one small servo and for testing): the board's 5V pin</h4>
+<p>The DevKitC's <code>5V</code> pin is connected almost directly (through a diode on some boards) to the USB 5 V. On 30-pin boards (such as the DOIT DevKit V1) the same pin is labeled <code>VIN</code>; wherever you see <code>5V</code> in this course, use <code>VIN</code> on those boards. A computer's USB port usually supplies 500 mA, and the ESP32 itself uses 100 to 250 mA (with Wi-Fi). One unloaded SG90 usually fits within that, but the current spike when it starts moving makes the voltage dip. (You saw the complete power path from USB to the pins, and the current budget, in <a href="1-4.html#power">lesson 1.4</a>; <a href="3-4.html#why-not">lesson 3.4</a> shows with numbers why you can't power a power-hungry load straight from the board.)</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"SERVO","name":"SG90 servo","img":"servo.svg","pins":[["GND","brown wire"],["V+","red wire (+5 V)"],["SIG","orange wire (signal)"]]},
+    {"id":"POT","name":"10 kΩ potentiometer","img":"pot.svg","pins":[["VCC","outer leg"],["SIG","middle leg"],["GND","other outer leg"]]}
+  ],
+  "wires":[["GND","SERVO.GND","black"],["5V","SERVO.V+","red"],["GPIO18","SERVO.SIG","orange","PWM 50Hz"],["3V3","POT.VCC","red"],["GPIO34","POT.SIG","blue"],["POT.GND","GND","black"]]
+}</script><figcaption>The servo is powered from the board's 5V pin and gets its signal from GPIO18. The potentiometer (for project 3) is powered from 3V3 as before, not from 5V.</figcaption></div>
+
+<h4>Method 2 (the right, reliable way): a separate supply + a common ground</h4>
+<p>For more than one servo, a servo under load, or any serious project, power the servo from a separate 5 V supply (a 5 V 2 A adapter, or a power bank). <b>The supply's ground and the ESP32's ground must be connected together.</b></p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"PSU","name":"Separate 5 V supply (2 A)","pins":[["+","+5 V output"],["-","negative (supply ground)"]]},
+    {"id":"SERVO","name":"SG90 servo","img":"servo.svg","pins":[["GND","brown wire"],["V+","red wire"],["SIG","orange wire"]]}
+  ],
+  "wires":[["PSU.+","SERVO.V+","red"],["PSU.-","SERVO.GND","black"],["PSU.-","GND","black","common ground"],["GPIO18","SERVO.SIG","orange"]]
+}</script><figcaption>The servo's power comes from a separate supply; only the signal and ground are shared between the ESP32 and the servo circuit. The ESP32 itself is powered over USB.</figcaption></div>
+<div class="callout why"><div class="ct">Why is a common ground essential?</div>
+<p>A voltage is always measured "relative to some point". The ESP32's 3.3 V signal means "3.3 V above the ESP32's own GND". If the servo's GND isn't connected to the ESP32's GND, the servo has no reference point to measure that 3.3 V against, and the signal means nothing to it. It's like saying "three floors up" without saying which building.</p></div>
+<div class="callout warn"><div class="ct">Brownout: when the servo resets your board</div>
+<p>If the ESP32 resets every time the servo moves and the Serial Monitor shows <code>Brownout detector was triggered</code>, the servo's current spike has pulled the voltage so low that the ESP32's built-in protection reset the chip to prevent unpredictable behavior. The fix: method 2 (a separate supply), plus a 470 to 1000 µF electrolytic capacitor (rated 10 V or more) between the servo's + and −, close to the servo itself (the capacitor's negative leg to GND). Like a small reservoir, the capacitor supplies the short current bursts.</p></div>
+
+<h3 id="esp32servo">The ESP32Servo library</h3>
+<p>Arduino's well-known <code>Servo</code> library doesn't work on the ESP32. Instead we use <a href="https://github.com/madhephaestus/ESP32Servo" target="_blank" rel="noopener">ESP32Servo</a>, which has the same commands and uses LEDC behind the scenes.</p>
+<ol class="steps">
+  <li><b>Install:</b> in the Arduino IDE, open <code>Sketch › Include Library › Manage Libraries…</code>, search for <code>ESP32Servo</code> and install the library with exactly that name, <b>ESP32Servo by Kevin Harrington, John K. Bennett</b> (version 3.x or newer, which works with core 3; versions 1.x and 0.x give compile errors on core 3). This library has no other dependencies. Don't install other libraries with similar names (such as <code>ServoESP32</code>); their commands are different.</li>
+  <li><b>In Wokwi:</b> open the <b>Library Manager</b> tab, click + and add <code>ESP32Servo</code>. (Wokwi saves this in a file called <code>libraries.txt</code>.)</li>
+</ol>
+<div class="code" data-file="Servo_Sweep.ino" id="c4"><pre>
+#include &lt;ESP32Servo.h&gt;
+
+Servo myServo;                  // one servo object
+const int SERVO_PIN = 18;
+
+void setup() {
+  Serial.begin(115200);
+  myServo.setPeriodHertz(50);             // standard servo: 50Hz
+  myServo.attach(SERVO_PIN, 500, 2400);   // pulse 0.5ms to 2.4ms
+}
+
+void loop() {
+  for (int angle = 0; angle &lt;= 180; angle++) {
+    myServo.write(angle);
+    delay(15);                  // give the servo time to move
+  }
+  for (int angle = 180; angle &gt;= 0; angle--) {
+    myServo.write(angle);
+    delay(15);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="c4">
+  <li data-lines="1"><b class="what">include.</b> Adds the library's code to the program.
+    <span class="why"><code>&lt;...&gt;</code> means "look in the libraries folder". If you see a <code>No such file or directory</code> error, the library isn't installed.</span></li>
+  <li data-lines="3"><b class="what">Creating an object.</b> <code>Servo myServo;</code> creates a "virtual servo" called myServo.
+    <span class="why">Every real servo needs its own object. For two servos: <code>Servo s1, s2;</code>. An object is like a TV remote that is paired with only one TV.</span></li>
+  <li data-lines="8"><b class="what">setPeriodHertz(50).</b> A frequency of 50 Hz (a 20 ms period).
+    <span class="why">The library's default is 50 anyway, but writing it out makes the code clearer. Some digital servos also accept higher frequencies (for example 330 Hz).</span></li>
+  <li data-lines="9"><b class="what">attach(pin, min, max).</b> Connects the servo to GPIO18 and says that 0 degrees = 500 microseconds and 180 degrees = 2400 microseconds.
+    <span class="why">The library's default is 544 to 2400. We wrote the SG90 range out explicitly so that if you have a different servo, you know where to change it. GPIO18 is a safe, general-purpose pin.</span></li>
+  <li data-lines="13-16"><b class="what">Sweep from 0 to 180.</b> <code>write(angle)</code> takes the angle in degrees and the library converts it into a pulse width.
+    <span class="why">15 ms between degrees gives the servo time to move; 181 steps × 15 ms ≈ 2.7 seconds for half a turn. The SG90's top speed is about 0.1 seconds per 60 degrees, so don't make it faster for no reason.</span></li>
+  <li data-lines="17-20"><b class="what">Back from 180 to 0.</b> The same loop in reverse.
+    <span class="why">A smooth back-and-forth movement causes the smallest current spikes. Jumping suddenly from 0 to 180 draws the most current and is the most likely to cause a brownout.</span></li>
+</ol>
+
+<h3 id="servo-raw">Without a library: a servo is just PWM (demystified)</h3>
+<p>The library isn't magic. Let's do the math ourselves. At 50 Hz with 16-bit resolution, one period is 20,000 microseconds and it's divided into 65,536 steps:</p>
+<div class="callout example"><div class="ct">Working out the duty for a servo</div>
+<p><code>duty = pulse width (µs) × 65536 ÷ 20000</code></p>
+<p>0 degrees: <code>500 × 65536 ÷ 20000 ≈ 1638</code> · 90 degrees: <code>1450 × 65536 ÷ 20000 ≈ 4751</code> · 180 degrees: <code>2400 × 65536 ÷ 20000 ≈ 7864</code>.</p>
+<p>(90 degrees is halfway between 500 and 2400, which is 1450 microseconds, close to the standard 1.5 ms.) So even in the extreme case the servo only sees about 12% duty; the rest of the period is LOW.</p></div>
+<div class="code" data-file="Servo_Raw_LEDC.ino" id="c5"><pre>
+// A servo without a library: just LEDC and a little math
+const int SERVO_PIN = 18;
+const int FREQ = 50;            // 50Hz = one pulse every 20ms
+const int RES  = 16;            // 16 bits: 0 to 65535
+const int MIN_US = 500;         // pulse for 0 degrees
+const int MAX_US = 2400;        // pulse for 180 degrees
+
+uint32_t usToDuty(int us) {
+  return (uint32_t)us * 65536UL / 20000UL;   // the pulse's share of 20000 microseconds
+}
+
+void writeAngle(int angle) {
+  angle = constrain(angle, 0, 180);
+  int us = map(angle, 0, 180, MIN_US, MAX_US);
+  ledcWrite(SERVO_PIN, usToDuty(us));
+  Serial.printf("angle=%3d  pulse=%4dus  duty=%lu\n", angle, us, (unsigned long)usToDuty(us));
+}
+
+void setup() {
+  Serial.begin(115200);
+  ledcAttach(SERVO_PIN, FREQ, RES);
+}
+
+void loop() {
+  const int angles[] = {0, 90, 180, 90};
+  for (int i = 0; i &lt; 4; i++) {
+    writeAngle(angles[i]);
+    delay(1000);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="c5">
+  <li data-lines="3-6"><b class="what">Servo parameters.</b> 50 Hz, 16 bits and the pulse range.
+    <span class="why"><code>50 × 65536 ≈ 3.3MHz</code>, far below the limit. 16-bit resolution means each step is about 0.3 microseconds; with 8 bits each step would be 78 microseconds and we'd have only about 24 steps between 0 and 180 degrees (jerky, step-by-step movement).</span></li>
+  <li data-lines="8-10"><b class="what">Converting microseconds to duty.</b> The same formula as above. <code>(uint32_t)</code> makes the number 32-bit before the multiplication, and <code>UL</code> means "an unsigned long constant".
+    <span class="why"><code>2400 × 65536 = 157,286,400</code> doesn't fit in the 16-bit int that some boards use. Make it a habit to do large multiplications explicitly in a big enough type. Multiply first, then divide, so you don't lose precision.</span></li>
+  <li data-lines="13"><b class="what">constrain(value, low, high).</b> Keeps the angle between 0 and 180.
+    <span class="why">If you pass 250 by mistake, without this line the pulse goes out of the allowed range, the servo pushes against its mechanical end stop, draws a lot of current and might strip its gears.</span></li>
+  <li data-lines="14-15"><b class="what">Angle → microseconds → duty → hardware.</b> map turns the angle into a pulse width and usToDuty turns that into a duty.
+    <span class="why">This is exactly what <code>myServo.write()</code> does behind the scenes.</span></li>
+  <li data-lines="21"><b class="what">ledcAttach at 50 Hz and 16 bits.</b>
+    <span class="why">The same function we used for the LED, just with different numbers. PWM is one tool; the LED and the servo are simply two ways of using it.</span></li>
+  <li data-lines="25-29"><b class="what">A list of angles.</b> An array of four values that are played in order, one second each.
+    <span class="why">An array is several values of the same type stored one after another; <code>angles[0]</code> is the first one. This is cleaner than writing writeAngle four times.</span></li>
+</ol>
+<div class="serial">angle=  0  pulse= 500us  duty=1638
+angle= 90  pulse=1450us  duty=4751
+angle=180  pulse=2400us  duty=7864
+angle= 90  pulse=1450us  duty=4751</div>
+
+<h2 id="pot-servo">Project 3: a potentiometer sets the servo angle</h2>
+<p>The circuit: the same "method 1" diagram above (servo on GPIO18, potentiometer on GPIO34). Turn the knob and the servo arm turns with it; like a simple robot arm.</p>
+<div class="code" data-file="Pot_Servo.ino" id="c6"><pre>
+#include &lt;ESP32Servo.h&gt;
+
+const int POT_PIN = 34;
+const int SERVO_PIN = 18;
+Servo myServo;
+int lastAngle = -1;             // no angle written yet
+
+void setup() {
+  Serial.begin(115200);
+  myServo.setPeriodHertz(50);
+  myServo.attach(SERVO_PIN, 500, 2400);
+}
+
+void loop() {
+  long sum = 0;
+  for (int i = 0; i &lt; 16; i++) sum += analogRead(POT_PIN);   // average of 16 samples
+  int raw = sum / 16;
+  int angle = map(raw, 0, 4095, 0, 180);
+
+  if (abs(angle - lastAngle) &gt;= 2) {    // deadband: ignore 1-degree jitter
+    myServo.write(angle);
+    lastAngle = angle;
+    Serial.printf("raw=%d  angle=%d\n", raw, angle);
+  }
+  delay(20);
+}
+</pre></div>
+<ol class="walk" data-for="c6">
+  <li data-lines="6"><b class="what">Remembering the last angle, starting at −1.</b>
+    <span class="why">−1 is never a real angle, so on the first pass of loop the condition is guaranteed to be true and the servo moves to where the knob is.</span></li>
+  <li data-lines="15-17"><b class="what">An average of 16 samples.</b> The same technique as lesson 3.1, this time in three lines.
+    <span class="why">Without averaging, ADC noise keeps changing the angle by ±1 degree and the servo "jitters" and buzzes.</span></li>
+  <li data-lines="18"><b class="what">Convert to an angle.</b> 0 to 4095 → 0 to 180.</li>
+  <li data-lines="20-24"><b class="what">A deadband.</b> Only move the servo when the angle has changed by at least 2 degrees. <code>abs</code> is the absolute value (it turns a negative number positive).
+    <span class="why">Even with averaging, the number sometimes flips between two neighboring angles. A deadband is a close cousin of the hysteresis from the previous lesson: ignore tiny, meaningless changes. A bonus: the Serial Monitor only prints when something has really changed.</span></li>
+  <li data-lines="25"><b class="what">A 20 ms pause.</b>
+    <span class="why">The servo only sees a new pulse every 20 ms; updating faster is pointless.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="c6">
+<p>Before you run it, add the <code>ESP32Servo</code> library from Wokwi's <b>Library Manager</b> tab, or you'll get a compile error. In the simulator the servo is powered straight from 5V and there's no current problem; that problem only exists in the real world, so take the power section seriously. Try the <code>Servo_Sweep</code> and <code>Servo_Raw_LEDC</code> code on this same circuit too.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo1", "top": 40, "left": 200, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": 20, "left": -170, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "servo1:GND", "esp:GND.2", "black", [] ],
+    [ "servo1:V+", "esp:5V", "red", [] ],
+    [ "servo1:PWM", "esp:18", "orange", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="buzzer">Bonus: sound with a buzzer and ledcWriteTone</h2>
+<p>There are two kinds of buzzer: <b>active</b> (it has a built-in oscillator and beeps at one fixed pitch when you apply a steady voltage) and <b>passive</b> (it's like a tiny speaker, and it only makes sound when you feed it a square wave). To play different notes you need a <b>passive</b> buzzer. The PWM frequency is the pitch (the note): 440 Hz = the note A.</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"BZ","name":"Passive buzzer","img":"buzzer.svg","pins":[["1","+ leg (or the longer one)"],["2","− leg"]]}
+  ],
+  "wires":[["GPIO25","BZ.1","orange","PWM"],["BZ.2","GND","black"]]
+}</script><figcaption>A small passive piezo buzzer can be connected straight to GPIO25. Louder magnetic buzzers draw more current and are better driven through a transistor (<a href="3-4.html#bjt">lesson 3.4</a>). If you have a three-pin "buzzer module", connect the signal pin (<code>S</code> or <code>I/O</code>) to GPIO25, the negative pin (<code>−</code> or <code>GND</code>) to GND and, if it has a <code>VCC</code> pin, connect that to 3V3. Some modules include a transistor and some (like the KY-006) are just the bare buzzer.</figcaption></div>
+<div class="code" data-file="Buzzer_Melody.ino" id="c7"><pre>
+// C major scale on a passive buzzer
+const int BUZZER_PIN = 25;
+const int notes[] = {262, 294, 330, 349, 392, 440, 494, 523};  // C D E F G A B C
+
+void setup() {
+  ledcAttach(BUZZER_PIN, 2000, 10);   // attach the pin to LEDC first
+}
+
+void loop() {
+  for (int i = 0; i &lt; 8; i++) {
+    ledcWriteTone(BUZZER_PIN, notes[i]);   // 50% square wave at this frequency
+    delay(250);
+  }
+  ledcWriteTone(BUZZER_PIN, 0);            // zero frequency = silence
+  delay(2000);
+}
+</pre></div>
+<ol class="walk" data-for="c7">
+  <li data-lines="3"><b class="what">An array of note frequencies.</b> The eight notes of the C major scale in hertz (rounded).
+    <span class="why">Every note has a specific frequency. The high C (523) is almost exactly twice the low C (262); one octave means doubling the frequency.</span></li>
+  <li data-lines="6"><b class="what">Attach before playing a tone.</b>
+    <span class="why">In core 3, <code>ledcWriteTone</code> does nothing on a pin that isn't attached and returns zero. The initial frequency and resolution don't matter; ledcWriteTone changes them itself for every note.</span></li>
+  <li data-lines="11-12"><b class="what">Play each note for 250 ms.</b> ledcWriteTone produces a 50% square wave at the note's frequency.
+    <span class="why">Here the duty stays fixed at 50% and the <b>frequency</b> changes; the opposite of the LED, where the frequency was fixed and the duty changed.</span></li>
+  <li data-lines="14"><b class="what">Zero frequency = silence.</b>
+    <span class="why">According to the documentation, a frequency of zero sets the duty to zero. Without this line the buzzer would play the last note forever.</span></li>
+</ol>
+<div class="callout tip"><div class="ct">A shortcut: tone()</div>
+<p>Core 3 also has Arduino's familiar <code>tone(pin, freq, duration)</code> and <code>noTone(pin)</code>. They're enough for simple beeps. We learned ledcWriteTone so you can see that a buzzer is just another use of LEDC.</p></div>
+<div class="wokwi" data-board="esp32" data-code-from="c7">
+<p>Turn your browser's sound on; Wokwi plays the buzzer's sound.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-buzzer", "id": "bz1", "top": 30, "left": -150, "attrs": { "volume": "0.2" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "bz1:1", "esp:25", "orange", [] ],
+    [ "bz1:2", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h2 id="video">Helpful videos</h2>
+<div class="video" data-yt="IhpYQ0DOL-E" data-title="ESP32 PWM with Arduino IDE" data-channel="Random Nerd Tutorials" data-lang="English">
+  <div class="sum"><ul>
+    <li>This video was made in 2018 and uses the <b>old</b> core 2 API (<code>ledcSetup</code> and <code>ledcAttachPin</code>). The concepts (channel, frequency, resolution, duty) are completely correct, but don't copy the code; convert it to core 3 with the translation table earlier in this lesson.</li>
+    <li>Notice how it sends one PWM signal to several GPIOs at once. The core 3 equivalent is <code>ledcAttachChannel</code> with a shared channel number.</li>
+    <li>The up-to-date written version of this tutorial is on <a href="https://randomnerdtutorials.com/esp32-pwm-arduino-ide/" target="_blank" rel="noopener">randomnerdtutorials.com</a>.</li>
+  </ul></div>
+</div>
+<div class="video" data-yt="zxBC1ivOVfM" data-title="Using Servo Motors with ESP32" data-channel="DroneBot Workshop" data-lang="English">
+  <div class="sum"><ul>
+    <li>Pay attention to the explanation of the servo's insides (motor, gears, feedback potentiometer) and the shape of the control pulse; compare it with the pulse diagram in this lesson.</li>
+    <li>Notice what power supply the presenter uses for several servos and how he connects the grounds together.</li>
+    <li>If the video shows an older library or version, install ESP32Servo version 3 and core 3 as described in this lesson.</li>
+  </ul></div>
+</div>
+<p>Official references: <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/ledc.html" target="_blank" rel="noopener">the LEDC documentation for Arduino-ESP32</a> and <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/migration_guides/2.x_to_3.0.html" target="_blank" rel="noopener">the core 2 to 3 migration guide</a>.</p>
+
+<h2 id="debug">When it doesn't work: troubleshooting</h2>
+<div class="table-wrap"><table>
+<tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+<tr><td><code>'ledcSetup' was not declared in this scope</code></td><td>Old core 2 code on core 3</td><td>Use the translation table: <code>ledcAttach(pin, freq, res)</code> and <code>ledcWrite(pin, duty)</code>.</td></tr>
+<tr><td>The LED never lights and <code>ledcAttach failed</code> is printed</td><td>An impossible frequency and resolution combination (product above 80 MHz) or an input-only pin (34 to 39)</td><td>Lower the resolution or the frequency; pick an output-capable pin.</td></tr>
+<tr><td>The LED only changes at the very start of the knob's travel, then stays fully on</td><td>A 12-bit ADC number written to an 8-bit PWM</td><td>Make the PWM 12-bit, or use <code>map(raw, 0, 4095, 0, 255)</code>.</td></tr>
+<tr><td>The servo jitters even when the knob isn't moving</td><td>ADC noise, weak power, or no common ground</td><td>Averaging + a deadband; a separate supply with a common ground; a 470 µF capacitor.</td></tr>
+<tr><td>The board resets when the servo moves; the message <code>Brownout detector was triggered</code> appears</td><td>The servo's current spike makes the USB voltage dip</td><td>A separate 5 V supply with a common ground, a large capacitor next to the servo, a short, good-quality USB cable.</td></tr>
+<tr><td>The servo buzzes and gets warm at 0 or 180 degrees</td><td>The pulse goes past the servo's mechanical limit and the motor pushes against the end stop</td><td>Narrow the range (for example <code>attach(pin, 600, 2300)</code>) or limit the angle to 5 to 175.</td></tr>
+<tr><td>The servo doesn't move at all</td><td>Wires swapped (brown GND, red +, orange signal), or no common ground</td><td>Check the colors; connect the separate supply's GND to the board's GND.</td></tr>
+<tr><td>The buzzer only clicks or makes one fixed tone</td><td>An active buzzer instead of a passive one, or you forgot to attach</td><td>Use a passive buzzer (it usually has an exposed green circuit board underneath) and call <code>ledcAttach</code> before ledcWriteTone.</td></tr>
+<tr><td>The LED shows dark bands in phone videos</td><td>A low PWM frequency (for example analogWrite's default 1 kHz)</td><td>Raise the frequency (5 to 20 kHz).</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">Coach's advice</div>
+<p>Most of the "broken servos" my students bring me are perfectly fine; the problem is power. Before you change a single line of code, ask three questions: Where does the servo's power come from? Are the grounds shared? How far does the 5V drop while it moves (check with a multimeter)? And one more rule: never copy PWM code from the internet without first checking whether it contains <code>ledcSetup</code>. Core 3 means <code>ledcAttach</code>. These two habits will save you weeks.</p></div>
+
+<h2 id="quiz">Lesson quiz</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="3">
+  <p class="q">PWM with 8-bit resolution and a duty of 64 on a 3.3 V pin. Roughly what is the average voltage?</p>
+  <ol><li data-why="64 isn't a voltage; it's one step out of 256.">64 V</li><li data-why="That's for 50% duty (128).">1.65 V</li><li>0.83 V</li><li data-why="3.3 V means 100% duty.">3.3 V</li></ol>
+  <div class="fb"><code>64 ÷ 256 = 25%</code> and <code>3.3 × 0.25 ≈ 0.83V</code>.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">Which frequency and resolution combination is <b>not</b> possible on the classic ESP32 (80 MHz clock)?</p>
+  <ol><li>10 kHz with 14 bits</li><li data-why="5000 × 4096 = 20.48MHz, under the limit.">5 kHz with 12 bits</li><li data-why="50 × 65536 ≈ 3.3MHz, under the limit.">50 Hz with 16 bits</li><li data-why="20000 × 1024 = 20.48MHz, under the limit.">20 kHz with 10 bits</li></ol>
+  <div class="fb"><code>10000 × 16384 = 163.84MHz</code>; twice the 80 MHz limit.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">On ESP32 core 3, which line lights the LED on GPIO4 with 50% PWM (8 bits)?</p>
+  <ol><li data-why="That's the core 2 API; it doesn't exist in core 3.">ledcSetup(0, 5000, 8); ledcAttachPin(4, 0); ledcWrite(0, 128);</li><li data-why="digitalWrite only writes 0 or 1; 128 just means fully HIGH.">digitalWrite(4, 128);</li><li data-why="Without attaching first, ledcWrite does nothing on the pin.">ledcWrite(4, 128);</li><li>ledcAttach(4, 5000, 8); ledcWrite(4, 128);</li></ol>
+  <div class="fb">In core 3, first <code>ledcAttach(pin, freq, res)</code> and then <code>ledcWrite(pin, duty)</code>; both use the <b>pin</b> number.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">An SG90 servo is calibrated for 0.5 to 2.4 millisecond pulses. Roughly what pulse width gives 90 degrees?</p>
+  <ol><li data-why="0.5 ms is the zero angle.">0.5 milliseconds</li><li>About 1.45 milliseconds</li><li data-why="2.4 ms is 180 degrees.">2.4 milliseconds</li><li data-why="20 ms is the whole period, not the pulse width.">20 milliseconds</li></ol>
+  <div class="fb">The middle of the range: <code>(500 + 2400) ÷ 2 = 1450µs</code>, close to the standard 1.5 ms.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">You've powered the servo from a separate 5 V adapter and the signal wire goes to GPIO18, but the servo doesn't move at all. What's the most likely problem?</p>
+  <ol><li data-why="An SG90 normally works fine with a 3.3 V signal.">A 3.3 V signal is too weak for the servo</li><li data-why="GPIO18 is a normal output and supports PWM.">GPIO18 can't generate PWM</li><li>The adapter's ground isn't connected to the ESP32 board's GND</li><li data-why="A separate adapter is the right approach, not the problem.">You shouldn't use a separate supply</li></ol>
+  <div class="fb">Without a common ground, the signal has no reference point. The supply's negative, the servo's brown wire and the board's GND must all be connected together.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">For the LED we used PWM with a fixed frequency and a changing duty. With ledcWriteTone on a buzzer, what changes?</p>
+  <ol><li>The frequency (the pitch of the note); the duty stays at 50%</li><li data-why="ledcWriteTone always produces 50% duty.">The duty; the frequency stays fixed</li><li data-why="The pin voltage is always 0 or 3.3 V.">The pin voltage</li><li data-why="The number of channels is fixed in hardware.">The number of LEDC channels</li></ol>
+  <div class="fb">Notes are made with frequency: 440 Hz = A. A 50% duty gives the loudest sound from a passive buzzer.</div>
+</div>
+
+<h2 id="practice">Exercises</h2>
+<div class="exercise"><div class="ct">Exercise 1: breathing without delay</div>
+<p>Rewrite the breathing LED program with millis and no delay at all: every 8 milliseconds the duty changes by one in the current direction, and the direction reverses at 0 and 255. Then add the button from lesson 3.1 (GPIO27) to pause and resume the breathing.</p>
+<details><summary>Hint</summary><p>You need two variables: <code>int duty = 0;</code> and <code>int step = 1;</code>. Each time it's time for a step: <code>duty += step; if (duty &lt;= 0 || duty &gt;= 255) step = -step;</code>. <code>||</code> means "or".</p></details>
+<details><summary>Answer</summary>
+<div class="code" data-file="Breathing_Millis.ino" id="ex1ans"><pre>
+const int LED_PIN = 4;
+int duty = 0, step = 1;
+unsigned long lastStep = 0;
+
+void setup() {
+  ledcAttach(LED_PIN, 5000, 8);
+}
+
+void loop() {
+  unsigned long now = millis();
+  if (now - lastStep &gt;= 8) {
+    lastStep = now;
+    duty += step;
+    if (duty &lt;= 0 || duty &gt;= 255) step = -step;
+    ledcWrite(LED_PIN, duty);
+  }
+  // there's room here to read the button
+}
+</pre></div>
+<ol class="walk" data-for="ex1ans">
+  <li data-lines="2"><b class="what">The breathing state.</b> <code>duty</code> is the current brightness and <code>step</code> is the direction (+1 up, −1 down).
+    <span class="why">Instead of two for loops, we have a small "state machine" that takes just one step on each pass of loop.</span></li>
+  <li data-lines="11-16"><b class="what">One step every 8 ms.</b> The duty moves by one and the direction reverses at both ends.
+    <span class="why">Exactly the millis pattern from lesson 3.1; loop never waits.</span></li>
+</ol>
+</details>
+</div>
+<div class="exercise"><div class="ct">Exercise 2: a light meter needle</div>
+<p>Combine the night-light circuit from lesson 3.1 (LDR on GPIO35) with the servo on GPIO18. Make the servo act like the needle of a light meter, showing the light level between 0 (dark) and 180 (bright).</p>
+<details><summary>Hint</summary><p>In our circuit, dark = high voltage. So write the map the other way round: <code>map(mv, 300, 3100, 180, 0)</code>, then <code>constrain</code>. Don't forget the 2-degree deadband.</p></details>
+</div>
+<div class="exercise"><div class="ct">Exercise 3: a siren</div>
+<p>Use the buzzer to build a siren whose frequency glides smoothly from 600 to 1200 Hz in 1 second and back again. Then think: why couldn't you do this by changing the duty?</p>
+<details><summary>Hint</summary><p>One for loop from 600 to 1200 in steps of 10 with <code>delay(8)</code>, and one loop in reverse. Pitch depends on frequency; the duty only changes the loudness and the "color" of the sound a little.</p></details>
+</div>
+
+<div class="callout info"><div class="ct">The lesson in three lines</div>
+<p>PWM means switching on and off fast with a variable duty; average voltage = 3.3 × duty, and the classic ESP32 rule is <code>frequency × 2<sup>bits</sup> ≤ 80MHz</code>. In core 3 you only need <code>ledcAttach(pin, freq, res)</code> and <code>ledcWrite(pin, duty)</code>; <code>ledcSetup</code> code belongs to core 2. A servo wants a 50 Hz pulse about 0.5 to 2.4 ms wide (ESP32Servo or the 16-bit math by hand), and its power must come from a 5 V supply that can deliver enough current, with a common ground, never from 3V3.</p></div>
+
+</article>
+</body>
+</html>
