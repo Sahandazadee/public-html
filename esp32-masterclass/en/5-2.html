@@ -1,0 +1,698 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESP-NOW: two ESP32s talking directly, no router · ESP32 Masterclass</title>
+<meta name="description" content="Learn ESP-NOW with Arduino ESP32 core 3: MAC addresses, message layouts with struct, a sender and a receiver, two-way messages with acknowledgment and temperature, sharing a channel with Wi-Fi, and troubleshooting.">
+<link rel="alternate" hreflang="fa" href="../5-2.html"><link rel="alternate" hreflang="en" href="5-2.html">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="../assets/course.js"></script>
+<script defer src="../assets/glossary-en.js"></script>
+<script defer src="../assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="5-2">
+
+<p class="lede">Every wireless link you have built so far needed a router or a server in the middle. But what if there is no router in the yard, the garden or the workshop? What if you want a button in your hand to switch on a light on the other side of the building in just a few milliseconds? <b>ESP-NOW</b> is Espressif's own protocol that connects two (or more) ESP32s <b>directly</b>, with no router at all. In this lesson you build a remote control: a button on board A, an LED on board B, and board B sends back its own temperature as a receipt.</p>
+
+<div class="goals">
+  <div><h4>🎯 After this lesson you can</h4><ul>
+    <li>Explain what ESP-NOW is and when to use it instead of Wi-Fi, MQTT or BLE</li>
+    <li>Read your board's MAC address correctly (and understand why it sometimes shows all zeros)</li>
+    <li>Build a "message layout" with a <code>struct</code> and send and receive it with <code>sizeof</code> and <code>memcpy</code></li>
+    <li>Write the correct callback signatures for core 3 and spot old 2.x code</li>
+    <li>Build two-way messaging with an acknowledgment (ACK) and a timeout</li>
+    <li>Run ESP-NOW at the same time as Wi-Fi on a shared channel</li>
+  </ul></div>
+  <div><h4>🧰 Prerequisites and parts</h4><ul>
+    <li>Lessons <a href="3-1.html">3.1</a> (buttons and debounce) and <a href="4-1.html">4.1</a> (Wi-Fi)</li>
+    <li><b>Two</b> ESP32 boards and two USB data cables (with one computer, use two Arduino IDE windows, one per port)</li>
+    <li>Board A: one push button</li>
+    <li>Board B: one LED + a 220 Ω resistor, and (for the two-way part) a DHT22 sensor + a 10 kΩ resistor</li>
+  </ul></div>
+</div>
+
+<h2 id="what">What is ESP-NOW?</h2>
+<p>ESP-NOW uses the same 2.4 GHz Wi-Fi radio that is built into the ESP32, but it skips all the Wi-Fi formalities (joining a router, getting an IP address, TCP, handshakes and so on). Each message is a small packet sent straight to the "MAC address" of the target board. It's like handing a letter to your neighbor through the window instead of going to the post office.</p>
+
+<div class="callout analogy"><div class="ct">An everyday example: walkie-talkie vs telephone</div>
+<p>Wi-Fi and MQTT are like a phone call: you dial a number, the telephone exchange (the router and the broker) connects you, and then you talk. It works from anywhere in the world, but without the exchange, nothing works. ESP-NOW is like a walkie-talkie: you press the button and your voice goes straight to the other handset. It's fast and needs no exchange, but it only reaches as far as the signal carries, and messages have to be short.</p></div>
+
+<pre class="mermaid">flowchart TB
+  subgraph W["Wi-Fi + MQTT: seven stops"]
+    direction LR
+    A1["ESP32 A"] --> R1["Router"] --> I1(("Internet")) --> BR["Broker"] --> I1b(("Internet")) --> R2["Router"] --> B1["ESP32 B"]
+  end
+  subgraph N["ESP-NOW: direct"]
+    direction LR
+    A2["ESP32 A"] -->|"by MAC address"| B2["ESP32 B"]
+  end</pre>
+
+<h3>When to use ESP-NOW, and when something else?</h3>
+<div class="table-wrap"><table>
+<tr><th>Feature</th><th>ESP-NOW</th><th>Wi-Fi + MQTT</th><th>BLE (Bluetooth Low Energy)</th></tr>
+<tr><td>Needs a router or broker?</td><td><b>No</b></td><td>Yes, both</td><td>No</td></tr>
+<tr><td>Range (no external antenna)</td><td>Tens of meters indoors; usually a few hundred meters in open space (depends on the antenna and obstacles)</td><td>Limited to the router's coverage, but anywhere in the world through the internet</td><td>Usually tens of meters</td></tr>
+<tr><td>Latency of one message</td><td>A few milliseconds</td><td>Tens to hundreds of milliseconds (the internet path)</td><td>Tens of milliseconds (depends on the connection interval)</td></tr>
+<tr><td>Maximum data per message</td><td>250 bytes (v1); v2 up to 1470 bytes (see below)</td><td>Practically unlimited (with buffer settings)</td><td>Usually 20 to a few hundred bytes</td></tr>
+<tr><td>Talks to a phone?</td><td>No, only between Espressif chips</td><td>Yes (an MQTT app or a dashboard)</td><td>Yes</td></tr>
+<tr><td>Time from power-on to first message</td><td>Very short; great for a battery sensor that wakes up, sends and goes back to sleep</td><td>A few seconds (connecting to Wi-Fi and the broker)</td><td>Medium</td></tr>
+<tr><td>Good example</td><td>Remote controls, doorbells, garden sensors reporting to a central board</td><td>Dashboards, control from outside the house</td><td>Control from a phone app at close range</td></tr>
+</table></div>
+
+<div class="callout info"><div class="ct">A few official numbers (from the ESP-IDF documentation)</div>
+<p>Each board's address book holds at most <b>20 peers</b>; by default up to <b>7 of them can be encrypted</b> (ESP-IDF settings can raise that to 17). In ESP-NOW v1 the data length is at most <b>250 bytes</b>. Newer cores (based on ESP-IDF 5.4 and later) have ESP-NOW <b>v2</b>, which sends up to <b>1470 bytes</b>; but a v1 device either truncates or drops any message longer than 250 bytes. This lesson's advice: until you are sure every board has v2, keep messages <b>under 250 bytes</b>. (In this lesson we only send 8 and 12 bytes!)</p></div>
+
+<h2 id="mac">Step 1: find your board's MAC address</h2>
+<p>A MAC address is a 6-byte number the factory writes into every ESP32 chip, such as <code>24:6F:28:AB:CD:EF</code>. Think of it as a house number: ESP-NOW delivers the letter to that exact address. Each two-digit group is one byte in base 16 (hexadecimal).</p>
+
+<div class="code" data-file="GetMac.ino" id="mac1"><pre>
+#include &lt;WiFi.h&gt;
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  Serial.print("Before WiFi.mode: ");
+  Serial.println(WiFi.macAddress());   // probably 00:00:00:00:00:00
+
+  WiFi.mode(WIFI_STA);                 // the Wi-Fi radio switches on
+  while (!WiFi.STA.started()) {
+    delay(10);
+  }
+  Serial.print("STA MAC: ");
+  Serial.println(WiFi.macAddress());
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="mac1">
+  <li data-lines="5-7"><b class="what">Reading the MAC before Wi-Fi is on.</b> On purpose, we print the MAC once <b>before</b> <code>WiFi.mode</code>.
+    <span class="why">In Arduino core 3, <code>WiFi.macAddress()</code> reads the address from the "network interface", and that interface doesn't exist until Wi-Fi starts. That's why you get <code>00:00:00:00:00:00</code>. Lots of students copy exactly these zeros into their sender code and then spend hours hunting for the problem.</span></li>
+  <li data-lines="9"><b class="what">WiFi.mode(WIFI_STA).</b> Switches the radio on in station mode. It doesn't need to connect to any router.
+    <span class="why">ESP-NOW works on the STA or the AP interface, and we always pick STA. Each interface has its own MAC (the AP MAC is usually one higher), so take the MAC of the interface ESP-NOW actually uses.</span></li>
+  <li data-lines="10-12"><b class="what">Wait until the STA interface has really started.</b> <code>WiFi.STA.started()</code> becomes <code>true</code> once the radio has finished starting up.
+    <span class="why">Wi-Fi starts up in a separate task and takes a few milliseconds. Espressif's official ESP-NOW examples use exactly this waiting loop too.</span></li>
+  <li data-lines="13-14"><b class="what">The real MAC.</b> Now the correct address is printed. Write it on a piece of masking tape and stick it on the board!
+    <span class="why">From here on you have two boards, and their MACs look alike. Labeling them stops you from mixing up board A and board B.</span></li>
+</ol>
+<div class="serial">Before WiFi.mode: 00:00:00:00:00:00
+STA MAC: 24:6F:28:AB:CD:EF</div>
+<p>Upload this program to <b>board B (the receiver)</b> and write down its MAC. To use it in code, put <code>0x</code> in front of each part: <code>24:6F:28:AB:CD:EF</code> becomes <code>{0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF}</code>.</p>
+
+<h2 id="struct">The message layout: struct, sizeof and memcpy</h2>
+<p>ESP-NOW just sends "a handful of bytes" and has no idea what they mean. We have to agree that bytes one to four are the message number, byte five means on or off, and so on. In C++ we write that agreement down as a <code>struct</code> (structure).</p>
+<div class="callout analogy"><div class="ct">An everyday example: a printed form</div>
+<p>A <code>struct</code> is like a printed paper form: box one is "number", box two is "status". The sender fills in the form and sends it. The receiver must have <b>exactly the same form</b> to know what each box means. If the receiver has an old version of the form with the boxes in different places, it will read the temperature as the message number!</p></div>
+
+<div class="callout example"><div class="ct">Do the math: what is sizeof really?</div>
+<p>Our command layout: <code>uint32_t seq</code> (4 bytes) + <code>bool ledOn</code> (1 byte). Total = 5 bytes? No! On the ESP32, <code>sizeof(CommandMsg)</code> is <b>8</b>. The compiler adds three empty bytes (padding) after the bool so the total size is a multiple of 4, because a 32-bit processor reads 4-byte numbers faster from addresses that are multiples of 4. The reply layout: 4 + 1 + 3 (empty) + a 4-byte <code>float</code> = <b>12</b> bytes.</p>
+<p>In practice: if one side is an ESP32 and the other side is a different chip or compiler (say, an ESP8266), the padding may differ. Between two ESP32s on the same core there's no problem. To be completely sure, you can write <code>__attribute__((packed))</code> after <code>struct</code> to remove the padding.</p></div>
+
+<ul>
+  <li><code>sizeof(x)</code> gives the number of bytes in x, at compile time. Always use it; never type the number by hand.</li>
+  <li><code>memcpy(destination, source, count)</code> copies a number of bytes exactly as they are from one place in memory to another. We use it to pour the received bytes into our own struct variable.</li>
+  <li><code>(uint8_t *)&amp;cmd</code> means "look at the address of the variable cmd as an array of bytes". <code>&amp;</code> gives the address and <code>(uint8_t *)</code> changes the type without changing any data.</li>
+</ul>
+
+<h2 id="oneway">Project 1: a one-way remote (button on A, LED on B)</h2>
+
+<h3>Wiring board A (sender)</h3>
+<div class="wiring"><script type="application/json">{
+  "board":"Board A (sender)",
+  "parts":[
+    {"id":"BTN","name":"Push button","img":"button.svg","pins":[["1","one side of the button"],["2","the opposite side (diagonal)"]]}
+  ],
+  "wires":[["GPIO4","BTN.1","blue"],["BTN.2","GND","black"]]
+}</script><figcaption>The button goes between GPIO4 and GND. No resistor is needed because we use the internal pull-up (<code>INPUT_PULLUP</code>): pressed = LOW, released = HIGH. Pick two legs that get connected when you press (usually two diagonal legs).</figcaption></div>
+
+<h3>Wiring board B (receiver)</h3>
+<div class="wiring"><script type="application/json">{
+  "board":"Board B (receiver)",
+  "parts":[
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO side"],["2","LED side"]]},
+    {"id":"LED1","name":"LED","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−), short leg"]]},
+    {"id":"DHT1","name":"DHT22 (project 2 only)","img":"dht22.svg","pins":[["VCC","3.3 V"],["DATA","data"],["NC","not connected"],["GND","ground"]]},
+    {"id":"R2","name":"10 kΩ resistor","img":"resistor.svg","pins":[["1","to 3V3"],["2","to DATA"]]}
+  ],
+  "wires":[["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"],["3V3","DHT1.VCC","red"],["GPIO27","DHT1.DATA","blue"],["DHT1.GND","GND","black"],["R2.1","3V3","red"],["R2.2","DHT1.DATA","blue"]]
+}</script><figcaption>The LED is on GPIO4 with a 220 Ω resistor. You only need the DHT22 sensor on GPIO27 with its 10 kΩ pull-up for the two-way project; for project 1 you can leave it out.</figcaption></div>
+
+<h3>Code for board A (sender)</h3>
+<div class="code" data-file="Sender_OneWay.ino — board A" id="send1"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+
+// Put board B's MAC here (from the GetMac program)
+uint8_t receiverMac[] = {0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF};
+
+const int BUTTON_PIN = 4;
+
+// Message layout: must be exactly the same on sender and receiver
+typedef struct {
+  uint32_t seq;     // message number
+  bool ledOn;       // should the LED be on?
+} CommandMsg;
+
+CommandMsg cmd = {0, false};
+int lastReading = HIGH;
+int stableState = HIGH;
+unsigned long lastChange = 0;
+
+// Core 3.3 and later: the first parameter is a wifi_tx_info_t
+void onSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "  delivered" : "  delivery FAILED");
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_send_cb(onSent);
+
+  esp_now_peer_info_t peer = {};
+  memcpy(peer.peer_addr, receiverMac, 6);
+  peer.channel = 0;          // 0 means the channel we are on right now
+  peer.encrypt = false;
+  if (esp_now_add_peer(&amp;peer) != ESP_OK) {
+    Serial.println("Failed to add peer");
+    while (true) delay(1000);
+  }
+  Serial.println("Sender ready. Press the button.");
+}
+
+void loop() {
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) {        // new change: restart the bounce timer
+    lastChange = millis();
+    lastReading = reading;
+  }
+  if (millis() - lastChange &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) {          // the button really was pressed
+      cmd.seq++;
+      cmd.ledOn = !cmd.ledOn;
+      esp_err_t r = esp_now_send(receiverMac, (uint8_t *)&amp;cmd, sizeof(cmd));
+      Serial.printf("Sent #%lu ledOn=%d (%s)\n", (unsigned long)cmd.seq, cmd.ledOn, r == ESP_OK ? "queued" : esp_err_to_name(r));
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="send1">
+  <li data-lines="1-2"><b class="what">Two libraries.</b> <code>WiFi.h</code> to switch the radio on, and <code>esp_now.h</code>, which is the main ESP-NOW API from ESP-IDF.
+    <span class="why">ESP-NOW needs the Wi-Fi radio even if you never connect to a router. Both libraries come with the ESP32 core, so there's nothing to install.</span></li>
+  <li data-lines="5"><b class="what">The receiver's address.</b> A 6-byte array holding board B's MAC.
+    <span class="why">Get even one digit wrong and the message reaches nobody, and the send callback says "FAILED". This is the most common ESP-NOW mistake.</span></li>
+  <li data-lines="10-13"><b class="what">Defining the message layout.</b> <code>typedef struct {...} CommandMsg;</code> creates a new data type called <code>CommandMsg</code> with two boxes.
+    <span class="why"><code>uint32_t</code> means an unsigned whole number of exactly 32 bits. Unlike <code>int</code>, its size is the same on every chip, which matters when you send data between devices. The message number (seq) helps us notice when a message was lost or arrived twice.</span></li>
+  <li data-lines="15-18"><b class="what">Global variables.</b> The message itself with a starting value, and three variables for debouncing the button.
+    <span class="why">Their values must survive between passes of loop, so they are global. The debounce logic is the same as in lesson 3.1.</span></li>
+  <li data-lines="20-23"><b class="what">The send callback.</b> After every send, ESP-NOW calls this function with the result: <code>ESP_NOW_SEND_SUCCESS</code> or <code>ESP_NOW_SEND_FAIL</code>.
+    <span class="why">Success means board B's radio received and acknowledged the packet at the MAC layer; it does <b>not</b> mean B's program has handled it. If B is off or the MAC is wrong, you get FAIL. This function's signature has changed between versions; be sure to read the yellow box below.</span></li>
+  <li data-lines="29-30"><b class="what">Switching the radio on.</b> STA mode, then wait until it has fully started.
+    <span class="why"><code>esp_now_init</code> must be called <b>after</b> Wi-Fi is on; otherwise it returns an error.</span></li>
+  <li data-lines="32-36"><b class="what">Starting ESP-NOW and registering the callback.</b> If <code>esp_now_init</code> fails, we hold the program in an endless loop.
+    <span class="why">Carrying on without ESP-NOW only produces confusing errors later. "Fail early and loudly" (fail fast) is a good habit.</span></li>
+  <li data-lines="38-45"><b class="what">Adding a peer.</b> We zero an <code>esp_now_peer_info_t</code> structure (<code>= {}</code>), copy the MAC into it, set the channel to 0, leave encryption off, and add it to the address book with <code>esp_now_add_peer</code>.
+    <span class="why">ESP-NOW only sends one-to-one (unicast) messages to MACs that are in the address book. Channel 0 means "the radio's current channel"; by default both boards start on the same channel (usually 1). Zeroing the structure matters: without it, the fields we didn't set would hold garbage values.</span></li>
+  <li data-lines="50-54"><b class="what">Catching every raw change of the button.</b> Whenever the input differs from the previous reading, we record the time.
+    <span class="why">When you press a button, its contact "bounces" for a few milliseconds and flips between 0 and 1 several times. Without debouncing, one press might send two commands and the LED would switch on and immediately off again.</span></li>
+  <li data-lines="55-57"><b class="what">The stable state.</b> If nothing has changed for 30 milliseconds and the state differs from the previous stable state, we accept it; only the "pressed" edge (LOW) sends a command.
+    <span class="why">This way, the bounce when you <b>release</b> the button doesn't create an extra command either.</span></li>
+  <li data-lines="58-61"><b class="what">Building and sending the message.</b> The number goes up by one and the state flips. <code>esp_now_send(destination, bytes, length)</code> puts the message in the send queue and returns immediately.
+    <span class="why"><code>ESP_OK</code> only means "queued"; the real result arrives a few milliseconds later in <code>onSent</code>. <code>esp_err_to_name</code> turns an error code into a readable name (for example, <code>ESP_ERR_ESPNOW_NOT_FOUND</code> means the peer was never added).</span></li>
+</ol>
+
+<div class="callout warn"><div class="ct">Callback signatures in different versions (read online tutorials carefully)</div>
+<p><b>Receive callback:</b> in core <b>3.x</b> the signature is <code>void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len)</code>, and the sender's MAC is in <code>info-&gt;src_addr</code>. In core <b>2.x</b> it was <code>void onRecv(const uint8_t *mac, const uint8_t *data, int len)</code>. Most tutorials online (even this lesson's video) use the 2.x version, and on core 3 they fail to compile with an <code>invalid conversion</code> error.</p>
+<p><b>Send callback:</b> in core 2.x and 3.0 to 3.2 the signature was <code>void onSent(const uint8_t *mac_addr, esp_now_send_status_t status)</code>. Starting with core <b>3.3.0</b> (based on ESP-IDF 5.5) it became <code>void onSent(const wifi_tx_info_t *info, esp_now_send_status_t status)</code>, and the destination MAC is in <code>info-&gt;des_addr</code>. If you get the error <code>invalid conversion from 'void (*)(const uint8_t*, esp_now_send_status_t)'</code>, you are compiling old code on a new core. Check your core version in <code>Tools › Board › Boards Manager</code>. If your code has to work on both:</p>
+<div class="code" data-file="Works on both versions" id="compat"><pre>
+#if ESP_ARDUINO_VERSION &gt;= ESP_ARDUINO_VERSION_VAL(3, 3, 0)
+void onSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+#else
+void onSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+#endif
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "delivered" : "FAILED");
+}
+</pre></div>
+<ol class="walk" data-for="compat">
+  <li data-lines="1-5"><b class="what">Picking the signature at compile time.</b> <code>#if</code> is a preprocessor directive: before compiling, only one of the two opening lines of the function is kept, based on the core version.
+    <span class="why">The core itself defines the <code>ESP_ARDUINO_VERSION</code> macros. The function body is shared because we don't use the first parameter.</span></li>
+  <li data-lines="6-7"><b class="what">The shared body.</b> It only prints the status.
+    <span class="why">If you need the MAC, read it from <code>info-&gt;des_addr</code> in the new branch and from <code>mac_addr</code> in the old one.</span></li>
+</ol></div>
+
+<h3>Code for board B (receiver)</h3>
+<div class="code" data-file="Receiver_OneWay.ino — board B" id="recv1"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+
+const int LED_PIN = 4;
+
+typedef struct {
+  uint32_t seq;
+  bool ledOn;
+} CommandMsg;
+
+CommandMsg incoming;
+volatile bool gotMsg = false;
+
+// Core 3.x signature: sender info + data + length
+void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len != sizeof(CommandMsg)) return;   // wrong size? ignore it
+  memcpy(&amp;incoming, data, sizeof(incoming));
+  gotMsg = true;                          // loop does the real work
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  Serial.print("Receiver MAC: ");
+  Serial.println(WiFi.macAddress());
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_recv_cb(onRecv);
+}
+
+void loop() {
+  if (gotMsg) {
+    gotMsg = false;
+    digitalWrite(LED_PIN, incoming.ledOn ? HIGH : LOW);
+    Serial.printf("Got #%lu -&gt; LED %s\n", (unsigned long)incoming.seq, incoming.ledOn ? "ON" : "OFF");
+  }
+}
+</pre></div>
+<ol class="walk" data-for="recv1">
+  <li data-lines="6-9"><b class="what">The same message layout.</b> An exact copy of the sender's struct, with the same order and the same types.
+    <span class="why">If you swap the order of <code>seq</code> and <code>ledOn</code> in the sender but not here, the bytes are read in the wrong places and you get no error at all, just strange behavior. In big projects this struct lives in a shared <code>.h</code> file.</span></li>
+  <li data-lines="11-12"><b class="what">A place for the message and a flag.</b> <code>incoming</code> holds the latest message and <code>gotMsg</code> signals that a new one has arrived. <code>volatile</code> tells the compiler "this variable may be changed from somewhere else; read it from memory every time".
+    <span class="why">The callback runs in another task (the Wi-Fi radio's task), not in loop. Without <code>volatile</code>, the compiler might cache the value and loop would never see it change.</span></li>
+  <li data-lines="15-19"><b class="what">The receive callback.</b> First we check the length, then copy the bytes into <code>incoming</code> and raise the flag. <code>info</code> carries details such as the sender's MAC (<code>info-&gt;src_addr</code>) and the signal strength (<code>info-&gt;rx_ctrl-&gt;rssi</code>).
+    <span class="why">The length check keeps out incomplete messages and messages from other programs. Don't do heavy work (printing, digitalWrite, reading sensors) in the callback: Espressif's documentation says it runs in the high-priority Wi-Fi task, and making it slow disrupts the messages that come next. Stick to the pattern "set a flag in the callback, do the work in loop".</span></li>
+  <li data-lines="24-27"><b class="what">Switching the radio on and printing the MAC.</b> The same as the GetMac program.
+    <span class="why">Printing the MAC from the receiver itself means that whenever you swap boards, you see the new address without any hassle.</span></li>
+  <li data-lines="29-33"><b class="what">Starting ESP-NOW and registering the receive callback.</b> The receiver doesn't need to add the sender as a peer.
+    <span class="why">According to the documentation, unencrypted unicast messages and broadcast messages are received even without a peer. A peer is only needed for <b>sending</b> (and for receiving encrypted messages).</span></li>
+  <li data-lines="36-41"><b class="what">Carrying out the command in loop.</b> If the flag is up, we lower it, set the LED and print the result.
+    <span class="why">An honest note: if two messages arrive very close together, the second one might be written into <code>incoming</code> while the first is still being read. For a hand-held remote this practically never happens; for fast data, people use a FreeRTOS queue (<code>xQueueSend</code>), which you learn in lesson <a href="5-4.html#rtos">5.4</a>.</span></li>
+</ol>
+<p>Upload both programs (A with board B's MAC), open the Serial Monitor for both, and press the button:</p>
+<div class="callout tip"><div class="ct">Two boards on one computer: which port belongs to which?</div>
+<p>Connect both boards over USB. In Arduino IDE 2 every window has its own board and port selection: open the sender sketch in one window and the receiver sketch in a second window with <code>File › Open</code>. To find out which port is which, open the <code>Tools › Port</code> menu, unplug one of the boards, and look at the menu again: the port that disappeared (for example <code>COM5</code>) belongs to that board. Put an A or B label on that board's cable too. Each window has its own Serial Monitor, so you can see both outputs side by side.</p></div>
+<div class="serial">[A] Sender ready. Press the button.
+[A] Sent #1 ledOn=1 (queued)
+[A]   delivered
+[B] Got #1 -&gt; LED ON
+[A] Sent #2 ledOn=0 (queued)
+[A]   delivered
+[B] Got #2 -&gt; LED OFF</div>
+
+<div class="callout info"><div class="ct">What about Wokwi?</div>
+<p>At the time of writing, the Wokwi simulator does <b>not simulate ESP-NOW between two boards</b> (the feature request in the wokwi-features repository is still open). So this lesson can only be completed with two real boards. You can run the GetMac program in Wokwi, but its virtual MAC is no use for a real board.</p></div>
+
+<h2 id="twoway">Project 2: two-way messaging with acknowledgment and temperature</h2>
+<p>In project 1, board A only knew that B's radio had received the packet. But did the LED actually turn on? In project 2, after carrying out the command, B sends back a <b>reply</b>: the number of that same command, the real state of the LED, and its own room temperature. If A gets no reply within 500 milliseconds, it reports an error. This "request, reply, deadline" pattern (request/response + timeout) is the foundation of every reliable protocol.</p>
+
+<pre class="mermaid">sequenceDiagram
+  participant A as Board A (button)
+  participant B as Board B (LED + DHT22)
+  A->>B: CommandMsg {seq=5, ledOn=true}
+  Note over B: LED on, temperature read
+  B->>A: ReplyMsg {seq=5, ledOn=true, tempC=24.6}
+  Note over A: seq matches ✅ receipt confirmed
+  A->>B: CommandMsg {seq=6, ledOn=false}
+  Note over B: Board B is off ❌
+  Note over A: 500 ms passed, no reply → error</pre>
+
+<div class="code" data-file="BoardA_TwoWay.ino — board A" id="twoA"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+
+uint8_t boardB[] = {0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF};   // board B's MAC
+const int BUTTON_PIN = 4;
+const int STATUS_LED = 2;      // the board's built-in LED (if your board has one)
+
+typedef struct {
+  uint32_t seq;
+  bool ledOn;
+} CommandMsg;
+
+typedef struct {
+  uint32_t seq;      // number of the command this reply belongs to
+  bool ledOn;        // the real LED state on B
+  float tempC;       // B's temperature (or NAN if the sensor failed)
+} ReplyMsg;
+
+CommandMsg cmd = {0, false};
+ReplyMsg reply;
+volatile bool gotReply = false;
+bool waiting = false;
+unsigned long sentAt = 0;
+int lastReading = HIGH, stableState = HIGH;
+unsigned long lastChange = 0;
+
+void onSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+  if (status != ESP_NOW_SEND_SUCCESS) Serial.println("  radio: not delivered");
+}
+
+void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len != sizeof(ReplyMsg)) return;
+  if (memcmp(info-&gt;src_addr, boardB, 6) != 0) return;   // only accept from B
+  memcpy(&amp;reply, data, sizeof(reply));
+  gotReply = true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(STATUS_LED, OUTPUT);
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_send_cb(onSent);
+  esp_now_register_recv_cb(onRecv);
+  esp_now_peer_info_t peer = {};
+  memcpy(peer.peer_addr, boardB, 6);
+  peer.channel = 0;
+  peer.encrypt = false;
+  esp_now_add_peer(&amp;peer);
+}
+
+void sendCommand() {
+  cmd.seq++;
+  cmd.ledOn = !cmd.ledOn;
+  digitalWrite(STATUS_LED, LOW);            // off until the ack arrives
+  esp_now_send(boardB, (uint8_t *)&amp;cmd, sizeof(cmd));
+  Serial.printf("-&gt; #%lu ledOn=%d\n", (unsigned long)cmd.seq, cmd.ledOn);
+  waiting = true;
+  sentAt = millis();
+}
+
+void loop() {
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChange = millis(); lastReading = reading; }
+  if (millis() - lastChange &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) sendCommand();
+  }
+
+  if (gotReply) {
+    gotReply = false;
+    if (waiting &amp;&amp; reply.seq == cmd.seq) {
+      waiting = false;
+      digitalWrite(STATUS_LED, HIGH);         // ack received
+      Serial.printf("&lt;- ack #%lu, LED on B is %s, temp %.1f C (%lu ms)\n",
+                    (unsigned long)reply.seq, reply.ledOn ? "ON" : "OFF",
+                    reply.tempC, millis() - sentAt);
+    }
+  }
+  if (waiting &amp;&amp; millis() - sentAt &gt; 500) {   // half a second to reply
+    waiting = false;
+    Serial.println("!! no reply from B within 500 ms");
+  }
+}
+</pre></div>
+<ol class="walk" data-for="twoA">
+  <li data-lines="4-6"><b class="what">Board B's MAC and two pins.</b> The button is on GPIO4 and the status LED is on GPIO2.
+    <span class="why">On most boards you can buy, the LED on GPIO2 is built in (lesson 2.3), so you need no extra wiring for "receipt received". If your board doesn't have one, just watch the Serial Monitor.</span></li>
+  <li data-lines="8-17"><b class="what">Two message layouts.</b> <code>CommandMsg</code> (8 bytes) goes from A to B and <code>ReplyMsg</code> (12 bytes) goes from B to A.
+    <span class="why">Because the two layouts have different sizes, the receiver can tell them apart from <code>len</code>. Bigger projects put a "message type" byte first.</span></li>
+  <li data-lines="19-25"><b class="what">Program state.</b> <code>waiting</code> means "I'm waiting for a reply", and <code>sentAt</code> is the send time, used to work out the deadline and the delay.
+    <span class="why">These variables form a tiny "state machine": either we are waiting or we aren't. Without it, there's no way to know which command an incoming reply belongs to or when the deadline has passed.</span></li>
+  <li data-lines="27-29"><b class="what">The send callback (core 3.3+).</b> It only reports radio failures.
+    <span class="why">Here our real acknowledgment is the reply from B's program, not the radio's ack, so we don't print successes and keep the Serial Monitor tidy.</span></li>
+  <li data-lines="31-36"><b class="what">A receive callback that filters by sender.</b> <code>memcmp</code> compares the six bytes of the sender's MAC with board B's MAC (0 means they match).
+    <span class="why">Any other ESP32 nearby that sends ESP-NOW on this channel reaches this function too. Only trust messages from B.</span></li>
+  <li data-lines="48-54"><b class="what">Registering both callbacks and the peer.</b> A both sends and receives.
+    <span class="why">One board can be a sender and a receiver at the same time; the radio switches between the two jobs automatically.</span></li>
+  <li data-lines="57-65"><b class="what">sendCommand.</b> Builds a new command, switches the status LED off, sends it, and starts the waiting clock.
+    <span class="why">Putting this in its own function keeps loop readable, and later you can call it from somewhere else too (a timer, for example).</span></li>
+  <li data-lines="68-73"><b class="what">Compact debounce.</b> The same logic as project 1, this time with several statements on one line.
+    <span class="why">The logic is identical; it's just written compactly to save space.</span></li>
+  <li data-lines="75-84"><b class="what">Handling the reply.</b> If we were waiting and the reply's <code>seq</code> matches the latest command, we accept the acknowledgment, switch the status LED on, and print the temperature and the round-trip time.
+    <span class="why">Comparing seq stops us from accepting a late reply to an old command. The round-trip time is usually a few to a few tens of milliseconds (mostly the time it takes to read the DHT22 on B), and it shows how fast ESP-NOW is.</span></li>
+  <li data-lines="85-88"><b class="what">The timeout.</b> If 500 milliseconds pass with no reply, we stop waiting and report an error.
+    <span class="why">In the wireless world, "no reply" is a normal situation (B is off, too far away, or the message got lost). A good program has a plan for it; in exercise 2, for example, you add retries yourself.</span></li>
+</ol>
+
+<div class="code" data-file="BoardB_TwoWay.ino — board B" id="twoB"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+#include &lt;DHT.h&gt;
+
+const int LED_PIN = 4;
+DHT dht(27, DHT22);
+
+typedef struct {
+  uint32_t seq;
+  bool ledOn;
+} CommandMsg;
+
+typedef struct {
+  uint32_t seq;
+  bool ledOn;
+  float tempC;
+} ReplyMsg;
+
+CommandMsg incoming;
+uint8_t senderMac[6];
+volatile bool gotMsg = false;
+
+void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len != sizeof(CommandMsg)) return;
+  memcpy(&amp;incoming, data, sizeof(incoming));
+  memcpy(senderMac, info-&gt;src_addr, 6);   // we send the reply to this address
+  gotMsg = true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  dht.begin();
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  Serial.println(WiFi.macAddress());
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_recv_cb(onRecv);
+}
+
+void loop() {
+  if (!gotMsg) return;
+  gotMsg = false;
+  digitalWrite(LED_PIN, incoming.ledOn ? HIGH : LOW);
+
+  if (!esp_now_is_peer_exist(senderMac)) {   // first time? add A to the address book
+    esp_now_peer_info_t peer = {};
+    memcpy(peer.peer_addr, senderMac, 6);
+    peer.channel = 0;
+    peer.encrypt = false;
+    esp_now_add_peer(&amp;peer);
+  }
+
+  ReplyMsg reply;
+  reply.seq = incoming.seq;
+  reply.ledOn = incoming.ledOn;
+  reply.tempC = dht.readTemperature();       // on error: NAN
+  esp_now_send(senderMac, (uint8_t *)&amp;reply, sizeof(reply));
+  Serial.printf("#%lu LED %s, replied temp=%.1f\n", (unsigned long)reply.seq,
+                reply.ledOn ? "ON" : "OFF", reply.tempC);
+}
+</pre></div>
+<ol class="walk" data-for="twoB">
+  <li data-lines="3,6"><b class="what">The DHT22 sensor on GPIO27.</b> The same Adafruit library as in lesson 3.3.
+    <span class="why">GPIO27 is a safe pin, and because the DHT22 is digital, it has no trouble running alongside the radio (which ties up ADC2).</span></li>
+  <li data-lines="8-17"><b class="what">Two layouts, an exact copy of board A's.</b> The order and types of the boxes must match A.
+    <span class="why">If you write <code>double</code> instead of <code>float</code> on B, the size becomes 16 bytes and A (which expects 12 bytes) throws the message away because of its length check. Luckily, that's better than reading a wrong number!</span></li>
+  <li data-lines="23-28"><b class="what">Saving the sender's MAC.</b> Besides the message, we copy the sender's address from <code>info-&gt;src_addr</code>.
+    <span class="why">This way B doesn't need to know board A's MAC in advance; it replies to whoever sent the command. (For more security, add a MAC filter like the one on A.)</span></li>
+  <li data-lines="45-47"><b class="what">Carrying out the command.</b> If no message has arrived, we return from loop; otherwise we set the LED.
+    <span class="why">An early <code>return</code> avoids deeply nested ifs and makes the code easier to read.</span></li>
+  <li data-lines="49-55"><b class="what">Adding A to the address book, the first time only.</b> <code>esp_now_is_peer_exist</code> checks whether this MAC has already been added.
+    <span class="why">To <b>send</b> the reply, A has to be a peer. Adding it twice gives the error <code>ESP_ERR_ESPNOW_EXIST</code>; this check prevents that. We do this in loop, not in the callback, so the callback stays short.</span></li>
+  <li data-lines="57-63"><b class="what">Building and sending the reply.</b> We put the command's seq, the LED state and the temperature in a ReplyMsg and send it to A.
+    <span class="why">Echoing back the same seq lets A match the reply to the right command. If the sensor doesn't respond, <code>NAN</code> is sent and A prints <code>nan</code>, so the error isn't hidden.</span></li>
+</ol>
+<div class="serial">[A] -&gt; #1 ledOn=1
+[B] #1 LED ON, replied temp=24.6
+[A] &lt;- ack #1, LED on B is ON, temp 24.6 C (9 ms)
+[A] -&gt; #2 ledOn=0
+[A]   radio: not delivered
+[A] !! no reply from B within 500 ms</div>
+<p>(The last lines are what you see after unplugging board B. The millisecond number will be different on your board.)</p>
+
+<h2 id="broadcast">Broadcasting</h2>
+<p>If you want one message to reach <b>every</b> ESP32 nearby (for example, "all lights off"), send it to the special address <code>FF:FF:FF:FF:FF:FF</code>. This address must also be added with <code>esp_now_add_peer</code>, like any other peer. Two important differences from one-to-one messages:</p>
+<ul>
+  <li>A broadcast message <b>has no radio acknowledgment</b>. The send callback usually reports success even if no receiver is switched on. So if confirmation matters, the receivers have to reply (as in project 2).</li>
+  <li>A broadcast message is not encrypted. Every ESP32 nearby receives it.</li>
+</ul>
+<div class="callout tip"><div class="ct">A new C++ library in core 3: ESP32_NOW.h</div>
+<p>Besides the classic <code>esp_now.h</code> API (the one you learned in this lesson), Arduino core 3 has an object-oriented library called <b>ESP_NOW</b> (file <code>ESP32_NOW.h</code>). It has a global object <code>ESP_NOW</code> (<code>ESP_NOW.begin()</code>, <code>ESP_NOW.getMaxDataLen()</code> and so on), and for each peer you inherit from the <code>ESP_NOW_Peer</code> class and override its <code>onReceive</code> and <code>onSent</code> functions. Ready-made examples are in <code>File › Examples › ESP_NOW</code> (such as <code>ESP_NOW_Broadcast_Master</code> and <code>ESP_NOW_Serial</code>). We taught the classic API because 90% of the code online and the ESP-IDF documentation use it; once you understand it, you can learn the new library in an hour.</p></div>
+
+<h2 id="wifi">ESP-NOW and Wi-Fi together: the shared-channel rule</h2>
+<p>The ESP32 has only one radio, and at any moment it works on <b>one channel</b> (1 to 13 in most countries). When board B connects to a router (to send data to MQTT, for example), its radio has to move to <b>the router's channel</b>, say channel 6. Now if board A is still on channel 1, its messages never reach B.</p>
+<div class="callout analogy"><div class="ct">An everyday example: radio frequencies</div>
+<p>Two people are talking on walkie-talkies. If one of them switches to channel 6 to stay in touch with the base (the router) as well, the other one has to switch to channel 6 too, or they can't hear each other.</p></div>
+
+<div class="code" data-file="BoardB — with Wi-Fi (setup changes only)" id="chanB"><pre>
+WiFi.mode(WIFI_STA);
+WiFi.begin("YourWiFi", "YourPassword");
+while (WiFi.status() != WL_CONNECTED) delay(500);
+Serial.printf("Router channel: %d\n", WiFi.channel());
+esp_now_init();                    // after the Wi-Fi connection
+esp_now_register_recv_cb(onRecv);
+</pre></div>
+<ol class="walk" data-for="chanB">
+  <li data-lines="1-3"><b class="what">B connects to the router first.</b> Just like in lesson 4.1.
+    <span class="why">The router picks the channel, not us. So connect first, then see which channel you're on.</span></li>
+  <li data-lines="4"><b class="what">Printing the channel.</b> <code>WiFi.channel()</code> returns the radio's current channel, for example 6.
+    <span class="why">You need this number for board A.</span></li>
+  <li data-lines="5-6"><b class="what">ESP-NOW on the same channel.</b> Now ESP-NOW works at the same time as Wi-Fi, on the router's channel.
+    <span class="why">Wi-Fi and ESP-NOW share the radio; on the same channel they work together without any trouble.</span></li>
+</ol>
+<div class="code" data-file="BoardA — setting the channel (setup changes only)" id="chanA"><pre>
+const uint8_t ROUTER_CHANNEL = 6;   // the number board B printed
+
+WiFi.mode(WIFI_STA);
+while (!WiFi.STA.started()) delay(10);
+WiFi.setChannel(ROUTER_CHANNEL);    // move A to the router's channel
+esp_now_init();
+// ... register the callbacks and the peer as before (peer.channel = 0)
+</pre></div>
+<ol class="walk" data-for="chanA">
+  <li data-lines="1"><b class="what">The router's channel.</b> The same number B printed.
+    <span class="why">A isn't connected to the router, so it can't find out the channel by itself; we tell it.</span></li>
+  <li data-lines="3-5"><b class="what">Switching the radio on and changing the channel.</b> <code>WiFi.setChannel</code> (available in core 3) moves the radio to the channel you choose.
+    <span class="why">Changing the channel only works while the radio is running; right after the waiting loop is the safest place for it.</span></li>
+  <li data-lines="6-7"><b class="what">The rest as before.</b> Because <code>peer.channel = 0</code>, the current channel (6) is used.
+    <span class="why">If you put any number other than zero in the peer, it must exactly match the radio's current channel; otherwise sending fails with an error.</span></li>
+</ol>
+<div class="callout warn"><div class="ct">Trap: the router changes its channel</div>
+<p>Many routers are set to "Auto Channel" and switch channels after a restart or when the airwaves get crowded. Then the ESP-NOW link suddenly drops. Two ways out: 1) Fix the channel in the router's settings (say, 6). 2) The more professional way: board A finds the router's network in setup with <code>WiFi.scanNetworks()</code> and reads its channel with <code>WiFi.channel(i)</code>; you do this in exercise 3.</p></div>
+
+<h2 id="video">Helpful video</h2>
+<div class="video" data-yt="bEKjCDDUPaU" data-title="ESP-NOW - Peer to Peer ESP32 Network" data-channel="DroneBot Workshop" data-lang="English">
+  <div class="sum"><ul>
+    <li>This roughly 43-minute video explains MAC addresses, peers, one-way and two-way messages, and broadcasting well.</li>
+    <li><b>Warning:</b> the video was made in 2022 with core 2.x. Wherever you see the signature <code>OnDataRecv(const uint8_t *mac, ...)</code> or <code>OnDataSent(const uint8_t *mac_addr, ...)</code>, replace it with the core 3 signature from this lesson (the yellow box above).</li>
+    <li>Notice how the presenter defines the struct identically on both sides, and compare that with this lesson's "message layout" section.</li>
+    <li>See how, in a network of several sensors reporting to one receiver, the receiver tells the senders apart.</li>
+  </ul></div>
+</div>
+
+<h2 id="debug">When it doesn't work: step-by-step troubleshooting</h2>
+<div class="table-wrap"><table>
+<tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+<tr><td>Always <code>delivery FAILED</code></td><td>Wrong MAC (one digit off, board A's MAC instead of B's, or the zeros from before Wi-Fi was on)</td><td>Copy the MAC again from board B's own Serial output, and put a label on the board</td></tr>
+<tr><td>Messages stopped arriving as soon as B connected to Wi-Fi</td><td>The boards are on different channels</td><td>Set the router's channel on A (<a href="#wifi">shared-channel section</a>)</td></tr>
+<tr><td>Messages arrive but the numbers make no sense</td><td>The structs on the two sides differ (order, type or number of boxes)</td><td>Compare the struct in both files line by line; better yet, put it in a shared <code>.h</code> file</td></tr>
+<tr><td>The receive callback is never called, but the sender says delivered</td><td>The length check (<code>len != sizeof</code>) rejects the message</td><td>Temporarily print <code>len</code> in the callback and compare it with <code>sizeof</code> on both sides</td></tr>
+<tr><td>Compile error <code>invalid conversion ... esp_now_recv_cb_t</code> or <code>esp_now_send_cb_t</code></td><td>The callback signature belongs to a different core version</td><td>Use the signature for your core, as shown in the yellow box</td></tr>
+<tr><td><code>esp_now_send</code> returns <code>ESP_ERR_ESPNOW_NOT_FOUND</code></td><td>The peer wasn't added, or the MAC you send to differs from the peer's MAC</td><td>Use one array for both</td></tr>
+<tr><td><code>ESP-NOW init failed</code></td><td><code>esp_now_init</code> was called before Wi-Fi was on</td><td>Put <code>WiFi.mode(WIFI_STA)</code> and the <code>WiFi.STA.started()</code> loop before it</td></tr>
+<tr><td>One press, two commands</td><td>No debounce, or it's too short</td><td>Use the stable-state logic with 30 to 50 milliseconds</td></tr>
+<tr><td>After B connects to Wi-Fi, some messages (not all) get lost</td><td>Modem sleep, a power-saving mode that is on by default while connected; it switches the radio off briefly between the router's beacons</td><td>In board B's setup, after connecting to Wi-Fi, write <code>WiFi.setSleep(false);</code> (power use goes up a little)</td></tr>
+<tr><td>The link drops in and out from a few meters away</td><td>A concrete wall, metal, or the board's antenna facing a metal case</td><td>Place the boards higher and away from metal; for long range there are modules with an external antenna (such as the WROOM-32U)</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">Coach's advice</div>
+<p>With ESP-NOW you have two programs on two boards, and when it doesn't work you're tempted to change both at once. Don't. Always make sure first that <b>the MAC is correct</b> (from the receiver's own Serial output, not from memory), then prove the link works with the simplest possible program (project 1), and only then make it more complex. Label each board A or B, and mark each Serial Monitor window with the board it belongs to. And remember: "delivered" means the radio received it, not that the program acted on it. Wherever carrying out a command matters (a lock, a pump, a motor), ask for a reply from the program with a seq. That's the difference between a toy and a reliable system.</p></div>
+
+<h2 id="quiz">Lesson quiz</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">In core 3, which signature is correct for the ESP-NOW receive callback?</p>
+  <ol><li data-why="That's the core 2.x signature, and it doesn't compile on core 3.">void onRecv(const uint8_t *mac, const uint8_t *data, int len)</li><li>void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len)</li><li data-why="That's the send callback signature in core 3.3 and later, not the receive one.">void onRecv(const wifi_tx_info_t *info, esp_now_send_status_t status)</li><li data-why="ESP-NOW hands you the data as bytes, not as a String.">void onRecv(String msg)</li></ol>
+  <div class="fb">In core 3 the sender's details are in an <code>esp_now_recv_info_t</code> structure, and its MAC is in <code>info-&gt;src_addr</code>.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">A program that prints the MAC before <code>WiFi.mode(WIFI_STA)</code> shows <code>00:00:00:00:00:00</code>. Why?</p>
+  <ol><li data-why="The MAC is written at the factory and doesn't break.">The board's MAC is broken</li><li data-why="ESP-NOW has nothing to do with reading the MAC.">Because ESP-NOW hasn't been initialized yet</li><li data-why="The serial speed only affects whether the characters are readable, not the value.">The Serial speed is wrong</li><li>Because the STA network interface hasn't been created yet, and <code>WiFi.macAddress()</code> reads the address from it</li></ol>
+  <div class="fb">Switch Wi-Fi on first and wait until <code>WiFi.STA.started()</code> is true, then read the MAC.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">How many bytes is <code>typedef struct { uint32_t seq; bool ledOn; float tempC; } ReplyMsg;</code> on the ESP32?</p>
+  <ol><li>12</li><li data-why="4+1+4=9 would be right without padding, but the compiler places the float at an address that is a multiple of 4.">9</li><li data-why="A bool is 1 byte, not 4; but 3 empty bytes follow it.">16</li><li data-why="You'd get that size with a double, not a float.">20</li></ol>
+  <div class="fb">4 (seq) + 1 (ledOn) + 3 bytes of padding + 4 (tempC) = 12. That's why you always write <code>sizeof</code>, never a hand-typed number.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">Board B connected to the home router (channel 11), and from that moment messages from board A (which isn't connected to the router) stop arriving. What is the best fix?</p>
+  <ol><li data-why="Encryption has nothing to do with the channel.">Turn encryption off</li><li data-why="Message size isn't the problem; the radios are on two different frequencies.">Make the message shorter</li><li>Move board A's radio to the router's channel with <code>WiFi.setChannel(11)</code></li><li data-why="A broadcast also goes out on the sender's own channel and doesn't reach channel 11.">Send to FF:FF:FF:FF:FF:FF instead of the MAC</li></ol>
+  <div class="fb">One radio, one channel. When one side is connected to a router, the other side has to be on that router's channel.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">The send callback reports <code>ESP_NOW_SEND_SUCCESS</code>. What exactly is guaranteed?</p>
+  <ol><li data-why="It doesn't guarantee that the receiver's program ran anything; for that you need a reply from the program.">Board B's program carried out the command</li><li>The receiver's radio received and acknowledged the packet at the MAC layer</li><li data-why="Only the radio has confirmed it; if the length check in the callback rejects it, the LED doesn't change.">The LED on B definitely turned on</li><li data-why="ESP-NOW has nothing to do with the internet.">The message reached the internet</li></ol>
+  <div class="fb">Espressif's documentation says plainly that reception by the application layer is not guaranteed; if you need it, the receiver must send a reply (as in project 2).</div>
+</div>
+
+<h2 id="practice">Exercises</h2>
+<div class="exercise"><div class="ct">Exercise 1: signal strength</div>
+<p>On board B, print the signal strength (RSSI) of every message and walk around the house: how many meters and how many walls does it take for the RSSI to reach about <code>-85</code> dBm and for messages to get lost?</p>
+<details><summary>Hint</summary><p>In the receive callback, <code>info-&gt;rx_ctrl-&gt;rssi</code> is a negative number (for example <code>-52</code>). Store it in a global <code>volatile int</code> variable and print it in loop. The closer to zero, the stronger the signal.</p></details>
+<details><summary>Answer</summary>
+<div class="code" data-file="RSSI.ino (snippet)"><pre>
+volatile int lastRssi = 0;
+
+void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len != sizeof(CommandMsg)) return;
+  memcpy(&amp;incoming, data, sizeof(incoming));
+  lastRssi = info-&gt;rx_ctrl-&gt;rssi;
+  gotMsg = true;
+}
+// in loop:  Serial.printf("RSSI: %d dBm\n", lastRssi);
+</pre></div></details>
+</div>
+<div class="exercise"><div class="ct">Exercise 2: retries</div>
+<p>On board A in project 2, if no reply arrives within 500 milliseconds, resend <b>the same</b> command (with the same seq) up to 3 times, and only report an error after the third failure. Why must seq stay the same?</p>
+<details><summary>Hint</summary><p>Add a counter <code>int tries</code>. In the timeout section, if <code>tries &lt; 3</code>, call <code>esp_now_send</code> with the same <code>cmd</code>, then <code>tries++</code> and <code>sentAt = millis()</code>. In <code>sendCommand</code>, set <code>tries = 0</code>.</p></details>
+<details><summary>Answer</summary><p>seq stays the same so that if the first message did arrive and only its reply got lost, B can tell it's the same command as before (by remembering the last seq it carried out) and doesn't flip the LED again. This property is called "idempotent" (repeating it does no harm); it's the same problem QoS 2 solves in MQTT.</p></details>
+</div>
+<div class="exercise"><div class="ct">Exercise 3: finding the channel automatically</div>
+<p>Write board A so that in setup it finds the router's network with <code>WiFi.scanNetworks()</code>, reads its channel and moves to it by itself. Then you no longer need to type the channel number by hand.</p>
+<details><summary>Hint</summary><p><code>int n = WiFi.scanNetworks();</code> then, in a <code>for</code> loop, if <code>WiFi.SSID(i) == "YourWiFi"</code>, <code>WiFi.channel(i)</code> is that network's channel. Then <code>WiFi.setChannel(ch)</code>, and after that <code>esp_now_init()</code>.</p></details>
+<details><summary>Answer</summary>
+<div class="code" data-file="AutoChannel.ino (board A setup snippet)"><pre>
+WiFi.mode(WIFI_STA);
+while (!WiFi.STA.started()) delay(10);
+int ch = 1;                              // channel 1 if the router isn't found
+int n = WiFi.scanNetworks();             // takes about 2 to 3 seconds
+for (int i = 0; i &lt; n; i++) {
+  if (WiFi.SSID(i) == "YourWiFi") { ch = WiFi.channel(i); break; }
+}
+WiFi.scanDelete();                       // free the scan results' memory
+WiFi.setChannel(ch);
+Serial.printf("Using channel %d\n", ch);
+esp_now_init();
+// ... register the callbacks and the peer as before
+</pre></div>
+<p>The network name is case-sensitive. If the router changes its channel later, just reset A so it scans again (or scan again after several timeouts in a row).</p></details>
+</div>
+
+<div class="callout info"><div class="ct">The lesson in three lines</div>
+<p>ESP-NOW moves short messages (up to 250 bytes in v1) between ESP32s by MAC address, with no router, in a few milliseconds; read the MAC after Wi-Fi is on, and add the peer before sending. The message layout is an identical <code>struct</code> on both sides, sent and read with <code>sizeof</code> and <code>memcpy</code>; keep callbacks short and use the core 3 signatures (<code>esp_now_recv_info_t</code>, and from 3.3 on <code>wifi_tx_info_t</code>). "Delivered" is only the radio's confirmation; for certainty, build a reply with a seq and a timeout, and if one side is connected to a router, put everyone on the router's channel.</p></div>
+
+</article>
+</body>
+</html>

@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESP32-CAM: live video and saving photos to an SD card · ESP32 Masterclass</title>
+<meta name="description" content="A complete ESP32-CAM guide for beginners: the parts of the AI-Thinker board, programming it with a USB-TTL adapter or the ESP32-CAM-MB, live video with CameraWebServer, time-lapse photos on a microSD card with deep sleep, and fixing power problems.">
+<link rel="alternate" hreflang="fa" href="../5-3.html"><link rel="alternate" hreflang="en" href="5-3.html">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="../assets/course.js"></script>
+<script defer src="../assets/glossary-en.js"></script>
+<script defer src="../assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="5-3">
+
+<p class="lede">The ESP32-CAM is a small board about the size of a postage stamp. It combines an ESP32, a 2-megapixel camera, 4 MB of extra RAM and a microSD card slot, and it costs less than a meal. In this lesson you use it to build a Wi-Fi security camera that shows live video in a browser, and then a "time-lapse" camera that saves a photo to an SD card every few minutes and sleeps between shots. This board is also a bit temperamental: <b>most of its problems come from the power supply</b>, and we'll learn to do things right from the start.</p>
+
+<div class="goals">
+  <div><h4>🎯 After this lesson you can</h4><ul>
+    <li>Identify the parts of the AI-Thinker ESP32-CAM board and its free pins</li>
+    <li>Program the board with a USB-TTL adapter or an ESP32-CAM-MB base (without frying it!)</li>
+    <li>Set up the official CameraWebServer example correctly and watch live video in your browser</li>
+    <li>Explain what the key <code>camera_config_t</code> settings mean</li>
+    <li>Save photos to a microSD card in 1-bit mode and build a time-lapse camera with deep sleep</li>
+    <li>Troubleshoot the common errors (Camera init failed, Brownout, Timed out)</li>
+  </ul></div>
+  <div><h4>🧰 Prerequisites and parts</h4><ul>
+    <li>Lessons <a href="4-1.html">4.1</a> (Wi-Fi) and <a href="3-3.html">3.3</a> (SD card); reading <a href="6-1.html">6.1</a> (deep sleep) helps</li>
+    <li>An <b>AI-Thinker ESP32-CAM</b> board with an OV2640 camera</li>
+    <li>Preferably an <b>ESP32-CAM-MB</b> programmer base; or a USB-to-serial adapter (CP2102, CH340 or FTDI) + 5 female-to-female jumper wires</li>
+    <li>A good, short USB data cable, and a 5 V power supply rated at least 2 A</li>
+    <li>A microSD card (preferably 4 to 32 GB, formatted FAT32)</li>
+  </ul></div>
+</div>
+
+<h2 id="anatomy">Meet the board: what's on it?</h2>
+<figure><div class="frame"><img src="../assets/img/esp32cam-pins.jpg" alt="AI-Thinker ESP32-CAM board with labeled pins"></div>
+<figcaption>The AI-Thinker ESP32-CAM seen from the ESP32-S module side. It has 16 pins: on the left GPIO4, 2, 14, 15, 13, 12, GND and 5V; on the right GND, GPIO1 (U0TXD), GPIO3 (U0RXD), a 3.3V/5V output pin, GND, GPIO0, GPIO16 and 3.3V. The RST button is at the bottom of the board.<span class="src">Image: raphaelbs/esp32-cam-ai-thinker repository on GitHub, Apache-2.0 license</span></figcaption></figure>
+
+<div class="table-wrap"><table>
+<tr><th>Part</th><th>Details</th><th>Why it matters</th></tr>
+<tr><td>ESP32-S module</td><td>The same dual-core ESP32 chip with Wi-Fi and Bluetooth, 4 MB of flash</td><td>Everything you learned in earlier lessons works here too</td></tr>
+<tr><td><b>OV2640</b> camera</td><td>2 megapixels, up to 1600×1200 (UXGA), makes compressed JPEG by itself</td><td>Because the camera itself outputs JPEG, the ESP32 doesn't have to compress the image; that's why this small processor can stream video</td></tr>
+<tr><td>4 MB <span class="term" data-t="PSRAM">PSRAM</span></td><td>Extra RAM outside the chip</td><td>The ESP32's internal SRAM is about 520 KB, and one UXGA photo can be several hundred kilobytes. Without PSRAM only small images are possible</td></tr>
+<tr><td>microSD card slot</td><td>Connected to the SD_MMC interface (pins 14, 15, 2, 4, 12, 13)</td><td>Saves photos without needing the internet</td></tr>
+<tr><td>White flash LED</td><td><b>GPIO4</b>, very bright</td><td>Shares a pin with the SD card's DATA1 line; an important problem we solve further down</td></tr>
+<tr><td>Small red LED</td><td><b>GPIO33</b>, on the back of the board, inverted logic (LOW = on)</td><td>For showing the program's status without blinding anyone!</td></tr>
+<tr><td>Antenna</td><td>An on-board (PCB) antenna + an IPEX connector for an external antenna</td><td>You choose between the two with a tiny zero-ohm resistor next to the antenna; just plugging in an external antenna isn't enough</td></tr>
+<tr><td><b>USB port</b></td><td><b>None!</b></td><td>To program it you need a separate adapter or base (next section)</td></tr>
+</table></div>
+
+<figure><div class="frame"><img src="../assets/img/esp32cam-flash-sd.jpg" alt="Table of how the camera and SD card pins connect to the ESP32"></div>
+<figcaption>Which ESP32 pin goes to the camera and which to the SD card. Notice that the SD card's DATA1 and the flash LED are both on PIN4 (GPIO4). Almost every pin is taken; only a few are left free for your projects.<span class="src">Image: raphaelbs/esp32-cam-ai-thinker repository on GitHub, Apache-2.0 license</span></figcaption></figure>
+
+<div class="callout warn"><div class="ct">Very few free pins</div>
+<p>The camera takes 15 pins and the SD card up to 6. If you use the SD card in 1-bit mode, GPIO12, GPIO13 and GPIO4 are freed up; GPIO16 is connected to the PSRAM and must not be used. GPIO12 is a sensitive strapping pin: if it is HIGH at power-up, the flash voltage is set wrong and the board won't boot. So the ESP32-CAM is not a good fit for projects with lots of sensors and motors; combine it with another ESP32 over <a href="5-2.html">ESP-NOW</a> or <a href="5-1.html">MQTT</a>.</p></div>
+
+<h2 id="program">Programming: the board has no USB, so what now?</h2>
+<p>A regular ESP32 board (DevKitC) has a USB-to-serial chip (CP2102 or CH340) and two transistors that "press" the BOOT button for you automatically. To stay small and cheap, the ESP32-CAM has neither. You have two options:</p>
+
+<h3>Option 1 (recommended): the ESP32-CAM-MB base</h3>
+<p>A small board that the ESP32-CAM plugs into, with a CH340 chip, a USB socket and an automatic reset circuit. Put the board on it (match the orientation to the printing on the board: the antenna end and the 5V and GND pins must line up), plug in the USB cable and upload like any regular ESP32. The 5 V power also comes from that USB cable. If no new COM port appears in <code>Tools › Port</code> on Windows, install the CH340 driver (from its maker, WCH) and unplug and replug the cable once; also make sure the cable isn't a "charge-only" one.</p>
+<div class="callout tip"><div class="ct">If it won't upload even with the MB</div>
+<p>Some MB versions don't run the automatic circuit properly. The manual method: hold the <b>IO0</b> button on the MB, press and release the <b>RST</b> button once (on the MB, or on the ESP32-CAM itself if you can reach it), then release IO0 and start the upload. After uploading, press RST once more to run the program.</p></div>
+
+<h3>Option 2: a USB-TTL adapter (FTDI, CP2102, CH340)</h3>
+<figure><div class="frame"><img src="../assets/img/esp32cam-ftdi.png" alt="Schematic of connecting the ESP32-CAM to a USB-to-TTL adapter"></div>
+<figcaption>Connection schematic: GND to GND, the board's U0T to the adapter's RX, the board's U0R to the adapter's TX, and a switch that connects IO0 to GND (it's labeled "RESET button" in the drawing, but it's really the programming-mode switch on IO0). In this drawing, 5V comes from a separate power supply (EXTERNAL PSU), which is the best approach.<span class="src">Image: raphaelbs/esp32-cam-ai-thinker repository on GitHub, Apache-2.0 license</span></figcaption></figure>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32-CAM (AI-Thinker)",
+  "parts":[
+    {"id":"TTL","name":"USB-to-TTL adapter","pins":[["5V","USB 5 V output"],["GND","ground"],["TX","adapter transmit"],["RX","adapter receive"]]},
+    {"id":"J1","name":"Programming-mode jumper wire","pins":[["1","first end"],["2","second end"]]}
+  ],
+  "wires":[["5V","TTL.5V","red"],["GND","TTL.GND","black"],["U0R","TTL.TX","yellow"],["U0T","TTL.RX","blue"],["GPIO0","J1.1","purple"],["J1.2","GND","black"]]
+}</script><figcaption>5 V power goes to the board's 5V pin (not 3.3V), the data wires are <b>crossed over</b> (TX to RX and RX to TX), and GPIO0 goes to GND with a jumper only while uploading. The U0R pin is GPIO3 and U0T is GPIO1.</figcaption></div>
+
+<ol class="steps">
+  <li><b>Set the adapter's logic voltage to 3.3 V.</b> If your adapter (like most FTDI boards) has a 3.3V/5V jumper, set it to 3.3V so its TX signal is 3.3 V; the ESP32's pins aren't designed for 5 V inputs. Plenty of tutorials got away with 5 V, but "it works" is not the same as "it's safe".</li>
+  <li><b>Power it from the 5 V pin.</b> Connect the adapter's 5V pin (if it has one) or, better, a separate 5 V supply to the ESP32-CAM's <b>5V</b> pin, and connect the grounds together. Powering it from the adapter's 3.3V output almost always ends in a brownout or a failed upload, because that output can't supply enough current.</li>
+  <li><b>Cross the data wires.</b> <code>U0R</code> (the board's receive) to <code>TX</code> (the adapter's transmit), and <code>U0T</code> to <code>RX</code>. Like two people on a phone call: one person's mouth goes to the other's ear.</li>
+  <li><b>Connect GPIO0 to GND</b> and press the RST button. The board is now in "receive a program" mode (download mode).</li>
+  <li><b>Upload.</b> When the Arduino IDE says <code>Hard resetting via RTS pin...</code>, <b>remove</b> the GPIO0 jumper and press RST again to run the program.</li>
+</ol>
+<div class="callout why"><div class="ct">Why do you have to remove the GPIO0 jumper?</div>
+<p>At power-up or reset, the ESP32 looks at GPIO0: LOW means "I want a new program", HIGH means "run the saved program". If the jumper stays on, the board stays in download mode every time and your program never runs. On top of that, on the ESP32-CAM GPIO0 is also the camera's clock signal (XCLK); keeping it tied to GND stops the camera from working too.</p></div>
+
+<h3>Arduino IDE settings</h3>
+<ol class="steps">
+  <li><b>Board:</b> <code>Tools › Board › esp32 › AI Thinker ESP32-CAM</code>. With this choice PSRAM is enabled automatically, and there's no separate menu for it.</li>
+  <li><b>Partition Scheme:</b> this board's default is <b>Huge APP (3MB No OTA/1MB SPIFFS)</b>. Keep it; the camera and web server program is large and doesn't fit in 1.2 MB (you'd get a <code>Sketch too big</code> error). Note: the CameraWebServer example folder has its own <code>partitions.csv</code> file, and when such a file sits next to the sketch, Arduino uses it instead of the menu choice; so for this example the menu choice has no effect, but it does matter for your own programs (like project 2).</li>
+  <li><b>Port:</b> the port of your adapter or MB (for example <code>COM7</code>).</li>
+</ol>
+
+<h2 id="power">Rule number one: power, power, power</h2>
+<p>At the moments when Wi-Fi switches its transmitter on while the camera is also active, the ESP32-CAM draws a high burst of current (several hundred milliamps). If the supply or the cable can't deliver that current, the voltage dips for a few milliseconds and the low-voltage guard (<span class="term" data-t="Brownout">Brownout</span>) resets the chip. The result: the board keeps resetting and you think your code is broken.</p>
+<div class="callout analogy"><div class="ct">An everyday example: taps and a narrow pipe</div>
+<p>Imagine opening every tap in the house at once while the main pipe is narrow: the water pressure suddenly drops. A thin, long USB cable is that narrow pipe, and Wi-Fi is like every tap opening at the same time.</p></div>
+<div class="callout example"><div class="ct">Do the math: why the cable matters</div>
+<p>A cheap one-meter USB cable can have about 0.5 Ω of resistance for the round trip (there and back). With a 0.5 A burst: <code>V = I × R = 0.5 × 0.5 = 0.25V</code> of drop. So 5 V becomes 4.75 V; then the AMS1117 regulator on the board drops about 1 V or more, and if its input sags, the 3.3 V output sags too. Every tenth of a volt counts. A short, thick cable + a 5 V 2 A supply = goodbye, brownouts.</p></div>
+<div class="callout warn"><div class="ct">A wrong fix you'll see a lot online</div>
+<p>Some tutorials switch off the brownout guard with the line <code>WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);</code>. That's like taking the battery out of a smoke alarm because it beeps too much! The problem (low voltage) is still there; you just stop hearing about it, and instead you get corrupted photos, half-written files on the SD card and random freezes. Fix the power, not the alarm.</p></div>
+
+<h2 id="webserver">Project 1: a live camera in your browser (CameraWebServer)</h2>
+<p>Espressif has prepared a complete example with a web server, live streaming and a settings page. You don't have to write any code; you only adjust two places.</p>
+<ol class="steps">
+  <li><b>Open</b> <code>File › Examples › ESP32 › Camera › CameraWebServer</code>. (This example appears under "Examples for AI Thinker ESP32-CAM" or "ESP32"; the right board must be selected first.) The Arduino IDE asks you to save a copy; save it.</li>
+  <li><b>Pick the camera model.</b> In newer cores (including 3.3.x, which this course was tested with), this choice lives in a separate <code>board_config.h</code> tab (the tabs above the editor, next to <code>CameraWebServer.ino</code>). In older versions these same lines are at the top of <code>CameraWebServer.ino</code> itself. The list has 17 models; the snippet below shows only a few lines, and <code>CAMERA_MODEL_AI_THINKER</code> is a few lines further down than the others.</li>
+</ol>
+<div class="code" data-file="board_config.h (changes only)" id="cfg1"><pre>
+//#define CAMERA_MODEL_WROVER_KIT // Has PSRAM
+//#define CAMERA_MODEL_ESP_EYE  // Has PSRAM
+//#define CAMERA_MODEL_ESP32S3_EYE // Has PSRAM
+#define CAMERA_MODEL_AI_THINKER // Has PSRAM
+</pre></div>
+<ol class="walk" data-for="cfg1">
+  <li data-lines="1-3"><b class="what">Switch the other models off.</b> Put <code>//</code> in front of any other model that is active (in the current version <code>CAMERA_MODEL_ESP_EYE</code> is active by default).
+    <span class="why">Each model wires the camera pins differently. If two models are active at once, or the wrong one is, <code>esp_camera_init</code> looks for the camera on the wrong pins (with two models active you usually get a "redefined" error at compile time already) and returns error <code>0x105</code> or <code>0x20001</code> (camera not found).</span></li>
+  <li data-lines="4"><b class="what">Switch AI-Thinker on.</b> Delete the <code>//</code> in front of <code>CAMERA_MODEL_AI_THINKER</code>.
+    <span class="why">Based on this name, the <code>camera_pins.h</code> file picks the right pins: XCLK on GPIO0, the camera's SDA and SCL on 26 and 27, PWDN on 32 and the flash LED on 4.</span></li>
+</ol>
+<ol class="steps">
+  <li><b>Type in your Wi-Fi name and password.</b> In <code>CameraWebServer.ino</code>, replace the two lines <code>const char *ssid = "**********";</code> and <code>const char *password = "**********";</code> with your own router's name and password. Keep in mind the ESP32 only sees 2.4 GHz networks.</li>
+  <li><b>Upload</b> (with the MB or USB-TTL method above), open the Serial Monitor at 115200 and press RST.</li>
+  <li><b>Grab the IP address.</b> In the Serial Monitor you'll see a message like <code>Camera Ready! Use 'http://192.168.1.42' to connect</code>. Open that address in the browser of a phone or computer connected to <b>the same router</b>.</li>
+  <li>Press <b>Start Stream</b>. Live video appears. The <b>Get Still</b> button takes a single photo. In the side menu, try Resolution, Quality, brightness and mirroring the image (H-Mirror, V-Flip). The LED Intensity slider controls the flash.</li>
+</ol>
+<div class="serial">WiFi connecting.....
+WiFi connected
+Camera Ready! Use 'http://192.168.1.42' to connect</div>
+<div class="callout tip"><div class="ct">Practical tips for live streaming</div>
+<p>The live stream runs on port <b>81</b> (direct address: <code>http://192.168.1.42:81/stream</code>), and only <b>one</b> viewer can watch it at a time; if it's open in another tab, a new tab shows nothing. The higher the resolution, the fewer frames per second: VGA (640×480) looks smoother than UXGA (1600×1200). The exact number depends on Wi-Fi strength and lighting.</p></div>
+
+<h3>What happens inside the example? Key camera_config_t settings</h3>
+<p>The snippet below comes straight from the official example. <code>camera_config_t</code> is a big struct that tells the camera library which pins the camera is connected to and how to deliver the image:</p>
+<div class="code" data-file="CameraWebServer.ino (part of setup)" id="camcfg"><pre>
+config.xclk_freq_hz = 20000000;
+config.frame_size = FRAMESIZE_UXGA;
+config.pixel_format = PIXFORMAT_JPEG;  // for streaming
+config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+config.fb_location = CAMERA_FB_IN_PSRAM;
+config.jpeg_quality = 12;
+config.fb_count = 1;
+
+if (config.pixel_format == PIXFORMAT_JPEG) {
+  if (psramFound()) {
+    config.jpeg_quality = 10;
+    config.fb_count = 2;
+    config.grab_mode = CAMERA_GRAB_LATEST;
+  } else {
+    config.frame_size = FRAMESIZE_SVGA;
+    config.fb_location = CAMERA_FB_IN_DRAM;
+  }
+}
+
+esp_err_t err = esp_camera_init(&amp;config);
+if (err != ESP_OK) {
+  Serial.printf("Camera init failed with error 0x%x", err);
+  return;
+}
+</pre></div>
+<ol class="walk" data-for="camcfg">
+  <li data-lines="1"><b class="what">Camera clock (XCLK) = 20 MHz.</b> The ESP32 feeds a clock signal to the camera on GPIO0, and the camera sends pixels out to that beat.
+    <span class="why">20 MHz is the standard value for the OV2640. If the image looks streaky or unstable, some people try 10 MHz: fewer frames, but more stable.</span></li>
+  <li data-lines="2"><b class="what">frame_size: the image size.</b> <code>FRAMESIZE_UXGA</code> means 1600×1200. Common options: <code>QVGA</code> 320×240, <code>VGA</code> 640×480, <code>SVGA</code> 800×600, <code>XGA</code> 1024×768, <code>SXGA</code> 1280×1024.
+    <span class="why">The library reserves buffers in advance for the largest size you give here. The example starts with UXGA so you can later pick any size from the web menu, and then lowers it to QVGA for a fast start.</span></li>
+  <li data-lines="3"><b class="what">pixel_format: JPEG.</b> The camera compresses the image to JPEG by itself.
+    <span class="why">A raw 1600×1200 image at 2 bytes per pixel is about 3.8 MB; the same image as JPEG is usually a few tens to a few hundred kilobytes. Without hardware JPEG, live streaming on an ESP32 would be practically impossible.</span></li>
+  <li data-lines="4"><b class="what">grab_mode.</b> <code>WHEN_EMPTY</code> means "fill the buffer when it's empty". <code>LATEST</code> means "always keep the newest frame".
+    <span class="why">With <code>WHEN_EMPTY</code>, the frame you get may be a few moments old; that matters for single photos (in project 2 you'll see why we throw away the first few frames).</span></li>
+  <li data-lines="5"><b class="what">fb_location: the buffer in PSRAM.</b> The "frame buffer" is the area of RAM that holds a complete picture.
+    <span class="why">A large JPEG doesn't fit in the ESP32's internal RAM (which Wi-Fi and your program also use). The 4 MB PSRAM is on the board for exactly this reason.</span></li>
+  <li data-lines="6"><b class="what">jpeg_quality.</b> A number from 0 to 63; <b>lower means better quality</b> and a bigger file.
+    <span class="why">10 to 12 is a good balance. Below 8 the files get very large and may not fit in the buffer (half an image).</span></li>
+  <li data-lines="7"><b class="what">fb_count: the number of buffers.</b> One or two buffers.
+    <span class="why">With two buffers, the camera fills the next frame while you send the previous one; smoother streaming, but twice the RAM. Without PSRAM, one buffer.</span></li>
+  <li data-lines="9-18"><b class="what">A decision based on whether PSRAM is present.</b> If <code>psramFound()</code> is true: better quality (10), two buffers, and always the newest frame. If not: shrink the size to SVGA and put the buffer in internal RAM (DRAM).
+    <span class="why">One program for boards with and without PSRAM. If you see an out-of-memory message on an AI-Thinker (which has PSRAM), the wrong board is selected in the Tools menu and PSRAM isn't enabled.</span></li>
+  <li data-lines="20-24"><b class="what">Starting the camera and checking for errors.</b> <code>esp_camera_init</code> switches the camera on with these settings, and if it fails, the error code is printed in hex.
+    <span class="why">That error code is your most important clue; the <a href="#debug">troubleshooting</a> table explains the most common ones.</span></li>
+</ol>
+
+<h2 id="timelapse">Project 2: a time-lapse camera with an SD card and deep sleep</h2>
+<p>Now we build a camera that works without Wi-Fi and without a computer: it wakes up, takes a full-quality photo, saves it with a sequence number on the SD card, and goes into deep sleep for 5 minutes. You can use it to record a plant growing, a building going up or clouds moving.</p>
+
+<pre class="mermaid">flowchart TD
+  W["Wake up (reset from deep sleep)"] --> C["Start the camera"]
+  C --> S["Mount the SD card in 1-bit mode"]
+  S --> D["Throw away the first 3 frames"]
+  D --> P["Take the photo"]
+  P --> N["Read the number from Preferences"]
+  N --> F["Save /img_00042.jpg"]
+  F --> Z["Deep sleep for 5 minutes"]
+  Z --> W
+  C -.->|"error"| Z
+  S -.->|"error"| Z</pre>
+
+<h3>An important problem: the flash LED and the SD card share a pin</h3>
+<p>An SD card has two modes: <b>4-bit</b> (four data lines, DATA0 to DATA3, faster) and <b>1-bit</b> (DATA0 only, a bit slower). On the ESP32-CAM, the DATA1 line is GPIO4, which is also where the bright flash LED is connected. In 4-bit mode, <b>the flash blinks</b> every time data is written to the card; it's annoying, it wastes power and it may show up in night photos.</p>
+<p>The fix: <code>SD_MMC.begin("/sdcard", true)</code>. That <code>true</code> means 1-bit mode; the card works with only GPIO14 (CLK), GPIO15 (CMD) and GPIO2 (DATA0), leaving GPIO4, GPIO12 and GPIO13 free. For a photo saved every 5 minutes, 1-bit mode is plenty fast.</p>
+
+<div class="callout info"><div class="ct">Preparing the microSD card</div>
+<p>Format the card as <b>FAT32</b> on your computer. 4 to 32 GB cards (SDHC) cause the least trouble; bigger cards usually come as exFAT and may not mount unless you reformat them. Insert the card before powering the board.</p></div>
+
+<div class="code" data-file="TimeLapse_SD.ino" id="tl1"><pre>
+#include "esp_camera.h"
+#include "FS.h"
+#include "SD_MMC.h"
+#include &lt;Preferences.h&gt;
+#include "driver/rtc_io.h"
+
+// Camera pins for the AI-Thinker ESP32-CAM board
+#define PWDN_GPIO_NUM  32
+#define RESET_GPIO_NUM -1
+#define XCLK_GPIO_NUM   0
+#define SIOD_GPIO_NUM  26
+#define SIOC_GPIO_NUM  27
+#define Y9_GPIO_NUM    35
+#define Y8_GPIO_NUM    34
+#define Y7_GPIO_NUM    39
+#define Y6_GPIO_NUM    36
+#define Y5_GPIO_NUM    21
+#define Y4_GPIO_NUM    19
+#define Y3_GPIO_NUM    18
+#define Y2_GPIO_NUM     5
+#define VSYNC_GPIO_NUM 25
+#define HREF_GPIO_NUM  23
+#define PCLK_GPIO_NUM  22
+
+const int FLASH_LED = 4;
+const uint64_t SLEEP_MINUTES = 5;
+
+RTC_DATA_ATTR int bootCount = 0;   // survives deep sleep
+Preferences prefs;
+
+bool initCamera() {
+  camera_config_t config = {};
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = Y2_GPIO_NUM;
+  config.pin_d1 = Y3_GPIO_NUM;
+  config.pin_d2 = Y4_GPIO_NUM;
+  config.pin_d3 = Y5_GPIO_NUM;
+  config.pin_d4 = Y6_GPIO_NUM;
+  config.pin_d5 = Y7_GPIO_NUM;
+  config.pin_d6 = Y8_GPIO_NUM;
+  config.pin_d7 = Y9_GPIO_NUM;
+  config.pin_xclk = XCLK_GPIO_NUM;
+  config.pin_pclk = PCLK_GPIO_NUM;
+  config.pin_vsync = VSYNC_GPIO_NUM;
+  config.pin_href = HREF_GPIO_NUM;
+  config.pin_sccb_sda = SIOD_GPIO_NUM;
+  config.pin_sccb_scl = SIOC_GPIO_NUM;
+  config.pin_pwdn = PWDN_GPIO_NUM;
+  config.pin_reset = RESET_GPIO_NUM;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG;
+  config.frame_size = FRAMESIZE_UXGA;      // 1600x1200
+  config.jpeg_quality = 10;                // 0 to 63; lower = better
+  config.fb_count = 1;
+  config.fb_location = CAMERA_FB_IN_PSRAM;
+  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+
+  esp_err_t err = esp_camera_init(&amp;config);
+  if (err != ESP_OK) {
+    Serial.printf("Camera init failed: 0x%x\n", err);
+    return false;
+  }
+  return true;
+}
+
+void goToSleep() {
+  Serial.printf("Sleeping %llu minutes...\n", SLEEP_MINUTES);
+  pinMode(FLASH_LED, OUTPUT);
+  digitalWrite(FLASH_LED, LOW);
+  rtc_gpio_hold_en(GPIO_NUM_4);            // keep the flash off during sleep
+  esp_sleep_enable_timer_wakeup(SLEEP_MINUTES * 60ULL * 1000000ULL);
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+void setup() {
+  Serial.begin(115200);
+  bootCount++;
+  Serial.printf("\nBoot #%d\n", bootCount);
+  rtc_gpio_hold_dis(GPIO_NUM_4);
+
+  if (!psramFound()) {
+    Serial.println("No PSRAM! Check board selection.");
+    goToSleep();
+  }
+  if (!initCamera()) goToSleep();
+
+  if (!SD_MMC.begin("/sdcard", true)) {    // true = 1-bit mode
+    Serial.println("SD card mount failed");
+    goToSleep();
+  }
+
+  // Throw away the first few frames so auto-exposure can settle
+  for (int i = 0; i &lt; 3; i++) {
+    camera_fb_t *tmp = esp_camera_fb_get();
+    if (tmp) esp_camera_fb_return(tmp);
+  }
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    Serial.println("Capture failed");
+    goToSleep();
+  }
+
+  prefs.begin("timelapse", false);
+  uint32_t photoNum = prefs.getUInt("num", 0) + 1;
+
+  char path[32];
+  snprintf(path, sizeof(path), "/img_%05lu.jpg", (unsigned long)photoNum);
+  File file = SD_MMC.open(path, FILE_WRITE);
+  if (file) {
+    file.write(fb-&gt;buf, fb-&gt;len);
+    file.close();
+    prefs.putUInt("num", photoNum);        // only after a successful save
+    Serial.printf("Saved %s (%u bytes)\n", path, (unsigned)fb-&gt;len);
+  } else {
+    Serial.println("Failed to open file");
+  }
+  prefs.end();
+  esp_camera_fb_return(fb);
+  goToSleep();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="tl1">
+  <li data-lines="1-5"><b class="what">Libraries.</b> <code>esp_camera.h</code> is the camera driver, <code>FS.h</code> and <code>SD_MMC.h</code> handle the SD card, <code>Preferences.h</code> stores the photo number in flash, and <code>driver/rtc_io.h</code> locks the flash pin during sleep.
+    <span class="why">All of them come with the ESP32 core. <code>SD_MMC</code> uses the hardware SDMMC interface, not SPI (which you saw in lesson 3.3 with a separate module); on the ESP32-CAM the card is wired to this interface.</span></li>
+  <li data-lines="7-23"><b class="what">The camera pin map.</b> The same numbers as in <code>camera_pins.h</code> for the AI-Thinker. <code>Y2</code> to <code>Y9</code> are the eight image data lines, <code>XCLK</code> is the clock, <code>PCLK</code> the pixel clock, <code>VSYNC</code> and <code>HREF</code> mark the start of a frame and a line, <code>SIOD</code>/<code>SIOC</code> are the settings bus (similar to I2C), and <code>PWDN</code> powers the camera down.
+    <span class="why">We wrote them out here so the program doesn't depend on the example's files and fits in a single file. Compare these numbers with the table in the image above (CAM ↔ ESP32): D0 = PIN5 means <code>Y2_GPIO_NUM 5</code>. <code>RESET_GPIO_NUM -1</code> means this board doesn't connect the camera's reset pin to the ESP32.</span></li>
+  <li data-lines="25-26"><b class="what">Constants.</b> The flash pin and the time between photos in minutes. The type is <code>uint64_t</code> (a 64-bit number).
+    <span class="why">The sleep time is given in <b>microseconds</b>: 5 minutes = <code>5 × 60 × 1,000,000 = 300,000,000</code> microseconds. One hour is 3,600,000,000, which is close to the ceiling of an unsigned 32-bit number (about 4.29 billion), and anything longer overflows. With 64 bits you don't have to worry.</span></li>
+  <li data-lines="28"><b class="what">RTC_DATA_ATTR.</b> This variable is kept in the small RTC memory, which stays powered during deep sleep.
+    <span class="why">In deep sleep the ESP32 is practically off, and waking up is like a reset: every normal variable starts from zero again. <code>bootCount</code> survives sleep, but a power cut or the RST button <b>resets it to zero</b>. That's why we didn't keep the file number in it.</span></li>
+  <li data-lines="29"><b class="what">Preferences.</b> A small "notebook" in flash memory (the NVS partition) that isn't erased even when the power goes off.
+    <span class="why">If the photo number lived only in RAM or RTC memory, it would restart at 1 after every power cut, and the old <code>img_00001.jpg</code> on the card would be overwritten. Preferences is the modern replacement for EEPROM on the ESP32.</span></li>
+  <li data-lines="32"><b class="what">Zeroing the struct.</b> <code>camera_config_t config = {};</code> sets every field to zero.
+    <span class="why">This struct has more fields than the ones we fill in (for example <code>sccb_i2c_port</code>). Without zeroing, those fields hold random values and the camera might work one time and not the next.</span></li>
+  <li data-lines="33-50"><b class="what">Filling in the pins.</b> The LEDC channel and timer (used to make the XCLK signal), the eight data lines and the other signals.
+    <span class="why">The camera library makes the 20 MHz clock signal with the same PWM hardware (LEDC) you used for LEDs in lesson 3.2. If your program uses LEDC for something else, don't give it channel 0 and timer 0.</span></li>
+  <li data-lines="51-57"><b class="what">Quality settings.</b> JPEG, the full 1600×1200 size, quality 10, one buffer in PSRAM, <code>WHEN_EMPTY</code> mode.
+    <span class="why">For a time-lapse, quality matters more than speed; one buffer is enough because we only take one photo. Each UXGA photo at quality 10 is usually a few hundred kilobytes, depending on the scene; an 8 GB card holds thousands of photos.</span></li>
+  <li data-lines="59-64"><b class="what">Starting the camera.</b> On error, it prints the code and returns <code>false</code>.
+    <span class="why">Instead of trapping the program, the function returns the result so setup can decide what to do (here: sleep and try again later).</span></li>
+  <li data-lines="67-71"><b class="what">Keeping the flash off during sleep.</b> We set GPIO4 LOW and then "lock" it with <code>rtc_gpio_hold_en</code>.
+    <span class="why">In deep sleep, ordinary pins are released (left floating) and the flash transistor could end up half on: a bright LED that drains the battery all night and throws strange light into your photos. GPIO4 is one of the RTC pins, so its state can be held during sleep.</span></li>
+  <li data-lines="72-74"><b class="what">Setting the alarm clock and going to sleep.</b> We set the wake-up timer, finish sending the Serial messages (<code>flush</code>) and enter deep sleep.
+    <span class="why"><code>60ULL</code> means the number 60 as a 64-bit type; this makes the whole multiplication happen in 64 bits so it doesn't overflow. Without <code>flush</code>, the last message might come out cut off, because the board shuts down before it has finished sending it. Deep sleep is covered in detail in lesson <a href="6-1.html">6.1</a>.</span></li>
+  <li data-lines="79-81"><b class="what">Counting wake-ups and unlocking the flash pin.</b> After every wake-up we release the GPIO4 lock.
+    <span class="why">If the lock is never released, the pin stays in that state forever. <code>bootCount</code> is only there so you can see in the Serial Monitor that the cycle really repeats.</span></li>
+  <li data-lines="83-87"><b class="what">Checking PSRAM and the camera.</b> If there's no PSRAM or the camera didn't start, go straight to sleep.
+    <span class="why">A camera you've left in the garden shouldn't get stuck forever at the first error. Sleeping and trying again 5 minutes later copes well with temporary problems (a brief voltage dip, for example).</span></li>
+  <li data-lines="89-92"><b class="what">Mounting the SD card in 1-bit mode.</b> The first argument is the mount point and the second is <code>true</code> for 1-bit.
+    <span class="why">It's the flash and DATA1 problem we explained above. After mounting, any path that starts with <code>/</code> is on the card.</span></li>
+  <li data-lines="94-98"><b class="what">Throwing away the first three frames.</b> We take three photos and hand their buffers back right away.
+    <span class="why">A camera that has just switched on hasn't yet adjusted its automatic exposure and white balance (AEC/AWB); the first frame is often very dark or green. And with <code>WHEN_EMPTY</code>, a frame left in the buffer may be old.</span></li>
+  <li data-lines="99-103"><b class="what">Taking the real photo.</b> <code>esp_camera_fb_get()</code> returns a pointer to the photo buffer; <code>fb-&gt;buf</code> is the JPEG bytes and <code>fb-&gt;len</code> is its length.
+    <span class="why">If it returns <code>NULL</code> (because of weak power, for example), never touch <code>fb-&gt;buf</code>; the program would crash.</span></li>
+  <li data-lines="105-109"><b class="what">The next photo number and the file name.</b> We read the previous number from Preferences (with a default of 0) and add one. <code>%05lu</code> writes the number as five digits with leading zeros: <code>/img_00042.jpg</code>.
+    <span class="why">Leading zeros make the files sort in the right order on a computer (<code>img_00010</code> comes after <code>img_00009</code>; without the zeros, <code>img_10</code> would land right after <code>img_1</code> and before <code>img_2</code>). Software that makes videos from photos expects this order too.</span></li>
+  <li data-lines="110-118"><b class="what">Writing the file.</b> We open the file for writing, write all the JPEG bytes in one go, and close it. The number is saved only after success.
+    <span class="why"><code>close()</code> is essential; until the file is closed, the card's file table isn't updated and the file stays corrupt or zero bytes long. If saving fails, the number doesn't go up, so the same number is tried again next time.</span></li>
+  <li data-lines="119-121"><b class="what">Tidying up and sleeping.</b> We close Preferences, give the buffer back to the library and go to sleep.
+    <span class="why">Returning the buffer is a good habit (in a program that doesn't sleep, forgetting it means memory runs out after a few photos and <code>fb_get</code> stops giving you any).</span></li>
+  <li data-lines="124"><b class="what">An empty loop.</b> We never get there.
+    <span class="why">In deep-sleep programs, all the work happens in setup; every wake-up means running setup once from the start.</span></li>
+</ol>
+<div class="serial">Boot #1
+Saved /img_00001.jpg (187432 bytes)
+Sleeping 5 minutes...
+
+Boot #2
+Saved /img_00002.jpg (191208 bytes)
+Sleeping 5 minutes...</div>
+<p>(File sizes depend on the scene.) To turn the photos into a video, put the card in your computer and, with free software like ffmpeg, run <code>ffmpeg -framerate 24 -i img_%05d.jpg timelapse.mp4</code>.</p>
+
+<div class="callout warn"><div class="ct">The truth about power use</div>
+<p>Lesson 6.1 says the ESP32 uses only about 10 microamps in deep sleep. That number is for the <b>chip</b>, not the ESP32-CAM board. On this board, the AMS1117 regulator, the camera (whose PWDN pin is released during sleep) and the SD card draw power too, and the real sleep current is usually in the <b>milliamp</b> range. If you want to run it on a battery, measure the current yourself with a multimeter; don't trust the chip's datasheet figure.</p>
+<p><b>How do I connect a battery?</b> A single-cell LiPo or 18650 battery is between 3 and 4.2 V. Don't connect it to the <b>3.3V</b> pin (4.2 V is too much for the ESP32 and the camera), and don't connect it straight to the <b>5V</b> pin either: the AMS1117 regulator on the board drops about 1 V, so with a 3.7 V input its output falls below 3 V and you get brownouts. The right way is a 5 V boost module between the battery and the 5V pin, or a suitable 3.3 V low-dropout regulator (LDO); how to choose and wire the battery and regulator is covered in lesson <a href="1-4.html#power">1.4</a>.</p></div>
+
+<div class="callout info"><div class="ct">What about Wokwi?</div>
+<p>At the time of writing, Wokwi doesn't simulate the ESP32-CAM board, the OV2640 camera sensor or the SD_MMC interface (a request for it has been filed in the wokwi-features repository). So this lesson can only be done on real hardware. Luckily, the ESP32-CAM is one of the cheapest boards in this course.</p></div>
+
+<h2 id="limits">The ESP32-CAM's honest limits</h2>
+<ul>
+  <li><b>Heat:</b> during long live streams the module and the regulator get warm (enough that you can feel it with your hand). In a closed box, add ventilation holes. More heat also means more image noise.</li>
+  <li><b>Antenna:</b> the on-board antenna is weak, and a metal case or walls make it worse. For an external antenna, besides plugging the antenna into the IPEX connector, you must move the tiny zero-ohm resistor next to the antenna (fine soldering). Without that, the external antenna is practically not connected.</li>
+  <li><b>Image quality:</b> the OV2640 is a cheap 2-megapixel camera; it's noisy in low light and has no night vision (IR). For motion detection or reading license plates, don't expect the quality of a professional security camera.</li>
+  <li><b>Security:</b> CameraWebServer has no password and runs over HTTP (unencrypted). Anyone connected to your home Wi-Fi can see the video. <b>Never</b> expose it to the internet with port forwarding on your router.</li>
+</ul>
+
+<div class="callout why"><div class="ct">Privacy and ethics: a camera means responsibility</div>
+<p>A small, cheap camera means a lot of power, and a lot of power means responsibility. Don't film or photograph anyone without their knowledge and consent. Don't put the camera in private places (bathrooms, other people's bedrooms, your neighbor's house, a workplace without permission). If the camera is in a shared space, tell the others and put up a sign. Keep the images secure and delete them when you no longer need them. Recording laws differ from country to country; not knowing the law is no excuse. A good engineer asks "should I?" before "can I?"</p></div>
+
+<h2 id="video">Helpful video</h2>
+<div class="video" data-yt="visj0KE5VtY" data-title="ESP32 CAM - 10 Dollar Camera for IoT Projects" data-channel="DroneBot Workshop" data-lang="English">
+  <div class="sum"><ul>
+    <li>Watch the parts about the board itself, using an FTDI adapter, the Camera Web Server example, fixing brownouts and the external antenna; exactly this lesson's topics.</li>
+    <li>The video was made before core 3; if you see the camera model being chosen at the top of the <code>.ino</code> file, do the same thing in <code>board_config.h</code> on the new core.</li>
+    <li>Notice what power supply the presenter recommends to fix brownouts, and compare it with this lesson's "Rule number one" section.</li>
+    <li>See which tiny part he moves for the external antenna.</li>
+  </ul></div>
+</div>
+
+<h2 id="debug">When it doesn't work: step-by-step troubleshooting</h2>
+<div class="table-wrap"><table>
+<tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+<tr><td><code>Camera init failed with error 0x105</code></td><td><code>ESP_ERR_NOT_FOUND</code>: the camera wasn't found. The camera's ribbon cable isn't fully seated, the wrong model is set in board_config.h, or the power is weak</td><td>Open the black latch on the connector, push the cable in straight and all the way, and close the latch. Set the model to <code>CAMERA_MODEL_AI_THINKER</code>. Try with a strong 5 V supply</td></tr>
+<tr><td><code>Camera init failed with error 0x20001</code></td><td><code>ESP_ERR_CAMERA_NOT_DETECTED</code>: the same story, with the camera library's own error code</td><td>Same as the row above; if that doesn't fix it, the camera module may be faulty (try another camera)</td></tr>
+<tr><td><code>Camera init failed with error 0x101</code> or an out-of-memory message</td><td><code>ESP_ERR_NO_MEM</code>: PSRAM isn't enabled</td><td>Select the <b>AI Thinker ESP32-CAM</b> board in Tools (not ESP32 Dev Module)</td></tr>
+<tr><td><code>Brownout detector was triggered</code> and repeated resets</td><td>The supply voltage dips when Wi-Fi switches on</td><td>A 5 V 2 A supply, a short and healthy cable, power into the 5V pin (not 3.3V). Don't switch off the brownout guard</td></tr>
+<tr><td><code>Failed to connect to ESP32: Timed out waiting for packet header</code></td><td>The board isn't in download mode, or TX and RX are swapped</td><td>GPIO0 to GND, then RST, then upload. The adapter's TX to U0R and RX to U0T. With the MB: hold IO0 and press RST</td></tr>
+<tr><td>Upload succeeded, but Serial only says <code>waiting for download</code></td><td>The GPIO0 jumper is still connected to GND</td><td>Remove the jumper and press RST</td></tr>
+<tr><td><code>SD card mount failed</code></td><td>No card, the card is exFAT, too big or damaged, or the power is weak</td><td>Format a 4 to 32 GB card as FAT32 and insert it before powering up. Try another card</td></tr>
+<tr><td>The flash LED blinks while saving to the card</td><td>The card is in 4-bit mode and DATA1 is on GPIO4</td><td><code>SD_MMC.begin("/sdcard", true)</code></td></tr>
+<tr><td>The first photo is very dark or green</td><td>Auto-exposure hasn't settled yet</td><td>Throw away the first few frames (as in the project 2 code)</td></tr>
+<tr><td>The web page opens but Stream shows nothing</td><td>The live stream is open in another tab or on another device (one viewer only)</td><td>Close the other tabs; lower the resolution</td></tr>
+<tr><td>Wi-Fi won't connect or the stream keeps dropping</td><td>Weak signal (PCB antenna, distance, metal case)</td><td>Try the board near the router; if needed, use an external antenna by moving the resistor</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">Coach's advice</div>
+<p>The ESP32-CAM takes patience and discipline. Before you change even one line of code, nail down three things: <b>power</b> (a strong 5 V into the 5V pin, a short cable), <b>the camera cable</b> (fully seated and latched), and <b>the board selection</b> (AI Thinker ESP32-CAM and the right model in board_config.h). Ninety percent of the "my code doesn't work" messages students send come down to one of these three. First run the official CameraWebServer example unchanged (except for the model and Wi-Fi); if that doesn't work, the problem is hardware, so don't blame your own code. And never hide the problem by switching off the brownout guard; an alarm that beeps is not your enemy.</p></div>
+
+<h2 id="quiz">Lesson quiz</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="3">
+  <p class="q">Why should GPIO0 be connected to GND only while uploading, and removed afterwards?</p>
+  <ol><li data-why="GPIO0 has nothing to do with power; the board won't burn out with GPIO0 grounded.">Because leaving it connected burns out the board</li><li data-why="Upload speed doesn't depend on GPIO0.">Because it slows down uploading</li><li>Because with GPIO0 LOW at reset the ESP32 enters download mode and the program doesn't run; on top of that, GPIO0 is also the camera's XCLK signal</li><li data-why="The SD card is on pins 14, 15, 2 and so on, not GPIO0.">Because the SD card is connected to GPIO0</li></ol>
+  <div class="fb">GPIO0 is a strapping pin: LOW at the moment of reset means "waiting for a new program". After uploading it must be HIGH (left free).</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">The board keeps resetting with the message <code>Brownout detector was triggered</code>. What's the best thing to do?</p>
+  <ol><li>A stronger 5 V supply and a shorter cable, powering through the 5V pin</li><li data-why="That only silences the alarm; the low voltage and the damage it causes are still there.">Switch off the brownout guard with WRITE_PERI_REG</li><li data-why="The USB-TTL adapter's 3.3V output supplies less current and makes the problem worse.">Power it from the USB-TTL adapter's 3.3V pin</li><li data-why="JPEG quality has little effect on Wi-Fi's current bursts.">Lower jpeg_quality</li></ol>
+  <div class="fb">A brownout means the voltage has dipped; the real cure is proper power.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">Why do we open the SD card with <code>SD_MMC.begin("/sdcard", true)</code> in the time-lapse project?</p>
+  <ol><li data-why="1-bit mode is slower, not faster.">Because 1-bit mode is faster</li><li data-why="FAT32 is about how the card is formatted, not this parameter.">Because it formats the card as FAT32</li><li data-why="true as the second argument means 1-bit; formatting is the third argument and defaults to false.">Because it formats the card if mounting fails</li><li>Because the card's DATA1 line shares GPIO4 with the flash LED, and 1-bit mode leaves GPIO4 free</li></ol>
+  <div class="fb">In 1-bit mode only CLK, CMD and DATA0 are used, and the flash doesn't blink while writing.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">What goes wrong if you keep the photo number only in an <code>RTC_DATA_ATTR</code> variable?</p>
+  <ol><li data-why="RTC_DATA_ATTR exists precisely to survive deep sleep.">It resets to zero on every deep sleep</li><li>It resets to zero after a power cut or reset, and old photos on the card get overwritten</li><li data-why="RTC memory is small, but one whole number fits in it easily.">RTC memory isn't big enough for one number</li><li data-why="RTC_DATA_ATTR has nothing to do with the SD card.">It damages the SD card</li></ol>
+  <div class="fb">RTC memory is only powered during deep sleep. To survive power cuts, use Preferences (flash).</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">In <code>camera_config_t</code>, what does changing <code>jpeg_quality</code> from 10 to 30 do?</p>
+  <ol><li data-why="A higher number means more compression, not more quality.">Better quality and a bigger file</li><li data-why="Resolution is set by frame_size, not jpeg_quality.">The image resolution triples</li><li>More compression: a smaller file and lower quality</li><li data-why="The number of buffers is set by fb_count.">More buffers are used</li></ol>
+  <div class="fb">In this library a <b>lower</b> number means <b>better</b> quality (range 0 to 63).</div>
+</div>
+
+<h2 id="practice">Exercises</h2>
+<div class="exercise"><div class="ct">Exercise 1: a flash photo at night</div>
+<p>Change the time-lapse program so it switches the flash on 200 milliseconds before taking the real photo and switches it off right after. Why don't we have to worry about the flash clashing with the SD card anymore?</p>
+<details><summary>Hint</summary><p>After <code>rtc_gpio_hold_dis</code>, add <code>pinMode(FLASH_LED, OUTPUT)</code>. Before the real <code>esp_camera_fb_get()</code> (and after throwing away the frames), add <code>digitalWrite(FLASH_LED, HIGH); delay(200);</code>, and after taking the photo, <code>digitalWrite(FLASH_LED, LOW);</code>.</p></details>
+<details><summary>Answer</summary><p>Because the card is in 1-bit mode and doesn't use GPIO4, GPIO4 is entirely ours. Note: the flash draws a lot of current; if you get a brownout when the flash fires, it's a power problem again. For a better photo, take the throw-away frames with the flash on as well, so auto-exposure adjusts to the flash light.</p></details>
+</div>
+<div class="exercise"><div class="ct">Exercise 2: a folder for each day</div>
+<p>Instead of saving every photo in the root of the card, make a separate folder for every 288 photos (one day at 5-minute intervals): <code>/day001/img_00001.jpg</code>.</p>
+<details><summary>Hint</summary><p>Day number = <code>(photoNum - 1) / 288 + 1</code>. Build the folder name with <code>snprintf</code>; if <code>!SD_MMC.exists(dir)</code>, call <code>SD_MMC.mkdir(dir)</code>; then build the full file path.</p></details>
+</div>
+<div class="exercise"><div class="ct">Exercise 3: think (no code)</div>
+<p>Your friend wants to leave an ESP32-CAM in the garden with a 2000 mAh battery and take a photo every 5 minutes. Assume each wake-up lasts 3 seconds at 200 mA and the sleep current is 5 mA. Roughly how many days will the battery last? Which part uses more?</p>
+<details><summary>Answer</summary><p>12 wake-ups per hour: <code>12 × 3s × 200mA = 7200 mA·s = 2 mAh</code>. Sleep takes up almost the whole hour: about <code>5 mAh</code>. That's about 7 mAh per hour in total; <code>2000 ÷ 7 ≈ 285</code> hours, or about 12 days (less in practice, because the battery's real capacity and the regulator's efficiency are below ideal). The bigger part is <b>the board's sleep current</b>, not taking photos; that's why a serious battery project needs a low-power regulator or a transistor to cut power to the camera.</p></details>
+</div>
+
+<div class="callout info"><div class="ct">The lesson in three lines</div>
+<p>The ESP32-CAM (AI-Thinker) is an ESP32 with an OV2640 camera, 4 MB of PSRAM and a microSD slot, but no USB port; program it with an ESP32-CAM-MB or a USB-TTL adapter (TX and RX crossed, GPIO0 to GND only while uploading) and select the "AI Thinker ESP32-CAM" board. CameraWebServer streams live video once you select <code>CAMERA_MODEL_AI_THINKER</code> and set up Wi-Fi, and <code>camera_config_t</code> decides the size, quality and buffer location (PSRAM). To save to the card use <code>SD_MMC.begin("/sdcard", true)</code> (1-bit mode, which frees the flash pin), use Preferences for a number that survives power cuts, and remember that this board's number-one problem is power: a strong 5 V, a short cable, and never switch off the brownout guard.</p></div>
+
+</article>
+</body>
+</html>
