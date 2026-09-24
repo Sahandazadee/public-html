@@ -657,29 +657,127 @@ Uptime: 5 s</div>
 <div class="exercise"><div class="ct">Exercise 1: chip detective</div>
 <p>Without looking at the board, use only software to find out whether your board's USB converter chip is a CP2102 or a CH340. Write down the method for your own operating system. Then look at the board with a magnifying glass to confirm your answer.</p>
 <details><summary>Hint</summary><p>Windows: Device Manager › Properties › Details › Hardware Ids. Linux: <code>lsusb</code> or <code>dmesg</code>. Look for the VID: <code>10C4</code> or <code>1A86</code>.</p></details>
-<details><summary>Answer</summary><p>If the ID is <code>10C4:EA60</code>, it's a CP2102 (Silicon Labs); if it's <code>1A86:7523</code>, a CH340; if it's <code>1A86:55D4</code>, a CH9102. On Linux, <code>dmesg</code> also tells you the driver name directly (<code>cp210x</code> or <code>ch341-uart</code>).</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>Depending on your operating system and chip, one of these (the port number, Bus/Device and REV will be different on your computer):</p>
+<div class="table-wrap"><table>
+<tr><th>Where</th><th>CP2102</th><th>CH340</th></tr>
+<tr><td>Windows, Hardware Ids</td><td><code>USB\VID_10C4&amp;PID_EA60</code></td><td><code>USB\VID_1A86&amp;PID_7523</code></td></tr>
+<tr><td>Windows, Ports</td><td><code>Silicon Labs CP210x USB to UART Bridge (COM5)</code></td><td><code>USB-SERIAL CH340 (COM6)</code></td></tr>
+<tr><td>Linux, <code>lsusb</code></td><td><code>ID 10c4:ea60 Silicon Labs CP210x UART Bridge</code></td><td><code>ID 1a86:7523 QinHeng Electronics CH340 serial converter</code></td></tr>
+<tr><td>Linux, <code>dmesg</code></td><td><code>cp210x converter now attached to ttyUSB0</code></td><td><code>ch341-uart converter now attached to ttyUSB0</code></td></tr>
+<tr><td>Mac, System Information › USB</td><td><code>Vendor ID: 0x10c4</code>, <code>Product ID: 0xea60</code></td><td><code>Vendor ID: 0x1a86</code>, <code>Product ID: 0x7523</code></td></tr>
+</table></div>
+<ul>
+<li>The decisive test: unplug the board; the entry you found should disappear, and come back when you plug it in again.</li>
+<li>If you see <code>1A86:55D4</code>, the chip is a CH9102; on Linux it usually shows up as <code>ttyACM0</code> instead of ttyUSB0 (the <code>cdc_acm</code> driver).</li>
+<li>The text on the chip itself (under the magnifying glass) should match the software's answer.</li>
+</ul></details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<ol>
+<li><b>Windows:</b> <kbd>Win</kbd>+<kbd>X</kbd> › Device Manager. Plug in the board, right-click the new entry under Ports (or Other devices) › Properties › Details › choose <b>Hardware Ids</b> from the Property list. The number after <code>VID_</code> is the maker, and the number after <code>PID_</code> is the model.</li>
+<li><b>Linux:</b> run <code>lsusb</code> once without the board and once with it; the new line is the converter, and after <code>ID</code> come the two numbers <code>VID:PID</code>. Or run <code>sudo dmesg | tail</code> right after plugging in; the driver name (<code>cp210x</code> or <code>ch341-uart</code>) tells you the chip directly.</li>
+<li><b>Mac:</b> hold the <kbd>Option</kbd> key and open <b>System Information</b> from the Apple menu › Hardware › USB › the new device. Read the Vendor ID and Product ID. (A quicker way: <code>ls /dev/cu.*</code>; the name <code>cu.SLAB_USBtoUART</code> means a CP2102 with the Silicon Labs driver, and <code>cu.wchusbserial…</code> means a WCH chip.)</li>
+<li><b>Decide:</b> VID <code>10C4</code> → Silicon Labs; with PID <code>EA60</code> it's a CP2102 (or a CP2104, which uses the same driver). VID <code>1A86</code> → WCH; PID <code>7523</code> means a CH340, and <code>55D4</code> a CH9102.</li>
+<li><b>Confirm:</b> read the chip next to the USB socket with a magnifying glass. It should say the same name.</li>
+</ol></details>
 </div>
 <div class="exercise"><div class="ct">Exercise 2: a more complete ID card</div>
 <p>Change the <code>hello_esp32</code> program so it also prints the number of CPU cores and the MAC address. Run it in the Arduino IDE first, then move the same code into a PlatformIO project (remember what has to be added).</p>
 <details><summary>Hint</summary><p>The <code>ESP.getChipCores()</code> function gives the number of cores. For the MAC, you can print <code>ESP.getEfuseMac()</code> with <code>Serial.printf("%012llX\n", …)</code> (<code>llX</code> means a 64-bit number in hex).</p></details>
-<details><summary>Answer</summary>
-<div class="code" data-file="hello_esp32 (addition)" id="ex2"><pre>
+<details class="expect"><summary>What should you see?</summary>
+<pre class="serial">Hello! ESP32 is alive :)
+Chip model: ESP32-D0WD-V3
+Chip revision: 301
+CPU MHz: 240
+Flash MB: 4
+Cores: 2
+eFuse MAC: 563412C40A24
+Uptime (s): 1
+Uptime (s): 3
+Uptime (s): 5</pre>
+<ul>
+<li>The model, revision, Flash and especially the MAC number will be different on your board. <code>Cores</code> is 2 on every classic ESP32 (on a C3 it's 1).</li>
+<li>The MAC number is exactly 12 hex digits. A test: the upload's Output panel has a line like <code>MAC: 24:0a:c4:12:34:56</code>. Read your printed number in pairs from the <b>right</b> (<code>24 0A C4 12 34 56</code>); it should be that same MAC.</li>
+<li>After moving to PlatformIO, the Monitor shows exactly the same output.</li>
+</ul></details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="hello_esp32.ino" id="ex2"><pre>
+// hello_esp32 + cores and MAC: a more complete ID card
+void setup() {
+  Serial.begin(115200);
+  delay(1000);                          // wait for the Serial Monitor to get ready
+  Serial.println();
+  Serial.println("Hello! ESP32 is alive :)");
+  Serial.print("Chip model: ");
+  Serial.println(ESP.getChipModel());
+  Serial.print("Chip revision: ");
+  Serial.println(ESP.getChipRevision());
+  Serial.print("CPU MHz: ");
+  Serial.println(ESP.getCpuFreqMHz());
+  Serial.print("Flash MB: ");
+  Serial.println(ESP.getFlashChipSize() / (1024 * 1024));
   Serial.print("Cores: ");
-  Serial.println(ESP.getChipCores());          // for the classic ESP32: 2
+  Serial.println(ESP.getChipCores());   // for the classic ESP32: 2
   Serial.printf("eFuse MAC: %012llX\n", ESP.getEfuseMac());
+}
+
+void loop() {
+  Serial.print("Uptime (s): ");
+  Serial.println(millis() / 1000);      // seconds since power-up
+  delay(2000);
+}
 </pre></div>
 <ol class="walk" data-for="ex2">
-  <li data-lines="1-2"><b class="what">Number of cores.</b> The classic ESP32 has two cores (you saw this in lesson 1.1).
+  <li data-lines="2-14"><b class="what">The earlier part, unchanged.</b> The same introduction as the original program.
+    <span class="why">We add the new lines at the <b>end</b> of setup so the earlier output stays the same and you can easily see what was added.</span></li>
+  <li data-lines="15-16"><b class="what">Number of cores.</b> The classic ESP32 has two cores (you saw this in lesson 1.1).
     <span class="why">Single-core versions exist too (such as the ESP32-C3); this line shows the difference instantly.</span></li>
-  <li data-lines="3"><b class="what">A unique ID from the eFuse.</b> A 48-bit number that the factory "burned" into the chip. <code>%012llX</code> means "print the 64-bit number as 12 hex digits with leading zeros".
+  <li data-lines="17"><b class="what">A unique ID from the eFuse.</b> A 48-bit number that the factory "burned" into the chip. <code>%012llX</code> means "print the 64-bit number as 12 hex digits with leading zeros".
     <span class="why">The byte order in this number is the reverse of the usual way a MAC is written; don't worry about it. In lesson 5.2 (ESP-NOW) you'll learn the standard way to read the MAC with the WiFi library.</span></li>
+  <li data-lines="20-24"><b class="what">loop, unchanged.</b> Uptime every two seconds.
+    <span class="why">A rising number shows the board didn't get stuck after printing its ID card.</span></li>
 </ol>
-<p>In PlatformIO, put these lines inside setup in <code>main.cpp</code>, and make sure you have <code>#include &lt;Arduino.h&gt;</code> and <code>monitor_speed = 115200</code>.</p></details>
+<p><b>Moving to PlatformIO:</b> paste the same code into <code>src/main.cpp</code> and add <b>one line</b> at the top of the file: <code>#include &lt;Arduino.h&gt;</code>. <code>platformio.ini</code> must also have <code>monitor_speed = 115200</code>; without it the Monitor opens at the default 9600 and you see scrambled characters.</p>
+<div class="wokwi" data-board="esp32" data-code-from="ex2">
+<p>This program has no external parts, so it runs in Wokwi too (the same three steps as in <a href="1-1.html#firmware">lesson 1.1</a>). The simulator's model, revision and MAC differ from a real board; Cores should be 2.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 <div class="exercise"><div class="ct">Exercise 3: deliberate errors (the most important exercise)</div>
 <p>Deliberately make these three mistakes, one at a time, and write down the exact error text or behavior in a notebook: (a) delete one <code>;</code> from the code and click Verify. (b) Set the port to a wrong or empty port and click Upload. (c) Set the Serial Monitor speed to 9600. Next to each error, write which stage it belongs to: compiling, uploading or the monitor.</p>
-<details><summary>Hint</summary><p>For (a), notice where the compiler points the line number; sometimes the error is reported on the line <b>after</b> the real spot. Why?</p></details>
-<details><summary>Answer</summary><p>(a) Compiling: a message like <code>expected ';' before …</code>; the compiler only realizes the <code>;</code> is missing when it reaches the next line. (b) Uploading: a message about the port not opening, or <code>Failed to connect</code>. (c) Monitor: no error at all, just scrambled characters. This notebook is your personal dictionary of errors; keep it.</p></details>
+<details><summary>Hint</summary><p>For (a), notice which line the word after <code>before</code> in the message belongs to; it's usually on the line <b>after</b> the real mistake. Why?</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>(a) If you delete the <code>;</code> after <code>Serial.begin(115200)</code>, the Output panel shows:</p>
+<pre class="serial">hello_esp32.ino:3:23: error: expected ';' before 'delay'
+    3 |   Serial.begin(115200)
+      |                       ^
+      |                       ;
+    4 |   delay(1000);
+exit status 1
+Compilation error: expected ';' before 'delay'</pre>
+<p>(b) A port that doesn't exist (on Windows, something like <code>COM7</code> instead of <code>/dev/ttyUSB5</code>):</p>
+<pre class="serial">A fatal error occurred: Could not open /dev/ttyUSB5, the port is busy or doesn't exist.</pre>
+<p>A port that exists but isn't the ESP32 (for example, the computer's Bluetooth port): <code>Failed to connect to ESP32: No serial data received.</code> And if no port is selected at all: <code>no upload port provided</code>.</p>
+<p>(c) No error message at all; just scrambled characters such as <code>⸮⸮x⸮⸮</code> or <code>�</code> instead of text.</p>
+<ul>
+<li>(a) shows up with <b>Verify</b> alone, before any upload; so it's the compiling stage. <code>3:23</code> means line 3, column 23.</li>
+<li>(b) only appears after "Sketch uses … bytes"; so compiling succeeded and the problem is in uploading.</li>
+<li>(c) the upload succeeds and the program runs; only the text is broken. Setting the speed back to 115200 and pressing EN fixes it.</li>
+</ul></details>
+<details class="answer"><summary>Full answer with explanation</summary><p>(a) Compiling: a message like <code>expected ';' before 'delay'</code>. The compiler only realizes the <code>;</code> is missing when it reaches the next word (<code>delay</code> on line 4), because in C++ a statement may continue over several lines and the end of a line means nothing to the compiler. Today's compiler points at line 3 correctly, but the word it names is on the next line (and other errors are sometimes really reported on the next line); so always look at the reported line <b>and the one before it</b>. (b) Uploading: a message about the port not opening, or <code>Failed to connect</code>. (c) Monitor: no error at all, just scrambled characters; the board sends at 115,200 bits per second and the monitor reads at 9600, so the bits get cut in the wrong places. This notebook is your personal dictionary of errors; keep it.</p></details>
 </div>
 
 <div class="callout info"><div class="ct">The lesson in three lines</div>

@@ -22,7 +22,8 @@
       lessonsNav: "فهرست درس‌ها", extras: "صفحه‌های کمکی", onPage: "روی این صفحه",
       chapter: "فصل", lesson: "درس", about: "حدود", minutes: "دقیقه", level: "سطح", of: "از",
       doneYes: "آفرین! این درس را تمام کرده‌ای. هر وقت خواستی برای مرور برگرد.",
-      doneNo: "همه آزمون‌ها را درست جواب دادی و تمرین‌ها را انجام دادی؟ فقط آن وقت تیک بزن.",
+      doneNo: "همه آزمون‌ها را درست جواب دادی. تمرین‌ها را هم انجام دادی و با «چه باید ببینی؟» مقایسه کردی؟ فقط آن وقت تیک بزن.",
+      doneLocked: "هنوز %n آزمون این درس مانده. اول همه را درست جواب بده، بعد این دکمه فعال می‌شود.",
       doneBtnYes: "✓ تمام شد (برداشتن تیک)", doneBtnNo: "این درس را تمام کردم",
       prev: "→ درس قبلی", back: "→ بازگشت", home: "خانه و نقشه راه", next: "درس بعدی ←", end: "پایان دوره ←", backHome: "بازگشت به خانه",
       footer: 'مستر کلاس ESP32 فارسی · آموزش رایگان · <a href="credits.html">منابع و مجوز تصاویر</a>',
@@ -46,7 +47,8 @@
       lessonsNav: "Lessons", extras: "Reference pages", onPage: "On this page",
       chapter: "Chapter", lesson: "Lesson", about: "about", minutes: "min", level: "Level", of: "of",
       doneYes: "Well done! You finished this lesson. Come back any time to review.",
-      doneNo: "Did you get every quiz right and do the exercises? Only then tick this box.",
+      doneNo: "Every quiz is correct. Did you also do the exercises and compare them with “What should you see?”? Only then tick this box.",
+      doneLocked: "%n quiz(zes) in this lesson still to go. Answer them all correctly first; then this button unlocks.",
       doneBtnYes: "✓ Done (click to undo)", doneBtnNo: "I finished this lesson",
       prev: "← Previous lesson", back: "← Back", home: "Home & roadmap", next: "Next lesson →", end: "End of course →", backHome: "Back to home",
       footer: 'ESP32 Masterclass · free course · <a href="credits.html">Sources and image licenses</a>',
@@ -169,16 +171,21 @@
   if (lesson) {
     var isDone = function () { return done.indexOf(lesson.id) > -1; };
     var box = el("div", { "class": "done-box" }, '<p></p><button class="btn" data-act="done"></button>');
+    /* تیک «تمام کردم» فقط وقتی فعال است که همه آزمون‌های درس درست جواب داده شده باشند */
+    var quizLeft = function () { return article.querySelectorAll(".quiz").length - article.querySelectorAll(".quiz.solved").length; };
     var paint = function () {
-      box.querySelector("p").textContent = isDone() ? t("doneYes") : t("doneNo");
-      var b = box.querySelector("button"); b.textContent = isDone() ? t("doneBtnYes") : t("doneBtnNo");
+      var left = quizLeft(), b = box.querySelector("button");
+      box.querySelector("p").textContent = isDone() ? t("doneYes") : left > 0 ? t("doneLocked").replace("%n", fa(left)) : t("doneNo");
+      b.textContent = isDone() ? t("doneBtnYes") : t("doneBtnNo");
+      b.disabled = !isDone() && left > 0;
       b.classList.toggle("done", isDone());
     };
     paint();
     box.querySelector("button").addEventListener("click", function () {
-      if (isDone()) done.splice(done.indexOf(lesson.id), 1); else done.push(lesson.id);
+      if (isDone()) done.splice(done.indexOf(lesson.id), 1); else if (quizLeft() === 0) done.push(lesson.id); else return;
       store("esp32mc-done", done); paint(); refreshProgress();
     });
+    document.addEventListener("esp32mc-quiz", paint);
     article.appendChild(box);
     var prev = lessons[idx - 1], next = lessons[idx + 1];
     var pg = el("nav", { "class": "pager" },
@@ -323,19 +330,37 @@
     if (fb) fb.setAttribute("data-orig", fb.innerHTML);
     items.forEach(function (li, i) {
       li.insertAdjacentHTML("afterbegin", "<b>" + t("letters")[i] + ") </b>");
+      /* با صفحه‌کلید هم بشود جواب داد: Tab برای رفتن، Enter یا فاصله برای انتخاب */
+      li.setAttribute("tabindex", "0"); li.setAttribute("role", "button");
+      li.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); li.click(); } });
       li.addEventListener("click", function () {
         if (q.classList.contains("solved")) return;
-        if (i + 1 === ans) { li.classList.add("right"); q.classList.add("solved"); }
+        if (i + 1 === ans) { li.classList.add("right"); q.classList.add("solved"); saveQuiz(); }
         else li.classList.add("wrong");
         q.classList.add("answered");
         if (!fb) fb = q.appendChild(el("div", { "class": "fb", "data-orig": "" }));
+        fb.setAttribute("aria-live", "polite");
         fb.style.borderInlineStart = "4px solid " + (i + 1 === ans ? "var(--green)" : "var(--red)");
         fb.innerHTML = (i + 1 === ans ? "<b>" + t("right") + "</b> " : "<b>" + t("wrong") + "</b> ") + (i + 1 === ans ? fb.getAttribute("data-orig") : (li.getAttribute("data-why") || t("hint")));
         updateScore();
       });
     });
   });
+  /* آزمون‌های درست‌شده در مرورگر ذخیره می‌شوند تا با بستن صفحه از دست نروند */
+  var QKEY = "esp32mc-quiz", qStore = store(QKEY) || {};
+  function saveQuiz() {
+    if (!lesson) return;
+    qStore[lesson.id] = [];
+    quizzes.forEach(function (q, k) { if (q.classList.contains("solved")) qStore[lesson.id].push(k); });
+    store(QKEY, qStore);
+  }
+  if (lesson && qStore[lesson.id]) qStore[lesson.id].forEach(function (k) {
+    var q = quizzes[k]; if (!q) return;
+    var li = q.querySelectorAll("ol > li")[+q.getAttribute("data-answer") - 1];
+    if (li) { q.classList.remove("solved"); li.click(); }
+  });
   function updateScore() {
+    document.dispatchEvent(new CustomEvent("esp32mc-quiz"));
     var s = article.querySelector(".quiz-score");
     if (!s) return;
     var solved = article.querySelectorAll(".quiz.solved").length;

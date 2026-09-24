@@ -428,7 +428,16 @@ touch=56  pot=4095  (3150 mV)</div>
 <div class="exercise"><div class="ct">Exercise 1: assigning pins for a real project</div>
 <p>Your project has these parts: one LED, one button, one potentiometer, one OLED display (I2C) and one SG90 servo. The project also uses Wi-Fi. Pick a GPIO for each part and give your reason in one sentence. Also say how each part is powered.</p>
 <details><summary>Hint</summary><p>Go through the 8-step checklist in order: first the protocol (OLED), then analog on ADC1 (we have Wi-Fi!), then outputs on green pins, then the button with INPUT_PULLUP. Where will you power the servo from?</p></details>
-<details><summary>Answer</summary>
+<details class="expect"><summary>What should you see?</summary>
+<p>Your table should have five rows (part, GPIO, reason, power). Grade yourself with these tests; every "yes" means that row is right:</p>
+<ul>
+<li>The OLED is on SDA=21 and SCL=22 (the default I2C pins).</li>
+<li>The potentiometer is on an ADC1 pin: 32, 33, 34, 35, 36 or 39; and it's connected to 3V3, not 5V.</li>
+<li>The LED, the button and the servo signal are on green pins from the traffic-light table; none of them is on 6 to 11, 12, 0, 2, 15, or 34 to 39 (for an output or an INPUT_PULLUP button).</li>
+<li>The servo is powered from 5V, and its GND is shared with the board's GND.</li>
+</ul>
+<p>If you follow the course pin plan, your answer is exactly this: LED → 4, button → 27, potentiometer → 34, OLED → 21/22, servo → 32.</p></details>
+<details class="answer"><summary>Full answer with explanation</summary>
 <div class="table-wrap"><table>
 <tr><th>Part</th><th>GPIO</th><th>Why</th><th>Power</th></tr>
 <tr><td>OLED</td><td>SDA=21, SCL=22</td><td>The I2C defaults; the library's example code works unchanged</td><td>3V3 and GND</td></tr>
@@ -442,10 +451,77 @@ touch=56  pot=4095  (3150 mV)</div>
 <div class="exercise"><div class="ct">Exercise 2: calibrating touch</div>
 <p>Run the Touch_And_InputOnly program on a real board. Write down ten touch readings without touching and ten while touching, and work out the average of each. Where does the program's automatic threshold (<code>threshold</code> in the first line of output) fall between those two numbers? If a touch is sometimes missed, change the <code>2 / 3</code> factor (for example to <code>3 / 4</code>). Then make the foil bigger (say, the size of your palm), press the EN button and repeat the experiment. What changes?</p>
 <details><summary>Hint</summary><p>Usually the untouched number is a few dozen, and a touch brings it down to less than half. Bigger foil has more capacitance, so the untouched number also drops; in other words, the threshold needs to be set again. A very long wire also increases noise.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>The start of the program with the <code>3 / 4</code> factor (every touch and pot number will be different on your board; they may be in the hundreds. Only the pattern matters):</p>
+<pre class="serial">Touch + input-only pin test (idle=58, threshold=43)
+touch=58  pot=2047  (1650 mV)
+touch=57  pot=2047  (1650 mV)
+touch=11  pot=2047  (1650 mV)
+&gt;&gt; touched!
+touch=58  pot=2047  (1650 mV)</pre>
+<ul>
+<li>The "touched" average should be much lower than the "untouched" average (usually less than half), and <code>threshold</code> should fall <b>between</b> the two averages.</li>
+<li><code>threshold</code> always equals <code>idle × 3 ÷ 4</code> with the fraction dropped: with idle=58 that's 43 (the old 2/3 factor gave 38).</li>
+<li>As long as you don't touch, you should see no <code>&gt;&gt; touched!</code> at all; with every touch, at least one.</li>
+<li>After making the foil bigger and pressing EN, the idle number in the first line is lower than before, and the threshold drops with it.</li>
+</ul></details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p><b>A sample measurement</b> (your numbers will differ): untouched 58, 57, 58, 59, 58, 57, 58, 58, 59, 57 → total 579, average <code>57.9</code>. Touched 11, 12, 10, 11, 13, 12, 11, 10, 12, 11 → total 113, average <code>11.3</code>. The original program's threshold is <code>58 × 2 ÷ 3 = 38</code>; that's between 11.3 and 57.9, a little above the midpoint (about 34.6). So a full touch is always detected.</p>
+<p><b>Why is a touch sometimes missed?</b> A light touch, or a touch through the wire's insulation, only lowers the number a little (say, to 40), which is still above 38. With the 3/4 factor the threshold rises to 43, and that light touch counts too. The cost: the threshold is closer to the untouched number, so noise (a long wire, a hand nearby) may cause a fake touch. A good factor is the biggest one that still gives no fake touches.</p>
+<div class="code" data-file="Touch_Calibrated.ino" id="ex2touch"><pre>
+// Touch_And_InputOnly with the touch threshold at three quarters of idle
+const int TOUCH_PIN = 32;          // T9: touch-capable and safe
+const int POT_PIN   = 34;          // input-only, ADC1 (works with Wi-Fi too)
+int touchThreshold;                // touch threshold; worked out in setup
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  int idle = touchRead(TOUCH_PIN);   // the "untouched" value (hands off at power-up!)
+  touchThreshold = idle * 3 / 4;     // three quarters: a smaller drop already counts
+  Serial.printf("Touch + input-only pin test (idle=%d, threshold=%d)\n", idle, touchThreshold);
+}
+
+void loop() {
+  int touchValue = touchRead(TOUCH_PIN);           // smaller number = touched
+  int potRaw     = analogRead(POT_PIN);            // 0 to 4095
+  int potMv      = analogReadMilliVolts(POT_PIN);  // calibrated millivolts
+
+  Serial.printf("touch=%d  pot=%d  (%d mV)\n", touchValue, potRaw, potMv);
+
+  if (touchValue &lt; touchThreshold) {
+    Serial.println("&gt;&gt; touched!");
+  }
+  delay(300);
+}
+</pre></div>
+<ol class="walk" data-for="ex2touch">
+  <li data-lines="2-4"><b class="what">The same pins and the same variable.</b> Touch on GPIO32 (T9), the potentiometer on GPIO34.
+    <span class="why">Only the threshold factor has changed; if you changed anything else too, you wouldn't know which change made the difference.</span></li>
+  <li data-lines="9-11"><b class="what">Calibration with a 3/4 factor.</b> The untouched value is read once, and the threshold becomes three quarters of it; with idle=58 that's <code>174 ÷ 4 = 43</code> (the fraction is dropped).
+    <span class="why">Multiply first, then divide. If you wrote <code>idle * (3 / 4)</code>, <code>3 / 4</code> would be zero in whole-number maths, the threshold would be zero, and no touch would ever be detected.</span></li>
+  <li data-lines="15-19"><b class="what">Read and print on one line.</b> One <code>touch=…</code> line every 300 milliseconds.
+    <span class="why">Ten lines in a row give you ten numbers to write down; that takes about three seconds.</span></li>
+  <li data-lines="21-24"><b class="what">Decide and pause.</b> Below the threshold means touched.
+    <span class="why">On the classic ESP32 a touch <b>lowers</b> the number; that's why the condition is "less than".</span></li>
+</ol>
+<p><b>Bigger foil:</b> the pin's capacitance goes up and the untouched number drops (say, from 58 to 31). Because the threshold is worked out in setup, pressing EN sets it again automatically (<code>31 × 3 ÷ 4 = 23</code>). If you don't press EN, the old threshold of 43 stays, which is higher than the new untouched number (31), so you see <code>&gt;&gt; touched!</code> nonstop. The lesson of the exercise: every time the shape of a touch sensor changes, calibrate again. This experiment only makes sense on a real board; the touch number in Wokwi isn't physical.</p></details>
 </div>
 <div class="exercise"><div class="ct">Exercise 3: pin detective (no code)</div>
 <p>Your friend built this circuit and says "nothing works right". Find every mistake and suggest a replacement pin for each: an analog soil moisture sensor on GPIO26 (with Wi-Fi), a pump relay on GPIO15, a button on GPIO39 with <code>INPUT_PULLUP</code>, an LED on GPIO35, and a module with a pull-up output on GPIO12.</p>
-<details><summary>Answer</summary><p>1) GPIO26 is on ADC2; it doesn't work with Wi-Fi → GPIO34 or 32. 2) GPIO15 outputs PWM during boot and is a strapping pin; the pump switches on for an instant → GPIO26 with a pull-down (the relay's seat in the course pin plan). 3) GPIO39 has no internal pull-up → either an external 10 kΩ resistor, or move the button to GPIO27 with INPUT_PULLUP. 4) GPIO35 is input-only, so the LED won't light → GPIO4. 5) GPIO12 HIGH at boot = the board doesn't boot → a green pin such as GPIO13.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>You should have found <b>five</b> mistakes; every one of the five parts has a problem. Each one breaks a rule from a section of this lesson:</p>
+<div class="table-wrap"><table>
+<tr><th>Part</th><th>Rule broken</th></tr>
+<tr><td>Soil sensor on 26</td><td><a href="#adc">ADC2 doesn't work with Wi-Fi</a></td></tr>
+<tr><td>Relay on 15</td><td><a href="#bootglitch">Boot glitch</a> and <a href="#strapping">strapping</a></td></tr>
+<tr><td>Button on 39</td><td><a href="#input-only">34 to 39 have no internal pull-up</a></td></tr>
+<tr><td>LED on 35</td><td><a href="#input-only">Input-only</a></td></tr>
+<tr><td>Pull-up module on 12</td><td><a href="#strapping">GPIO12 must be LOW at boot</a></td></tr>
+</table></div>
+<p>Your replacement pin is right if it doesn't break any of these five rules itself (check it against the traffic-light table).</p></details>
+<details class="answer"><summary>Full answer with explanation</summary><p>1) GPIO26 is on ADC2; it doesn't work with Wi-Fi → GPIO34 or 32. 2) GPIO15 outputs PWM during boot and is a strapping pin; the pump switches on for an instant → GPIO26 with a pull-down (the relay's seat in the course pin plan). 3) GPIO39 has no internal pull-up → either an external 10 kΩ resistor, or move the button to GPIO27 with INPUT_PULLUP. 4) GPIO35 is input-only, so the LED won't light → GPIO4. 5) GPIO12 HIGH at boot = the board doesn't boot → a green pin such as GPIO13.</p>
+<p>How to find them: ask two questions about each part. (a) Can this pin do what the part needs? (Analog with Wi-Fi → ADC1; an output → not 34 to 39; a button with INPUT_PULLUP → not 34 to 39.) (b) Does this pin cause trouble at boot? (Strapping or boot glitch, especially when the part switches a real load like a pump, or pulls the pin up by itself.)</p></details>
 </div>
 
 <div class="callout info"><div class="ct">The lesson in three lines</div>
