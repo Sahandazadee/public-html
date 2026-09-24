@@ -947,29 +947,269 @@ Rebooting...
 <div class="exercise"><div class="ct">Exercise 1: a PRD and pin table for your own project</div>
 <p>Pick one of the projects from the ladder (suggestion: rung 1 or 3). Fill in the PRD template completely, list the sensors and actuators with their voltages and interfaces, choose the chip with the decision tree, and write a pin table with a "reason" column. Calculate the power budget with numbers, too.</p>
 <details><summary>Hint</summary><p>Ask three questions for every pin: Is it a strapping pin? Is it on ADC1 (if it's analog)? Is it connected to the flash, PSRAM or USB? Give the PRD to an AI and ask it to "find the problems in it", not to write it for you (lesson 6.2).</p></details>
-<details><summary>Answer</summary><p>There's no single answer. To pass: every Must is measurable; at least two acceptance criteria; no pin without a reason; no analog input on ADC2 when Wi-Fi is used; peak and average current as numbers. If you pass all of these, start the project.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>There's no single right PRD, so grade your own with these criteria. You pass if all of them are true:</p>
+<ul>
+<li>Every Must is measurable (a number, a time or a yes/no test), not a wish like "waters the plant well".</li>
+<li>At least two acceptance criteria, each one a test you can actually run.</li>
+<li>Every sensor and actuator has its voltage, its interface and its current written next to it.</li>
+<li>No pin without a reason; no analog input on an ADC2 pin (0, 2, 4, 12 to 15, 25 to 27) when the project uses Wi-Fi; no heavy load straight on a pin.</li>
+<li>Peak current and average current as numbers, and a power supply chosen from the peak.</li>
+</ul>
+<p>Sanity check for the numbers: with a small pump, the peak lands around 400 to 500 mA (Wi-Fi about 250 mA plus the pump), so a 1 A supply. An always-on ESP32 with Wi-Fi averages tens of milliamps, which empties a 2000 mAh battery in about a day. If your battery project promises weeks without deep sleep, the numbers are wrong.</p>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>A model answer for rung 1, automatic plant watering. Yours will differ; compare it criterion by criterion.</p>
+<p><b>1. The PRD.</b></p>
+<div class="code" data-file="PRD-plant-watering.txt" data-lang="text" id="ex1prd"><pre>
+Project: automatic plant watering: keeps one potted plant's soil moist without me.
+User: me, at home on a windowsill; I look at it once a day, and it must survive a week of holidays.
+
+Must do (Must):
+  - M1: read the soil moisture every 10 minutes (0 to 100 % after calibration)
+  - M2: below 30 %, run the pump for 5 s, then no more watering for 10 minutes
+  - M3: never more than 5 s of pumping in one go, and at most 6 waterings a day
+  - M4: a button waters once by hand (5 s)
+Nice to have (Nice):
+  - N1: send the moisture over MQTT every 10 minutes (lesson 5.1)
+  - N2: an OLED with the moisture and the time since the last watering
+
+Constraints:
+  - Power: USB, 5 V 1 A adapter (the pump needs 5 V)
+  - Target battery life: none (mains powered in version 1)
+  - Communication: Wi-Fi only for N1; watering must work without it
+  - Environment: indoors, right next to water: electronics above the pot, in a box
+  - Size and budget: 100 x 60 mm, at most 25 (your currency)
+
+Acceptance criteria (how do I know it's done?):
+  - A1: sensor in a glass of water: 90 to 100 %; held in dry air: 0 to 10 %
+  - A2: soil below 30 %: the pump runs 5 s (plus or minus 0.5 s), then not again for 10 min
+  - A3: router switched off: watering still works (only N1 stops)
+  - A4: power cut while pumping: when power returns, the pump stays off
+
+Out of scope (this version will NOT do):
+  - several plants, a water-level sensor for the tank, a phone app
+</pre></div>
+<p><b>2. Sensors and actuators.</b></p>
+<div class="table-wrap"><table><tr><th>Part</th><th>Voltage</th><th>Interface</th><th>Current</th></tr>
+<tr><td>Capacitive soil moisture sensor (v1.2 type)</td><td>3.3 to 5 V; powered from 3.3 V so its output stays below 3.3 V</td><td>analog</td><td>about 5 mA</td></tr>
+<tr><td>Small submersible pump</td><td>5 V</td><td>on/off through a logic-level MOSFET, with a flyback diode across the pump</td><td>100 to 200 mA (read its label)</td></tr>
+<tr><td>Push button</td><td>—</td><td>digital, internal pull-up</td><td>almost 0</td></tr>
+<tr><td>Status LED + 220 Ω</td><td>3.3 V</td><td>digital</td><td>about 6 mA</td></tr>
+<tr><td>(N2) SSD1306 OLED</td><td>3.3 V</td><td>I2C</td><td>about 10 to 20 mA</td></tr></table></div>
+<p><b>3. The chip, with the decision tree.</b> Camera or big display? No. Bluetooth Classic? No. Thread or Zigbee? No. USB keyboard? No. DAC, touch or lots of pins? No. The tree ends at the <b>ESP32-C3</b>. The plain ESP32 DevKitC you already own is just as good (step 4: without a special reason, the plain ESP32 is safe), so version 1 is built on it; the C3 is the choice for a smaller final build.</p>
+<p><b>4. Pin table</b> (the same as the lesson's step 5, now for this PRD):</p>
+<div class="table-wrap"><table><tr><th>Part</th><th>ESP32 DevKitC</th><th>Reason</th></tr>
+<tr><td>Soil sensor AO</td><td>GPIO34</td><td>ADC1, so it keeps working with Wi-Fi (N1); input-only is no problem for a sensor.</td></tr>
+<tr><td>Pump MOSFET gate</td><td>GPIO26</td><td>A normal output, not a strapping pin; a 10 kΩ resistor from gate to GND keeps the pump off while the board boots (A4).</td></tr>
+<tr><td>Manual button</td><td>GPIO27</td><td>Internal pull-up, not a strapping pin, and the course's usual button pin.</td></tr>
+<tr><td>Status LED</td><td>GPIO4</td><td>A safe output.</td></tr>
+<tr><td>OLED (N2)</td><td>GPIO21 / GPIO22</td><td>The default I2C pins.</td></tr></table></div>
+<p><b>5. Power budget.</b></p>
+<ul>
+<li>Peak: Wi-Fi about 250 mA + pump 200 mA + sensor 5 mA + LED 6 mA + OLED 20 mA ≈ 480 mA. With a safety margin: a 5 V, 1 A adapter.</li>
+<li>Average: the ESP32 connected to Wi-Fi and mostly idle, about 80 mA (an assumption: measure it), + sensor 5 mA + pump 6 × 5 s × 200 mA ÷ 86400 s ≈ 0.07 mA ≈ 85 mA.</li>
+<li>Per day: 85 mA × 24 h ≈ 2040 mAh at 5 V, about 10 Wh. No problem for an adapter; a 2000 mAh battery would last about one day. A battery version therefore needs deep sleep between readings, like the example in section 1 (about 50 days).</li>
+</ul>
+</details>
 </div>
 <div class="exercise"><div class="ct">Exercise 2: adding the ESP32-C6 to the portable sketch</div>
 <p>Change the <code>PortableDemo</code> sketch so it also compiles for the ESP32-C6. Choose safe pins using the tables in sections 2 and 3. Then set the Board to "ESP32C6 Dev Module" and press only Verify (✓); no board needed.</p>
 <details><summary>Hint</summary><p>Add an <code>#elif CONFIG_IDF_TARGET_ESP32C6</code> branch. On the C6, the ADC1 channels are on GPIO0 to GPIO6; avoid 4, 5, 8, 9 and 15 (strapping), 12 and 13 (USB), and 24 to 30 (flash). Thanks to the SOC macros, the rest of the code needs no changes.</p></details>
-<details><summary>Answer</summary>
-<div class="code" data-file="PortableDemo-C6-branch.ino" id="c6branch"><pre>
+<details class="expect"><summary>What should you see?</summary>
+<p><b>Verify</b> with "ESP32C6 Dev Module" selected ends with a line like this (the size depends on your core version; this is 3.3.12):</p>
+<pre class="serial">Sketch uses 299876 bytes (22%) of program storage space. Maximum is 1310720 bytes.</pre>
+<p>If you get <code>#error "This sketch supports ...</code> instead, your new branch wasn't taken: check the spelling of <code>CONFIG_IDF_TARGET_ESP32C6</code>.</p>
+<p><b>In Wokwi on an ESP32-C6</b> (the diagram in the answer), the report looks like this; the revision and the pot value depend on the chip and the knob position:</p>
+<pre class="serial">Chip: ESP32-C6 rev 0, 1 core(s) @ 160 MHz
+Flash: 4096 KB, PSRAM: 0 KB
+DAC: no  -&gt; PWM only
+Touch: no
+Bluetooth Classic: no  -&gt; use BLE
+Serial = UART0
+pot=2047  button=up
+pot=2047  button=DOWN</pre>
+<ul>
+<li>No <code>touch=</code> column: the C6 has no touch sensor, and the macro removed that line by itself.</li>
+<li>The LED on GPIO18 follows the potentiometer; the button shows <code>DOWN</code> while held.</li>
+<li>Switch the Board back to ESP32, ESP32-S3 and ESP32-C3 and press Verify: all three still compile.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="PortableDemo.ino" id="c6branch"><pre>
+// PortableDemo.ino — one sketch, four chips: ESP32, ESP32-S3, ESP32-C3, ESP32-C6
+#include &lt;Arduino.h&gt;
+#include "soc/soc_caps.h"   // SOC_… macros (each chip's hardware capabilities)
+
+// ---------- 1) Pins: only this part differs per chip ----------
+#if CONFIG_IDF_TARGET_ESP32
+  const int LED_PIN    = 4;    // PWM output
+  const int BUTTON_PIN = 27;
+  const int POT_PIN    = 34;   // ADC1_CH6
+  const int TOUCH_PIN  = 32;   // T9
+  const int DAC_PIN    = 25;   // DAC1
+#elif CONFIG_IDF_TARGET_ESP32S3
+  const int LED_PIN    = 5;
+  const int BUTTON_PIN = 4;
+  const int POT_PIN    = 1;    // ADC1_CH0
+  const int TOUCH_PIN  = 7;    // T7
+#elif CONFIG_IDF_TARGET_ESP32C3
+  const int LED_PIN    = 6;
+  const int BUTTON_PIN = 7;
+  const int POT_PIN    = 3;    // ADC1_CH3
 #elif CONFIG_IDF_TARGET_ESP32C6
   const int LED_PIN    = 18;
   const int BUTTON_PIN = 19;
   const int POT_PIN    = 2;    // ADC1_CH2
+#else
+  #error "This sketch supports ESP32, ESP32-S3, ESP32-C3 and ESP32-C6 only"
+#endif
+
+// ---------- 2) Capability report ----------
+void printChipInfo() {
+  Serial.printf("Chip: %s rev %d, %d core(s) @ %lu MHz\n",
+                ESP.getChipModel(), ESP.getChipRevision(),
+                ESP.getChipCores(), (unsigned long)ESP.getCpuFreqMHz());
+  Serial.printf("Flash: %lu KB, PSRAM: %lu KB\n",
+                (unsigned long)(ESP.getFlashChipSize() / 1024),
+                (unsigned long)(ESP.getPsramSize() / 1024));
+#if SOC_DAC_SUPPORTED
+  Serial.println("DAC: yes");
+#else
+  Serial.println("DAC: no  -&gt; PWM only");
+#endif
+#if SOC_TOUCH_SENSOR_SUPPORTED
+  Serial.println("Touch: yes");
+#else
+  Serial.println("Touch: no");
+#endif
+#if SOC_BT_CLASSIC_SUPPORTED
+  Serial.println("Bluetooth Classic: yes (BluetoothSerial OK)");
+#else
+  Serial.println("Bluetooth Classic: no  -&gt; use BLE");
+#endif
+#if ARDUINO_USB_CDC_ON_BOOT
+  Serial.println("Serial = native USB (CDC)");
+#else
+  Serial.println("Serial = UART0");
+#endif
+}
+
+// ---------- 3) setup ----------
+void setup() {
+  Serial.begin(115200);
+  unsigned long t0 = millis();
+  while (!Serial &amp;&amp; millis() - t0 &lt; 3000) delay(10);  // wait for USB, at most 3 seconds
+
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  ledcAttach(LED_PIN, 5000, 8);        // core 3.x: pin, frequency, resolution
+  printChipInfo();
+}
+
+// ---------- 4) loop ----------
+void loop() {
+  int raw  = analogRead(POT_PIN);      // 0..4095
+  int duty = raw &gt;&gt; 4;                 // 0..255
+  bool pressed = (digitalRead(BUTTON_PIN) == LOW);
+  ledcWrite(LED_PIN, duty);
+
+#if SOC_DAC_SUPPORTED
+  dacWrite(DAC_PIN, duty);             // a real analog voltage, 0 to 3.3V
+#endif
+
+  Serial.printf("pot=%4d  button=%s", raw, pressed ? "DOWN" : "up  ");
+#if SOC_TOUCH_SENSOR_SUPPORTED
+  Serial.printf("  touch=%lu", (unsigned long)touchRead(TOUCH_PIN));
+#endif
+#ifdef RGB_BUILTIN
+  if (pressed) rgbLedWrite(RGB_BUILTIN, 40, 0, 0);  // red
+  else         rgbLedWrite(RGB_BUILTIN, 0, 40, 0);  // green
+#endif
+  Serial.println();
+  delay(200);
+}
 </pre></div>
 <ol class="walk" data-for="c6branch">
-  <li data-lines="1"><b class="what">The new branch.</b> Add these lines before the <code>#else</code>.
-    <span class="why">The order of the branches doesn't matter, because only one of the CONFIG_IDF_TARGET_ flags is defined in any compile.</span></li>
-  <li data-lines="2-4"><b class="what">Safe C6 pins.</b> GPIO18 and 19 are ordinary outputs and inputs; GPIO2 is channel ADC1_CH2.
-    <span class="why">Not strapping, not flash, not USB. We didn't define a touch pin or a DAC because the C6 has neither, and the SOC macros remove those parts automatically. If your board (for example the XIAO C6) doesn't break these pins out, pick replacements from that board's pinout using the same rules.</span></li>
-</ol></details>
+  <li data-lines="1"><b class="what">The header now says four chips.</b>
+    <span class="why">Small, but the first line is what the next reader sees.</span></li>
+  <li data-lines="21"><b class="what">The new branch.</b> It sits before the <code>#else</code>.
+    <span class="why">The order of the branches doesn't matter, because only one of the <code>CONFIG_IDF_TARGET_</code> flags is defined in any compile.</span></li>
+  <li data-lines="22-24"><b class="what">Safe C6 pins.</b> GPIO18 and 19 are ordinary inputs and outputs; GPIO2 is channel ADC1_CH2.
+    <span class="why">Not strapping (4, 5, 8, 9, 15), not flash (24 to 30), not USB (12, 13). There's no touch pin and no DAC pin, because the C6 has neither, and the SOC macros remove those parts automatically. If your board (the XIAO C6, for example) doesn't break these pins out, pick replacements from its pinout with the same rules.</span></li>
+  <li data-lines="25-26"><b class="what">The error message is updated too.</b>
+    <span class="why">"Fail early and loudly" only helps if the message tells the truth about what's supported.</span></li>
+  <li data-lines="85-88"><b class="what">No change needed, but worth noticing.</b> The C6 board definition declares <code>RGB_BUILTIN</code> (the RGB LED on GPIO8 of the C6-DevKitC-1), so this block is compiled: the LED shows green, and red while the button is held.
+    <span class="why">This is the capability-macro idea paying off: a feature you never wrote for the C6 works on it by itself.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32-c6" data-code-from="c6branch">
+<p><b>The same sketch on an ESP32-C6.</b> Open this (it starts a new ESP32-C6 project), paste the whole sketch, replace diagram.json with the text below and press ▶. Potentiometer on GPIO2, button on GPIO19, LED on GPIO18.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type":  "board-esp32-c6-devkitc-1", "id":  "esp", "top":  0, "left":  0, "attrs":  {} },
+    { "type":  "wokwi-potentiometer", "id":  "pot1", "top":  -90, "left":  -170, "attrs":  {} },
+    { "type":  "wokwi-pushbutton", "id":  "btn1", "top":  150, "left":  -170, "attrs":  { "color":  "green"} },
+    { "type":  "wokwi-resistor", "id":  "r1", "top":  130, "left":  190, "rotate":  90, "attrs":  { "value":  "220"} },
+    { "type":  "wokwi-led", "id":  "led1", "top":  40, "left":  220, "attrs":  { "color":  "red"} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "pot1:SIG", "esp:2", "blue", [] ],
+    [ "btn1:1.l", "esp:19", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.1", "black", [] ],
+    [ "esp:18", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 <div class="exercise"><div class="ct">Exercise 3: crash hunting</div>
 <p>Upload the <code>DebugStart</code> sketch and set Core Debug Level to Info. (a) Send the letter <code>c</code> and translate the full crash text with the Exception Decoder; note the line number it shows. (b) After the reset, what is the "Abnormal resets" number? (c) Send the letter <code>r</code>; now what are the reset reason and the counter value, and why didn't the counter go up?</p>
 <details><summary>Hint</summary><p>Look at the condition on lines 29 and 30 of the code: which reset reasons are counted?</p></details>
-<details><summary>Answer</summary><p>(a) The decoder points to the line <code>*p = 42;</code> in <code>loop()</code> (line 61 of the sketch). (b) 1, with reason PANIC. (c) The reason is SW and the counter stays at 1, because a software reset isn't "abnormal" and isn't in the counting condition. <code>RTC_NOINIT_ATTR</code> kept the value 1 through both resets.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>From power-up, then after <code>c</code>, then after <code>r</code> (the numbers in square brackets are milliseconds and the heap size varies; the core may print a few lines of its own too):</p>
+<pre class="serial">=== Boot. Reset reason: POWERON  (power was applied)
+=== Abnormal resets since power-on: 0
+=== Chip: ESP32-D0WD-V3, free heap: 342108 bytes
+[  1512][E][DebugStart.ino:37] setup(): ERROR level: shown if Core Debug Level &gt;= Error
+[  1519][W][DebugStart.ino:38] setup(): WARN  level: shown if Core Debug Level &gt;= Warn
+[  1526][I][DebugStart.ino:39] setup(): INFO  level: shown if Core Debug Level &gt;= Info
+Send 'c' = crash, 'r' = restart, 'h' = heap
+[  5000][I][DebugStart.ino:51] loop(): alive, uptime=5s heap=342108
+Crashing on purpose (null pointer write)...
+Guru Meditation Error: Core  1 panic'ed (StoreProhibited). Exception was unhandled.
+...
+Rebooting...
+...
+=== Boot. Reset reason: PANIC    (crash / Guru Meditation)
+=== Abnormal resets since power-on: 1
+...
+=== Boot. Reset reason: SW       (ESP.restart() was called)
+=== Abnormal resets since power-on: 1</pre>
+<ul>
+<li>Only the E, W and I lines appear: Info shows its own level and everything more serious. The D and V lines stay silent.</li>
+<li>A heartbeat line every 5 seconds; after <code>h</code>, a line with the current and the lowest free heap.</li>
+<li>The Exception Decoder turns the Backtrace into <code>loop()</code> at <code>DebugStart.ino:61</code>.</li>
+<li>Extra check: press EN on the DevKitC. The reason becomes POWERON and the counter goes back to 0, because on the ESP32 the EN pin switches the whole chip off and on.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<ol>
+<li><b>(a) The crash line: 61.</b> The Decoder shows <code>loop()</code> at <code>DebugStart.ino:61</code>, the line <code>*p = 42;</code>. The first line of the translated Backtrace is where the crash happened; the lines below it are the functions that called it (here the core's loop task). <code>StoreProhibited</code> with <code>EXCVADDR: 0x00000000</code> confirms it: a write to address zero.</li>
+<li><b>(b) The counter after the crash: 1, reason PANIC.</b> On the fresh power-up, line 28 set the counter to 0. The crash caused a PANIC reset; PANIC is in the condition on lines 29 and 30, so the counter went from 0 to 1.</li>
+<li><b>(c) After <code>r</code>: reason SW, counter still 1.</b> <code>ESP.restart()</code> is a planned software reset, and SW isn't in the list on lines 29 and 30 (PANIC, TASK_WDT, INT_WDT, BROWNOUT), so nothing is added. It isn't reset to 0 either, because line 28 only does that on POWERON.</li>
+<li><b>Why the value survived both resets.</b> <code>RTC_NOINIT_ATTR</code> puts <code>crashCount</code> in RTC memory, which the startup code doesn't clear on a crash or a software reset. Only a real power cut (or EN on a DevKitC) gives POWERON, where it starts from a random value and is set to 0.</li>
+</ol>
+<p><b>Grading:</b> all three numbers right (61; 1 with PANIC; SW with 1) and, for (c), the reason: "SW isn't counted as abnormal".</p>
+</details>
 </div>
 
 <h2 id="certificate">🎓 Course completion certificate</h2>

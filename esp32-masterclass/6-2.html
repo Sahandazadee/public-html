@@ -491,13 +491,504 @@ void loop() {
   <li>کد را اول در Wokwi اجرا کن، بعد روی برد.</li>
 </ol>
 <details><summary>راهنمایی</summary><p>کد فعلی پروژه را کامل در پرسش بگذار و صریح بگو «فقط این ویژگی را اضافه کن و بقیه کد را تغییر نده». بعد تغییرها را خط به خط با کد قبلی مقایسه کن. اگر مدل چیزهایی را که نخواسته بودی عوض کرده (مثلا پین‌ها یا زمان خواب)، این خودش یک یافته مهم بازبینی است.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>این تمرین دو نتیجه دارد: بازبینی نوشته‌شده تو، و برنامه‌ای که واقعا کار می‌کند.</p>
+<p><b>بازبینی‌ات خوب است اگر</b> برای هر ده مرحله «قبول» یا «رد» <b>همراه با دلیل</b> نوشته باشی (نه فقط یک تیک)؛ کد جدید را خط به خط با کد قبلی مقایسه کرده باشی؛ و جواب سوال پیگیری‌ات را خودت امتحان کرده باشی، نه این که فقط باورش کنی.</p>
+<p><b>برنامه درست</b> (نمایشگر DHT22 درس ۳.۳ به‌علاوه LED روی GPIO4)، هر ۲ ثانیه در Serial Monitor. در Wokwi سنسور DHT22 با ۲۴٫۵ درجه و ۴۰ درصد شروع می‌کند؛ این‌جا لغزنده رطوبت اول روی ۸۰ و بعد روی ۶۰ رفته:</p>
+<pre class="serial">T=24.5 C  H=40.0 %  LED off
+T=24.5 C  H=40.0 %  LED off
+T=24.5 C  H=80.0 %  LED blinking
+T=24.5 C  H=80.0 %  LED blinking
+T=24.5 C  H=60.0 %  LED off</pre>
+<ul>
+<li>رطوبت بالای ۷۰: LED ثانیه‌ای دو بار چشمک می‌زند (۲۵۰ میلی‌ثانیه روشن، ۲۵۰ خاموش) و یکنواخت؛ نه هر ۲ ثانیه یک تغییر.</li>
+<li>رطوبت برگشت زیر ۷۰: LED ظرف ۲ ثانیه خاموش می‌شود و خاموش می‌ماند. هیچ‌وقت روشن گیر نمی‌کند.</li>
+<li>سیم داده DHT22 را بکش: «DHT22 read error!» روی نمایشگر و LED خاموش.</li>
+<li>OLED در حالی که LED چشمک می‌زند، هر ۲ ثانیه به‌روز می‌شود.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>جواب هوش مصنوعی تو هر بار فرق می‌کند؛ پس این‌جا یک <b>بازبینی نمونه</b> برای یک جواب معمولی آمده (نوشته خود ما، مثل بقیه مثال‌های این درس). پرسش همان قالب بود، با کد کامل <code>Weather_OLED</code> درس ۳.۳ و این درخواست: «اگر رطوبت بالای ۷۰ درصد بود، LED روی GPIO4 (با ۲۲۰ اهم به GND) بدون delay چشمک بزند؛ فقط همین ویژگی را اضافه کن و بقیه کد را تغییر نده». جواب:</p>
+<div class="code" data-file="HumidBlink_AI.ino" id="exHumAI"><pre>
+// مثال ساختگی: جواب AI (همان Weather_OLED درس ۳.۳ + قابلیت جدید)
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+DHT dht(13, DHT22);
+
+unsigned long lastRead = 0;
+const int LED_PIN = 4;                  // جدید
+bool ledState = false;                  // جدید
+unsigned long lastBlink = 0;            // جدید
+
+void showMessage(const char *msg) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println(msg);
+  display.display();
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);             // جدید
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found!");
+    while (true) delay(1000);
+  }
+  display.setTextColor(SSD1306_WHITE);
+  dht.begin();
+  showMessage("Waiting for DHT22...");
+}
+
+void loop() {
+  if (millis() - lastRead &lt; 2000) return;   // هنوز ۲ ثانیه نشده
+  lastRead = millis();
+
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) {
+    showMessage("DHT22 read error!");
+    Serial.println("DHT22 read error");
+    return;
+  }
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("Temperature");
+  display.setTextSize(2);
+  display.setCursor(0, 12);
+  display.printf("%.1f C", t);
+  display.setTextSize(1);
+  display.setCursor(0, 36);
+  display.println("Humidity");
+  display.setTextSize(2);
+  display.setCursor(0, 48);
+  display.printf("%.1f %%", h);
+  display.display();
+
+  Serial.printf("T=%.1f C  H=%.1f %%\n", t, h);
+
+  if (h &gt; 70) {                         // جدید: چشمک بدون delay
+    if (millis() - lastBlink &gt;= 250) {
+      lastBlink = millis();
+      ledState = !ledState;
+      digitalWrite(LED_PIN, ledState);
+    }
+  }
+}
+</pre></div>
+<p>بدون حتی یک هشدار کامپایل می‌شود. حالا چک‌لیست، مرحله به مرحله:</p>
+<div class="table-wrap"><table><tr><th>#</th><th>مرحله</th><th>نتیجه</th><th>چرا</th></tr>
+<tr><td>۱</td><td>همه خط‌ها را می‌فهمم</td><td>❌ رد</td><td>loop را خط به خط دنبال کن: خط اولش اگر ۲ ثانیه نگذشته باشد از loop بیرون می‌رود. پس کد چشمک جدید در انتها فقط هر ۲ ثانیه یک بار اجرا می‌شود و LED هر ۲ ثانیه وضعیت عوض می‌کند، نه هر ۲۵۰ میلی‌ثانیه. «بدون delay» در عمل رعایت نشده، با این که کلمه delay آن‌جا نیست.</td></tr>
+<tr><td>۲</td><td>پین‌ها</td><td>✅ قبول</td><td>GPIO4 خروجی امن است، ۱۳ برای DHT22، ۲۱ و ۲۲ برای I2C. هیچ‌کدام ۶ تا ۱۱، پین فقط‌ورودی (۳۴ تا ۳۹) یا Strapping نیست.</td></tr>
+<tr><td>۳</td><td>با سیم‌کشی من یکی است</td><td>✅ قبول</td><td>همان پین‌های بردبورد دوره. در مقایسه خط به خط، فقط خط‌هایی که «جدید» خورده‌اند تازه‌اند؛ مدل چیز دیگری را عوض نکرده.</td></tr>
+<tr><td>۴</td><td>ولتاژ و جریان</td><td>✅ قبول</td><td>LED با ۲۲۰ اهم: (۳٫۳ − ۲٫۰) ÷ ۲۲۰ ≈ ۶ میلی‌آمپر، خیلی کمتر از توان یک پین.</td></tr>
+<tr><td>۵</td><td>نسخه API</td><td>✅ قبول</td><td>هیچ چیزی از هسته 2.x نیست؛ اصلا LEDC ندارد.</td></tr>
+<tr><td>۶</td><td>کتابخانه‌ها واقعی‌اند</td><td>✅ قبول</td><td>همان سه کتابخانه درس ۳.۳؛ <code>digitalWrite</code> و <code>millis</code> مال خود هسته‌اند.</td></tr>
+<tr><td>۷</td><td>انتظار بی‌پایان نیست</td><td>✅ قبول</td><td>نه delay در loop هست و نه while بی‌حد. (<code>while (true)</code> برای نبودن نمایشگر از قبل در ۳.۳ بود و آن‌جا عمدی است.)</td></tr>
+<tr><td>۸</td><td>مدیریت خطا</td><td>❌ رد</td><td>دو سوراخ: (الف) وقتی رطوبت دوباره زیر ۷۰ می‌آید، هیچ چیزی LED را خاموش نمی‌کند و ممکن است برای همیشه روشن بماند؛ (ب) در خطای سنسور، loop قبل از کد چشمک برمی‌گردد و LED در هر وضعیتی بود یخ می‌زند.</td></tr>
+<tr><td>۹</td><td>امنیت</td><td>✅ قبول</td><td>نه Wi-Fi دارد نه رمز.</td></tr>
+<tr><td>۱۰</td><td>اول Wokwi، بعد برد</td><td>❌ رد (در شبیه‌ساز دیده شد)</td><td>رطوبت روی ۸۰: LED فقط هر ۲ ثانیه یک بار عوض می‌شود. برگشت به ۵۰: LED گاهی روشن می‌ماند.</td></tr></table></div>
+<p><b>سوال پیگیری.</b> «در چه شرایطی این کد درست کار نمی‌کند؟» یک جواب خوب حداقل چشمک کند و گیر کردن LED را نام می‌برد. اگر هوش مصنوعی‌ات گفت «در همه حالت‌ها کار می‌کند»، همین خودش زنگ خطر است: تو همین الان سه حالت پیدا کردی که کار نمی‌کند.</p>
+<p><b>کد اصلاح‌شده.</b> منطق LED به یک تابع جدا می‌رود که در <b>هر</b> دور loop، قبل از نگهبان ۲ ثانیه‌ای اجرا می‌شود؛ رطوبت در یک متغیر سراسری می‌ماند تا آن تابع ببیندش. هر چیزی که در کارت‌ها نیامده، همان کد درس ۳.۳ است.</p>
+<div class="code" data-file="HumidBlink.ino" id="exHum"><pre>
+// ایستگاه هواشناسی کوچک (۳.۳) + LED هشدار رطوبت روی GPIO4، بازبینی و اصلاح‌شده
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+DHT dht(13, DHT22);
+
+unsigned long lastRead = 0;
+const int LED_PIN = 4;
+const float HUM_LIMIT = 70.0;           // بالاتر از این: چشمک
+float hum = NAN;                        // آخرین رطوبت، مشترک با updateLed()
+bool ledOn = false;
+unsigned long lastBlink = 0;
+
+void showMessage(const char *msg) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println(msg);
+  display.display();
+}
+
+void updateLed() {
+  if (!isnan(hum) &amp;&amp; hum &gt; HUM_LIMIT) {
+    if (millis() - lastBlink &gt;= 250) {  // عوض کردن هر ۲۵۰ میلی‌ثانیه = ۲ چشمک در ثانیه
+      lastBlink = millis();
+      ledOn = !ledOn;
+      digitalWrite(LED_PIN, ledOn);
+    }
+  } else if (ledOn) {                   // رطوبت عادی یا خطای سنسور: LED خاموش
+    ledOn = false;
+    digitalWrite(LED_PIN, LOW);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found!");
+    while (true) delay(1000);
+  }
+  display.setTextColor(SSD1306_WHITE);
+  dht.begin();
+  showMessage("Waiting for DHT22...");
+}
+
+void loop() {
+  updateLed();                              // در «هر» دور، قبل از نگهبان پایین
+  if (millis() - lastRead &lt; 2000) return;   // هنوز ۲ ثانیه نشده
+  lastRead = millis();
+
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) {
+    hum = NAN;                              // رطوبت نامعلوم: LED خاموش می‌شود
+    showMessage("DHT22 read error!");
+    Serial.println("DHT22 read error");
+    return;
+  }
+  hum = h;
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("Temperature");
+  display.setTextSize(2);
+  display.setCursor(0, 12);
+  display.printf("%.1f C", t);
+  display.setTextSize(1);
+  display.setCursor(0, 36);
+  display.println("Humidity");
+  display.setTextSize(2);
+  display.setCursor(0, 48);
+  display.printf("%.1f %%", h);
+  display.display();
+
+  Serial.printf("T=%.1f C  H=%.1f %%  LED %s\n", t, h, h &gt; HUM_LIMIT ? "blinking" : "off");
+}
+</pre></div>
+<ol class="walk" data-for="exHum">
+  <li data-lines="11-15"><b class="what">متغیرهای جدید.</b> پین LED، حد ۷۰ درصد به صورت ثابت نام‌دار، آخرین رطوبت (تا اولین خواندن درست NaN)، وضعیت LED و زمان آخرین تغییر.
+    <span class="why"><code>hum</code> حالا باید سراسری باشد: در loop نوشته می‌شود و در <code>updateLed</code> خوانده. شروع با NaN یعنی «نامعلوم»، پس LED تا یک خواندن واقعی خاموش می‌ماند.</span></li>
+  <li data-lines="25-36"><b class="what">updateLed(): چشمک فقط وقتی رطوبت زیاد است.</b> هر ۲۵۰ میلی‌ثانیه LED برعکس می‌شود؛ در هر حالت دیگر (رطوبت عادی یا نامعلوم) یک بار خاموش می‌شود.
+    <span class="why">شاخه <code>else if (ledOn)</code> هر دو سوراخ مرحله ۸ را می‌بندد: LED دیگر نمی‌تواند تصادفی روشن بماند. فقط وقتی چیزی عوض می‌شود روی پین می‌نویسد.</span></li>
+  <li data-lines="52"><b class="what">اول از همه، در هر دور صدا زده می‌شود.</b> قبل از خطی که اگر ۲ ثانیه نگذشته باشد از loop بیرون می‌رود.
+    <span class="why">این خود اصلاح مرحله ۱ است. loop هزاران بار در ثانیه اجرا می‌شود، پس بررسی ۲۵۰ میلی‌ثانیه دقیق است. قاعده: کارهای سریع قبل از «نگهبان دم در»، کارهای کند بعد از آن.</span></li>
+  <li data-lines="58-64"><b class="what">رطوبت را به‌روز نگه دار.</b> در خطا NaN می‌شود و در موفقیت مقدار تازه را می‌گیرد.
+    <span class="why">سنسور مرده نباید LED را روی یک عدد قدیمی در حال چشمک نگه دارد.</span></li>
+  <li data-lines="82"><b class="what">یک کلمه اضافه در خط سریال.</b> «LED blinking» یا «LED off».
+    <span class="why">منطق را می‌توانی در Serial Monitor چک کنی، بدون این که به LED خیره شوی.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="exHum">
+<p>در Wokwi کتابخانه‌های <code>Adafruit SSD1306</code> و <code>DHT sensor library</code> را از زبانه Library Manager اضافه کن. روی DHT22 کلیک کن و لغزنده رطوبت را بالا و پایین ۷۰ ببر.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type":  "board-esp32-devkit-c-v4", "id":  "esp", "top":  0, "left":  0, "attrs":  {} },
+    { "type":  "board-ssd1306", "id":  "oled1", "top":  60, "left":  200, "attrs":  { "i2cAddress":  "0x3c"} },
+    { "type":  "wokwi-dht22", "id":  "dht1", "top":  -20, "left":  -150, "attrs":  { "temperature":  "24.5", "humidity":  "40"} },
+    { "type":  "wokwi-resistor", "id":  "r1", "top":  150, "left":  -130, "attrs":  { "value":  "220"} },
+    { "type":  "wokwi-led", "id":  "led1", "top":  90, "left":  -60, "attrs":  { "color":  "red"} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ],
+    [ "r1:1", "esp:4", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۲: شکار باگ</div>
 <p>کد ساختگی «پرسش بد» در مثال ۱ را دوباره بخوان. بدون نگاه کردن به کارت‌های توضیح، همه اشکال‌هایش را فهرست کن (حداقل ۷ مورد). بعد نسخه درست را با قالب پرسش از هوش مصنوعی بخواه و مقایسه کن.</p>
-<details><summary>جواب (فهرست اشکال‌ها)</summary><p>(۱) Wi-Fi ناخواسته؛ (۲) رمز در کد؛ (۳) DHT11 به جای سنسور نامشخص؛ (۴) GPIO2 برای سنسور (Strapping)؛ (۵) انتظار بی‌پایان برای Wi-Fi؛ (۶) <code>ledcSetup</code>/<code>ledcAttachPin</code> در ۳.x وجود ندارد؛ (۷) GPIO35 فقط ورودی است؛ (۸) NaN بررسی نمی‌شود؛ (۹) <code>delay(5000)</code>؛ (۱۰) فن مستقیم به پین بدون ترانزیستور/ماسفت؛ (۱۱) سرعت سریال 9600 ناهماهنگ با عادت دوره (اشکال کوچک).</p></details>
+<p><b>بخش ۲.</b> حالا یک جواب ساختگی دوم را با چک‌لیست ده‌مرحله‌ای نمره بده. درخواست این بود: «نور LED را با پتانسیومتر کم و زیاد کن و تا وقتی دکمه نگه داشته شده خاموشش کن؛ LED روی GPIO4، پتانسیومتر روی GPIO34، دکمه روی GPIO27 به GND». حداقل ۴ اشکال پیدا کن و برای هر کدام بگو کدام مرحله چک‌لیست آن را می‌گیرد.</p>
+<div class="code" data-file="DimmerAI.ino" id="exGrade"><pre>
+// جواب ساختگی AI: «نور LED را با پتانسیومتر کم و زیاد کن؛ دکمه خاموشش کند»
+#include &lt;WiFi.h&gt;
+
+const int LED = 34;
+const int POT = 4;
+const int BTN = 27;
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin("MyHome", "sunflower2024");
+  pinMode(BTN, INPUT);
+  ledcAttach(LED, 5000, 8);
+}
+
+void loop() {
+  int v = analogRead(POT);
+  if (digitalRead(BTN) == LOW) ledcWrite(LED, 0);
+  else ledcWrite(LED, v);
+  delay(10);
+}
+</pre></div>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p><b>بخش ۱، معیار قبولی:</b> قبولی اگر فهرستت حداقل ۷ مورد از ۱۱ اشکال جواب را داشته باشد، از جمله دو موردی که بی‌صدا خراب می‌کنند یا به سخت‌افزار آسیب می‌زنند: PWM روی GPIO35 (فقط ورودی) و فن مستقیم روی پین. نسخه درستی که با قالب از هوش مصنوعی می‌گیری باید <code>ledcAttach(26, 25000, 8)</code>، <code>ledcWrite(26, duty)</code>، بررسی <code>isnan</code>، زمان‌بندی با <code>millis()</code> داشته باشد و Wi-Fi نداشته باشد.</p>
+<p><b>برنامه اصلاح‌شده در Wokwi</b> (یک LED آبی روی GPIO26 جای ماسفت و فن را گرفته؛ DHT22 با ۲۴ درجه شروع می‌کند و بعد لغزنده روی ۳۰، ۳۱٫۵ و ۳۶ رفته):</p>
+<pre class="serial">T=24.0 C  fan duty=0/255
+T=30.0 C  fan duty=72/255
+T=31.5 C  fan duty=127/255
+T=36.0 C  fan duty=255/255</pre>
+<ul>
+<li>در ۲۸ درجه و کمتر LED خاموش است؛ بین ۲۸ و ۳۵ کم‌کم پرنورتر می‌شود؛ از ۳۵ به بالا کاملا روشن است.</li>
+<li>عددها روی همان خط راست‌اند: (T − 28) × 255 ÷ 7، رو به پایین گرد شده. ۳۰ درجه ← ۷۲، نه ۷۳.</li>
+</ul>
+<p><b>بخش ۲، معیار قبولی:</b> حداقل ۴ مورد از ۵ اشکال جواب، هر کدام با مرحله چک‌لیستش.</p>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p><b>بخش ۱: اشکال‌های کد «پرسش بد»</b>، با مرحله‌ای از چک‌لیست که هر کدام را می‌گیرد:</p>
+<ol>
+<li>Wi-Fi ناخواسته (مرحله ۱: هر خط اضافه، خطی است که باید بفهمی و به آن اعتماد کنی).</li>
+<li>رمز در کد (مرحله ۹).</li>
+<li>DHT11 به جای سنسوری که مشخص نشده بود (مرحله ۳).</li>
+<li>GPIO2 برای سنسور، که Strapping است (مرحله ۲).</li>
+<li>انتظار بی‌پایان برای Wi-Fi (مرحله ۷).</li>
+<li><code>ledcSetup</code>/<code>ledcAttachPin</code> در 3.x وجود ندارند (مرحله ۵).</li>
+<li>GPIO35 فقط ورودی است و هیچ‌وقت نمی‌تواند PWM بدهد (مرحله ۲).</li>
+<li>NaN بررسی نمی‌شود (مرحله ۸).</li>
+<li><code>delay(5000)</code> (مرحله ۷).</li>
+<li>فن مستقیم به پین، بدون ترانزیستور یا ماسفت (مرحله ۴).</li>
+<li>سرعت سریال 9600 که با عادت دوره نمی‌خواند (اشکال کوچک).</li>
+</ol>
+<p><b>یک نسخه درست</b>، نوشته‌شده از روی «پرسش خوب» (DHT22 روی GPIO13، گیت ماسفت logic-level روی GPIO26، PWM با ۲۵ کیلوهرتز، زیر ۲۸ درجه خاموش، بالای ۳۵ درجه تمام سرعت، بینشان خطی، هسته 3.x). روی برد واقعی گیت ماسفت با حدود ۱۰۰ اهم به GPIO26 می‌رود، یک مقاومت ۱۰ کیلواهمی از گیت به GND فن را هنگام بوت خاموش نگه می‌دارد، فن بین منبع ۱۲ ولت و درین است و یک دیود هرزگرد دو سر فن قرار می‌گیرد (درس ۳.۴).</p>
+<div class="code" data-file="FanControl.ino" id="exFan"><pre>
+// فن کنترل‌شده با دما: DHT22 روی GPIO13، گیت ماسفت روی GPIO26، PWM با ۲۵ کیلوهرتز
+#include &lt;DHT.h&gt;
+
+const int PIN_DHT = 13;
+const int PIN_FAN = 26;                 // گیت یک ماسفت logic-level، هرگز خود فن
+const float T_OFF  = 28.0;              // برابر یا پایین‌تر: فن خاموش
+const float T_FULL = 35.0;              // برابر یا بالاتر: تمام سرعت
+DHT dht(PIN_DHT, DHT22);
+unsigned long lastRead = 0;
+
+int dutyFor(float t) {                  // ۲۸ درجه ← 0 ... ۳۵ درجه ← 255، یک خط راست
+  if (t &lt;= T_OFF)  return 0;
+  if (t &gt;= T_FULL) return 255;
+  return (int)((t - T_OFF) * 255.0 / (T_FULL - T_OFF));
+}
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  ledcAttach(PIN_FAN, 25000, 8);        // هسته 3.x: پین، ۲۵ کیلوهرتز (بی‌صدا)، ۸ بیت
+  ledcWrite(PIN_FAN, 0);                // شروع با فن خاموش
+}
+
+void loop() {
+  if (millis() - lastRead &lt; 2000) return;   // DHT22 بین دو خواندن ۲ ثانیه لازم دارد
+  lastRead = millis();
+  float t = dht.readTemperature();
+  if (isnan(t)) {
+    ledcWrite(PIN_FAN, 255);            // سنسور از دست رفت: تمام سرعت انتخاب امن است
+    Serial.println("DHT22 error -&gt; fan at full speed");
+    return;
+  }
+  int duty = dutyFor(t);
+  ledcWrite(PIN_FAN, duty);             // در 3.x عدد اول «پین» است
+  Serial.printf("T=%.1f C  fan duty=%d/255\n", t, duty);
+}
+</pre></div>
+<ol class="walk" data-for="exFan">
+  <li data-lines="4-9"><b class="what">پین‌ها و دو حد دما، همه با اسم.</b>
+    <span class="why">هر عددی که در پرسش آمده بود، بالای برنامه اسم دارد. GPIO26 فقط گیت ماسفت را می‌راند؛ جریان فن هیچ‌وقت از ESP32 نمی‌گذرد (اصلاح اشکال ۱۰).</span></li>
+  <li data-lines="11-15"><b class="what">dutyFor(): از دما به سرعت.</b> ۲۸ درجه یا کمتر ← 0، ۳۵ درجه یا بیشتر ← 255، و بینشان یک خط راست.
+    <span class="why">یک تابع کوچک که با ماشین‌حساب چکش می‌کنی: ۳۱٫۵ درجه وسط راه است، پس ۱۲۷. جمع کردن کل قاعده در یک تابع، تستش را آسان می‌کند.</span></li>
+  <li data-lines="17-22"><b class="what">setup بدون Wi-Fi، با 115200 و API هسته 3.x.</b> <code>ledcAttach(pin, 25000, 8)</code> و فن خاموش شروع می‌کند.
+    <span class="why">۲۵ کیلوهرتز بالاتر از محدوده شنوایی است، پس فن سوت نمی‌کشد. همین یک خط جای دو خط 2.x را می‌گیرد (اصلاح اشکال‌های ۱، ۲، ۵، ۶، ۷ و ۱۱).</span></li>
+  <li data-lines="24-26"><b class="what">هر ۲ ثانیه یک خواندن، بدون متوقف کردن برنامه.</b>
+    <span class="why">جای <code>delay(5000)</code> را می‌گیرد؛ DHT22 که سریع‌تر از این داده تازه نمی‌دهد.</span></li>
+  <li data-lines="27-32"><b class="what">خواندن ناموفق فن را تمام سرعت می‌کند.</b>
+    <span class="why">در یک سیستم خنک‌کننده، «دمای نامعلوم» باید یعنی «خنک کن»، نه «خاموش». سکوت، خطرناک‌ترین رفتار کد بد بود (اشکال ۸).</span></li>
+  <li data-lines="33-35"><b class="what">دیوتی را روی پین بنویس و چاپش کن.</b> در 3.x آرگومان اول <code>ledcWrite</code> پین است.
+    <span class="why">عدد چاپ‌شده اجازه می‌دهد فرمول را با جدول «چه باید ببینی؟» مقایسه کنی.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="exFan">
+<p>در Wokwi کتابخانه <code>DHT sensor library</code> را اضافه کن. یک LED آبی روی GPIO26 جای ماسفت و فن را گرفته: نورش همان دیوتی را نشان می‌دهد. روی DHT22 کلیک کن و دما را بین ۲۵ و ۳۶ جابه‌جا کن.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type":  "board-esp32-devkit-c-v4", "id":  "esp", "top":  0, "left":  0, "attrs":  {} },
+    { "type":  "wokwi-dht22", "id":  "dht1", "top":  -20, "left":  -150, "attrs":  { "temperature":  "24", "humidity":  "40"} },
+    { "type":  "wokwi-resistor", "id":  "r1", "top":  150, "left":  -130, "attrs":  { "value":  "220"} },
+    { "type":  "wokwi-led", "id":  "led1", "top":  90, "left":  -60, "attrs":  { "color":  "blue"} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ],
+    [ "r1:1", "esp:26", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+<p><b>بخش ۲: نمره‌دهی نمونه برای جواب دوم.</b></p>
+<div class="table-wrap"><table><tr><th>خط</th><th>اشکال</th><th>مرحله</th></tr>
+<tr><td><code>LED = 34</code></td><td>GPIO34 فقط ورودی است: خروجی PWM ندارد و LED هیچ‌وقت روشن نمی‌شود. درخواست هم GPIO4 گفته بود.</td><td>۲، ۳</td></tr>
+<tr><td><code>POT = 4</code></td><td>GPIO4 پین ADC2 است و ADC2 وقتی Wi-Fi روشن است عدد درست نمی‌دهد. درخواست GPIO34 گفته بود.</td><td>۲، ۳</td></tr>
+<tr><td><code>WiFi.begin("MyHome", "sunflower2024")</code></td><td>Wi-Fi ناخواسته با یک رمز واقعی‌نما در کد؛ همین هم پتانسیومتر را خراب می‌کند.</td><td>۹ (و ۱)</td></tr>
+<tr><td><code>pinMode(BTN, INPUT)</code></td><td>بدون بالاکش: با دکمه‌ای که به GND می‌رود، پین در حالت رها معلق است و LED تصادفی خاموش می‌شود.</td><td>۳، ۸</td></tr>
+<tr><td><code>ledcWrite(LED, v)</code></td><td><code>v</code> از ۰ تا ۴۰۹۵ است ولی کانال ۸ بیتی فقط ۰ تا ۲۵۵ را می‌فهمد؛ پس بیشتر مسیر پیچ عددهایی می‌دهد که کانال نمی‌تواند استفاده کند.</td><td>۱</td></tr></table></div>
+<p>چیزهای درست: <code>ledcAttach</code> مال هسته 3.x است (مرحله ۵ قبول) و <code>delay(10)</code> کوتاه است (مرحله ۷ قبول). نسخه اصلاح‌شده:</p>
+<div class="code" data-file="Dimmer.ino" id="exGradeFix"><pre>
+// دیمر، اصلاح‌شده: پتانسیومتر روی GPIO34 نور LED روی GPIO4 را تنظیم می‌کند؛ دکمه GPIO27 خاموشش می‌کند
+const int LED = 4;                      // یک پین خروجی واقعی
+const int POT = 34;                     // ADC1 و فقط‌ورودی: عالی برای پتانسیومتر
+const int BTN = 27;                     // دکمه به GND
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BTN, INPUT_PULLUP);           // پین معلق نماند
+  ledcAttach(LED, 5000, 8);             // ۸ بیت: دیوتی 0..255
+}
+
+void loop() {
+  int v = analogRead(POT);              // 0..4095
+  int duty = v &gt;&gt; 4;                    // 0..255، همان بازه‌ای که ۸ بیت می‌فهمد
+  if (digitalRead(BTN) == LOW) duty = 0;
+  ledcWrite(LED, duty);
+  delay(10);
+}
+</pre></div>
+<ol class="walk" data-for="exGradeFix">
+  <li data-lines="2-4"><b class="what">پین‌های خود درخواست.</b> LED روی ۴، پتانسیومتر روی ۳۴ (ADC1)، دکمه روی ۲۷.
+    <span class="why">سیم‌کشی را درخواست تعیین می‌کند، نه مدل. بدون Wi-Fi حتی پین ADC2 هم کار می‌کرد، ولی ADC1 اگر بعدا Wi-Fi اضافه شود هم درست می‌ماند.</span></li>
+  <li data-lines="8-9"><b class="what">بالاکش برای دکمه، PWM هشت‌بیتی برای LED.</b>
+    <span class="why"><code>INPUT_PULLUP</code> پین را در حالت رها بودن دکمه HIGH نگه می‌دارد، پس هیچ‌وقت معلق نمی‌ماند.</span></li>
+  <li data-lines="13-17"><b class="what">بخوان، مقیاس کن، بنویس.</b> <code>v &gt;&gt; 4</code> یعنی تقسیم بر ۱۶: بازه ۰ تا ۴۰۹۵ می‌شود ۰ تا ۲۵۵.
+    <span class="why">همان ترفند <code>PortableDemo</code> در درس ۶.۴: حالا کل مسیر پیچ روی کل بازه نور می‌نشیند.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="exGradeFix">
+<p>پتانسیومتر را بچرخان: نور LED نرم کم و زیاد می‌شود. دکمه را نگه دار: LED خاموش می‌شود.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type":  "board-esp32-devkit-c-v4", "id":  "esp", "top":  0, "left":  0, "attrs":  {} },
+    { "type":  "wokwi-potentiometer", "id":  "pot1", "top":  -90, "left":  -170, "attrs":  {} },
+    { "type":  "wokwi-pushbutton", "id":  "btn1", "top":  150, "left":  -170, "attrs":  { "color":  "green"} },
+    { "type":  "wokwi-resistor", "id":  "r1", "top":  130, "left":  190, "rotate":  90, "attrs":  { "value":  "220"} },
+    { "type":  "wokwi-led", "id":  "led1", "top":  40, "left":  220, "attrs":  { "color":  "red"} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "btn1:1.l", "esp:27", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۳: معلم خصوصی</div>
 <p>کد شمارنده پالس (مثال ۳) را بدون توضیح‌های ما به یک دستیار هوش مصنوعی بده و با «پرسش توضیحی» بخواه خط به خط توضیح دهد. جوابش را با کارت‌های توضیح همین صفحه مقایسه کن. کجا یکی بودند؟ کجا چیزی گفت که ما نگفتیم؟ آیا جایی اشتباه کرد؟ یکی از سه آزمایشی را که پیشنهاد داد، روی Wokwi اجرا کن.</p>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>جواب درست یکتایی از هوش مصنوعی وجود ندارد، ولی یک جواب خوب این شش نکته را پوشش می‌دهد. در توضیح هوش مصنوعی‌ات تیکشان بزن:</p>
+<ul>
+<li><code>volatile</code>: مقدار باید هر بار از حافظه خوانده شود چون وقفه آن را عوض می‌کند. (امتیاز اضافه اگر بگوید volatile به تنهایی <code>pulses++</code> را امن <b>نمی‌کند</b>؛ آن کار قفل است.)</li>
+<li>قفل (<code>mux</code>): وقفه و loop هیچ‌وقت هم‌زمان به <code>pulses</code> دست نمی‌زنند، پس «بخوان و بعد صفر کن» مثل یک قدم عمل می‌کند.</li>
+<li><code>IRAM_ATTR</code> و ISR کوتاه: داخلش نه <code>Serial</code> نه <code>delay</code>.</li>
+<li><code>INPUT_PULLUP</code> + <code>FALLING</code>: لبه‌های HIGH به LOW را می‌شمارد؛ دکمه مکانیکی لرزش (bounce) دارد.</li>
+<li>زمان‌بندی با <code>millis()</code> هر یک ثانیه، <code>static</code>، و تفریقی که از سرریز ۴۹ روزه جان سالم به در می‌برد.</li>
+<li>چاپ بعد از آزاد شدن قفل، هرگز داخل آن.</li>
+</ul>
+<p><b>زنگ‌های خطر</b> (هوش مصنوعی اشتباه می‌کند یا حدس می‌زند): «volatile متغیر را thread-safe» یا «اتمیک» می‌کند؛ «<code>millis() - last</code> بعد از ۴۹ روز خراب می‌شود»؛ «چاپ داخل ISR اگر کوتاه باشد اشکالی ندارد».</p>
+<p><b>آزمایش‌های رایج واقعا چه نشان می‌دهند:</b></p>
+<ul>
+<li>در Wokwi یک بار دکمه را بزن: معمولا <code>pulses/s: 1</code>، گاهی ۲ یا ۳. این لرزش دکمه است، نه باگ شمارنده.</li>
+<li><code>volatile</code> را بردار: به احتمال زیاد در این اسکچ <b>هیچ تغییر دیدنی‌ای</b> نمی‌بینی، چون صدا زدن قفل دور خواندن، خودش خواندن تازه از حافظه را اجباری می‌کند. این ثابت نمی‌کند volatile بی‌فایده است؛ در کدی بدون قفل، باگ می‌تواند ظاهر شود. هوش مصنوعی‌ای که پیش‌بینی کند «شمارنده همیشه صفر می‌ماند» بیش از حد مطمئن است.</li>
+<li>یک <code>Serial.printf</code> داخل ISR بگذار: معمولا کمی بعد از اولین فشار کرش و ریبوت (یک Guru Meditation یا پیام «assert failed»)؛ گاهی مدتی به نظر کار می‌کند. در هر دو حالت ممنوع است.</li>
+<li>آزمایش فرکانس معلوم در جواب: یک <code>pulses/s: 100</code> ثابت، گاهی ۹۹ یا ۱۰۱.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p><b>مقایسه، قدم به قدم.</b></p>
+<ol>
+<li>توضیح هوش مصنوعی را کنار شش کارت توضیح زیر مثال ۳ بگذار. برای هر کارت علامت بزن: «همان را گفت»، «بیشتر گفت»، «کمتر گفت» یا «چیز دیگری گفت».</li>
+<li>هر چیزی که «چیز دیگری» خورده، در یکی از دو دسته می‌رود: (الف) یک جزئیات تازه و درست (در مستندات رسمی چکش کن، مثلا صفحه‌های GPIO و وقفه Arduino-ESP32)، یا (ب) یک اشتباه. زنگ‌های خطر «چه باید ببینی؟» رایج‌ترین اشتباه‌ها هستند.</li>
+<li>برای هر کدام از سه آزمایش هوش مصنوعی، پیش‌بینی‌اش را <b>قبل</b> از اجرا یادداشت کن. بعد اجرا و مقایسه کن. آزمایشی که نتیجه‌اش هوش مصنوعی را غافلگیر کرد، باارزش‌ترین یافته کل تمرین است.</li>
+</ol>
+<p><b>یک آزمایش محکم که خودت اضافه کنی: یک فرکانس معلوم به شمارنده بده.</b> با دکمه نمی‌شود دقیق بودن شمارنده را ثابت کرد، چون نمی‌توانی تعداد معلومی فشار بدهی. ESP32 می‌تواند پالس‌های خودش را بسازد: LEDC یک موج مربعی ۱۰۰ هرتز روی GPIO26 می‌دهد و یک سیم جامپر آن را به GPIO27 می‌برد. روی برد واقعی یک جامپر از GPIO26 به GPIO27 وصل کن و در این تست دکمه GPIO27 را فشار نده (خروجی را به GND اتصال کوتاه می‌کند).</p>
+<div class="code" data-file="FreqTest.ino" id="exFreq"><pre>
+// آزمایش: یک فرکانس معلوم به شمارنده پالس بده (سیم جامپر از GPIO26 به GPIO27)
+volatile uint32_t pulses = 0;
+portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+
+void IRAM_ATTR onPulse() {
+  portENTER_CRITICAL_ISR(&amp;mux);
+  pulses++;
+  portEXIT_CRITICAL_ISR(&amp;mux);
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(27, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(27), onPulse, FALLING);
+  ledcAttach(26, 100, 10);              // موج مربعی ۱۰۰ هرتز روی GPIO26
+  ledcWrite(26, 512);                   // 512 از 1024 = دیوتی ۵۰ درصد
+}
+
+void loop() {
+  static uint32_t last = 0;
+  if (millis() - last &gt;= 1000) {
+    last = millis();
+    portENTER_CRITICAL(&amp;mux);
+    uint32_t n = pulses;
+    pulses = 0;
+    portEXIT_CRITICAL(&amp;mux);
+    Serial.printf("pulses/s: %lu\n", n);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="exFreq">
+  <li data-lines="1-17"><b class="what">شمارنده پالس مثال ۳ بدون تغییر، به‌علاوه دو خط.</b> <code>ledcAttach(26, 100, 10)</code> یک سیگنال ۱۰۰ هرتز روی GPIO26 می‌سازد؛ <code>ledcWrite(26, 512)</code> آن را ۵۰ درصد می‌کند (۵۱۲ از ۱۰۲۴ پله‌ای که ۱۰ بیت می‌دهد).
+    <span class="why">موج مربعی در هر دوره دقیقا یک لبه پایین‌رونده دارد، پس ۱۰۰ هرتز یعنی دقیقا ۱۰۰ شمارش در ثانیه. دقت ۱۰ بیتی انتخاب شده چون فرکانس‌های خیلی پایین برای تقسیم‌کننده ساعت LEDC بیت کافی لازم دارند.</span></li>
+  <li data-lines="19-29"><b class="what">همان گزارش ثانیه‌ای.</b>
+    <span class="why">دیدن ۱۰۰ پشت سر هم، وقفه، قفل و زمان‌بندی را با هم ثابت می‌کند. ۹۹ یا ۱۰۱ گاه‌به‌گاه طبیعی است: پنجره یک ثانیه‌ای و سیگنال هم‌گام نیستند، پس یک لبه ممکن است درست قبل یا بعد از مرز بیفتد.</span></li>
+</ol>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>

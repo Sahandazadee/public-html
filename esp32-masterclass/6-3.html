@@ -225,7 +225,7 @@ void loop() {
 #include &lt;Adafruit_SSD1306.h&gt;
 #include &lt;DHT.h&gt;
 
-DHT dht(4, DHT22);
+DHT dht(13, DHT22);
 Adafruit_SSD1306 oled(128, 64, &amp;Wire, -1);   // -1: پایه ریست ندارد
 
 void setup() {
@@ -298,7 +298,7 @@ void loop() {
 
 const int PIN_LED = 4, PIN_BUZ = 25, PIN_BTN = 27;
 const float TEMP_HIGH = 35.0, TEMP_CLEAR = 33.0;
-DHT dht(4, DHT22);
+DHT dht(13, DHT22);
 
 float tempC = NAN;
 bool alarmOn = false, muted = false;
@@ -906,43 +906,841 @@ OK: temperature back to normal</div>
 <div class="exercise"><div class="ct">تمرین ۱: هشدار گم‌نشدنی</div>
 <p>در برنامه فعلی، اگر شبکه در لحظه شروع هشدار قطع باشد، پیام «ALERT» گم می‌شود. برنامه را طوری تغییر بده که پیام هشدار در یک متغیر «در انتظار ارسال» بماند و به محض وصل شدن MQTT فرستاده شود.</p>
 <details><summary>راهنمایی</summary><p>یک متغیر <code>const char* pendingAlert = nullptr;</code> بساز. در <code>publishAlert</code>، اگر وصل نیستی، پیام را در آن بگذار. در <code>keepMqtt</code>، بلافاصله بعد از اتصال موفق، اگر <code>pendingAlert</code> خالی نیست، آن را بفرست و خالی کن. چون پیام‌ها رشته‌های ثابت‌اند، نگه داشتن اشاره‌گر به آن‌ها امن است.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p><b>آزمایش:</b> کاری کن که هشدار قبل از وصل شدن MQTT شروع شود. در Wokwi اگر DHT22 با ۳۶ درجه شروع کند، این خودبه‌خود اتفاق می‌افتد (دیاگرام جواب همین کار را می‌کند): اولین خواندن در ثانیه ۲ است، ولی اولین تلاش MQTT تازه بعد از ۵ ثانیه. روی برد واقعی: روتر را خاموش کن، در Serial Monitor بنویس <code>t 36</code>، صبر کن تا <code>ALERT: temperature high</code> بیاید، بعد روتر را روشن کن.</p>
+<pre class="serial">ALERT: temperature high
+MQTT connected
+Sent pending: ALERT: temperature high
+Published to MQTT</pre>
+<p>(با شبکه کند، ممکن است قبل از <code>MQTT connected</code> چند خط <code>WiFi: reconnecting...</code> هم بیاید.)</p>
+<ul>
+<li>در کلاینت MQTT روی <code>esp32fa/station-42/alert</code> (با پیشوند خودت): دقیقا یک <code>ALERT: temperature high</code>، چند ثانیه بعد از شروع، با این که هشدار در قطعی شروع شده بود.</li>
+<li>همین آزمایش را با برنامه نهایی اصلی تکرار کن: خط ALERT در سریال می‌آید، ولی تا یادآوری ۱۰ دقیقه بعد چیزی به کلاینت نمی‌رسد. این همان باگی است که درست کردی.</li>
+<li>اگر هشدار در یک قطعی هم شروع و هم تمام شود (<code>t 36</code> و بعد <code>t 30</code>)، فقط <code>OK: temperature back to normal</code> می‌رسد: یک جای خالی، تازه‌ترین پیام را نگه می‌دارد که همان وضعیت فعلی است.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>برنامه نهایی کامل با این تغییر. فقط خط‌هایی که در کارت‌ها آمده‌اند تازه‌اند؛ بقیه همان برنامه گام ۶ است، بخش به بخش.</p>
+<div class="code" data-file="StationPending.ino" id="exPend"><pre>
+// ایستگاه پایش محیط، تمرین ۱: هشداری که منتظر شبکه می‌ماند
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+
+// ================== ۱. تنظیمات ==================
+const char* WIFI_SSID = "Wokwi-GUEST";         // برد واقعی: اسم Wi-Fi خودت
+const char* WIFI_PASS = "";                    // برد واقعی: رمز Wi-Fi خودت
+const char* MQTT_HOST = "broker.hivemq.com";
+const uint16_t MQTT_PORT = 1883;
+const char* MQTT_USER = nullptr;               // Adafruit IO: نام کاربری
+const char* MQTT_KEY  = nullptr;               // Adafruit IO: AIO Key
+const char* BASE      = "esp32fa/station-42/"; // پیشوند یکتای topicها
+
+const float TEMP_HIGH  = 35.0;                 // بالاتر از این: هشدار
+const float TEMP_CLEAR = 33.0;                 // پایین‌تر از این: پایان هشدار
+const uint32_t SENSOR_MS  = 2000;              // هر ۲ ثانیه خواندن
+const uint32_t PUBLISH_MS = 30000;             // هر ۳۰ ثانیه ارسال
+const uint32_t REMIND_MS  = 600000;            // یادآوری هشدار: حداکثر هر ۱۰ دقیقه
+
+// ================== ۲. پین‌ها ==================
+const int PIN_DHT = 13;
+const int PIN_LDR = 35;                        // ADC1: با Wi-Fi کار می‌کند
+const int PIN_LED = 4;
+const int PIN_BUZ = 25;
+const int PIN_BTN = 27;                        // دکمه بی‌صدا
+
+// ================== ۳. اشیا و وضعیت ==================
+DHT dht(PIN_DHT, DHT22);
+Adafruit_SSD1306 oled(128, 64, &amp;Wire, -1);
+WiFiClient net;
+PubSubClient mqtt(net);
+
+float tempC = NAN, hum = NAN;
+int lightPct = 0;
+bool alarmOn = false, muted = false, oledOk = false;
+uint32_t tSensor = 0, tPublish = 0, tAlert = 0, tWifi = 0, tMqtt = 0;
+float fakeTemp = NAN;                          // کمک تست: NAN = سنسور واقعی
+const char* pendingAlert = nullptr;            // هشداری که منتظر شبکه است
+
+// ================== ۴. سنسورها ==================
+void readSensors() {
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (!isnan(t) &amp;&amp; !isnan(h)) { tempC = t; hum = h; }
+  else Serial.println("DHT22 read failed, keeping last value");
+  if (!isnan(fakeTemp)) tempC = fakeTemp;      // کمک تست (بخش ۱۰)
+  int raw = analogRead(PIN_LDR);               // 0..4095
+  lightPct = map(raw, 4095, 0, 0, 100);        // نور بیشتر = ولتاژ کمتر
+}
+
+// ================== ۵. ارسال به ابر ==================
+void publishValue(const char* name, float v, int decimals) {
+  char topic[64], payload[16];
+  snprintf(topic, sizeof(topic), "%s%s", BASE, name);
+  snprintf(payload, sizeof(payload), "%.*f", decimals, v);
+  mqtt.publish(topic, payload);
+}
+
+void publishAll() {
+  if (!mqtt.connected() || isnan(tempC)) return;
+  publishValue("temp", tempC, 1);
+  publishValue("hum", hum, 0);
+  publishValue("light", lightPct, 0);
+  Serial.println("Published to MQTT");
+}
+
+void sendAlert(const char* msg) {              // خود ارسال MQTT
+  char topic[64];
+  snprintf(topic, sizeof(topic), "%salert", BASE);
+  mqtt.publish(topic, msg);
+}
+
+void publishAlert(const char* msg) {
+  tAlert = millis();                           // شمارش یادآوری از نو
+  Serial.println(msg);
+  if (mqtt.connected()) sendAlert(msg);
+  else pendingAlert = msg;                     // شبکه نیست: برای بعد نگهش دار
+}
+
+// ================== ۶. منطق هشدار (هیسترزیس + محدودیت نرخ) ==================
+void updateAlarm() {
+  if (isnan(tempC)) return;
+  if (!alarmOn &amp;&amp; tempC &gt; TEMP_HIGH) {
+    alarmOn = true;
+    muted = false;
+    publishAlert("ALERT: temperature high");
+  } else if (alarmOn &amp;&amp; tempC &lt; TEMP_CLEAR) {
+    alarmOn = false;
+    publishAlert("OK: temperature back to normal");
+  } else if (alarmOn &amp;&amp; millis() - tAlert &gt;= REMIND_MS) {
+    publishAlert("ALERT: still high");         // یادآوری، نه اسپم
+  }
+}
+
+void driveOutputs() {
+  if (alarmOn &amp;&amp; digitalRead(PIN_BTN) == LOW) muted = true;
+  bool blink = (millis() / 250) % 2;
+  digitalWrite(PIN_LED, alarmOn &amp;&amp; blink);
+  static bool buzzing = false;
+  bool wantBuzz = alarmOn &amp;&amp; !muted &amp;&amp; blink;
+  if (wantBuzz != buzzing) {
+    ledcWriteTone(PIN_BUZ, wantBuzz ? 2000 : 0);
+    buzzing = wantBuzz;
+  }
+}
+
+// ================== ۷. نمایشگر ==================
+void drawDisplay() {
+  if (!oledOk) return;                         // نمایشگر نیست؟ بقیه کارها ادامه دارد
+  oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setCursor(0, 0);
+  oled.print(WiFi.status() == WL_CONNECTED ? "WiFi OK  " : "WiFi --  ");
+  oled.print(mqtt.connected() ? "MQTT OK" : "MQTT --");
+  oled.setTextSize(2);
+  oled.setCursor(0, 14);
+  if (isnan(tempC)) oled.print("T: ERR");
+  else { oled.print(tempC, 1); oled.print(" C"); }
+  oled.setCursor(0, 34);
+  if (isnan(hum)) oled.print("H: ERR");
+  else { oled.print(hum, 0); oled.print(" %"); }
+  oled.setTextSize(1);
+  oled.setCursor(0, 56);
+  oled.printf("Light %d%%  %s", lightPct, alarmOn ? (muted ? "ALARM(m)" : "ALARM!") : "normal");
+  oled.display();
+}
+
+// ================== ۸. شبکه (بدون مسدود کردن) ==================
+void keepWiFi() {
+  if (WiFi.status() == WL_CONNECTED) return;
+  if (millis() - tWifi &lt; 15000) return;        // هر ۱۵ ثانیه یک تلاش
+  tWifi = millis();
+  Serial.println("WiFi: reconnecting...");
+  WiFi.reconnect();
+}
+
+void keepMqtt() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (mqtt.connected()) { mqtt.loop(); return; }
+  if (millis() - tMqtt &lt; 5000) return;         // هر ۵ ثانیه یک تلاش
+  tMqtt = millis();
+  String id = "esp32-station-" + String((uint32_t)ESP.getEfuseMac(), HEX) + "-" + String(esp_random() &amp; 0xFFFF, HEX);
+  String will = String(BASE) + "status";
+  if (mqtt.connect(id.c_str(), MQTT_USER, MQTT_KEY, will.c_str(), 0, true, "offline")) {
+    mqtt.publish(will.c_str(), "online", true);
+    Serial.println("MQTT connected");
+    if (pendingAlert != nullptr) {             // هشداری که در قطعی جا مانده؟
+      sendAlert(pendingAlert);
+      Serial.printf("Sent pending: %s\n", pendingAlert);
+      pendingAlert = nullptr;
+    }
+  } else {
+    Serial.printf("MQTT failed, state=%d\n", mqtt.state());
+  }
+}
+
+// ================== ۹. setup و loop ==================
+void setup() {
+  Serial.begin(115200);
+  pinMode(PIN_LED, OUTPUT);
+  pinMode(PIN_BTN, INPUT_PULLUP);
+  ledcAttach(PIN_BUZ, 2000, 8);                // API هسته 3.x
+  analogReadResolution(12);
+  dht.begin();
+  Wire.begin(21, 22);
+  oledOk = oled.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  if (oledOk) oled.setTextColor(SSD1306_WHITE);
+  else Serial.println("OLED not found, continuing without display");
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  net.setConnectionTimeout(1000);              // TCP: بعد از ۱ ثانیه بی‌خیال شو (پیش‌فرض ۳)
+  mqtt.setSocketTimeout(2);                    // جواب بروکر: بعد از ۲ ثانیه (پیش‌فرض ۱۵)
+  tWifi = millis();
+}
+
+void loop() {
+  readSerialCommands();                        // کمک تست (بخش ۱۰)
+  uint32_t now = millis();
+  if (now - tSensor &gt;= SENSOR_MS) {
+    tSensor = now;
+    readSensors();
+    updateAlarm();
+    drawDisplay();
+  }
+  if (now - tPublish &gt;= PUBLISH_MS) {
+    tPublish = now;
+    publishAll();
+  }
+  keepWiFi();
+  keepMqtt();
+  driveOutputs();
+}
+
+// ================== ۱۰. کمک تست: دمای ساختگی از Serial ==================
+void readSerialCommands() {
+  if (!Serial.available()) return;
+  String line = Serial.readStringUntil('\n');  // مثلا "t 36" یا "real"
+  line.trim();
+  if (line.startsWith("t ")) {
+    fakeTemp = line.substring(2).toFloat();
+    Serial.printf("Fake temperature: %.1f C\n", fakeTemp);
+  } else if (line == "real") {
+    fakeTemp = NAN;
+    Serial.println("Using the real sensor again");
+  }
+}
+</pre></div>
+<ol class="walk" data-for="exPend">
+  <li data-lines="42"><b class="what">یک «جای انتظار» برای هشدار.</b> <code>nullptr</code> یعنی «چیزی منتظر نیست».
+    <span class="why">یک اشاره‌گر کافی است چون هر هشدار یک رشته ثابت نوشته‌شده در برنامه است (<code>"ALERT: ..."</code>)؛ این رشته‌ها تمام مدت اجرا در فلش هستند، پس اشاره‌گر هیچ‌وقت به چیزی که از بین رفته اشاره نمی‌کند.</span></li>
+  <li data-lines="71-75"><b class="what">sendAlert(): فقط فرستادن MQTT.</b> ساختن topic و <code>publish</code> از <code>publishAlert</code> بیرون آمده‌اند.
+    <span class="why">حالا دو جا باید هشدار بفرستند: همان لحظه، و بعدا پس از وصل شدن دوباره. یک تابع کوچک یعنی topic در هر دو جا یک‌جور ساخته می‌شود.</span></li>
+  <li data-lines="77-82"><b class="what">publishAlert(): الان بفرست یا برای بعد نگه دار.</b> وصل هستیم ← بفرست. وصل نیستیم ← در جای انتظار بگذار.
+    <span class="why">تایمر یادآوری و خط سریال مثل قبل می‌مانند، پس رفتار محلی (و قانون «بدون اسپم») عوض نمی‌شود. هشدار تازه‌تر روی هشدار منتظر قبلی می‌نشیند: بعد از قطعی، وضعیت فعلی مهم است نه تاریخچه.</span></li>
+  <li data-lines="151-155"><b class="what">بلافاصله بعد از اتصال موفق: منتظر را بفرست و جا را خالی کن.</b>
+    <span class="why">این اولین لحظه‌ای است که می‌دانیم پیام می‌تواند برود. خالی کردن جا بعدش یعنی پیام دقیقا یک بار می‌رود، نه با هر اتصال دوباره.</span></li>
+  <li data-lines="85-97"><b class="what">updateAlarm() عوض نشده.</b> هنوز <code>publishAlert</code> را صدا می‌زند که حالا قطعی را خودش مدیریت می‌کند.
+    <span class="why">اصلاح فقط در یک جا، یعنی تابع ارسال، انجام شده؛ منطق هشدار لازم نیست چیزی درباره شبکه بداند.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="exPend">
+<p>چهار کتابخانه را از تب Library Manager خود Wokwi اضافه کن (مثل برنامه نهایی). در این دیاگرام DHT22 با ۳۶ درجه شروع می‌کند، پس هشدار قبل از وصل شدن MQTT شروع می‌شود. <code>BASE</code> را به پیشوند خودت تغییر بده و topic هشدار را در کلاینت MQTT نگاه کن.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type":  "board-esp32-devkit-c-v4", "id":  "esp", "top":  0, "left":  0, "attrs":  {} },
+    { "type":  "wokwi-dht22", "id":  "dht1", "top":  -110, "left":  170, "attrs":  { "temperature":  "36", "humidity":  "45"} },
+    { "type":  "wokwi-photoresistor-sensor", "id":  "ldr1", "top":  250, "left":  170, "attrs":  {} },
+    { "type":  "board-ssd1306", "id":  "oled1", "top":  60, "left":  260, "attrs":  { "i2cAddress":  "0x3c"} },
+    { "type":  "wokwi-resistor", "id":  "r1", "top":  110, "left":  -130, "attrs":  { "value":  "220"} },
+    { "type":  "wokwi-led", "id":  "led1", "top":  40, "left":  -60, "attrs":  { "color":  "red"} },
+    { "type":  "wokwi-buzzer", "id":  "bz1", "top":  170, "left":  -160, "attrs":  { "volume":  "0.2"} },
+    { "type":  "wokwi-pushbutton", "id":  "btn1", "top":  280, "left":  -170, "attrs":  { "color":  "yellow", "label":  "Mute"} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:AO", "esp:35", "blue", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "r1:1", "esp:4", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ],
+    [ "bz1:2", "esp:25", "orange", [] ],
+    [ "bz1:1", "esp:GND.1", "black", [] ],
+    [ "btn1:1.l", "esp:27", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۲: سنسور مرده</div>
 <p>اگر DHT22 برای همیشه جدا شود، برنامه فعلی آخرین دمای معتبر را تا ابد نشان می‌دهد و ارسال می‌کند؛ این دروغ است. تغییری بده که اگر ۵ خواندن پشت سر هم شکست خورد، <code>tempC</code> و <code>hum</code> دوباره NaN شوند و یک پیام <code>"ERROR: sensor"</code> (فقط یک بار) به topic هشدار برود.</p>
 <details><summary>راهنمایی</summary><p>یک شمارنده <code>failStreak</code> در <code>readSensors</code>: با موفقیت صفر، با شکست یکی زیاد. وقتی دقیقا به ۵ رسید (نه بزرگ‌تر یا مساوی، تا پیام فقط یک بار برود)، مقدارها را NaN کن و <code>publishAlert</code> را صدا بزن. <code>publishAll</code> از قبل با NaN چیزی نمی‌فرستد و نمایشگر «ERR» نشان می‌دهد.</p></details>
-<details><summary>جواب</summary>
-<div class="code" data-file="readSensors_v2_part.ino" id="exFail"><pre>
-// جایگزین تابع readSensors در برنامه نهایی (بخشی از برنامه)
-int failStreak = 0;
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>روی برد واقعی، وقتی ایستگاه کار می‌کند سیم DATA سنسور DHT22 را بکش. در Wokwi شبیه‌سازی را متوقف کن، خط <code>dht1:SDA</code> را از diagram.json پاک کن و دوباره اجرا کن. هر ۲ ثانیه یک خط:</p>
+<pre class="serial">DHT22 read failed (1 in a row)
+DHT22 read failed (2 in a row)
+DHT22 read failed (3 in a row)
+DHT22 read failed (4 in a row)
+DHT22 read failed (5 in a row)
+ERROR: sensor
+DHT22 read failed (6 in a row)</pre>
+<ul>
+<li>حدود ۱۰ ثانیه بعد از کشیدن سیم، OLED از عددهای قدیمی به <code>T: ERR</code> و <code>H: ERR</code> تغییر می‌کند.</li>
+<li>دقیقا یک <code>ERROR: sensor</code> روی topic هشدار، نه هر ۲ ثانیه یکی.</li>
+<li>از آن به بعد هیچ مقدار دما، رطوبت یا نوری فرستاده نمی‌شود (<code>publishAll</code> با NaN متوقف می‌شود).</li>
+<li>سیم را دوباره وصل کن: عددهای واقعی ظرف ۲ ثانیه. دوباره بکش: بعد از ۱۰ ثانیه یک <code>ERROR: sensor</code> تازه و تکی.</li>
+</ul>
+<p>در Wokwi سنسور از همان اول نیست، پس پنجمین خطا حدود ثانیه ۱۰ است؛ اگر تا آن موقع MQTT هنوز وصل نشده باشد، پیام فقط به سریال می‌رسد (تمرین ۱ دقیقا همین را درست می‌کند).</p>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>برنامه نهایی کامل با <code>readSensors</code> جدید. فقط خط‌هایی که در کارت‌ها آمده‌اند عوض شده‌اند.</p>
+<div class="code" data-file="StationDeadSensor.ino" id="exFail"><pre>
+// ایستگاه پایش محیط، تمرین ۲: سنسور مرده گزارش می‌شود، نه پنهان
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
 
+// ================== ۱. تنظیمات ==================
+const char* WIFI_SSID = "Wokwi-GUEST";         // برد واقعی: اسم Wi-Fi خودت
+const char* WIFI_PASS = "";                    // برد واقعی: رمز Wi-Fi خودت
+const char* MQTT_HOST = "broker.hivemq.com";
+const uint16_t MQTT_PORT = 1883;
+const char* MQTT_USER = nullptr;               // Adafruit IO: نام کاربری
+const char* MQTT_KEY  = nullptr;               // Adafruit IO: AIO Key
+const char* BASE      = "esp32fa/station-42/"; // پیشوند یکتای topicها
+
+const float TEMP_HIGH  = 35.0;                 // بالاتر از این: هشدار
+const float TEMP_CLEAR = 33.0;                 // پایین‌تر از این: پایان هشدار
+const uint32_t SENSOR_MS  = 2000;              // هر ۲ ثانیه خواندن
+const uint32_t PUBLISH_MS = 30000;             // هر ۳۰ ثانیه ارسال
+const uint32_t REMIND_MS  = 600000;            // یادآوری هشدار: حداکثر هر ۱۰ دقیقه
+
+// ================== ۲. پین‌ها ==================
+const int PIN_DHT = 13;
+const int PIN_LDR = 35;                        // ADC1: با Wi-Fi کار می‌کند
+const int PIN_LED = 4;
+const int PIN_BUZ = 25;
+const int PIN_BTN = 27;                        // دکمه بی‌صدا
+
+// ================== ۳. اشیا و وضعیت ==================
+DHT dht(PIN_DHT, DHT22);
+Adafruit_SSD1306 oled(128, 64, &amp;Wire, -1);
+WiFiClient net;
+PubSubClient mqtt(net);
+
+float tempC = NAN, hum = NAN;
+int lightPct = 0;
+bool alarmOn = false, muted = false, oledOk = false;
+uint32_t tSensor = 0, tPublish = 0, tAlert = 0, tWifi = 0, tMqtt = 0;
+float fakeTemp = NAN;                          // کمک تست: NAN = سنسور واقعی
+int failStreak = 0;                            // تعداد خطاهای پشت سر هم
+
+// ================== ۴. سنسورها ==================
 void readSensors() {
   float t = dht.readTemperature();
   float h = dht.readHumidity();
   if (!isnan(t) &amp;&amp; !isnan(h)) {
     tempC = t; hum = h;
-    failStreak = 0;
+    failStreak = 0;                            // موفق: شمارش از صفر
   } else {
     failStreak++;
-    if (failStreak == 5) {                   // دقیقا یک بار
-      tempC = NAN; hum = NAN;
+    Serial.printf("DHT22 read failed (%d in a row)\n", failStreak);
+    if (failStreak == 5) {                     // دقیقا یک بار، بعد از ۱۰ ثانیه خطا
+      tempC = NAN; hum = NAN;                  // عدد قدیمی را تازه جا نزن
       publishAlert("ERROR: sensor");
     }
   }
-  int raw = analogRead(PIN_LDR);
-  lightPct = map(raw, 4095, 0, 0, 100);
+  if (!isnan(fakeTemp)) tempC = fakeTemp;      // کمک تست (بخش ۱۰)
+  int raw = analogRead(PIN_LDR);               // 0..4095
+  lightPct = map(raw, 4095, 0, 0, 100);        // نور بیشتر = ولتاژ کمتر
+}
+
+// ================== ۵. ارسال به ابر ==================
+void publishValue(const char* name, float v, int decimals) {
+  char topic[64], payload[16];
+  snprintf(topic, sizeof(topic), "%s%s", BASE, name);
+  snprintf(payload, sizeof(payload), "%.*f", decimals, v);
+  mqtt.publish(topic, payload);
+}
+
+void publishAll() {
+  if (!mqtt.connected() || isnan(tempC)) return;
+  publishValue("temp", tempC, 1);
+  publishValue("hum", hum, 0);
+  publishValue("light", lightPct, 0);
+  Serial.println("Published to MQTT");
+}
+
+void publishAlert(const char* msg) {
+  tAlert = millis();                           // شمارش یادآوری از نو
+  Serial.println(msg);
+  if (!mqtt.connected()) return;
+  char topic[64];
+  snprintf(topic, sizeof(topic), "%salert", BASE);
+  mqtt.publish(topic, msg);
+}
+
+// ================== ۶. منطق هشدار (هیسترزیس + محدودیت نرخ) ==================
+void updateAlarm() {
+  if (isnan(tempC)) return;
+  if (!alarmOn &amp;&amp; tempC &gt; TEMP_HIGH) {
+    alarmOn = true;
+    muted = false;
+    publishAlert("ALERT: temperature high");
+  } else if (alarmOn &amp;&amp; tempC &lt; TEMP_CLEAR) {
+    alarmOn = false;
+    publishAlert("OK: temperature back to normal");
+  } else if (alarmOn &amp;&amp; millis() - tAlert &gt;= REMIND_MS) {
+    publishAlert("ALERT: still high");         // یادآوری، نه اسپم
+  }
+}
+
+void driveOutputs() {
+  if (alarmOn &amp;&amp; digitalRead(PIN_BTN) == LOW) muted = true;
+  bool blink = (millis() / 250) % 2;
+  digitalWrite(PIN_LED, alarmOn &amp;&amp; blink);
+  static bool buzzing = false;
+  bool wantBuzz = alarmOn &amp;&amp; !muted &amp;&amp; blink;
+  if (wantBuzz != buzzing) {
+    ledcWriteTone(PIN_BUZ, wantBuzz ? 2000 : 0);
+    buzzing = wantBuzz;
+  }
+}
+
+// ================== ۷. نمایشگر ==================
+void drawDisplay() {
+  if (!oledOk) return;                         // نمایشگر نیست؟ بقیه کارها ادامه دارد
+  oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setCursor(0, 0);
+  oled.print(WiFi.status() == WL_CONNECTED ? "WiFi OK  " : "WiFi --  ");
+  oled.print(mqtt.connected() ? "MQTT OK" : "MQTT --");
+  oled.setTextSize(2);
+  oled.setCursor(0, 14);
+  if (isnan(tempC)) oled.print("T: ERR");
+  else { oled.print(tempC, 1); oled.print(" C"); }
+  oled.setCursor(0, 34);
+  if (isnan(hum)) oled.print("H: ERR");
+  else { oled.print(hum, 0); oled.print(" %"); }
+  oled.setTextSize(1);
+  oled.setCursor(0, 56);
+  oled.printf("Light %d%%  %s", lightPct, alarmOn ? (muted ? "ALARM(m)" : "ALARM!") : "normal");
+  oled.display();
+}
+
+// ================== ۸. شبکه (بدون مسدود کردن) ==================
+void keepWiFi() {
+  if (WiFi.status() == WL_CONNECTED) return;
+  if (millis() - tWifi &lt; 15000) return;        // هر ۱۵ ثانیه یک تلاش
+  tWifi = millis();
+  Serial.println("WiFi: reconnecting...");
+  WiFi.reconnect();
+}
+
+void keepMqtt() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (mqtt.connected()) { mqtt.loop(); return; }
+  if (millis() - tMqtt &lt; 5000) return;         // هر ۵ ثانیه یک تلاش
+  tMqtt = millis();
+  String id = "esp32-station-" + String((uint32_t)ESP.getEfuseMac(), HEX) + "-" + String(esp_random() &amp; 0xFFFF, HEX);
+  String will = String(BASE) + "status";
+  if (mqtt.connect(id.c_str(), MQTT_USER, MQTT_KEY, will.c_str(), 0, true, "offline")) {
+    mqtt.publish(will.c_str(), "online", true);
+    Serial.println("MQTT connected");
+  } else {
+    Serial.printf("MQTT failed, state=%d\n", mqtt.state());
+  }
+}
+
+// ================== ۹. setup و loop ==================
+void setup() {
+  Serial.begin(115200);
+  pinMode(PIN_LED, OUTPUT);
+  pinMode(PIN_BTN, INPUT_PULLUP);
+  ledcAttach(PIN_BUZ, 2000, 8);                // API هسته 3.x
+  analogReadResolution(12);
+  dht.begin();
+  Wire.begin(21, 22);
+  oledOk = oled.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  if (oledOk) oled.setTextColor(SSD1306_WHITE);
+  else Serial.println("OLED not found, continuing without display");
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  net.setConnectionTimeout(1000);              // TCP: بعد از ۱ ثانیه بی‌خیال شو (پیش‌فرض ۳)
+  mqtt.setSocketTimeout(2);                    // جواب بروکر: بعد از ۲ ثانیه (پیش‌فرض ۱۵)
+  tWifi = millis();
+}
+
+void loop() {
+  readSerialCommands();                        // کمک تست (بخش ۱۰)
+  uint32_t now = millis();
+  if (now - tSensor &gt;= SENSOR_MS) {
+    tSensor = now;
+    readSensors();
+    updateAlarm();
+    drawDisplay();
+  }
+  if (now - tPublish &gt;= PUBLISH_MS) {
+    tPublish = now;
+    publishAll();
+  }
+  keepWiFi();
+  keepMqtt();
+  driveOutputs();
+}
+
+// ================== ۱۰. کمک تست: دمای ساختگی از Serial ==================
+void readSerialCommands() {
+  if (!Serial.available()) return;
+  String line = Serial.readStringUntil('\n');  // مثلا "t 36" یا "real"
+  line.trim();
+  if (line.startsWith("t ")) {
+    fakeTemp = line.substring(2).toFloat();
+    Serial.printf("Fake temperature: %.1f C\n", fakeTemp);
+  } else if (line == "real") {
+    fakeTemp = NAN;
+    Serial.println("Using the real sensor again");
+  }
 }
 </pre></div>
 <ol class="walk" data-for="exFail">
-  <li data-lines="7-9"><b class="what">موفقیت شمارنده را صفر می‌کند.</b>
-    <span class="why">یعنی فقط شکست‌های <b>پشت سر هم</b> شمرده می‌شوند؛ یک خطای تکی گاه‌به‌گاه عادی است.</span></li>
-  <li data-lines="11-15"><b class="what">در شکست پنجم، اعلام خرابی.</b> مقدارها NaN و یک پیام خطا.
-    <span class="why">شرط <code>== 5</code> به جای <code>&gt;= 5</code> یعنی پیام فقط یک بار می‌رود، نه در هر خواندن بعدی؛ همان اصل «بدون اسپم». پنج خواندن یعنی ۱۰ ثانیه، که با یک خطای تصادفی اشتباه گرفته نمی‌شود. <code>publishAlert</code> باید قبل از این تابع تعریف شده باشد (مثل برنامه نهایی که بخش ۵ قبل از استفاده است، یا با یک اعلان پیشاپیش).</span></li>
+  <li data-lines="42"><b class="what">شمارنده خطاهای پشت سر هم.</b>
+    <span class="why">یک متغیر سراسری، چون مقدارش باید از یک بار صدا زدن <code>readSensors</code> تا بار بعد (هر ۲ ثانیه) بماند.</span></li>
+  <li data-lines="48-50"><b class="what">موفقیت شمارنده را صفر می‌کند.</b>
+    <span class="why">یعنی فقط خطاهای <b>پشت سر هم</b> شمرده می‌شوند؛ یک خطای تکی گاه‌به‌گاه برای DHT22 طبیعی است و نباید هشدار بدهد.</span></li>
+  <li data-lines="51-53"><b class="what">شکست: بشمارش و در سریال بگو.</b>
+    <span class="why">عدد داخل پرانتز اجازه می‌دهد موقع تست، شمارش معکوس تا هشدار را ببینی.</span></li>
+  <li data-lines="54-57"><b class="what">در پنجمین شکست، خرابی را گزارش کن.</b> مقدارها NaN می‌شوند و یک پیام خطا از راه <code>publishAlert</code> می‌رود.
+    <span class="why">شرط <code>== 5</code> به جای <code>&gt;= 5</code> یعنی پیام فقط یک بار می‌رود، نه در هر خواندن بعدی؛ همان قانون «بدون اسپم». پنج خواندن یعنی ۱۰ ثانیه که با یک اختلال تصادفی اشتباه گرفته نمی‌شود. با NaN، نمایشگر ERR نشان می‌دهد، <code>publishAll</code> چیزی نمی‌فرستد و <code>updateAlarm</code> هشدار را همان‌طور که بود نگه می‌دارد: هشدار روشن به چشمک زدن ادامه می‌دهد که امن‌تر از خاموش شدن بی‌صدا است. <code>readSensors</code> تابع <code>publishAlert</code> را صدا می‌زند با این که پایین‌تر نوشته شده؛ در فایل .ino مشکلی نیست، چون Arduino IDE قبل از کامپایل اعلان‌ها را خودش اضافه می‌کند.</span></li>
+  <li data-lines="59"><b class="what">کمک تست هنوز آخر از همه است.</b>
+    <span class="why">دمای ساختگی (<code>t 36</code>) هنوز جای سنسور را می‌گیرد، پس تست‌های هشدار حتی با سنسور جداشده هم کار می‌کنند.</span></li>
 </ol>
+<div class="wokwi" data-board="esp32" data-code-from="exFail">
+<p>مدار ایستگاه. برای شبیه‌سازی سنسور مرده، خط اتصال <code>dht1:SDA</code> را در diagram.json پاک کن و دوباره اجرا کن.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type":  "board-esp32-devkit-c-v4", "id":  "esp", "top":  0, "left":  0, "attrs":  {} },
+    { "type":  "wokwi-dht22", "id":  "dht1", "top":  -110, "left":  170, "attrs":  { "temperature":  "28", "humidity":  "45"} },
+    { "type":  "wokwi-photoresistor-sensor", "id":  "ldr1", "top":  250, "left":  170, "attrs":  {} },
+    { "type":  "board-ssd1306", "id":  "oled1", "top":  60, "left":  260, "attrs":  { "i2cAddress":  "0x3c"} },
+    { "type":  "wokwi-resistor", "id":  "r1", "top":  110, "left":  -130, "attrs":  { "value":  "220"} },
+    { "type":  "wokwi-led", "id":  "led1", "top":  40, "left":  -60, "attrs":  { "color":  "red"} },
+    { "type":  "wokwi-buzzer", "id":  "bz1", "top":  170, "left":  -160, "attrs":  { "volume":  "0.2"} },
+    { "type":  "wokwi-pushbutton", "id":  "btn1", "top":  280, "left":  -170, "attrs":  { "color":  "yellow", "label":  "Mute"} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:AO", "esp:35", "blue", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "r1:1", "esp:4", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ],
+    [ "bz1:2", "esp:25", "orange", [] ],
+    [ "bz1:1", "esp:GND.1", "black", [] ],
+    [ "btn1:1.l", "esp:27", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
 </details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۳: حالت باتری</div>
 <p>نسخه باتری ایستگاه را بساز (بخش «حالت باتری» را ببین): هر ۵ دقیقه بیدار شود، بخواند، روی OLED برای ۳ ثانیه نشان دهد، اگر هشدار شروع یا تمام شد پیام بفرست، هر ۶ بیداری یک بار مقادیر را بفرستد، و بخوابد. دکمه GPIO27 برد را برای نمایش فوری بیدار کند. بعد با فرمول درس ۶.۱ عمر یک باتری ۲۰۰۰ میلی‌آمپر ساعت را تخمین بزن.</p>
 <details><summary>راهنمایی</summary><p>متغیرهای <code>RTC_DATA_ATTR bool alarmOn</code> و <code>RTC_DATA_ATTR uint32_t wakeCount</code>. شرط ارسال مقادیر: <code>wakeCount % 6 == 0</code>. یادآوری هشدار: هر ۲ بیداری (۱۰ دقیقه). برای Wi-Fi از <code>connectWiFiFast()</code> درس ۶.۱ با حد زمانی استفاده کن و فقط وقتی چیزی برای فرستادن داری Wi-Fi را روشن کن. قبل از خواب OLED را با <code>SSD1306_DISPLAYOFF</code> خاموش کن و EXT0 را روی GPIO27 با سطح LOW و بالاکش RTC تنظیم کن. برای بیداری با دکمه، ارسال را رد کن و فقط نمایش بده.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>با اسکچ جواب، <code>SLEEP_SEC</code> روی ۱۰ برای تست و DHT22 روی ۲۸ درجه و ۴۵ درصد (عدد نور به سنسور بستگی دارد و زمان‌های Awake کمی فرق می‌کنند؛ خط‌های بوت <code>rst:0x5</code> بین بیداری‌ها حذف شده‌اند):</p>
+<pre class="serial">Wake #1  T=28.0 C  H=45 %  light=52 %  alarm=off
+Nothing to send, Wi-Fi stays off
+Awake 5214 ms. Sleep 10 s
+Wake #2  T=28.0 C  H=45 %  light=52 %  alarm=off
+Nothing to send, Wi-Fi stays off
+Awake 3012 ms. Sleep 10 s
+...
+Wake #6  T=28.0 C  H=45 %  light=52 %  alarm=off
+Sent values
+Awake 3012 ms. Sleep 10 s
+Wake #7  T=36.0 C  H=45 %  light=52 %  alarm=ON
+Sent alert: ALERT: temperature high
+Awake 3165 ms. Sleep 10 s
+Button  T=36.0 C  H=45 %  light=52 %  alarm=ON
+Awake 3004 ms. Sleep 10 s</pre>
+<ul>
+<li>OLED در هر بیداری حدود ۳ ثانیه روشن می‌شود و بعد تاریک.</li>
+<li>Wi-Fi فقط در بیداری‌های ۶، ۱۲، ۱۸ و ... استفاده می‌شود، و وقتی هشدار شروع یا تمام می‌شود یا یادآوری لازم دارد.</li>
+<li>دما روی ۳۶: یک بار <code>ALERT: temperature high</code> و در هر بیداری یک بوق کوتاه؛ بعد از آن هر دو بیداری یک <code>ALERT: still high</code>؛ ۳۴: هیچ چیز تازه (هیسترزیس)؛ ۳۲: <code>OK: temperature back to normal</code>.</li>
+<li>دکمه در حال خواب: یک خط <code>Button</code>، بدون Wi-Fi، و شماره بیداری‌ها تکان نمی‌خورد.</li>
+<li>تخمین باتری‌ات: حدودا دو ماه روی برد کم‌مصرف، حدودا یک هفته و نیم روی DevKitC (عددها در جواب).</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>یک تغییر مهم در طراحی: همه چیز در <code>setup()</code> اتفاق می‌افتد و هر چیزی که باید از خواب جان سالم به در ببرد در حافظه RTC است. Wi-Fi فقط وقتی روشن می‌شود که چیزی برای فرستادن هست.</p>
+<div class="code" data-file="StationBattery.ino" id="exBatt"><pre>
+// ایستگاه در حالت باتری: بیدار شو، بخوان، نشان بده، فقط در صورت لزوم بفرست، بخواب (۶.۳، تمرین ۳)
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+#include "driver/rtc_io.h"
+
+// ---------- تنظیمات ----------
+const char* WIFI_SSID = "Wokwi-GUEST";         // برد واقعی: اسم Wi-Fi خودت
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const char* BASE      = "esp32fa/station-42/"; // پیشوند یکتای topicها
+const float TEMP_HIGH = 35.0, TEMP_CLEAR = 33.0;
+const uint64_t SLEEP_SEC = 300;                // ۵ دقیقه (برای تست ۱۰)
+const uint32_t WIFI_TIMEOUT_MS = 8000;
+const uint32_t SHOW_MS = 3000;                 // OLED سه ثانیه روشن می‌ماند
+const int PIN_DHT = 13, PIN_LDR = 35, PIN_BUZ = 25;
+const gpio_num_t PIN_BTN = GPIO_NUM_27;        // پین RTC: می‌تواند برد را بیدار کند
+
+DHT dht(PIN_DHT, DHT22);
+Adafruit_SSD1306 oled(128, 64, &amp;Wire, -1);
+WiFiClient net;
+PubSubClient mqtt(net);
+bool oledOk = false;
+
+// ---------- حافظه RTC: بعد از خواب عمیق باقی می‌ماند ----------
+RTC_DATA_ATTR bool alarmOn = false;
+RTC_DATA_ATTR uint32_t wakeCount = 0;          // بیداری‌های تایمری (و اولین روشن شدن)
+RTC_DATA_ATTR uint32_t lastAlertWake = 0;      // wakeCount آخرین هشداری که واقعا رفت
+RTC_DATA_ATTR uint8_t savedChannel = 0;        // میان‌بر Wi-Fi از درس ۶.۱
+RTC_DATA_ATTR uint8_t savedBssid[6];
+
+bool connectWiFiFast() {                       // درس ۶.۱، بدون تغییر
+  WiFi.mode(WIFI_STA);
+  WiFi.persistent(false);
+  if (savedChannel != 0) WiFi.begin(WIFI_SSID, WIFI_PASS, savedChannel, savedBssid);
+  else WiFi.begin(WIFI_SSID, WIFI_PASS);
+  uint32_t start = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    if (millis() - start &gt; WIFI_TIMEOUT_MS) { savedChannel = 0; return false; }
+    delay(20);
+  }
+  savedChannel = WiFi.channel();
+  memcpy(savedBssid, WiFi.BSSID(), 6);
+  return true;
+}
+
+void publishValue(const char* name, float v, int decimals) {
+  char topic[64], payload[16];
+  snprintf(topic, sizeof(topic), "%s%s", BASE, name);
+  snprintf(payload, sizeof(payload), "%.*f", decimals, v);
+  mqtt.publish(topic, payload);
+}
+
+void show(float t, float h, int light, bool byButton) {
+  if (!oledOk) return;
+  oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setCursor(0, 0);
+  oled.print(byButton ? "Button reading" : "Wake #");
+  if (!byButton) oled.print(wakeCount);
+  oled.setTextSize(2);
+  oled.setCursor(0, 14);
+  if (isnan(t)) oled.print("T: ERR"); else { oled.print(t, 1); oled.print(" C"); }
+  oled.setCursor(0, 34);
+  if (isnan(h)) oled.print("H: ERR"); else { oled.print(h, 0); oled.print(" %"); }
+  oled.setTextSize(1);
+  oled.setCursor(0, 56);
+  oled.printf("Light %d%%  %s", light, alarmOn ? "ALARM!" : "normal");
+  oled.display();
+}
+
+void goToSleep() {
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  if (oledOk) oled.ssd1306_command(SSD1306_DISPLAYOFF);   // وگرنه باتری را می‌خورد
+  pinMode(27, INPUT_PULLUP);
+  while (digitalRead(27) == LOW) delay(10);   // صبر تا دکمه رها شود
+  esp_sleep_enable_timer_wakeup(SLEEP_SEC * 1000000ULL);
+  esp_sleep_enable_ext0_wakeup(PIN_BTN, 0);
+  rtc_gpio_pullup_en(PIN_BTN);
+  rtc_gpio_pulldown_dis(PIN_BTN);
+  Serial.printf("Awake %lu ms. Sleep %llu s\n", millis(), SLEEP_SEC);
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+void setup() {
+  Serial.begin(115200);
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  bool byButton = (cause == ESP_SLEEP_WAKEUP_EXT0);
+  dht.begin();
+  Wire.begin(21, 22);
+  oledOk = oled.begin(SSD1306_SWITCHCAPVCC, 0x3C);   // نمایشگر را دوباره روشن هم می‌کند
+  if (oledOk) oled.setTextColor(SSD1306_WHITE);
+  if (cause != ESP_SLEEP_WAKEUP_TIMER &amp;&amp; !byButton) delay(2000);  // اولین روشن شدن: DHT22 هنوز آماده نیست
+
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  int light = map(analogRead(PIN_LDR), 4095, 0, 0, 100);
+  const char* alert = nullptr;
+  if (!byButton) {
+    wakeCount++;
+    // ---- ۱) منطق هشدار: هیسترزیس، یادآوری هر ۲ بیداری (۱۰ دقیقه) ----
+    if (!isnan(t)) {
+      if (!alarmOn &amp;&amp; t &gt; TEMP_HIGH)       { alarmOn = true;  alert = "ALERT: temperature high"; }
+      else if (alarmOn &amp;&amp; t &lt; TEMP_CLEAR)  { alarmOn = false; alert = "OK: temperature back to normal"; }
+      else if (alarmOn &amp;&amp; wakeCount - lastAlertWake &gt;= 2) alert = "ALERT: still high";
+    }
+  }
+  show(t, h, light, byButton);
+  uint32_t tShown = millis();
+  Serial.printf("%s  T=%.1f C  H=%.0f %%  light=%d %%  alarm=%s\n",
+                byButton ? "Button" : ("Wake #" + String(wakeCount)).c_str(), t, h, light, alarmOn ? "ON" : "off");
+
+  if (!byButton) {
+    if (alarmOn) {                             // هشدار محلی: در هر بیداری یک بوق کوتاه
+      ledcAttach(PIN_BUZ, 2000, 8);
+      ledcWriteTone(PIN_BUZ, 2000);
+      delay(150);
+      ledcWriteTone(PIN_BUZ, 0);
+    }
+    bool sendValues = (wakeCount % 6 == 0) &amp;&amp; !isnan(t);   // هر ششمین بیداری = هر ۳۰ دقیقه
+
+    // ---- ۲) شبکه فقط وقتی چیزی برای فرستادن هست ----
+    if (alert == nullptr &amp;&amp; !sendValues) {
+      Serial.println("Nothing to send, Wi-Fi stays off");
+    } else if (!connectWiFiFast()) {
+      Serial.println("Wi-Fi failed, will retry next wake");
+    } else {
+      mqtt.setServer(MQTT_HOST, 1883);
+      String id = "esp32-station-" + String((uint32_t)ESP.getEfuseMac(), HEX) + "-" + String(esp_random() &amp; 0xFFFF, HEX);
+      if (mqtt.connect(id.c_str())) {
+        if (alert != nullptr) {
+          String topic = String(BASE) + "alert";
+          mqtt.publish(topic.c_str(), alert);
+          lastAlertWake = wakeCount;           // فقط وقتی واقعا رفت حساب می‌شود
+          Serial.printf("Sent alert: %s\n", alert);
+        }
+        if (sendValues) {
+          publishValue("temp", t, 1);
+          publishValue("hum", h, 0);
+          publishValue("light", light, 0);
+          Serial.println("Sent values");
+        }
+        mqtt.loop();
+        delay(50);                             // فرصت کوتاه برای خروج بسته‌ها
+        mqtt.disconnect();
+      } else {
+        Serial.println("MQTT failed, will retry next wake");
+      }
+    }
+  }
+  while (millis() - tShown &lt; SHOW_MS) delay(10);   // باقی ۳ ثانیه روی صفحه
+  goToSleep();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="exBatt">
+  <li data-lines="10-20"><b class="what">تنظیمات.</b> زمان خواب بر حسب ثانیه، حد زمانی Wi-Fi، ۳ ثانیه نمایش و پین‌های ایستگاه (دکمه از نوع <code>gpio_num_t</code> است چون EXT0 این را می‌خواهد).
+    <span class="why">ثانیه به جای دقیقه، تا تست با ۱۰ ثانیه به هیچ تغییر دیگری نیاز نداشته باشد.</span></li>
+  <li data-lines="28-33"><b class="what">حافظه RTC.</b> وضعیت هشدار، شمارنده بیداری، شماره بیداری آخرین هشداری که واقعا رفت، و میان‌بر Wi-Fi.
+    <span class="why"><code>millis()</code> بعد از هر بیداری از صفر شروع می‌شود، پس یادآوری را نمی‌شود با میلی‌ثانیه زمان‌بندی کرد؛ به جایش بیداری‌ها را می‌شماریم (راهنمایی: هر ۲ بیداری = ۱۰ دقیقه).</span></li>
+  <li data-lines="35-55"><b class="what">connectWiFiFast() از ۶.۱ و publishValue() از برنامه نهایی، بدون تغییر.</b>
+    <span class="why">میان‌بر کانال و BSSID ذخیره‌شده، گران‌ترین بخش بیداری را کوتاه می‌کند.</span></li>
+  <li data-lines="57-73"><b class="what">show(): نمایشگر برای یک بیداری.</b> شماره بیداری (یا «Button reading»)، دما و رطوبت با حروف درشت، نور و وضعیت هشدار در پایین.
+    <span class="why">همان چیدمان ایستگاه همیشه‌روشن، تا دستگاه در هر دو حالت یک‌جور به نظر برسد.</span></li>
+  <li data-lines="75-88"><b class="what">goToSleep(): همه چیز خاموش، دو منبع بیداری.</b> Wi-Fi خاموش، OLED خاموش، صبر تا رها شدن دکمه، بعد تایمر و EXT0 روی GPIO27 با بالاکش RTC.
+    <span class="why">یک OLED روشن به تنهایی باتری را خالی می‌کند. تایمر و دکمه هر دو می‌توانند برد را بیدار کنند؛ هر کدام زودتر بیاید برنده است.</span></li>
+  <li data-lines="90-98"><b class="what">شروع setup: چرا بیدار شدم؟</b> دکمه، تایمر یا روشن شدن تازه. <code>oled.begin</code> نمایشگر را دوباره روشن هم می‌کند. فقط روشن شدن تازه ۲ ثانیه برای DHT22 صبر می‌کند.
+    <span class="why">در خواب عمیق سنسور برق دارد، پس در بیداری با تایمر و دکمه فورا آماده است؛ صبر کردن آن‌جا فقط باتری هدر می‌داد.</span></li>
+  <li data-lines="100-112"><b class="what">بخوان، بعد درباره هشدار تصمیم بگیر (فقط بیداری تایمری).</b> همان هیسترزیس برنامه نهایی؛ شرط یادآوری <code>wakeCount - lastAlertWake &gt;= 2</code> است.
+    <span class="why">بیداری با دکمه فقط برای نگاه کردن است: بیداری حساب نمی‌شود و هشدار را عوض نمی‌کند، پس زمان‌بندی یادآوری‌ها و ارسال مقادیر منظم می‌ماند.</span></li>
+  <li data-lines="113-116"><b class="what">نمایش و چاپ، و یادداشت زمان.</b>
+    <span class="why">۳ ثانیه نمایش از همین حالا شروع می‌شود؛ کارهای شبکه پایین‌تر وقتی انجام می‌شوند که نمایشگر مقادیر را نشان می‌دهد.</span></li>
+  <li data-lines="118-125"><b class="what">یک بوق کوتاه وقتی هشدار روشن است؛ مقادیر هر ششمین بیداری.</b>
+    <span class="why">این همان معامله بخش «حالت باتری» است: در خواب نه چشمکی هست نه بوق پیوسته، فقط یک بوق در هر بیداری.</span></li>
+  <li data-lines="127-154"><b class="what">شبکه فقط در صورت نیاز.</b> چیزی برای فرستادن نیست ← Wi-Fi خاموش می‌ماند. وگرنه: اتصال سریع، فرستادن هشدار و/یا مقادیر، یک لحظه فرصت برای بسته‌ها، قطع اتصال. <code>lastAlertWake</code> فقط وقتی به‌روز می‌شود که هشدار واقعا رفته باشد.
+    <span class="why">بیشتر بیداری‌ها (۵ از ۶ بدون هشدار) اصلا به Wi-Fi دست نمی‌زنند؛ عمر باتری از همین‌جا می‌آید. اگر هشداری نرسید، بیداری بعدی یادآوری می‌فرستد، پس مشکل فراموش نمی‌شود.</span></li>
+  <li data-lines="156-157"><b class="what">باقی ۳ ثانیه را صبر کن و بخواب.</b>
+    <span class="why">ارسال داخل همان ۳ ثانیه نمایش انجام می‌شود، پس فرستادن بیداری را طولانی‌تر نمی‌کند، مگر این که Wi-Fi کند باشد.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="exBatt">
+<p>مدار ایستگاه. چهار کتابخانه را از تب Library Manager اضافه کن و <code>SLEEP_SEC</code> را ۱۰ بگذار. خواب عمیق با تایمر و با EXT0 در Wokwi کار می‌کند؛ در حال خواب دکمه زرد را بزن تا عدد فوری را ببینی.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type":  "board-esp32-devkit-c-v4", "id":  "esp", "top":  0, "left":  0, "attrs":  {} },
+    { "type":  "wokwi-dht22", "id":  "dht1", "top":  -110, "left":  170, "attrs":  { "temperature":  "28", "humidity":  "45"} },
+    { "type":  "wokwi-photoresistor-sensor", "id":  "ldr1", "top":  250, "left":  170, "attrs":  {} },
+    { "type":  "board-ssd1306", "id":  "oled1", "top":  60, "left":  260, "attrs":  { "i2cAddress":  "0x3c"} },
+    { "type":  "wokwi-resistor", "id":  "r1", "top":  110, "left":  -130, "attrs":  { "value":  "220"} },
+    { "type":  "wokwi-led", "id":  "led1", "top":  40, "left":  -60, "attrs":  { "color":  "red"} },
+    { "type":  "wokwi-buzzer", "id":  "bz1", "top":  170, "left":  -160, "attrs":  { "volume":  "0.2"} },
+    { "type":  "wokwi-pushbutton", "id":  "btn1", "top":  280, "left":  -170, "attrs":  { "color":  "yellow", "label":  "Mute"} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:AO", "esp:35", "blue", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "r1:1", "esp:4", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ],
+    [ "bz1:2", "esp:25", "orange", [] ],
+    [ "bz1:1", "esp:GND.1", "black", [] ],
+    [ "btn1:1.l", "esp:27", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+<p><b>تخمین باتری.</b> یک دور کامل ۶ بیداری است = ۳۰ دقیقه = ۱۸۰۰ ثانیه. فرض‌ها (عددهای خودت را اندازه بگیر): بیداری معمولی ۳٫۳ ثانیه با حدود ۵۰ میلی‌آمپر (ESP32 به‌علاوه OLED روشن)؛ بیداری ارسال حدود ۴ ثانیه با حدود ۱۲۰ میلی‌آمپر (Wi-Fi).</p>
+<ul>
+<li>بار بیداری در هر دور: ۵ × ۳٫۳ × ۵۰ + ۱ × ۴ × ۱۲۰ = ۸۲۵ + ۴۸۰ = ۱۳۰۵ میلی‌آمپرثانیه. زمان بیداری: ۵ × ۳٫۳ + ۴ = ۲۰٫۵ ثانیه، پس ۱۷۷۹٫۵ ثانیه خواب.</li>
+<li><b>برد کم‌مصرف</b> (خواب حدود ۰٫۲ میلی‌آمپر، با DHT22 و OLED خاموش): ۱۷۷۹٫۵ × ۰٫۲ ≈ ۳۵۶. I_avg = (۱۳۰۵ + ۳۵۶) ÷ ۱۸۰۰ ≈ ۰٫۹۲ میلی‌آمپر. عمر = ۲۰۰۰ ÷ ۰٫۹۲ ≈ ۲۱۷۰ ساعت ≈ ۹۰ روز؛ واقع‌بینانه (× ۰٫۷۵) حدود ۶۸ روز.</li>
+<li><b>DevKitC</b> (خواب حدود ۶ میلی‌آمپر): ۱۷۷۹٫۵ × ۶ ≈ ۱۰۶۸۰. I_avg = (۱۳۰۵ + ۱۰۶۸۰) ÷ ۱۸۰۰ ≈ ۶٫۶۶ میلی‌آمپر. عمر = ۲۰۰۰ ÷ ۶٫۶۶ ≈ ۳۰۰ ساعت ≈ ۱۲٫۵ روز؛ واقع‌بینانه حدود ۹ روز.</li>
+<li>بزرگ‌ترین هزینه بیداری، ۳ ثانیه نمایش در هر بیداری است (۸۲۵ از ۱۳۰۵). نشان دادن مقادیر فقط در بیداری با دکمه، بار بیداری را تقریبا نصف می‌کند.</li>
+</ul>
+</details>
 </div>
 
 <h2 id="certificate">🎓 تو حالا می‌توانی...</h2>

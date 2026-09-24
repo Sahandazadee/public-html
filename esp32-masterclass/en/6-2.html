@@ -491,13 +491,504 @@ void loop() {
   <li>Run the code in Wokwi first, then on the board.</li>
 </ol>
 <details><summary>Hint</summary><p>Put the project's current code into the prompt in full and say clearly "add only this feature and don't change the rest of the code". Then compare the changes with the previous code line by line. If the model changed things you didn't ask for (the pins or the sleep time, for example), that's an important review finding in itself.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>This exercise has two results: your written review, and a program that really works.</p>
+<p><b>Your review is good if</b> every one of the ten steps has "pass" or "fail" <b>and a reason</b> (not just a tick); you compared the new code with the old code line by line; and you checked the answer to your follow-up question yourself instead of just believing it.</p>
+<p><b>The working program</b> (the DHT22 display from lesson 3.3 plus the LED on GPIO4), in the Serial Monitor every 2 seconds. In Wokwi the DHT22 starts at 24.5 °C and 40 %; here the humidity slider was moved to 80, then to 60:</p>
+<pre class="serial">T=24.5 C  H=40.0 %  LED off
+T=24.5 C  H=40.0 %  LED off
+T=24.5 C  H=80.0 %  LED blinking
+T=24.5 C  H=80.0 %  LED blinking
+T=24.5 C  H=60.0 %  LED off</pre>
+<ul>
+<li>Humidity above 70: the LED blinks twice per second (250 ms on, 250 ms off), steadily; not one change every 2 seconds.</li>
+<li>Humidity back below 70: the LED goes out within 2 seconds and stays out. It never gets stuck on.</li>
+<li>Pull out the DHT22's data wire: "DHT22 read error!" on the display, and the LED off.</li>
+<li>The OLED keeps updating every 2 seconds while the LED blinks.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>Your AI's answer will be different every time, so here's a <b>model review</b> of one typical answer (written by us, like the other examples in this lesson). The prompt was the template, with the complete <code>Weather_OLED</code> code from lesson 3.3 pasted in and this request: "if humidity goes above 70 percent, blink the LED on GPIO4 (220 Ω to GND) without delay; add only this feature and don't change the rest of the code". The answer:</p>
+<div class="code" data-file="HumidBlink_AI.ino" id="exHumAI"><pre>
+// Made-up example: the AI's answer (Weather_OLED from 3.3 + the new feature)
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+DHT dht(13, DHT22);
+
+unsigned long lastRead = 0;
+const int LED_PIN = 4;                  // NEW
+bool ledState = false;                  // NEW
+unsigned long lastBlink = 0;            // NEW
+
+void showMessage(const char *msg) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println(msg);
+  display.display();
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);             // NEW
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found!");
+    while (true) delay(1000);
+  }
+  display.setTextColor(SSD1306_WHITE);
+  dht.begin();
+  showMessage("Waiting for DHT22...");
+}
+
+void loop() {
+  if (millis() - lastRead &lt; 2000) return;   // 2 seconds haven't passed yet
+  lastRead = millis();
+
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) {
+    showMessage("DHT22 read error!");
+    Serial.println("DHT22 read error");
+    return;
+  }
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("Temperature");
+  display.setTextSize(2);
+  display.setCursor(0, 12);
+  display.printf("%.1f C", t);
+  display.setTextSize(1);
+  display.setCursor(0, 36);
+  display.println("Humidity");
+  display.setTextSize(2);
+  display.setCursor(0, 48);
+  display.printf("%.1f %%", h);
+  display.display();
+
+  Serial.printf("T=%.1f C  H=%.1f %%\n", t, h);
+
+  if (h &gt; 70) {                         // NEW: blink without delay
+    if (millis() - lastBlink &gt;= 250) {
+      lastBlink = millis();
+      ledState = !ledState;
+      digitalWrite(LED_PIN, ledState);
+    }
+  }
+}
+</pre></div>
+<p>It compiles without a single warning. Now the checklist, step by step:</p>
+<div class="table-wrap"><table><tr><th>#</th><th>Step</th><th>Result</th><th>Why</th></tr>
+<tr><td>1</td><td>I understand every line</td><td>❌ fail</td><td>Following loop line by line: its first line leaves loop if 2 seconds haven't passed. So the new blink code at the end runs only once every 2 seconds, and the LED changes state every 2 s, not every 250 ms. "Without delay" was ignored in practice, even though the word delay isn't there.</td></tr>
+<tr><td>2</td><td>Pins</td><td>✅ pass</td><td>GPIO4 is a safe output, 13 for the DHT22, 21/22 for I2C. None of them is 6 to 11, an input-only pin (34 to 39) or a strapping pin.</td></tr>
+<tr><td>3</td><td>It matches my wiring</td><td>✅ pass</td><td>The same pins as the course breadboard. Compared line by line, only the lines marked NEW are new; the model didn't change anything else.</td></tr>
+<tr><td>4</td><td>Voltage and current</td><td>✅ pass</td><td>An LED with 220 Ω: (3.3 − 2.0) ÷ 220 ≈ 6 mA, far below what a pin can supply.</td></tr>
+<tr><td>5</td><td>API version</td><td>✅ pass</td><td>Nothing from core 2.x; no LEDC at all.</td></tr>
+<tr><td>6</td><td>The libraries are real</td><td>✅ pass</td><td>The same three libraries as lesson 3.3; <code>digitalWrite</code> and <code>millis</code> belong to the core.</td></tr>
+<tr><td>7</td><td>No endless waiting</td><td>✅ pass</td><td>No delay in loop and no unlimited while. (The <code>while (true)</code> for a missing display was already in 3.3, on purpose.)</td></tr>
+<tr><td>8</td><td>Error handling</td><td>❌ fail</td><td>Two holes: (a) when humidity drops back below 70, nothing switches the LED off, so it can stay lit forever; (b) on a sensor error, loop returns before the blink code, so the LED freezes in whatever state it was in.</td></tr>
+<tr><td>9</td><td>Security</td><td>✅ pass</td><td>No Wi-Fi, no passwords.</td></tr>
+<tr><td>10</td><td>Wokwi first, then the board</td><td>❌ fail (seen in the simulator)</td><td>Humidity to 80: the LED changes only once every 2 seconds. Back to 50: the LED sometimes stays on.</td></tr></table></div>
+<p><b>The follow-up question.</b> "In which situations does this code not work correctly?" A good answer names at least the slow blinking and the LED getting stuck. If your AI said "it works in all cases", that's a warning sign in itself: you just found three cases where it doesn't.</p>
+<p><b>The corrected code.</b> The LED logic moves into its own function that runs on <b>every</b> pass of loop, before the 2-second guard; the humidity lives in a global variable so that function can see it. Everything not mentioned in the walk is unchanged from lesson 3.3.</p>
+<div class="code" data-file="HumidBlink.ino" id="exHum"><pre>
+// Mini weather station (3.3) + a humidity warning LED on GPIO4, reviewed and fixed
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+DHT dht(13, DHT22);
+
+unsigned long lastRead = 0;
+const int LED_PIN = 4;
+const float HUM_LIMIT = 70.0;           // above this: blink
+float hum = NAN;                        // last humidity, shared with updateLed()
+bool ledOn = false;
+unsigned long lastBlink = 0;
+
+void showMessage(const char *msg) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println(msg);
+  display.display();
+}
+
+void updateLed() {
+  if (!isnan(hum) &amp;&amp; hum &gt; HUM_LIMIT) {
+    if (millis() - lastBlink &gt;= 250) {  // toggle every 250 ms = 2 blinks per second
+      lastBlink = millis();
+      ledOn = !ledOn;
+      digitalWrite(LED_PIN, ledOn);
+    }
+  } else if (ledOn) {                   // humidity OK or sensor error: LED off
+    ledOn = false;
+    digitalWrite(LED_PIN, LOW);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found!");
+    while (true) delay(1000);
+  }
+  display.setTextColor(SSD1306_WHITE);
+  dht.begin();
+  showMessage("Waiting for DHT22...");
+}
+
+void loop() {
+  updateLed();                              // on EVERY pass, before the guard below
+  if (millis() - lastRead &lt; 2000) return;   // 2 seconds haven't passed yet
+  lastRead = millis();
+
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) {
+    hum = NAN;                              // unknown humidity: the LED goes off
+    showMessage("DHT22 read error!");
+    Serial.println("DHT22 read error");
+    return;
+  }
+  hum = h;
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("Temperature");
+  display.setTextSize(2);
+  display.setCursor(0, 12);
+  display.printf("%.1f C", t);
+  display.setTextSize(1);
+  display.setCursor(0, 36);
+  display.println("Humidity");
+  display.setTextSize(2);
+  display.setCursor(0, 48);
+  display.printf("%.1f %%", h);
+  display.display();
+
+  Serial.printf("T=%.1f C  H=%.1f %%  LED %s\n", t, h, h &gt; HUM_LIMIT ? "blinking" : "off");
+}
+</pre></div>
+<ol class="walk" data-for="exHum">
+  <li data-lines="11-15"><b class="what">The new variables.</b> The LED pin, the 70 % limit as a named constant, the last humidity (NaN until the first good reading), the LED state and the time of the last toggle.
+    <span class="why"><code>hum</code> has to be global now: it's written in loop and read in <code>updateLed</code>. Starting it at NaN means "unknown", so the LED stays off until there is a real reading.</span></li>
+  <li data-lines="25-36"><b class="what">updateLed(): blink only while humidity is too high.</b> Every 250 ms the LED flips; in every other case (humidity OK or unknown) it's switched off once.
+    <span class="why">The <code>else if (ledOn)</code> branch closes both holes from step 8: the LED can no longer stay on by accident. It only writes to the pin when something changes.</span></li>
+  <li data-lines="52"><b class="what">Called first, on every pass.</b> Before the line that leaves loop when 2 seconds haven't passed.
+    <span class="why">This is the actual fix for step 1. loop runs thousands of times a second, so the 250 ms check is precise. The rule: fast jobs go before the "guard at the door", slow jobs after it.</span></li>
+  <li data-lines="58-64"><b class="what">Keep the humidity up to date.</b> On an error it becomes NaN, on success it takes the new value.
+    <span class="why">A dead sensor must not leave the LED blinking on an old number.</span></li>
+  <li data-lines="82"><b class="what">One extra word in the Serial line.</b> "LED blinking" or "LED off".
+    <span class="why">You can check the logic in the Serial Monitor without staring at the LED.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="exHum">
+<p>In Wokwi, add <code>Adafruit SSD1306</code> and <code>DHT sensor library</code> in the Library Manager tab. Click the DHT22 and move the humidity slider above and below 70.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type":  "board-esp32-devkit-c-v4", "id":  "esp", "top":  0, "left":  0, "attrs":  {} },
+    { "type":  "board-ssd1306", "id":  "oled1", "top":  60, "left":  200, "attrs":  { "i2cAddress":  "0x3c"} },
+    { "type":  "wokwi-dht22", "id":  "dht1", "top":  -20, "left":  -150, "attrs":  { "temperature":  "24.5", "humidity":  "40"} },
+    { "type":  "wokwi-resistor", "id":  "r1", "top":  150, "left":  -130, "attrs":  { "value":  "220"} },
+    { "type":  "wokwi-led", "id":  "led1", "top":  90, "left":  -60, "attrs":  { "color":  "red"} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ],
+    [ "r1:1", "esp:4", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 <div class="exercise"><div class="ct">Exercise 2: bug hunt</div>
 <p>Read the made-up "bad prompt" code from Example 1 again. Without looking at the explanation cards, list all its problems (at least 7). Then ask an AI for a correct version using the prompt template, and compare.</p>
-<details><summary>Answer (list of problems)</summary><p>(1) Wi-Fi nobody asked for; (2) a password in the code; (3) a DHT11 when the sensor wasn't specified; (4) GPIO2 for a sensor (a strapping pin); (5) endless waiting for Wi-Fi; (6) <code>ledcSetup</code>/<code>ledcAttachPin</code> don't exist in 3.x; (7) GPIO35 is input-only; (8) NaN isn't checked; (9) <code>delay(5000)</code>; (10) the fan wired straight to a pin with no transistor or MOSFET; (11) a serial speed of 9600, which doesn't match the course's habit (a minor issue).</p></details>
+<p><b>Part 2.</b> Now grade a second made-up answer with the ten-step checklist. The request was: "dim the LED with the potentiometer, and turn it off while the button is held; LED on GPIO4, potentiometer on GPIO34, button on GPIO27 to GND". Find at least 4 problems and, for each one, name the checklist step that catches it.</p>
+<div class="code" data-file="DimmerAI.ino" id="exGrade"><pre>
+// Made-up AI answer: "dim the LED with the potentiometer; the button turns it off"
+#include &lt;WiFi.h&gt;
+
+const int LED = 34;
+const int POT = 4;
+const int BTN = 27;
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin("MyHome", "sunflower2024");
+  pinMode(BTN, INPUT);
+  ledcAttach(LED, 5000, 8);
+}
+
+void loop() {
+  int v = analogRead(POT);
+  if (digitalRead(BTN) == LOW) ledcWrite(LED, 0);
+  else ledcWrite(LED, v);
+  delay(10);
+}
+</pre></div>
+<details class="expect"><summary>What should you see?</summary>
+<p><b>Part 1, grading:</b> you pass if your list has at least 7 of the 11 problems in the answer, including the two that fail silently or damage hardware: PWM on GPIO35 (input-only) and the fan wired straight to a pin. The corrected version you get from the AI with the template should contain <code>ledcAttach(26, 25000, 8)</code>, <code>ledcWrite(26, duty)</code>, an <code>isnan</code> check, timing with <code>millis()</code>, and no Wi-Fi.</p>
+<p><b>The corrected program in Wokwi</b> (a blue LED on GPIO26 stands in for the MOSFET and fan; the DHT22 starts at 24 °C, then the slider was moved to 30, 31.5 and 36):</p>
+<pre class="serial">T=24.0 C  fan duty=0/255
+T=30.0 C  fan duty=72/255
+T=31.5 C  fan duty=127/255
+T=36.0 C  fan duty=255/255</pre>
+<ul>
+<li>At 28 °C and below the LED is off; between 28 and 35 it gets brighter step by step; from 35 up it's fully on.</li>
+<li>The numbers follow the straight line: (T − 28) × 255 ÷ 7, rounded down. 30 °C → 72, not 73.</li>
+</ul>
+<p><b>Part 2, grading:</b> at least 4 of the 5 problems in the answer, each with a checklist step.</p>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p><b>Part 1: the problems in the "bad prompt" code</b>, with the checklist step that catches each one:</p>
+<ol>
+<li>Wi-Fi nobody asked for (step 1: every extra line is a line you must understand and trust).</li>
+<li>A password written in the code (step 9).</li>
+<li>A DHT11 when the sensor wasn't specified (step 3).</li>
+<li>GPIO2 for a sensor, a strapping pin (step 2).</li>
+<li>Endless waiting for Wi-Fi (step 7).</li>
+<li><code>ledcSetup</code>/<code>ledcAttachPin</code> don't exist in 3.x (step 5).</li>
+<li>GPIO35 is input-only, so it can never output PWM (step 2).</li>
+<li>NaN isn't checked (step 8).</li>
+<li><code>delay(5000)</code> (step 7).</li>
+<li>The fan wired straight to a pin with no transistor or MOSFET (step 4).</li>
+<li>A serial speed of 9600, which doesn't match the course's habit (a minor issue).</li>
+</ol>
+<p><b>A correct version</b>, written from the "good prompt" (DHT22 on GPIO13, logic-level MOSFET gate on GPIO26, 25 kHz PWM, off below 28 °C, full speed above 35 °C, linear in between, core 3.x). On the real board the MOSFET's gate goes to GPIO26 through about 100 Ω, a 10 kΩ resistor from gate to GND keeps the fan off during boot, the fan sits between the 12 V supply and the drain, and a flyback diode goes across the fan (lesson 3.4).</p>
+<div class="code" data-file="FanControl.ino" id="exFan"><pre>
+// Temperature-controlled fan: DHT22 on GPIO13, MOSFET gate on GPIO26, 25 kHz PWM
+#include &lt;DHT.h&gt;
+
+const int PIN_DHT = 13;
+const int PIN_FAN = 26;                 // gate of a logic-level MOSFET, never the fan itself
+const float T_OFF  = 28.0;              // at or below: fan off
+const float T_FULL = 35.0;              // at or above: full speed
+DHT dht(PIN_DHT, DHT22);
+unsigned long lastRead = 0;
+
+int dutyFor(float t) {                  // 28 C -&gt; 0 ... 35 C -&gt; 255, a straight line
+  if (t &lt;= T_OFF)  return 0;
+  if (t &gt;= T_FULL) return 255;
+  return (int)((t - T_OFF) * 255.0 / (T_FULL - T_OFF));
+}
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  ledcAttach(PIN_FAN, 25000, 8);        // core 3.x: pin, 25 kHz (silent), 8 bits
+  ledcWrite(PIN_FAN, 0);                // start with the fan off
+}
+
+void loop() {
+  if (millis() - lastRead &lt; 2000) return;   // the DHT22 needs 2 s between readings
+  lastRead = millis();
+  float t = dht.readTemperature();
+  if (isnan(t)) {
+    ledcWrite(PIN_FAN, 255);            // sensor lost: full speed is the safe choice
+    Serial.println("DHT22 error -&gt; fan at full speed");
+    return;
+  }
+  int duty = dutyFor(t);
+  ledcWrite(PIN_FAN, duty);             // in 3.x the first number is the PIN
+  Serial.printf("T=%.1f C  fan duty=%d/255\n", t, duty);
+}
+</pre></div>
+<ol class="walk" data-for="exFan">
+  <li data-lines="4-9"><b class="what">Pins and the two temperature limits, all named.</b>
+    <span class="why">Every number the prompt gave has a name at the top. GPIO26 drives only the MOSFET's gate; the fan's current never flows through the ESP32 (fixes problem 10).</span></li>
+  <li data-lines="11-15"><b class="what">dutyFor(): temperature to speed.</b> 28 °C or less → 0, 35 °C or more → 255, a straight line in between.
+    <span class="why">A small function you can check with a calculator: 31.5 °C is halfway, so 127. Turning the whole rule into one function makes it easy to test.</span></li>
+  <li data-lines="17-22"><b class="what">setup without Wi-Fi, at 115200, with the core 3.x API.</b> <code>ledcAttach(pin, 25000, 8)</code> and the fan starts off.
+    <span class="why">25 kHz is above human hearing, so the fan doesn't whine. This one line replaces the two 2.x lines (fixes problems 1, 2, 5, 6, 7 and 11).</span></li>
+  <li data-lines="24-26"><b class="what">A reading every 2 seconds without stopping the program.</b>
+    <span class="why">Replaces <code>delay(5000)</code>; the DHT22 can't give fresh data faster anyway.</span></li>
+  <li data-lines="27-32"><b class="what">A failed reading switches the fan to full speed.</b>
+    <span class="why">"Unknown temperature" in a cooling system should mean "cool", not "off". Silence was the most dangerous behavior of the bad code (problem 8).</span></li>
+  <li data-lines="33-35"><b class="what">Write the duty to the pin and print it.</b> In 3.x the first argument of <code>ledcWrite</code> is the pin.
+    <span class="why">The printed number lets you check the formula against the table in "What should you see?".</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="exFan">
+<p>In Wokwi, add <code>DHT sensor library</code>. A blue LED on GPIO26 stands in for the MOSFET and the fan: its brightness shows the duty. Click the DHT22 and move the temperature between 25 and 36.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type":  "board-esp32-devkit-c-v4", "id":  "esp", "top":  0, "left":  0, "attrs":  {} },
+    { "type":  "wokwi-dht22", "id":  "dht1", "top":  -20, "left":  -150, "attrs":  { "temperature":  "24", "humidity":  "40"} },
+    { "type":  "wokwi-resistor", "id":  "r1", "top":  150, "left":  -130, "attrs":  { "value":  "220"} },
+    { "type":  "wokwi-led", "id":  "led1", "top":  90, "left":  -60, "attrs":  { "color":  "blue"} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ],
+    [ "r1:1", "esp:26", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+<p><b>Part 2: model grading of the second sample.</b></p>
+<div class="table-wrap"><table><tr><th>Line</th><th>Problem</th><th>Step</th></tr>
+<tr><td><code>LED = 34</code></td><td>GPIO34 is input-only: no PWM output, the LED never lights. The request also said GPIO4.</td><td>2, 3</td></tr>
+<tr><td><code>POT = 4</code></td><td>GPIO4 is an ADC2 pin, and ADC2 doesn't give correct readings while Wi-Fi is on. The request said GPIO34.</td><td>2, 3</td></tr>
+<tr><td><code>WiFi.begin("MyHome", "sunflower2024")</code></td><td>Wi-Fi nobody asked for, with a real-looking password in the code; it's also what breaks the potentiometer.</td><td>9 (and 1)</td></tr>
+<tr><td><code>pinMode(BTN, INPUT)</code></td><td>No pull-up: with the button to GND, the pin floats when released and the LED switches off at random.</td><td>3, 8</td></tr>
+<tr><td><code>ledcWrite(LED, v)</code></td><td><code>v</code> goes from 0 to 4095, but an 8-bit channel only understands 0 to 255, so most of the knob's travel gives values the channel can't use.</td><td>1</td></tr></table></div>
+<p>What's fine: <code>ledcAttach</code> is core 3.x (step 5 passes) and <code>delay(10)</code> is short (step 7 passes). The fixed version:</p>
+<div class="code" data-file="Dimmer.ino" id="exGradeFix"><pre>
+// Dimmer, fixed: potentiometer on GPIO34 sets the LED on GPIO4; the GPIO27 button turns it off
+const int LED = 4;                      // a real output pin
+const int POT = 34;                     // ADC1, input-only: perfect for a potentiometer
+const int BTN = 27;                     // button to GND
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BTN, INPUT_PULLUP);           // no floating pin
+  ledcAttach(LED, 5000, 8);             // 8 bits: duty 0..255
+}
+
+void loop() {
+  int v = analogRead(POT);              // 0..4095
+  int duty = v &gt;&gt; 4;                    // 0..255, the range 8 bits understand
+  if (digitalRead(BTN) == LOW) duty = 0;
+  ledcWrite(LED, duty);
+  delay(10);
+}
+</pre></div>
+<ol class="walk" data-for="exGradeFix">
+  <li data-lines="2-4"><b class="what">The pins from the request.</b> LED on 4, potentiometer on 34 (ADC1), button on 27.
+    <span class="why">The request decides the wiring, not the model. With no Wi-Fi at all, even an ADC2 pin would work, but ADC1 stays correct if Wi-Fi is added later.</span></li>
+  <li data-lines="8-9"><b class="what">Pull-up for the button, 8-bit PWM for the LED.</b>
+    <span class="why"><code>INPUT_PULLUP</code> holds the pin HIGH when the button is released, so it never floats.</span></li>
+  <li data-lines="13-17"><b class="what">Read, scale, write.</b> <code>v &gt;&gt; 4</code> divides by 16: 0 to 4095 becomes 0 to 255.
+    <span class="why">The same trick as <code>PortableDemo</code> in lesson 6.4: the whole knob travel now maps onto the whole brightness range.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="exGradeFix">
+<p>Turn the potentiometer: the LED dims smoothly. Hold the button: the LED goes off.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type":  "board-esp32-devkit-c-v4", "id":  "esp", "top":  0, "left":  0, "attrs":  {} },
+    { "type":  "wokwi-potentiometer", "id":  "pot1", "top":  -90, "left":  -170, "attrs":  {} },
+    { "type":  "wokwi-pushbutton", "id":  "btn1", "top":  150, "left":  -170, "attrs":  { "color":  "green"} },
+    { "type":  "wokwi-resistor", "id":  "r1", "top":  130, "left":  190, "rotate":  90, "attrs":  { "value":  "220"} },
+    { "type":  "wokwi-led", "id":  "led1", "top":  40, "left":  220, "attrs":  { "color":  "red"} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "btn1:1.l", "esp:27", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 <div class="exercise"><div class="ct">Exercise 3: the private tutor</div>
 <p>Give the pulse counter code (Example 3) to an AI assistant without our explanations, and use the "explanation prompt" to ask it to explain the code line by line. Compare its answer with the explanation cards on this page. Where did they agree? Where did it say something we didn't? Did it get anything wrong? Run one of the three experiments it suggested in Wokwi.</p>
+<details class="expect"><summary>What should you see?</summary>
+<p>There's no single correct AI answer, but a good one covers these six points. Tick them off in your AI's explanation:</p>
+<ul>
+<li><code>volatile</code>: the value must be read from memory every time because the interrupt changes it. (Bonus point if it says volatile alone does <b>not</b> make <code>pulses++</code> safe; that's the lock's job.)</li>
+<li>The lock (<code>mux</code>): the interrupt and loop never touch <code>pulses</code> at the same moment, so "read, then reset to zero" acts as one step.</li>
+<li><code>IRAM_ATTR</code> and a short ISR: no <code>Serial</code> and no <code>delay</code> inside.</li>
+<li><code>INPUT_PULLUP</code> + <code>FALLING</code>: counts HIGH-to-LOW edges; a mechanical button bounces.</li>
+<li>Timing with <code>millis()</code> once a second, <code>static</code>, and the subtraction that survives the 49-day rollover.</li>
+<li>Printing after the lock is released, never inside it.</li>
+</ul>
+<p><b>Red flags</b> (the AI is wrong or guessing): "volatile makes the variable thread-safe" or "atomic"; "<code>millis() - last</code> breaks after 49 days"; "printing inside the ISR is fine if it's short".</p>
+<p><b>What the common experiments really show:</b></p>
+<ul>
+<li>Press the button once in Wokwi: usually <code>pulses/s: 1</code>, sometimes 2 or 3. That's bounce, not a bug in the counter.</li>
+<li>Remove <code>volatile</code>: most likely <b>no visible change</b> in this sketch, because the lock calls around the read already force a fresh read from memory. That doesn't prove volatile is useless; in code without the lock the bug can appear. An AI that predicts "the count will always stay 0" is overconfident.</li>
+<li>Move a <code>Serial.printf</code> into the ISR: usually a crash and reboot (a Guru Meditation or an "assert failed" message) soon after the first press; sometimes it seems to work for a while. Either way, it's forbidden.</li>
+<li>The known-frequency experiment in the answer: a steady <code>pulses/s: 100</code>, now and then 99 or 101.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p><b>How to compare, step by step.</b></p>
+<ol>
+<li>Put the AI's explanation next to the six explanation cards under Example 3. For each card, mark: "said the same", "said more", "said less", or "said something different".</li>
+<li>Everything marked "different" goes into one of two piles: (a) a new, correct detail (check it in the official documentation, for example the Arduino-ESP32 GPIO and interrupt pages), or (b) a mistake. The red flags in "What should you see?" are the most common mistakes.</li>
+<li>For each of the AI's three experiments, write down its prediction <b>before</b> you run it. Then run it and compare. An experiment whose result surprised the AI is the most valuable finding of the whole exercise.</li>
+</ol>
+<p><b>A strong experiment to add yourself: feed the counter a known frequency.</b> A button can't prove the counter is exact, because you can't press it a known number of times. The ESP32 can make its own pulses: LEDC outputs a 100 Hz square wave on GPIO26, and a jumper wire carries it to GPIO27. On a real board, connect a jumper from GPIO26 to GPIO27, and don't press the GPIO27 button during this test (it would short the output to GND).</p>
+<div class="code" data-file="FreqTest.ino" id="exFreq"><pre>
+// Experiment: feed the pulse counter a known frequency (jumper GPIO26 -&gt; GPIO27)
+volatile uint32_t pulses = 0;
+portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+
+void IRAM_ATTR onPulse() {
+  portENTER_CRITICAL_ISR(&amp;mux);
+  pulses++;
+  portEXIT_CRITICAL_ISR(&amp;mux);
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(27, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(27), onPulse, FALLING);
+  ledcAttach(26, 100, 10);              // 100 Hz square wave on GPIO26
+  ledcWrite(26, 512);                   // 512 of 1024 = 50 % duty
+}
+
+void loop() {
+  static uint32_t last = 0;
+  if (millis() - last &gt;= 1000) {
+    last = millis();
+    portENTER_CRITICAL(&amp;mux);
+    uint32_t n = pulses;
+    pulses = 0;
+    portEXIT_CRITICAL(&amp;mux);
+    Serial.printf("pulses/s: %lu\n", n);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="exFreq">
+  <li data-lines="1-17"><b class="what">The pulse counter from Example 3, unchanged, plus two lines.</b> <code>ledcAttach(26, 100, 10)</code> makes a 100 Hz signal on GPIO26; <code>ledcWrite(26, 512)</code> sets it to 50 % (512 of the 1024 steps that 10 bits give).
+    <span class="why">A square wave has exactly one falling edge per period, so 100 Hz means exactly 100 counts per second. 10-bit resolution is chosen because very low frequencies need enough bits for the LEDC clock divider.</span></li>
+  <li data-lines="19-29"><b class="what">The same once-a-second report.</b>
+    <span class="why">Seeing 100 again and again proves the ISR, the lock and the timing together. 99 or 101 now and then is normal: the one-second window and the signal aren't synchronized, so an edge can fall just before or just after the boundary.</span></li>
+</ol>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">The lesson in three lines</div>

@@ -225,7 +225,7 @@ void loop() {
 #include &lt;Adafruit_SSD1306.h&gt;
 #include &lt;DHT.h&gt;
 
-DHT dht(4, DHT22);
+DHT dht(13, DHT22);
 Adafruit_SSD1306 oled(128, 64, &amp;Wire, -1);   // -1: no reset pin
 
 void setup() {
@@ -298,7 +298,7 @@ void loop() {
 
 const int PIN_LED = 4, PIN_BUZ = 25, PIN_BTN = 27;
 const float TEMP_HIGH = 35.0, TEMP_CLEAR = 33.0;
-DHT dht(4, DHT22);
+DHT dht(13, DHT22);
 
 float tempC = NAN;
 bool alarmOn = false, muted = false;
@@ -906,43 +906,841 @@ OK: temperature back to normal</div>
 <div class="exercise"><div class="ct">Exercise 1: an alert that never gets lost</div>
 <p>In the current program, if the network is down at the moment the alarm starts, the "ALERT" message is lost. Change the program so the alert message waits in a "pending" variable and is sent as soon as MQTT connects.</p>
 <details><summary>Hint</summary><p>Create a variable <code>const char* pendingAlert = nullptr;</code>. In <code>publishAlert</code>, if you're not connected, store the message in it. In <code>keepMqtt</code>, right after a successful connection, if <code>pendingAlert</code> isn't empty, send it and clear it. Because the messages are constant strings, keeping a pointer to them is safe.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p><b>The test:</b> make the alarm start before MQTT is connected. In Wokwi that happens by itself if the DHT22 starts at 36 °C (the diagram in the answer does this): the first reading comes at 2 seconds, but the first MQTT attempt only after 5 seconds. On a real board: switch off the router, type <code>t 36</code> in the Serial Monitor, wait for <code>ALERT: temperature high</code>, then switch the router back on.</p>
+<pre class="serial">ALERT: temperature high
+MQTT connected
+Sent pending: ALERT: temperature high
+Published to MQTT</pre>
+<p>(With a slow network, <code>WiFi: reconnecting...</code> lines may appear before <code>MQTT connected</code>.)</p>
+<ul>
+<li>In your MQTT client on <code>esp32fa/station-42/alert</code> (your own prefix): exactly one <code>ALERT: temperature high</code>, a few seconds after the start, even though the alarm began while offline.</li>
+<li>Run the same test with the original final program: the ALERT line appears in Serial, but nothing arrives in the client until the reminder 10 minutes later. That's the bug you fixed.</li>
+<li>If the alarm starts and also ends during an outage (<code>t 36</code>, then <code>t 30</code>), only <code>OK: temperature back to normal</code> arrives: one slot keeps the newest message, which is the current truth.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>The complete final program with the change. Only the lines in the walk are new; everything else is the program from step 6, section by section.</p>
+<div class="code" data-file="StationPending.ino" id="exPend"><pre>
+// Environment station, exercise 1: an alert that waits for the network
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+
+// ================== 1. Settings ==================
+const char* WIFI_SSID = "Wokwi-GUEST";         // real board: your Wi-Fi name
+const char* WIFI_PASS = "";                    // real board: your Wi-Fi password
+const char* MQTT_HOST = "broker.hivemq.com";
+const uint16_t MQTT_PORT = 1883;
+const char* MQTT_USER = nullptr;               // Adafruit IO: username
+const char* MQTT_KEY  = nullptr;               // Adafruit IO: AIO Key
+const char* BASE      = "esp32fa/station-42/"; // unique topic prefix
+
+const float TEMP_HIGH  = 35.0;                 // above this: alarm
+const float TEMP_CLEAR = 33.0;                 // below this: alarm ends
+const uint32_t SENSOR_MS  = 2000;              // read every 2 seconds
+const uint32_t PUBLISH_MS = 30000;             // send every 30 seconds
+const uint32_t REMIND_MS  = 600000;            // alarm reminder: at most every 10 minutes
+
+// ================== 2. Pins ==================
+const int PIN_DHT = 13;
+const int PIN_LDR = 35;                        // ADC1: works with Wi-Fi
+const int PIN_LED = 4;
+const int PIN_BUZ = 25;
+const int PIN_BTN = 27;                        // mute button
+
+// ================== 3. Objects and state ==================
+DHT dht(PIN_DHT, DHT22);
+Adafruit_SSD1306 oled(128, 64, &amp;Wire, -1);
+WiFiClient net;
+PubSubClient mqtt(net);
+
+float tempC = NAN, hum = NAN;
+int lightPct = 0;
+bool alarmOn = false, muted = false, oledOk = false;
+uint32_t tSensor = 0, tPublish = 0, tAlert = 0, tWifi = 0, tMqtt = 0;
+float fakeTemp = NAN;                          // test helper: NAN = use the real sensor
+const char* pendingAlert = nullptr;            // an alert waiting for the network
+
+// ================== 4. Sensors ==================
+void readSensors() {
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (!isnan(t) &amp;&amp; !isnan(h)) { tempC = t; hum = h; }
+  else Serial.println("DHT22 read failed, keeping last value");
+  if (!isnan(fakeTemp)) tempC = fakeTemp;      // test helper (section 10)
+  int raw = analogRead(PIN_LDR);               // 0..4095
+  lightPct = map(raw, 4095, 0, 0, 100);        // more light = lower voltage
+}
+
+// ================== 5. Sending to the cloud ==================
+void publishValue(const char* name, float v, int decimals) {
+  char topic[64], payload[16];
+  snprintf(topic, sizeof(topic), "%s%s", BASE, name);
+  snprintf(payload, sizeof(payload), "%.*f", decimals, v);
+  mqtt.publish(topic, payload);
+}
+
+void publishAll() {
+  if (!mqtt.connected() || isnan(tempC)) return;
+  publishValue("temp", tempC, 1);
+  publishValue("hum", hum, 0);
+  publishValue("light", lightPct, 0);
+  Serial.println("Published to MQTT");
+}
+
+void sendAlert(const char* msg) {              // the actual MQTT send
+  char topic[64];
+  snprintf(topic, sizeof(topic), "%salert", BASE);
+  mqtt.publish(topic, msg);
+}
+
+void publishAlert(const char* msg) {
+  tAlert = millis();                           // restart the reminder timer
+  Serial.println(msg);
+  if (mqtt.connected()) sendAlert(msg);
+  else pendingAlert = msg;                     // no network: keep it for later
+}
+
+// ================== 6. Alarm logic (hysteresis + rate limiting) ==================
+void updateAlarm() {
+  if (isnan(tempC)) return;
+  if (!alarmOn &amp;&amp; tempC &gt; TEMP_HIGH) {
+    alarmOn = true;
+    muted = false;
+    publishAlert("ALERT: temperature high");
+  } else if (alarmOn &amp;&amp; tempC &lt; TEMP_CLEAR) {
+    alarmOn = false;
+    publishAlert("OK: temperature back to normal");
+  } else if (alarmOn &amp;&amp; millis() - tAlert &gt;= REMIND_MS) {
+    publishAlert("ALERT: still high");         // a reminder, not spam
+  }
+}
+
+void driveOutputs() {
+  if (alarmOn &amp;&amp; digitalRead(PIN_BTN) == LOW) muted = true;
+  bool blink = (millis() / 250) % 2;
+  digitalWrite(PIN_LED, alarmOn &amp;&amp; blink);
+  static bool buzzing = false;
+  bool wantBuzz = alarmOn &amp;&amp; !muted &amp;&amp; blink;
+  if (wantBuzz != buzzing) {
+    ledcWriteTone(PIN_BUZ, wantBuzz ? 2000 : 0);
+    buzzing = wantBuzz;
+  }
+}
+
+// ================== 7. Display ==================
+void drawDisplay() {
+  if (!oledOk) return;                         // no display? everything else keeps going
+  oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setCursor(0, 0);
+  oled.print(WiFi.status() == WL_CONNECTED ? "WiFi OK  " : "WiFi --  ");
+  oled.print(mqtt.connected() ? "MQTT OK" : "MQTT --");
+  oled.setTextSize(2);
+  oled.setCursor(0, 14);
+  if (isnan(tempC)) oled.print("T: ERR");
+  else { oled.print(tempC, 1); oled.print(" C"); }
+  oled.setCursor(0, 34);
+  if (isnan(hum)) oled.print("H: ERR");
+  else { oled.print(hum, 0); oled.print(" %"); }
+  oled.setTextSize(1);
+  oled.setCursor(0, 56);
+  oled.printf("Light %d%%  %s", lightPct, alarmOn ? (muted ? "ALARM(m)" : "ALARM!") : "normal");
+  oled.display();
+}
+
+// ================== 8. Network (non-blocking) ==================
+void keepWiFi() {
+  if (WiFi.status() == WL_CONNECTED) return;
+  if (millis() - tWifi &lt; 15000) return;        // one attempt every 15 seconds
+  tWifi = millis();
+  Serial.println("WiFi: reconnecting...");
+  WiFi.reconnect();
+}
+
+void keepMqtt() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (mqtt.connected()) { mqtt.loop(); return; }
+  if (millis() - tMqtt &lt; 5000) return;         // one attempt every 5 seconds
+  tMqtt = millis();
+  String id = "esp32-station-" + String((uint32_t)ESP.getEfuseMac(), HEX) + "-" + String(esp_random() &amp; 0xFFFF, HEX);
+  String will = String(BASE) + "status";
+  if (mqtt.connect(id.c_str(), MQTT_USER, MQTT_KEY, will.c_str(), 0, true, "offline")) {
+    mqtt.publish(will.c_str(), "online", true);
+    Serial.println("MQTT connected");
+    if (pendingAlert != nullptr) {             // an alert missed while offline?
+      sendAlert(pendingAlert);
+      Serial.printf("Sent pending: %s\n", pendingAlert);
+      pendingAlert = nullptr;
+    }
+  } else {
+    Serial.printf("MQTT failed, state=%d\n", mqtt.state());
+  }
+}
+
+// ================== 9. setup and loop ==================
+void setup() {
+  Serial.begin(115200);
+  pinMode(PIN_LED, OUTPUT);
+  pinMode(PIN_BTN, INPUT_PULLUP);
+  ledcAttach(PIN_BUZ, 2000, 8);                // core 3.x API
+  analogReadResolution(12);
+  dht.begin();
+  Wire.begin(21, 22);
+  oledOk = oled.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  if (oledOk) oled.setTextColor(SSD1306_WHITE);
+  else Serial.println("OLED not found, continuing without display");
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  net.setConnectionTimeout(1000);              // TCP: give up after 1 s (default 3 s)
+  mqtt.setSocketTimeout(2);                    // broker reply: give up after 2 s (default 15 s)
+  tWifi = millis();
+}
+
+void loop() {
+  readSerialCommands();                        // test helper (section 10)
+  uint32_t now = millis();
+  if (now - tSensor &gt;= SENSOR_MS) {
+    tSensor = now;
+    readSensors();
+    updateAlarm();
+    drawDisplay();
+  }
+  if (now - tPublish &gt;= PUBLISH_MS) {
+    tPublish = now;
+    publishAll();
+  }
+  keepWiFi();
+  keepMqtt();
+  driveOutputs();
+}
+
+// ================== 10. Test helper: a fake temperature over Serial ==================
+void readSerialCommands() {
+  if (!Serial.available()) return;
+  String line = Serial.readStringUntil('\n');  // e.g. "t 36" or "real"
+  line.trim();
+  if (line.startsWith("t ")) {
+    fakeTemp = line.substring(2).toFloat();
+    Serial.printf("Fake temperature: %.1f C\n", fakeTemp);
+  } else if (line == "real") {
+    fakeTemp = NAN;
+    Serial.println("Using the real sensor again");
+  }
+}
+</pre></div>
+<ol class="walk" data-for="exPend">
+  <li data-lines="42"><b class="what">One "waiting slot" for an alert.</b> <code>nullptr</code> means "nothing waiting".
+    <span class="why">A pointer is enough because every alert is a fixed string written in the program (<code>"ALERT: ..."</code>); those strings live in flash for the whole run, so the pointer never points at something that has disappeared.</span></li>
+  <li data-lines="71-75"><b class="what">sendAlert(): only the MQTT publish.</b> The topic building and <code>publish</code> moved out of <code>publishAlert</code>.
+    <span class="why">Two places now need to send an alert: right away, and later after reconnecting. One small function means the topic is built the same way in both.</span></li>
+  <li data-lines="77-82"><b class="what">publishAlert(): send now, or keep it for later.</b> Connected → send. Not connected → store it in the slot.
+    <span class="why">The reminder timer and the Serial line stay as before, so the local behavior (and the "no spam" rule) doesn't change. A newer alert overwrites an older waiting one: after an outage, the current state matters, not the history.</span></li>
+  <li data-lines="151-155"><b class="what">Right after a successful connection: send what's waiting, then empty the slot.</b>
+    <span class="why">This is the first moment we know the message can go out. Emptying the slot afterwards means it's sent exactly once, not again on every reconnect.</span></li>
+  <li data-lines="85-97"><b class="what">updateAlarm() hasn't changed.</b> It still calls <code>publishAlert</code>, which now handles an outage by itself.
+    <span class="why">The fix lives in one place, the sending function; the alarm logic doesn't need to know anything about the network.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="exPend">
+<p>Add the four libraries in Wokwi's Library Manager tab (as for the final program). In this diagram the DHT22 starts at 36 °C, so the alarm begins before MQTT connects. Change <code>BASE</code> to your own prefix and watch the alert topic in your MQTT client.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type":  "board-esp32-devkit-c-v4", "id":  "esp", "top":  0, "left":  0, "attrs":  {} },
+    { "type":  "wokwi-dht22", "id":  "dht1", "top":  -110, "left":  170, "attrs":  { "temperature":  "36", "humidity":  "45"} },
+    { "type":  "wokwi-photoresistor-sensor", "id":  "ldr1", "top":  250, "left":  170, "attrs":  {} },
+    { "type":  "board-ssd1306", "id":  "oled1", "top":  60, "left":  260, "attrs":  { "i2cAddress":  "0x3c"} },
+    { "type":  "wokwi-resistor", "id":  "r1", "top":  110, "left":  -130, "attrs":  { "value":  "220"} },
+    { "type":  "wokwi-led", "id":  "led1", "top":  40, "left":  -60, "attrs":  { "color":  "red"} },
+    { "type":  "wokwi-buzzer", "id":  "bz1", "top":  170, "left":  -160, "attrs":  { "volume":  "0.2"} },
+    { "type":  "wokwi-pushbutton", "id":  "btn1", "top":  280, "left":  -170, "attrs":  { "color":  "yellow", "label":  "Mute"} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:AO", "esp:35", "blue", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "r1:1", "esp:4", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ],
+    [ "bz1:2", "esp:25", "orange", [] ],
+    [ "bz1:1", "esp:GND.1", "black", [] ],
+    [ "btn1:1.l", "esp:27", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 <div class="exercise"><div class="ct">Exercise 2: a dead sensor</div>
 <p>If the DHT22 gets disconnected for good, the current program shows and sends the last valid temperature forever; that's a lie. Change it so that after 5 failed readings in a row, <code>tempC</code> and <code>hum</code> go back to NaN and an <code>"ERROR: sensor"</code> message is sent (just once) to the alert topic.</p>
 <details><summary>Hint</summary><p>Add a <code>failStreak</code> counter in <code>readSensors</code>: reset to zero on success, add one on failure. When it reaches exactly 5 (not greater-than-or-equal, so the message goes out only once), set the values to NaN and call <code>publishAlert</code>. <code>publishAll</code> already sends nothing when the value is NaN, and the display shows "ERR".</p></details>
-<details><summary>Answer</summary>
-<div class="code" data-file="readSensors_v2_part.ino" id="exFail"><pre>
-// Replacement for readSensors in the final program (part of a program)
-int failStreak = 0;
+<details class="expect"><summary>What should you see?</summary>
+<p>On a real board, pull out the DHT22's DATA wire while the station is running. In Wokwi, stop the simulation, delete the line with <code>dht1:SDA</code> from diagram.json and start again. One line every 2 seconds:</p>
+<pre class="serial">DHT22 read failed (1 in a row)
+DHT22 read failed (2 in a row)
+DHT22 read failed (3 in a row)
+DHT22 read failed (4 in a row)
+DHT22 read failed (5 in a row)
+ERROR: sensor
+DHT22 read failed (6 in a row)</pre>
+<ul>
+<li>About 10 seconds after the wire comes out, the OLED switches from the old numbers to <code>T: ERR</code> and <code>H: ERR</code>.</li>
+<li>Exactly one <code>ERROR: sensor</code> on the alert topic, not one every 2 seconds.</li>
+<li>After that, no more temperature, humidity or light values are published (<code>publishAll</code> stops on NaN).</li>
+<li>Plug the wire back in: real numbers within 2 seconds. Pull it again: after 10 seconds a new, single <code>ERROR: sensor</code>.</li>
+</ul>
+<p>In Wokwi the sensor is missing from the very start, so the fifth failure comes at about 10 seconds; if MQTT isn't connected yet by then, the message only reaches Serial (exercise 1 fixes exactly that).</p>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>The complete final program with the new <code>readSensors</code>. Only the lines in the walk changed.</p>
+<div class="code" data-file="StationDeadSensor.ino" id="exFail"><pre>
+// Environment station, exercise 2: a dead sensor is reported, not hidden
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
 
+// ================== 1. Settings ==================
+const char* WIFI_SSID = "Wokwi-GUEST";         // real board: your Wi-Fi name
+const char* WIFI_PASS = "";                    // real board: your Wi-Fi password
+const char* MQTT_HOST = "broker.hivemq.com";
+const uint16_t MQTT_PORT = 1883;
+const char* MQTT_USER = nullptr;               // Adafruit IO: username
+const char* MQTT_KEY  = nullptr;               // Adafruit IO: AIO Key
+const char* BASE      = "esp32fa/station-42/"; // unique topic prefix
+
+const float TEMP_HIGH  = 35.0;                 // above this: alarm
+const float TEMP_CLEAR = 33.0;                 // below this: alarm ends
+const uint32_t SENSOR_MS  = 2000;              // read every 2 seconds
+const uint32_t PUBLISH_MS = 30000;             // send every 30 seconds
+const uint32_t REMIND_MS  = 600000;            // alarm reminder: at most every 10 minutes
+
+// ================== 2. Pins ==================
+const int PIN_DHT = 13;
+const int PIN_LDR = 35;                        // ADC1: works with Wi-Fi
+const int PIN_LED = 4;
+const int PIN_BUZ = 25;
+const int PIN_BTN = 27;                        // mute button
+
+// ================== 3. Objects and state ==================
+DHT dht(PIN_DHT, DHT22);
+Adafruit_SSD1306 oled(128, 64, &amp;Wire, -1);
+WiFiClient net;
+PubSubClient mqtt(net);
+
+float tempC = NAN, hum = NAN;
+int lightPct = 0;
+bool alarmOn = false, muted = false, oledOk = false;
+uint32_t tSensor = 0, tPublish = 0, tAlert = 0, tWifi = 0, tMqtt = 0;
+float fakeTemp = NAN;                          // test helper: NAN = use the real sensor
+int failStreak = 0;                            // failed readings in a row
+
+// ================== 4. Sensors ==================
 void readSensors() {
   float t = dht.readTemperature();
   float h = dht.readHumidity();
   if (!isnan(t) &amp;&amp; !isnan(h)) {
     tempC = t; hum = h;
-    failStreak = 0;
+    failStreak = 0;                            // success: count again from zero
   } else {
     failStreak++;
-    if (failStreak == 5) {                   // exactly once
-      tempC = NAN; hum = NAN;
+    Serial.printf("DHT22 read failed (%d in a row)\n", failStreak);
+    if (failStreak == 5) {                     // exactly once, after 10 s of failures
+      tempC = NAN; hum = NAN;                  // don't pass an old value off as new
       publishAlert("ERROR: sensor");
     }
   }
-  int raw = analogRead(PIN_LDR);
-  lightPct = map(raw, 4095, 0, 0, 100);
+  if (!isnan(fakeTemp)) tempC = fakeTemp;      // test helper (section 10)
+  int raw = analogRead(PIN_LDR);               // 0..4095
+  lightPct = map(raw, 4095, 0, 0, 100);        // more light = lower voltage
+}
+
+// ================== 5. Sending to the cloud ==================
+void publishValue(const char* name, float v, int decimals) {
+  char topic[64], payload[16];
+  snprintf(topic, sizeof(topic), "%s%s", BASE, name);
+  snprintf(payload, sizeof(payload), "%.*f", decimals, v);
+  mqtt.publish(topic, payload);
+}
+
+void publishAll() {
+  if (!mqtt.connected() || isnan(tempC)) return;
+  publishValue("temp", tempC, 1);
+  publishValue("hum", hum, 0);
+  publishValue("light", lightPct, 0);
+  Serial.println("Published to MQTT");
+}
+
+void publishAlert(const char* msg) {
+  tAlert = millis();                           // restart the reminder timer
+  Serial.println(msg);
+  if (!mqtt.connected()) return;
+  char topic[64];
+  snprintf(topic, sizeof(topic), "%salert", BASE);
+  mqtt.publish(topic, msg);
+}
+
+// ================== 6. Alarm logic (hysteresis + rate limiting) ==================
+void updateAlarm() {
+  if (isnan(tempC)) return;
+  if (!alarmOn &amp;&amp; tempC &gt; TEMP_HIGH) {
+    alarmOn = true;
+    muted = false;
+    publishAlert("ALERT: temperature high");
+  } else if (alarmOn &amp;&amp; tempC &lt; TEMP_CLEAR) {
+    alarmOn = false;
+    publishAlert("OK: temperature back to normal");
+  } else if (alarmOn &amp;&amp; millis() - tAlert &gt;= REMIND_MS) {
+    publishAlert("ALERT: still high");         // a reminder, not spam
+  }
+}
+
+void driveOutputs() {
+  if (alarmOn &amp;&amp; digitalRead(PIN_BTN) == LOW) muted = true;
+  bool blink = (millis() / 250) % 2;
+  digitalWrite(PIN_LED, alarmOn &amp;&amp; blink);
+  static bool buzzing = false;
+  bool wantBuzz = alarmOn &amp;&amp; !muted &amp;&amp; blink;
+  if (wantBuzz != buzzing) {
+    ledcWriteTone(PIN_BUZ, wantBuzz ? 2000 : 0);
+    buzzing = wantBuzz;
+  }
+}
+
+// ================== 7. Display ==================
+void drawDisplay() {
+  if (!oledOk) return;                         // no display? everything else keeps going
+  oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setCursor(0, 0);
+  oled.print(WiFi.status() == WL_CONNECTED ? "WiFi OK  " : "WiFi --  ");
+  oled.print(mqtt.connected() ? "MQTT OK" : "MQTT --");
+  oled.setTextSize(2);
+  oled.setCursor(0, 14);
+  if (isnan(tempC)) oled.print("T: ERR");
+  else { oled.print(tempC, 1); oled.print(" C"); }
+  oled.setCursor(0, 34);
+  if (isnan(hum)) oled.print("H: ERR");
+  else { oled.print(hum, 0); oled.print(" %"); }
+  oled.setTextSize(1);
+  oled.setCursor(0, 56);
+  oled.printf("Light %d%%  %s", lightPct, alarmOn ? (muted ? "ALARM(m)" : "ALARM!") : "normal");
+  oled.display();
+}
+
+// ================== 8. Network (non-blocking) ==================
+void keepWiFi() {
+  if (WiFi.status() == WL_CONNECTED) return;
+  if (millis() - tWifi &lt; 15000) return;        // one attempt every 15 seconds
+  tWifi = millis();
+  Serial.println("WiFi: reconnecting...");
+  WiFi.reconnect();
+}
+
+void keepMqtt() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (mqtt.connected()) { mqtt.loop(); return; }
+  if (millis() - tMqtt &lt; 5000) return;         // one attempt every 5 seconds
+  tMqtt = millis();
+  String id = "esp32-station-" + String((uint32_t)ESP.getEfuseMac(), HEX) + "-" + String(esp_random() &amp; 0xFFFF, HEX);
+  String will = String(BASE) + "status";
+  if (mqtt.connect(id.c_str(), MQTT_USER, MQTT_KEY, will.c_str(), 0, true, "offline")) {
+    mqtt.publish(will.c_str(), "online", true);
+    Serial.println("MQTT connected");
+  } else {
+    Serial.printf("MQTT failed, state=%d\n", mqtt.state());
+  }
+}
+
+// ================== 9. setup and loop ==================
+void setup() {
+  Serial.begin(115200);
+  pinMode(PIN_LED, OUTPUT);
+  pinMode(PIN_BTN, INPUT_PULLUP);
+  ledcAttach(PIN_BUZ, 2000, 8);                // core 3.x API
+  analogReadResolution(12);
+  dht.begin();
+  Wire.begin(21, 22);
+  oledOk = oled.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  if (oledOk) oled.setTextColor(SSD1306_WHITE);
+  else Serial.println("OLED not found, continuing without display");
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  net.setConnectionTimeout(1000);              // TCP: give up after 1 s (default 3 s)
+  mqtt.setSocketTimeout(2);                    // broker reply: give up after 2 s (default 15 s)
+  tWifi = millis();
+}
+
+void loop() {
+  readSerialCommands();                        // test helper (section 10)
+  uint32_t now = millis();
+  if (now - tSensor &gt;= SENSOR_MS) {
+    tSensor = now;
+    readSensors();
+    updateAlarm();
+    drawDisplay();
+  }
+  if (now - tPublish &gt;= PUBLISH_MS) {
+    tPublish = now;
+    publishAll();
+  }
+  keepWiFi();
+  keepMqtt();
+  driveOutputs();
+}
+
+// ================== 10. Test helper: a fake temperature over Serial ==================
+void readSerialCommands() {
+  if (!Serial.available()) return;
+  String line = Serial.readStringUntil('\n');  // e.g. "t 36" or "real"
+  line.trim();
+  if (line.startsWith("t ")) {
+    fakeTemp = line.substring(2).toFloat();
+    Serial.printf("Fake temperature: %.1f C\n", fakeTemp);
+  } else if (line == "real") {
+    fakeTemp = NAN;
+    Serial.println("Using the real sensor again");
+  }
 }
 </pre></div>
 <ol class="walk" data-for="exFail">
-  <li data-lines="7-9"><b class="what">Success resets the counter.</b>
-    <span class="why">That means only failures <b>in a row</b> are counted; an occasional single error is normal.</span></li>
-  <li data-lines="11-15"><b class="what">On the fifth failure, report the fault.</b> The values become NaN and one error message goes out.
-    <span class="why">The condition <code>== 5</code> instead of <code>&gt;= 5</code> means the message goes out only once, not on every reading after that; the same "no spam" principle. Five readings means 10 seconds, which can't be mistaken for a random glitch. <code>publishAlert</code> must be defined before this function (as in the final program, where section 5 comes before it's used, or with a forward declaration).</span></li>
+  <li data-lines="42"><b class="what">A counter of failures in a row.</b>
+    <span class="why">A global variable, because its value has to survive from one call of <code>readSensors</code> to the next (every 2 seconds).</span></li>
+  <li data-lines="48-50"><b class="what">Success resets the counter.</b>
+    <span class="why">That means only failures <b>in a row</b> are counted; an occasional single error is normal for a DHT22 and shouldn't raise an alarm.</span></li>
+  <li data-lines="51-53"><b class="what">Failure: count it and say so in Serial.</b>
+    <span class="why">The number in brackets lets you watch the countdown to the alert while testing.</span></li>
+  <li data-lines="54-57"><b class="what">On the fifth failure, report the fault.</b> The values become NaN and one error message goes out through <code>publishAlert</code>.
+    <span class="why"><code>== 5</code> instead of <code>&gt;= 5</code> means the message goes out once, not on every reading after that: the same "no spam" rule. Five readings are 10 seconds, which can't be mistaken for a random glitch. With NaN, the display shows ERR, <code>publishAll</code> sends nothing and <code>updateAlarm</code> leaves the alarm as it was: a running alarm keeps blinking, which is safer than silently switching it off. <code>readSensors</code> calls <code>publishAlert</code> although it's written further down; that's fine in a .ino file, because the Arduino IDE adds the declarations by itself before compiling.</span></li>
+  <li data-lines="59"><b class="what">The test helper still comes last.</b>
+    <span class="why">A fake temperature (<code>t 36</code>) still overrides the sensor, so the alarm tests work even with the sensor unplugged.</span></li>
 </ol>
+<div class="wokwi" data-board="esp32" data-code-from="exFail">
+<p>The station circuit. To simulate a dead sensor, delete the <code>dht1:SDA</code> connection line in diagram.json and run again.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type":  "board-esp32-devkit-c-v4", "id":  "esp", "top":  0, "left":  0, "attrs":  {} },
+    { "type":  "wokwi-dht22", "id":  "dht1", "top":  -110, "left":  170, "attrs":  { "temperature":  "28", "humidity":  "45"} },
+    { "type":  "wokwi-photoresistor-sensor", "id":  "ldr1", "top":  250, "left":  170, "attrs":  {} },
+    { "type":  "board-ssd1306", "id":  "oled1", "top":  60, "left":  260, "attrs":  { "i2cAddress":  "0x3c"} },
+    { "type":  "wokwi-resistor", "id":  "r1", "top":  110, "left":  -130, "attrs":  { "value":  "220"} },
+    { "type":  "wokwi-led", "id":  "led1", "top":  40, "left":  -60, "attrs":  { "color":  "red"} },
+    { "type":  "wokwi-buzzer", "id":  "bz1", "top":  170, "left":  -160, "attrs":  { "volume":  "0.2"} },
+    { "type":  "wokwi-pushbutton", "id":  "btn1", "top":  280, "left":  -170, "attrs":  { "color":  "yellow", "label":  "Mute"} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:AO", "esp:35", "blue", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "r1:1", "esp:4", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ],
+    [ "bz1:2", "esp:25", "orange", [] ],
+    [ "bz1:1", "esp:GND.1", "black", [] ],
+    [ "btn1:1.l", "esp:27", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
 </details>
 </div>
 <div class="exercise"><div class="ct">Exercise 3: battery mode</div>
 <p>Build the battery version of the station (see the "Battery mode" section): wake every 5 minutes, take a reading, show it on the OLED for 3 seconds, send a message if an alarm started or ended, send the values once every 6 wake-ups, and go back to sleep. The GPIO27 button should wake the board for an instant reading. Then use the formula from lesson 6.1 to estimate how long a 2000 mAh battery would last.</p>
 <details><summary>Hint</summary><p>Use the variables <code>RTC_DATA_ATTR bool alarmOn</code> and <code>RTC_DATA_ATTR uint32_t wakeCount</code>. Condition for sending values: <code>wakeCount % 6 == 0</code>. Alarm reminder: every 2 wake-ups (10 minutes). For Wi-Fi, use <code>connectWiFiFast()</code> from lesson 6.1 with a timeout, and only turn Wi-Fi on when you have something to send. Before sleeping, turn the OLED off with <code>SSD1306_DISPLAYOFF</code> and set up EXT0 on GPIO27 with a LOW level and the RTC pull-up. When the button caused the wake-up, skip sending and just show the reading.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>With the answer sketch, <code>SLEEP_SEC</code> set to 10 for testing and the DHT22 at 28 °C and 45 % (the light value depends on the sensor, the Awake times vary a little; the <code>rst:0x5</code> boot lines between wake-ups are left out):</p>
+<pre class="serial">Wake #1  T=28.0 C  H=45 %  light=52 %  alarm=off
+Nothing to send, Wi-Fi stays off
+Awake 5214 ms. Sleep 10 s
+Wake #2  T=28.0 C  H=45 %  light=52 %  alarm=off
+Nothing to send, Wi-Fi stays off
+Awake 3012 ms. Sleep 10 s
+...
+Wake #6  T=28.0 C  H=45 %  light=52 %  alarm=off
+Sent values
+Awake 3012 ms. Sleep 10 s
+Wake #7  T=36.0 C  H=45 %  light=52 %  alarm=ON
+Sent alert: ALERT: temperature high
+Awake 3165 ms. Sleep 10 s
+Button  T=36.0 C  H=45 %  light=52 %  alarm=ON
+Awake 3004 ms. Sleep 10 s</pre>
+<ul>
+<li>The OLED lights up for about 3 seconds per wake-up, then goes dark.</li>
+<li>Wi-Fi is used only on wake-ups 6, 12, 18... and when the alarm starts, ends or needs a reminder.</li>
+<li>Temperature at 36: <code>ALERT: temperature high</code> once and a short beep on every wake-up; <code>ALERT: still high</code> on every second wake-up after that; 34: nothing new (hysteresis); 32: <code>OK: temperature back to normal</code>.</li>
+<li>Button during sleep: a <code>Button</code> line, no Wi-Fi, and the wake-up numbers don't move.</li>
+<li>Your battery estimate: roughly two months on a low-power board, roughly a week and a half on a DevKitC (see the answer for the numbers).</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>One important change of design: everything happens in <code>setup()</code>, and anything that must survive sleep lives in RTC memory. Wi-Fi only switches on when there is something to send.</p>
+<div class="code" data-file="StationBattery.ino" id="exBatt"><pre>
+// Battery-mode station: wake, measure, show, send only if needed, sleep (6.3, exercise 3)
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+#include "driver/rtc_io.h"
+
+// ---------- settings ----------
+const char* WIFI_SSID = "Wokwi-GUEST";         // real board: your Wi-Fi name
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const char* BASE      = "esp32fa/station-42/"; // unique topic prefix
+const float TEMP_HIGH = 35.0, TEMP_CLEAR = 33.0;
+const uint64_t SLEEP_SEC = 300;                // 5 minutes (10 while testing)
+const uint32_t WIFI_TIMEOUT_MS = 8000;
+const uint32_t SHOW_MS = 3000;                 // the OLED stays on for 3 s
+const int PIN_DHT = 13, PIN_LDR = 35, PIN_BUZ = 25;
+const gpio_num_t PIN_BTN = GPIO_NUM_27;        // RTC pin: can wake the board
+
+DHT dht(PIN_DHT, DHT22);
+Adafruit_SSD1306 oled(128, 64, &amp;Wire, -1);
+WiFiClient net;
+PubSubClient mqtt(net);
+bool oledOk = false;
+
+// ---------- RTC memory: survives deep sleep ----------
+RTC_DATA_ATTR bool alarmOn = false;
+RTC_DATA_ATTR uint32_t wakeCount = 0;          // timer wake-ups (and the first power-up)
+RTC_DATA_ATTR uint32_t lastAlertWake = 0;      // wakeCount of the last alert that went out
+RTC_DATA_ATTR uint8_t savedChannel = 0;        // Wi-Fi shortcut from lesson 6.1
+RTC_DATA_ATTR uint8_t savedBssid[6];
+
+bool connectWiFiFast() {                       // lesson 6.1, unchanged
+  WiFi.mode(WIFI_STA);
+  WiFi.persistent(false);
+  if (savedChannel != 0) WiFi.begin(WIFI_SSID, WIFI_PASS, savedChannel, savedBssid);
+  else WiFi.begin(WIFI_SSID, WIFI_PASS);
+  uint32_t start = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    if (millis() - start &gt; WIFI_TIMEOUT_MS) { savedChannel = 0; return false; }
+    delay(20);
+  }
+  savedChannel = WiFi.channel();
+  memcpy(savedBssid, WiFi.BSSID(), 6);
+  return true;
+}
+
+void publishValue(const char* name, float v, int decimals) {
+  char topic[64], payload[16];
+  snprintf(topic, sizeof(topic), "%s%s", BASE, name);
+  snprintf(payload, sizeof(payload), "%.*f", decimals, v);
+  mqtt.publish(topic, payload);
+}
+
+void show(float t, float h, int light, bool byButton) {
+  if (!oledOk) return;
+  oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setCursor(0, 0);
+  oled.print(byButton ? "Button reading" : "Wake #");
+  if (!byButton) oled.print(wakeCount);
+  oled.setTextSize(2);
+  oled.setCursor(0, 14);
+  if (isnan(t)) oled.print("T: ERR"); else { oled.print(t, 1); oled.print(" C"); }
+  oled.setCursor(0, 34);
+  if (isnan(h)) oled.print("H: ERR"); else { oled.print(h, 0); oled.print(" %"); }
+  oled.setTextSize(1);
+  oled.setCursor(0, 56);
+  oled.printf("Light %d%%  %s", light, alarmOn ? "ALARM!" : "normal");
+  oled.display();
+}
+
+void goToSleep() {
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  if (oledOk) oled.ssd1306_command(SSD1306_DISPLAYOFF);   // otherwise it keeps draining
+  pinMode(27, INPUT_PULLUP);
+  while (digitalRead(27) == LOW) delay(10);   // wait until the button is released
+  esp_sleep_enable_timer_wakeup(SLEEP_SEC * 1000000ULL);
+  esp_sleep_enable_ext0_wakeup(PIN_BTN, 0);
+  rtc_gpio_pullup_en(PIN_BTN);
+  rtc_gpio_pulldown_dis(PIN_BTN);
+  Serial.printf("Awake %lu ms. Sleep %llu s\n", millis(), SLEEP_SEC);
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+void setup() {
+  Serial.begin(115200);
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  bool byButton = (cause == ESP_SLEEP_WAKEUP_EXT0);
+  dht.begin();
+  Wire.begin(21, 22);
+  oledOk = oled.begin(SSD1306_SWITCHCAPVCC, 0x3C);   // also switches the display back on
+  if (oledOk) oled.setTextColor(SSD1306_WHITE);
+  if (cause != ESP_SLEEP_WAKEUP_TIMER &amp;&amp; !byButton) delay(2000);  // first power-up: DHT22 not ready
+
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  int light = map(analogRead(PIN_LDR), 4095, 0, 0, 100);
+  const char* alert = nullptr;
+  if (!byButton) {
+    wakeCount++;
+    // ---- 1) alarm logic: hysteresis, reminder every 2 wake-ups (10 minutes) ----
+    if (!isnan(t)) {
+      if (!alarmOn &amp;&amp; t &gt; TEMP_HIGH)       { alarmOn = true;  alert = "ALERT: temperature high"; }
+      else if (alarmOn &amp;&amp; t &lt; TEMP_CLEAR)  { alarmOn = false; alert = "OK: temperature back to normal"; }
+      else if (alarmOn &amp;&amp; wakeCount - lastAlertWake &gt;= 2) alert = "ALERT: still high";
+    }
+  }
+  show(t, h, light, byButton);
+  uint32_t tShown = millis();
+  Serial.printf("%s  T=%.1f C  H=%.0f %%  light=%d %%  alarm=%s\n",
+                byButton ? "Button" : ("Wake #" + String(wakeCount)).c_str(), t, h, light, alarmOn ? "ON" : "off");
+
+  if (!byButton) {
+    if (alarmOn) {                             // the local alarm: one short beep per wake-up
+      ledcAttach(PIN_BUZ, 2000, 8);
+      ledcWriteTone(PIN_BUZ, 2000);
+      delay(150);
+      ledcWriteTone(PIN_BUZ, 0);
+    }
+    bool sendValues = (wakeCount % 6 == 0) &amp;&amp; !isnan(t);   // every 6th wake = every 30 min
+
+    // ---- 2) the network only if there is something to send ----
+    if (alert == nullptr &amp;&amp; !sendValues) {
+      Serial.println("Nothing to send, Wi-Fi stays off");
+    } else if (!connectWiFiFast()) {
+      Serial.println("Wi-Fi failed, will retry next wake");
+    } else {
+      mqtt.setServer(MQTT_HOST, 1883);
+      String id = "esp32-station-" + String((uint32_t)ESP.getEfuseMac(), HEX) + "-" + String(esp_random() &amp; 0xFFFF, HEX);
+      if (mqtt.connect(id.c_str())) {
+        if (alert != nullptr) {
+          String topic = String(BASE) + "alert";
+          mqtt.publish(topic.c_str(), alert);
+          lastAlertWake = wakeCount;           // counts only when it really went out
+          Serial.printf("Sent alert: %s\n", alert);
+        }
+        if (sendValues) {
+          publishValue("temp", t, 1);
+          publishValue("hum", h, 0);
+          publishValue("light", light, 0);
+          Serial.println("Sent values");
+        }
+        mqtt.loop();
+        delay(50);                             // a moment for the packets to leave
+        mqtt.disconnect();
+      } else {
+        Serial.println("MQTT failed, will retry next wake");
+      }
+    }
+  }
+  while (millis() - tShown &lt; SHOW_MS) delay(10);   // the rest of the 3 s on screen
+  goToSleep();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="exBatt">
+  <li data-lines="10-20"><b class="what">Settings.</b> The sleep time in seconds, the Wi-Fi time limit, 3 seconds on screen, and the pins from the station (the button is a <code>gpio_num_t</code> because EXT0 needs one).
+    <span class="why">Seconds instead of minutes, so a test with 10 seconds needs no other change.</span></li>
+  <li data-lines="28-33"><b class="what">RTC memory.</b> The alarm state, the wake-up counter, the wake-up number of the last alert that really went out, and the Wi-Fi shortcut.
+    <span class="why"><code>millis()</code> starts from zero after every wake-up, so the reminder can't be timed in milliseconds; we count wake-ups instead (hint: every 2 wake-ups = 10 minutes).</span></li>
+  <li data-lines="35-55"><b class="what">connectWiFiFast() from 6.1 and publishValue() from the final program, unchanged.</b>
+    <span class="why">The shortcut through the saved channel and BSSID shortens the most expensive part of the wake-up.</span></li>
+  <li data-lines="57-73"><b class="what">show(): the display for one wake-up.</b> The wake-up number (or "Button reading"), temperature and humidity in large text, light and alarm state at the bottom.
+    <span class="why">The same layout as the always-on station, so the device looks the same in both modes.</span></li>
+  <li data-lines="75-88"><b class="what">goToSleep(): everything off, two wake-up sources.</b> Wi-Fi off, OLED off, wait until the button is released, then the timer and EXT0 on GPIO27 with the RTC pull-up.
+    <span class="why">A lit OLED would drain the battery on its own. Timer and button can both wake the board; whichever comes first wins.</span></li>
+  <li data-lines="90-98"><b class="what">Start of setup: why did I wake up?</b> The button, the timer, or a fresh power-up. <code>oled.begin</code> also switches the display back on. Only a fresh power-up waits 2 seconds for the DHT22.
+    <span class="why">During deep sleep the sensor stays powered, so on timer and button wake-ups it's ready at once; waiting there would only cost battery.</span></li>
+  <li data-lines="100-112"><b class="what">Read, then decide on the alarm (timer wake-ups only).</b> The same hysteresis as the final program; the reminder condition is <code>wakeCount - lastAlertWake &gt;= 2</code>.
+    <span class="why">A button wake-up is only for looking: it doesn't count as a wake-up and doesn't change the alarm, so the timing of reminders and value uploads stays regular.</span></li>
+  <li data-lines="113-116"><b class="what">Show and print, and note the time.</b>
+    <span class="why">The 3 seconds on screen start now; the network work below happens while the display is already showing the values.</span></li>
+  <li data-lines="118-125"><b class="what">One short beep while the alarm is on; values every sixth wake-up.</b>
+    <span class="why">This is the trade-off from the "Battery mode" section: no blinking and no continuous beeping in sleep, just one beep per wake-up.</span></li>
+  <li data-lines="127-154"><b class="what">The network only when needed.</b> Nothing to send → Wi-Fi stays off. Otherwise: connect fast, send the alert and/or the values, give the packets a moment, disconnect. <code>lastAlertWake</code> is updated only when the alert really went out.
+    <span class="why">Most wake-ups (5 out of 6 without an alarm) don't touch Wi-Fi at all, which is where the battery life comes from. If an alert fails, the next wake-up sends a reminder, so the problem isn't forgotten.</span></li>
+  <li data-lines="156-157"><b class="what">Wait for the rest of the 3 seconds, then sleep.</b>
+    <span class="why">Sending happens inside the 3 display seconds, so a send doesn't make the wake-up longer unless Wi-Fi is slow.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="exBatt">
+<p>The station circuit. Add the four libraries in the Library Manager tab and set <code>SLEEP_SEC</code> to 10. Deep sleep with a timer and with EXT0 works in Wokwi; press the yellow button during sleep for an instant reading.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type":  "board-esp32-devkit-c-v4", "id":  "esp", "top":  0, "left":  0, "attrs":  {} },
+    { "type":  "wokwi-dht22", "id":  "dht1", "top":  -110, "left":  170, "attrs":  { "temperature":  "28", "humidity":  "45"} },
+    { "type":  "wokwi-photoresistor-sensor", "id":  "ldr1", "top":  250, "left":  170, "attrs":  {} },
+    { "type":  "board-ssd1306", "id":  "oled1", "top":  60, "left":  260, "attrs":  { "i2cAddress":  "0x3c"} },
+    { "type":  "wokwi-resistor", "id":  "r1", "top":  110, "left":  -130, "attrs":  { "value":  "220"} },
+    { "type":  "wokwi-led", "id":  "led1", "top":  40, "left":  -60, "attrs":  { "color":  "red"} },
+    { "type":  "wokwi-buzzer", "id":  "bz1", "top":  170, "left":  -160, "attrs":  { "volume":  "0.2"} },
+    { "type":  "wokwi-pushbutton", "id":  "btn1", "top":  280, "left":  -170, "attrs":  { "color":  "yellow", "label":  "Mute"} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:AO", "esp:35", "blue", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "r1:1", "esp:4", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ],
+    [ "bz1:2", "esp:25", "orange", [] ],
+    [ "bz1:1", "esp:GND.1", "black", [] ],
+    [ "btn1:1.l", "esp:27", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+<p><b>The battery estimate.</b> One full cycle is 6 wake-ups = 30 minutes = 1800 s. Assumptions (measure your own): a normal wake-up is 3.3 s at about 50 mA (ESP32 plus the lit OLED); the wake-up that sends is about 4 s at about 120 mA (Wi-Fi).</p>
+<ul>
+<li>Awake charge per cycle: 5 × 3.3 × 50 + 1 × 4 × 120 = 825 + 480 = 1305 mA·s. Awake time: 5 × 3.3 + 4 = 20.5 s, so 1779.5 s of sleep.</li>
+<li><b>Low-power board</b> (sleep about 0.2 mA, including the DHT22 and the switched-off OLED): 1779.5 × 0.2 ≈ 356 mA·s. I_avg = (1305 + 356) ÷ 1800 ≈ 0.92 mA. Life = 2000 ÷ 0.92 ≈ 2170 h ≈ 90 days; realistic (× 0.75) about 68 days.</li>
+<li><b>DevKitC</b> (sleep about 6 mA): 1779.5 × 6 ≈ 10680 mA·s. I_avg = (1305 + 10680) ÷ 1800 ≈ 6.66 mA. Life = 2000 ÷ 6.66 ≈ 300 h ≈ 12.5 days; realistic about 9 days.</li>
+<li>The biggest awake cost is the 3 seconds of display on every wake-up (825 of 1305). Showing the values only on button wake-ups would roughly halve the awake charge.</li>
+</ul>
+</details>
 </div>
 
 <h2 id="certificate">🎓 You can now...</h2>
