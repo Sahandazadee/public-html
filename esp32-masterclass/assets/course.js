@@ -3,7 +3,7 @@
 window.COURSE = {
   title: "مستر کلاس ESP32 فارسی", title_en: "ESP32 Masterclass",
   /* صفحه‌هایی که نسخه انگلیسی آن‌ها منتشر شده؛ وقتی همه آماده شد مقدار "all" می‌گیرد */
-  enPages: ["2-3"],
+  enPages: ["1-1", "1-2", "2-3"],
   chapters: [
     { n: 1, title: "آشنایی با سخت‌افزار ESP32", title_en: "Meet the ESP32 hardware", color: "#2f7af0", lessons: [
       { id: "1-1", title: "ESP32 چیست؟ مقایسه با آردوینو و رزبری پای", min: 35, level: "مبتدی", title_en: "What is the ESP32? Compared with Arduino and Raspberry Pi", level_en: "Beginner" },

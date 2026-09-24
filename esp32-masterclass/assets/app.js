@@ -579,7 +579,7 @@
     var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode: function (n) {
         for (var p = n.parentNode; p && p !== root; p = p.parentNode) {
-          if (SKIP.test(p.nodeName.toUpperCase()) || (p.classList && (p.classList.contains("term") || p.classList.contains("code") || p.classList.contains("serial") || p.classList.contains("no-term") || p.classList.contains("pinout") || p.classList.contains("wiring") || p.classList.contains("quiz")))) return NodeFilter.FILTER_REJECT;
+          if (SKIP.test(p.nodeName.toUpperCase()) || (p.classList && (p.classList.contains("term") || p.classList.contains("code") || p.classList.contains("serial") || p.classList.contains("no-term") || p.classList.contains("lesson-head") || p.classList.contains("pinout") || p.classList.contains("wiring") || p.classList.contains("quiz")))) return NodeFilter.FILTER_REJECT;
         }
         return n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       }
