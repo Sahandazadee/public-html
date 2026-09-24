@@ -27,7 +27,7 @@
     <li>Build a BLE server with a writable characteristic and notify, and test it with nRF Connect</li>
   </ul></div>
   <div><h4>🧰 Prerequisites and parts</h4><ul>
-    <li>Lesson <a href="2-3.html">2.3</a> (LED) and lesson <a href="4-1.html">4.1</a> (events and millis)</li>
+    <li>Lesson <a href="2-2.html">2.2</a> (LED) and lesson <a href="4-1.html">4.1</a> (events and millis)</li>
     <li>An <b>original ESP32</b> board (DevKitC or similar). For part A, an ESP32-C3 or S3 will not work</li>
     <li>One LED and a 220 Ω resistor</li>
     <li>An Android phone with the free <b>Serial Bluetooth Terminal</b> app (by Kai Morich) and the free <b>nRF Connect</b> app (by Nordic, for Android and iPhone)</li>
@@ -71,7 +71,7 @@
 <p>If your board is an ESP32-C3 or ESP32-S3, part A (BluetoothSerial) won't even compile, and you'll get the error <code>Serial Port Profile for Bluetooth is not available or not enabled</code> or something similar. Go straight to <a href="#ble">part B (BLE)</a>, which works on all of these boards (except the S2).</p></div>
 
 <h2 id="wiring">Wiring (for both parts)</h2>
-<p>Just one LED on GPIO4, exactly as in lesson 2.3. Everything else is wireless.</p>
+<p>Just one LED on GPIO4, exactly as in lesson 2.2. Everything else is wireless.</p>
 <div class="wiring"><script type="application/json">{
   "board":"ESP32 DevKitC",
   "parts":[
@@ -207,6 +207,19 @@ Command: [hello]</div>
 <p>The Bluetooth organization has defined short 16-bit UUIDs for standard services; for example <code>0x180F</code> means "Battery Service" and <code>0x2A19</code> means "Battery Level". Every phone in the world knows these. For something you invented yourself (like our LED), you must make a random 128-bit UUID. The number of possible values is so huge (about 10 to the power of 38) that the chance of anyone else in the world making the same one is practically zero. To make your own UUIDs, use a site like <a href="https://www.uuidgenerator.net/" target="_blank" rel="noopener">uuidgenerator.net</a>. Never use the standard UUIDs for your own things, or the phone will think your device is, say, a heart-rate monitor.</p></div>
 <div class="callout example"><div class="ct">Notify, with numbers</div>
 <p>Without Notify, the phone has to "read" (Read) every time it wants the latest value; that's polling, as in lesson 4.2. With Notify, the ESP32 sends the new value by itself every 2 seconds. In one hour that's 1,800 small messages, instead of the phone asking "anything new?" every 200 milliseconds, say (18,000 times an hour). Ten times fewer messages means less battery for both sides.</p></div>
+
+<div class="callout info" id="cpp-primer"><div class="ct">A five-minute C++ primer for the code below</div>
+<p>The BLE library is written in "real" C++, so the next program uses a few words you haven't needed yet. Think of building houses:</p>
+<ul>
+  <li><b>class</b>: a blueprint. <code>BLEServer</code> is the blueprint of "a BLE server"; it describes what one has and what it can do, but it isn't a server yet.</li>
+  <li><b>object</b>: an actual house built from the blueprint. <code>WebServer server(80);</code> in lesson 4.2 built one object called <code>server</code>. You can build many houses from one blueprint.</li>
+  <li><b>pointer</b> (<code>*</code>): a note with a house's street address on it, not the house itself. <code>BLEServer* pServer</code> is such a note; the library builds the house and hands you only its address. <code>nullptr</code> is an empty note: "no address yet". And <code>&amp;x</code> means "write down the address of <code>x</code>", as in <code>getLocalTime(&amp;t)</code> in lesson 4.1.</li>
+  <li><b><code>-&gt;</code></b>: "go to the address on this note and use what's there". <code>pServer-&gt;setCallbacks(...)</code> calls a function of the object the pointer points to. With a plain object you use a dot instead: <code>server.begin()</code>.</li>
+  <li><b>new</b>: build a new house now and give me its address. <code>new LedCallbacks()</code> makes an object that stays alive for the whole program (it isn't thrown away at the end of <code>setup</code>).</li>
+  <li><b>inheritance and override</b>: <code>class LedCallbacks : public BLECharacteristicCallbacks</code> means "my blueprint is the library's blueprint plus my changes". The library's version is like a standard form with empty lines (<code>onWrite</code> does nothing); <code>override</code> says "I'm filling in exactly this line", and the compiler complains if the line's name or shape doesn't match.</li>
+  <li><b><code>::</code></b>: "belongs to the blueprint itself", not to one particular house. <code>BLEDevice::init(...)</code> is like calling the company's main office rather than a single employee; there's only one BLE radio, so no object is needed.</li>
+</ul>
+<p>You don't need to write classes yourself yet. It's enough to read the program below and recognize these pieces.</p></div>
 
 <h3>The BLE server program</h3>
 <div class="code" data-file="BLE_LED_Counter.ino" id="codeBLE"><pre>
@@ -346,6 +359,8 @@ void loop() {
     <span class="why">Together these two variables detect an "edge": the moment of change from disconnected to connected or back. It's the same idea as detecting the moment a button is pressed in lesson 3.1.</span></li>
 </ol>
 
+<div class="callout warn"><div class="ct">How much fits in one notification? 20 bytes by default</div>
+<p>A BLE connection starts with an MTU (the maximum packet size) of 23 bytes, and 3 of those are overhead, so one notify or read carries <b>20 bytes of data</b> by default. <code>count=1800</code> (10 bytes) fits easily; <code>temperature=23.5 humidity=41.2</code> (32 bytes) does not: the library cuts it to the first 20 bytes and prints a warning. Many phones ask for a bigger MTU after connecting (nRF Connect on Android has a "Request MTU" menu item), but you can't count on it. The simple rule: keep each value short (a number, or a few letters), or give each value its own characteristic.</p></div>
 <div class="callout warn"><div class="ct">Careful: BLE differences between core 3.x and 2.x</div>
 <p>In core 2.x, <code>getValue()</code> returns a <code>std::string</code> (the standard C++ string), and almost every older tutorial has this line: <code>std::string value = pCharacteristic-&gt;getValue();</code>. In core 3.x the function returns an Arduino <code>String</code>, and that line no longer compiles (you get an error like <code>conversion from 'String' to non-scalar type 'std::string' requested</code>). The fix: write <code>String value = ...</code>. If you really need a std::string: <code>std::string v = c-&gt;getValue().c_str();</code>. In core 3.x, <code>setValue</code> also accepts a <code>String</code>. Details are in the <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/migration_guides/2.x_to_3.0.html" target="_blank" rel="noopener">2.x to 3.0 migration guide</a>.</p></div>
 <div class="callout tip"><div class="ct">A lighter alternative: NimBLE-Arduino</div>

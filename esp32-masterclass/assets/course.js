@@ -13,8 +13,8 @@ window.COURSE = {
     ]},
     { n: 2, title: "نصب ابزار و اولین برنامه", title_en: "Tools and your first program", color: "#12a37f", lessons: [
       { id: "2-1", title: "نصب Arduino IDE و PlatformIO", min: 40, level: "مبتدی", title_en: "Installing Arduino IDE and PlatformIO", level_en: "Beginner" },
-      { id: "2-2", title: "شبیه‌ساز Wokwi: بدون سخت‌افزار شروع کن", min: 30, level: "مبتدی", title_en: "The Wokwi simulator: start with no hardware", level_en: "Beginner" },
-      { id: "2-3", title: "اولین برنامه: چشمک زدن LED خط به خط", min: 50, level: "مبتدی", title_en: "First program: blinking an LED, line by line", level_en: "Beginner" }
+      { id: "2-2", title: "اولین برنامه: چشمک زدن LED خط به خط", min: 50, level: "مبتدی", title_en: "First program: blinking an LED, line by line", level_en: "Beginner" },
+      { id: "2-3", title: "شبیه‌ساز Wokwi: بدون سخت‌افزار شروع کن", min: 30, level: "مبتدی", title_en: "The Wokwi simulator: start with no hardware", level_en: "Beginner" }
     ]},
     { n: 3, title: "ورودی، خروجی و پروتکل‌های سخت‌افزاری", title_en: "Inputs, outputs and hardware protocols", color: "#e0781f", lessons: [
       { id: "3-1", title: "ورودی و خروجی دیجیتال و آنالوگ: دکمه، پتانسیومتر، LDR", min: 55, level: "مبتدی تا متوسط", title_en: "Digital and analog I/O: buttons, potentiometers and LDRs", level_en: "Beginner to intermediate" },
@@ -31,7 +31,9 @@ window.COURSE = {
       { id: "5-1", title: "پروتکل MQTT با HiveMQ و Adafruit IO", min: 60, level: "پیشرفته", title_en: "MQTT with HiveMQ and Adafruit IO", level_en: "Advanced" },
       { id: "5-2", title: "ESP-NOW: ارتباط مستقیم دو ESP32 بدون مودم", min: 50, level: "پیشرفته", title_en: "ESP-NOW: two ESP32s talking without a router", level_en: "Advanced" },
       { id: "5-3", title: "ESP32-CAM: پخش زنده تصویر و ذخیره عکس روی کارت SD", min: 65, level: "پیشرفته", title_en: "ESP32-CAM: live video and photos to an SD card", level_en: "Advanced" },
-      { id: "5-4", title: "ابزارهای پروژه واقعی: FreeRTOS، آپدیت بی‌سیم OTA، LittleFS و فراخوانی API", min: 75, level: "پیشرفته", title_en: "Real-project tools: FreeRTOS, OTA updates, LittleFS and web APIs", level_en: "Advanced" }
+      { id: "5-4", title: "FreeRTOS: چند کار هم‌زمان، صف و نگهبان (Watchdog)", min: 55, level: "پیشرفته", title_en: "FreeRTOS: tasks, queues and the watchdog", level_en: "Advanced" },
+      { id: "5-5", title: "آپدیت بی‌سیم OTA و فایل‌سیستم LittleFS", min: 50, level: "پیشرفته", title_en: "OTA updates and LittleFS", level_en: "Advanced" },
+      { id: "5-6", title: "API وب، HTTPS و دستگاهی که ماه‌ها کار کند", min: 60, level: "پیشرفته", title_en: "Web APIs, HTTPS and a device that runs for months", level_en: "Advanced" }
     ]},
     { n: 6, title: "مدیریت انرژی، هوش مصنوعی و پروژه نهایی", title_en: "Power, AI and the final project", color: "#0f8fa8", lessons: [
       { id: "6-1", title: "خواب عمیق و خواب سبک برای دستگاه‌های باتری‌خور", min: 50, level: "پیشرفته", title_en: "Deep sleep and light sleep for battery devices", level_en: "Advanced" },

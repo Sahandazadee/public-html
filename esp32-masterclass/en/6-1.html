@@ -32,7 +32,7 @@
     <li>Lessons <a href="3-1.html">3.1</a> (buttons and inputs), <a href="3-3.html">3.3</a> (DHT22), <a href="4-1.html">4.1</a> (Wi-Fi) and <a href="5-1.html">5.1</a> (MQTT)</li>
     <li>An ESP32 DevKitC board, two push buttons, two 10 kΩ resistors</li>
     <li>A DHT22 sensor (or a DHT22 module)</li>
-    <li>A digital multimeter (for the measuring section)</li>
+    <li>A digital multimeter and the second ESP32 board from lesson 5.2 as a 5 V source (for the measuring section); optional: a USB power meter</li>
     <li>Optional: a lithium battery, a TP4056 charger module with protection, a low-power regulator such as the HT7833</li>
   </ul></div>
 </div>
@@ -130,14 +130,78 @@
 <div class="callout warn"><div class="ct">Don't be fooled by the code alone</div>
 <p>Your sleep code can be completely correct and the battery can still be dead in a week. That doesn't mean the code has a problem; it means the <b>hardware</b> does. Until you have measured, make no promises about battery life.</p></div>
 
-<h3 id="measure">Measuring current with a multimeter (safely)</h3>
+<h2 id="battery">Batteries for beginners: lithium cells, regulators, chargers</h2>
+<p>(You saw the basics of powering a circuit, regulators and the "common ground" rule in the <a href="1-4.html#power">power section of lesson 1.4</a>; here we only add the points that are specific to batteries and sleep.) The most popular battery for the ESP32 is a single-cell lithium battery: either a <b>LiPo</b> (a flat pouch, usually with a JST connector) or a cylindrical <b>18650</b> cell. Both have a nominal voltage of 3.7 V: 4.2 V when full and about 3.0 V when nearly empty.</p>
+
+<div class="callout warn"><div class="ct">Don't connect the battery straight to 3V3</div>
+<p>The board's 3V3 pin goes straight to the ESP32, and the ESP32 can only tolerate up to about 3.6 V. A full battery is 4.2 V, so connecting it directly can damage the chip. Connecting it to the 5V pin isn't a good idea either: the AMS1117 regulator on the board needs about one volt of headroom, so with a 3.7 V input its output drops below 3 V and the board resets the moment Wi-Fi transmits (a brownout). On top of that, it still has its own quiescent draw of several milliamps.</p></div>
+
+<p>The right way is a <b>low-power LDO regulator</b> with two properties: (1) a <b>very low quiescent current</b>, just a few microamps, and (2) the ability to supply Wi-Fi's current bursts (a few hundred milliamps) with a small voltage drop.</p>
+<div class="table-wrap"><table>
+<tr><th>Regulator</th><th>Maximum current</th><th>Quiescent current (per datasheet)</th><th>Notes</th></tr>
+<tr><td>AMS1117-3.3 (on most boards)</td><td>About 1 A</td><td>About 5 mA</td><td>Not suitable for batteries</td></tr>
+<tr><td>HT7833</td><td>500 mA</td><td>A few microamps</td><td>A good, cheap choice for an ESP32 on a lithium battery</td></tr>
+<tr><td>MCP1700-3302</td><td>250 mA</td><td>About 1.6 µA</td><td>Excellent quiescent current, but 250 mA is borderline for Wi-Fi peaks; a large capacitor (e.g. 470 µF) on the output is required, and the board may still reset</td></tr>
+</table></div>
+<div class="callout info"><div class="ct">What does dropout mean?</div>
+<p>To give a steady 3.3 V, every regulator needs its input to be a little above 3.3 V. That gap is called the "dropout voltage". With a good LDO, the output stays at a proper 3.3 V down to a battery voltage of about 3.5 V; below that, the output sags a little. The ESP32 usually keeps working down to about 3 V, but Wi-Fi becomes unstable at low voltages. Always read the datasheet of the regulator you buy.</p></div>
+
+<h3>The charger: a TP4056 module</h3>
+<p>Charge a lithium battery <b>only</b> with a charger made for lithium cells. The cheapest option is a TP4056 module, which runs from USB and charges the battery up to 4.2 V. It comes in two versions: charger only, and a version <b>with protection</b> (it has a DW01 chip with transistors next to it, and separate OUT+ and OUT− outputs). Always buy the version with protection, and connect the load (the regulator and the ESP32) to <code>OUT+</code> and <code>OUT−</code>, not straight to the battery.</p>
+<div class="callout example"><div class="ct">Work it out: the charging current</div>
+<p>On a TP4056 module, a resistor called R_PROG sets the charging current. According to the datasheet it is roughly <code>I = 1200 ÷ R_PROG</code> (current in amps, resistance in ohms). Typical modules have 1.2 kΩ, which means 1 A. The safety rule: don't charge faster than 1C, the battery's capacity number. For a 500 mAh battery, 1 A is 2C and dangerous; you need to change R_PROG to about 2.4 kΩ so the current becomes 500 mA.</p></div>
+
+<div class="callout warn"><div class="ct">Lithium battery safety is no joke</div>
+<ul>
+  <li>Set aside any battery that is swollen, punctured, crushed or hot right away; never charge it.</li>
+  <li>Never short-circuit the terminals, not even for a moment. A lithium battery delivers a very large current that can make a wire red-hot and melt it.</li>
+  <li><b>Check the polarity of the JST connector before plugging it in.</b> Different manufacturers put the red and black wires in the connector the opposite way round; plugging it in reversed burns out the charger or the board.</li>
+  <li>Do your first few charges under supervision on a fireproof surface (a tile or a metal tray, for example), not on a bed or a carpet.</li>
+  <li>Don't use an "unprotected" 18650 cell without a protection circuit.</li>
+  <li>Don't leave a battery in direct sunlight or in a hot car.</li>
+</ul></div>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC (powered through the 3V3 pin)",
+  "parts":[
+    {"id":"CHG","name":"TP4056 module with protection","pins":[["B+","to battery positive"],["B-","to battery negative"],["OUT+","protected output +"],["OUT-","protected output −"]]},
+    {"id":"BAT","name":"3.7 V LiPo battery","pins":[["+","positive"],["-","negative"]]},
+    {"id":"LDO","name":"HT7833 regulator","pins":[["VIN","input"],["VOUT","3.3 V output"],["GND","ground"]]}
+  ],
+  "wires":[["BAT.+","CHG.B+","red"],["BAT.-","CHG.B-","black"],["CHG.OUT+","LDO.VIN","red"],["CHG.OUT-","LDO.GND","black"],["LDO.VOUT","3V3","red"],["LDO.GND","GND","black"]]
+}</script><figcaption>The complete battery power chain: battery → charger with protection → low-power LDO → 3V3 pin. Next to the LDO's input and output pins, fit the capacitors its datasheet asks for (for example 10 µF ceramic), plus a larger electrolytic capacitor (for example 100 to 470 µF) close to the ESP32. Never connect USB and this supply at the same time; two sources on the same 3V3 rail fight each other.</figcaption></div>
+
+<h2 id="measure">Measuring current with a multimeter (safely)</h2>
 <p>If you're not yet comfortable with your multimeter's sockets and selector dial, first review the <a href="1-4.html#multimeter">multimeter section in lesson 1.4</a>; here we only add current measurement.</p>
+<p>You don't need a battery to measure current. Two ways, from easiest to most precise:</p>
+<ul>
+  <li><b>A USB power meter</b> (a small "USB tester" that plugs in between the USB charger or computer and the board's cable; they cost a few dollars). It shows volts and milliamps directly, with no wiring at all. Most of them only resolve 1 to 10 mA, so they're great for the awake current and for seeing the difference between "awake" and "asleep" on a dev board, but too coarse for microamps.</li>
+  <li><b>Your multimeter in series with the 5V line</b>, with no extra parts. The board you measure gets its 5 V through the multimeter instead of through its own USB socket. The 5 V comes from your second ESP32 board (the one from lesson <a href="5-2.html">5.2</a>) plugged into USB: its <b>5V</b> pin carries the USB 5 V. Any other 5 V USB source with pins works too. The wiring and the steps are below.</li>
+</ul>
 <figure><div class="frame"><img src="../assets/img/multimeter.jpg" alt="Measuring a lithium battery with a digital multimeter"></div>
 <figcaption>A digital multimeter. For voltage you place the two leads <b>in parallel</b> (across the two ends of the battery); for current, the multimeter must sit <b>in series</b>, in the path of the current. <span class="src">Image: Arduino (arduino/docs-content), CC BY-SA 4.0</span></figcaption></figure>
 
 <div class="callout analogy"><div class="ct">Why in series? A water meter</div>
 <p>A water meter is fitted in the middle of the pipe so that all the water flows through it and gets counted. An ammeter works the same way: you have to cut the pipe (the wire) and put the ammeter in the middle. If you put the ammeter "beside" the battery (in parallel), it's like connecting the pipe straight to the drain: the ammeter has almost zero resistance, so you are effectively short-circuiting the battery. The result: the multimeter's fuse blows and a lithium battery may get hot.</p></div>
 
+<div class="wiring"><script type="application/json">{
+  "board":"Board being measured (no USB)",
+  "parts":[
+    {"id":"SRC","name":"Second ESP32 board, plugged into USB (only a 5 V source)","pins":[["5V","5V pin (USB 5 V)"],["GND","GND pin"]]},
+    {"id":"MM","name":"Multimeter set to DC current","img":"multimeter.jpg","pins":[["mA","mA or 10A input"],["COM","common input (black)"]]}
+  ],
+  "wires":[["SRC.5V","MM.mA","red","red probe lead"],["MM.COM","5V","red"],["SRC.GND","GND","black"]]
+}</script><figcaption>The multimeter sits in series with the 5 V line: all the current the measured board uses flows through it. The two grounds are connected directly. The measured board's USB cable must be unplugged; otherwise it takes its power from USB and your reading means nothing. This measures the whole dev board (regulator, USB chip and LED included), which is exactly the honest number from the section above.</figcaption></div>
+
+<ol class="steps">
+  <li><b>Upload first, then unplug.</b> Upload the sleep program to the board you want to measure, then unplug its USB cable. The program stays in flash; from now on only the 5 V line through the multimeter powers it.</li>
+  <li><b>Move the multimeter's red lead to the current socket.</b> Start with the <code>10A</code> socket (or the largest range) and turn the selector to DC current (the A with a straight line). Always start with the largest range, then go down.</li>
+  <li><b>Put the multimeter in the gap:</b> the source's 5V pin → red probe, black probe (COM) → the measured board's 5V pin. Then connect the two GND pins with a plain jumper wire.</li>
+  <li><b>Read the awake current</b> (tens of milliamps, with brief jumps). Most multimeters are far too slow to catch the short Wi-Fi peaks; the number on the display is only an approximation.</li>
+  <li><b>Once the board is asleep</b>, lower the range to mA for a more precise reading. On a DevKitC, expect a few milliamps even in deep sleep: that's the regulator and the USB chip from the section above, not your code.</li>
+  <li><b>Finished?</b> <b>Always</b> move the red lead back to the voltage (V) socket. Otherwise your next mistake will be measuring the battery voltage with the lead still in the current socket, which is a short circuit.</li>
+</ol>
+<p><b>Measuring a battery build.</b> Once you've built the battery chain from the section above, you measure it the same way, with the multimeter between the battery's positive lead and the regulator's input. Here the µA range becomes useful, because a good LDO and a bare module really can sleep in the microamp range:</p>
 <div class="wiring"><script type="application/json">{
   "board":"ESP32 DevKitC (powered through the 3V3 pin)",
   "parts":[
@@ -147,15 +211,6 @@
   ],
   "wires":[["BAT.+","MM.mA","red","red probe lead"],["MM.COM","LDO.VIN","red"],["LDO.VOUT","3V3","red"],["LDO.GND","GND","black"],["BAT.-","GND","black"]]
 }</script><figcaption>The multimeter in series with the battery's positive lead: all the current flows through it. The USB cable must be unplugged for this test; otherwise the board takes its power from USB and your reading means nothing. (Check the regulator's real pinout in the datasheet for the exact package you have; the pin order differs between packages.)</figcaption></div>
-
-<ol class="steps">
-  <li><b>Unplug the board from USB.</b> Only the battery or the power supply should be powering it.</li>
-  <li><b>Move the multimeter's red lead to the current socket.</b> Start with the <code>10A</code> socket (or the largest range) and turn the selector to DC current (the A with a straight line). Always start with the largest range, then go down.</li>
-  <li><b>Open the circuit and put the multimeter in the gap:</b> battery positive → red probe, black probe (COM) → regulator input.</li>
-  <li><b>Read the awake current</b> (tens of milliamps, with brief jumps). Most multimeters are far too slow to catch the short Wi-Fi peaks; the number on the display is only an approximation.</li>
-  <li><b>Once the board is asleep</b>, lower the range to mA and then µA for a more precise reading.</li>
-  <li><b>Finished?</b> <b>Always</b> move the red lead back to the voltage (V) socket. Otherwise your next mistake will be measuring the battery voltage with the lead still in the current socket, which is a short circuit.</li>
-</ol>
 
 <div class="callout warn"><div class="ct">The "burden voltage" trap on the microamp range</div>
 <p>To measure current, the multimeter puts a small resistor in the path. On the µA range that resistor is fairly large. When the ESP32 wakes up and suddenly draws tens of milliamps, the voltage across that resistor rises, and the board may reset (<span class="term" data-t="Brownout">brownout</span>) and get stuck in an endless loop of waking up and resetting. If you see this, the problem is the multimeter, not your code: read the sleep current on the µA range and switch back to the mA range before the next wake-up, or use a dedicated current-measuring tool (a power profiler).</p></div>
@@ -254,21 +309,21 @@ Going to deep sleep for 10 s...</div>
 <h2 id="ext0">Waking up with a button (EXT0)</h2>
 <p>Sometimes you don't want the board to wake up every few minutes; you want it to wake up only when someone presses a button (like a doorbell or a remote control). For that we use <b>EXT0</b>: one specific pin at one specific level (LOW or HIGH) wakes the board.</p>
 <div class="callout warn"><div class="ct">Only RTC pins can wake the board</div>
-<p>In deep sleep only the RTC part has power, so only pins connected to the RTC (RTC GPIOs) can wake the board. On the ESP32 these are: <code>0, 2, 4, 12–15, 25–27, 32–39</code>. We chose <b>GPIO33</b> because it is an RTC pin, it is not a strapping pin, and it has internal pull-up and pull-down resistors. (GPIO34 to 39 have no internal resistors, and GPIO0, 2, 12 and 15 are strapping pins.)</p></div>
+<p>In deep sleep only the RTC part has power, so only pins connected to the RTC (RTC GPIOs) can wake the board. On the ESP32 these are: <code>0, 2, 4, 12–15, 25–27, 32–39</code>. We use <b>GPIO27</b>, the course's usual button pin (so it's already wired), because it is an RTC pin, it is not a strapping pin, and it has internal pull-up and pull-down resistors. (GPIO34 to 39 have no internal resistors, and GPIO0, 2, 12 and 15 are strapping pins.)</p></div>
 
 <div class="wiring"><script type="application/json">{
   "board":"ESP32 DevKitC",
   "parts":[
     {"id":"SW1","name":"Wake-up push button","img":"button.svg","pins":[["1","one side of the button"],["2","the other side of the button"]]}
   ],
-  "wires":[["GPIO33","SW1.1","blue"],["SW1.2","GND","black"]]
-}</script><figcaption>The button goes between GPIO33 and ground. The internal RTC pull-up resistor normally holds the pin HIGH; pressing the button pulls it LOW and the board wakes up.</figcaption></div>
+  "wires":[["GPIO27","SW1.1","blue"],["SW1.2","GND","black"]]
+}</script><figcaption>The button goes between GPIO27 and ground. The internal RTC pull-up resistor normally holds the pin HIGH; pressing the button pulls it LOW and the board wakes up.</figcaption></div>
 
 <div class="code" data-file="DeepSleep_Button.ino" id="dsExt0"><pre>
-// Waking up with a button (EXT0) on GPIO33
+// Waking up with a button (EXT0) on GPIO27
 #include "driver/rtc_io.h"
 
-const gpio_num_t WAKE_PIN = GPIO_NUM_33;     // must be an RTC pin
+const gpio_num_t WAKE_PIN = GPIO_NUM_27;     // must be an RTC pin
 RTC_DATA_ATTR int bootCount = 0;
 
 void setup() {
@@ -281,7 +336,7 @@ void setup() {
     Serial.println("Woken up by the button!");
   }
 
-  // the button is between GPIO33 and GND: pressed = LOW
+  // the button is between GPIO27 and GND: pressed = LOW
   esp_sleep_enable_ext0_wakeup(WAKE_PIN, 0);   // 0 means wake up on LOW
   rtc_gpio_pullup_en(WAKE_PIN);                // internal RTC pull-up on
   rtc_gpio_pulldown_dis(WAKE_PIN);             // pull-down off
@@ -296,7 +351,7 @@ void loop() {}
 <ol class="walk" data-for="dsExt0">
   <li data-lines="2"><b class="what">The rtc_io header.</b> The <code>rtc_gpio_...</code> functions are defined in this ESP-IDF header file.
     <span class="why">In deep sleep the pins are no longer controlled by <code>pinMode</code> (that part is switched off); the RTC part controls them. So the pull-up resistor has to be switched on through the RTC as well.</span></li>
-  <li data-lines="4"><b class="what">The gpio_num_t type.</b> The sleep functions want a <code>gpio_num_t</code> instead of a plain number; <code>GPIO_NUM_33</code> is simply pin 33.
+  <li data-lines="4"><b class="what">The gpio_num_t type.</b> The sleep functions want a <code>gpio_num_t</code> instead of a plain number; <code>GPIO_NUM_27</code> is simply pin 27.
     <span class="why">The compiler won't accept a plain number (an int) in its place, so you can't accidentally pass some unrelated number or variable where a pin belongs.</span></li>
   <li data-lines="13-15"><b class="what">Detecting a button wake-up.</b> If the wake-up cause was EXT0, a special message is printed.
     <span class="why">In a real project this is where the main work happens: for example, sending a "someone rang the doorbell" message.</span></li>
@@ -321,7 +376,7 @@ void loop() {}
   "connections": [
     [ "esp:TX", "$serialMonitor:RX", "", [] ],
     [ "esp:RX", "$serialMonitor:TX", "", [] ],
-    [ "btn1:1.r", "esp:33", "blue", [] ],
+    [ "btn1:1.r", "esp:27", "blue", [] ],
     [ "btn1:2.r", "esp:GND.1", "black", [] ]
   ],
   "dependencies": {}
@@ -343,7 +398,7 @@ void loop() {}
     {"id":"R2","name":"10 kΩ resistor (pull-down for B)","img":"resistor.svg","pins":[["1","to GPIO33"],["2","to GND"]]}
   ],
   "wires":[["3V3","SWA.1","red"],["SWA.2","GPIO32","blue"],["GPIO32","R1.1","blue"],["R1.2","GND","black"],["3V3","SWB.1","red"],["SWB.2","GPIO33","blue"],["GPIO33","R2.1","blue"],["R2.2","GND","black"]]
-}</script><figcaption>Each button has one side on 3V3 and the other side on an RTC pin. A 10 kΩ resistor normally holds each pin LOW. Pressing a button pulls its own pin HIGH.</figcaption></div>
+}</script><figcaption>Each button has one side on 3V3 and the other side on an RTC pin. A 10 kΩ resistor normally holds each pin LOW. Pressing a button pulls its own pin HIGH. This is the one place in the course where the buttons go to 3V3 instead of GND and sit on GPIO32 and GPIO33, because EXT1 on the original ESP32 can only wake on HIGH; for this example, temporarily rewire button 2 this way and use a second button on GPIO32, then put them back afterwards.</figcaption></div>
 
 <div class="code" data-file="DeepSleep_TwoButtons.ino" id="dsExt1"><pre>
 // Waking up with either of two buttons (EXT1)
@@ -413,18 +468,18 @@ void loop() {}
 </div>
 
 <h2 id="touch">Waking up with touch</h2>
-<p>The ESP32 has several <span class="term" data-t="Touch">touch</span> pins that work without any button: you just touch a wire or a piece of aluminum foil. These pins can wake the board from deep sleep too. We pick <b>T7, which is GPIO27</b>, because it is not a strapping pin.</p>
+<p>The ESP32 has several <span class="term" data-t="Touch">touch</span> pins that work without any button: you just touch a wire or a piece of aluminum foil. These pins can wake the board from deep sleep too. We pick <b>T9, which is GPIO32</b>, because it is not a strapping pin, and because GPIO32 already has the course's push button on it. (GPIO32 is the course's swappable pin for a servo or NeoPixel; neither is used in this lesson.)</p>
 
 <div class="wiring"><script type="application/json">{
   "board":"ESP32 DevKitC",
   "parts":[
-    {"id":"PAD","name":"Touch pad: a jumper wire or aluminum foil","pins":[["1","one wire to GPIO27; the other end free for touching"]]}
+    {"id":"PAD","name":"Touch pad: a jumper wire or aluminum foil","pins":[["1","one wire to GPIO32; the other end free for touching"]]}
   ],
-  "wires":[["GPIO27","PAD.1","blue"]]
-}</script><figcaption>Just one wire to GPIO27. Stick the other end of the wire to a piece of foil or a coin to make touching easier. No resistor is needed.</figcaption></div>
+  "wires":[["GPIO32","PAD.1","blue"]]
+}</script><figcaption>Just one wire to GPIO32. Stick the other end of the wire to a piece of foil or a coin to make touching easier. No resistor is needed.</figcaption></div>
 
 <div class="code" data-file="DeepSleep_Touch.ino" id="dsTouch"><pre>
-// Waking up by touch on GPIO27 (T7)
+// Waking up by touch on GPIO32 (T9)
 const int THRESHOLD = 40;   // on the ESP32: a touch reading below this = touched
 
 void setup() {
@@ -433,9 +488,9 @@ void setup() {
   if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TOUCHPAD) {
     Serial.println("Woken up by touch!");
   }
-  Serial.printf("touchRead(T7) now = %d\n", touchRead(T7));
-  touchSleepWakeUpEnable(T7, THRESHOLD);   // core 3.x API
-  Serial.println("Touch the wire on GPIO27 to wake me");
+  Serial.printf("touchRead(T9) now = %d\n", touchRead(T9));
+  touchSleepWakeUpEnable(T9, THRESHOLD);   // core 3.x API
+  Serial.println("Touch the wire on GPIO32 to wake me");
   Serial.flush();
   esp_deep_sleep_start();
 }
@@ -447,8 +502,8 @@ void loop() {}
     <span class="why">The right number depends on the wire length, the size of the foil and even the humidity. That's why line 10 prints the current value, so you can tune the threshold yourself: usually somewhere between the "not touched" and "touched" numbers. (On the ESP32-S2 and S3 it's the other way round: touching makes the number bigger.)</span></li>
   <li data-lines="7-9"><b class="what">Detecting a touch wake-up.</b> The cause is <code>ESP_SLEEP_WAKEUP_TOUCHPAD</code>.
     <span class="why">As with the other sources, after waking up we start from setup and need to find out why.</span></li>
-  <li data-lines="11"><b class="what">touchSleepWakeUpEnable(touch pin, threshold).</b> Registers pin T7 as a wake-up source.
-    <span class="why">This function was added in core 2.0.6 and is the recommended way in 3.x. Older tutorials use <code>touchAttachInterrupt(T7, callback, Threshold)</code> followed by <code>esp_sleep_enable_touchpad_wakeup()</code>.</span></li>
+  <li data-lines="11"><b class="what">touchSleepWakeUpEnable(touch pin, threshold).</b> Registers pin T9 as a wake-up source.
+    <span class="why">This function was added in core 2.0.6 and is the recommended way in 3.x. Older tutorials use <code>touchAttachInterrupt(T9, callback, Threshold)</code> followed by <code>esp_sleep_enable_touchpad_wakeup()</code>.</span></li>
 </ol>
 <div class="callout info"><div class="ct">Wokwi and touch</div>
 <p>Wokwi's official feature table for the ESP32 does not list the touch sensor among the simulated parts. Try this example on a real board only.</p></div>
@@ -457,7 +512,7 @@ void loop() {}
 <p>Say you use a pin to drive a transistor that switches the power of a power-hungry sensor on and off. When the ESP32 goes to sleep, its pins may be released and the transistor could switch on by accident. The <code>gpio_hold_en</code> function "locks" a pin's state.</p>
 <div class="code" data-file="DeepSleep_Hold.ino" id="dsHold"><pre>
 // Holding an output pin's state during deep sleep
-const gpio_num_t PWR_PIN = GPIO_NUM_25;   // e.g. the control pin of the sensor's power transistor
+const gpio_num_t PWR_PIN = GPIO_NUM_26;   // e.g. the control pin of the sensor's power transistor
 
 void goToSleep() {
   digitalWrite(PWR_PIN, LOW);             // the state we want: sensor power off
@@ -479,7 +534,7 @@ void loop() {}
 </pre></div>
 <ol class="walk" data-for="dsHold">
   <li data-lines="5-7"><b class="what">Locking the pin.</b> First we write the state we want, then <code>gpio_hold_en</code> locks it. On the ESP32, <code>gpio_deep_sleep_hold_en</code> turns on the lock for digital pins during deep sleep as well.
-    <span class="why">GPIO25 is an RTC pin, and for RTC pins <code>gpio_hold_en</code> alone is enough (it is equivalent to <code>rtc_gpio_hold_en</code>). Line 7 is needed for non-RTC pins, and having it here does no harm.</span></li>
+    <span class="why">GPIO26 is an RTC pin, and for RTC pins <code>gpio_hold_en</code> alone is enough (it is equivalent to <code>rtc_gpio_hold_en</code>). Line 7 is needed for non-RTC pins, and having it here does no harm.</span></li>
   <li data-lines="13"><b class="what">Releasing the lock after waking up.</b>
     <span class="why">If you don't release it, every later <code>digitalWrite</code> on this pin does nothing, and you can spend hours hunting for a bug that isn't in your code!</span></li>
 </ol>
@@ -492,7 +547,7 @@ void loop() {}
 // Light sleep: the program carries on from where it stopped
 #include "driver/gpio.h"
 
-const int BTN = 33;            // button between GPIO33 and GND
+const int BTN = 27;            // button between GPIO27 and GND
 int counter = 0;               // an ordinary variable; not wiped in light sleep
 
 void setup() {
@@ -543,8 +598,8 @@ void loop() {
     {"id":"DHT","name":"DHT22 sensor","img":"dht22.svg","pins":[["VCC","pin 1: 3.3 V power"],["DATA","pin 2: data"],["NC","pin 3: not connected"],["GND","pin 4: ground"]]},
     {"id":"R1","name":"10 kΩ resistor","img":"resistor.svg","pins":[["1","to DATA"],["2","to 3V3"]]}
   ],
-  "wires":[["3V3","DHT.VCC","red"],["GPIO4","DHT.DATA","blue"],["DHT.GND","GND","black"],["GPIO4","R1.1","blue"],["R1.2","3V3","red"]]
-}</script><figcaption>The DHT22 on GPIO4 (a safe pin) with a 10 kΩ pull-up resistor between DATA and 3V3. If you have a three-pin DHT22 module, the resistor is already on the module and you only need three wires.</figcaption></div>
+  "wires":[["3V3","DHT.VCC","red"],["GPIO13","DHT.DATA","blue"],["DHT.GND","GND","black"],["GPIO13","R1.1","blue"],["R1.2","3V3","red"]]
+}</script><figcaption>The DHT22 on GPIO13 (the course's usual DHT22 pin, a safe one) with a 10 kΩ pull-up resistor between DATA and 3V3. If you have a three-pin DHT22 module, the resistor is already on the module and you only need three wires.</figcaption></div>
 
 <div class="code" data-file="BatteryLogger.ino" id="logger"><pre>
 // Battery-powered logger: wake up, read, send, sleep
@@ -560,7 +615,7 @@ const char* TOPIC     = "esp32fa/lesson61/logger"; // make up a unique name of y
 const uint64_t SLEEP_MIN = 10;                     // every 10 minutes
 const uint32_t WIFI_TIMEOUT_MS = 8000;             // longest time to try Wi-Fi
 
-#define DHT_PIN  4
+#define DHT_PIN  13
 #define DHT_TYPE DHT22
 DHT dht(DHT_PIN, DHT_TYPE);
 WiFiClient net;
@@ -619,7 +674,7 @@ void setup() {
 
   if (connectWiFiFast()) {
     mqtt.setServer(MQTT_HOST, 1883);
-    String id = "esp32-logger-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+    String id = "esp32-logger-" + String((uint32_t)ESP.getEfuseMac(), HEX) + "-" + String(esp_random() &amp; 0xFFFF, HEX);
     if (mqtt.connect(id.c_str())) {
       char msg[64];
       snprintf(msg, sizeof(msg), "{\"t\":%.1f,\"h\":%.1f,\"n\":%lu}", t, h, bootCount);
@@ -655,7 +710,7 @@ void loop() {}
     <span class="why">According to its datasheet, the DHT22 isn't ready for about 1 to 2 seconds after power is applied, but the ESP32 boots in under half a second. Without this line, the first reading on a real board usually returns <code>nan</code>, the board sleeps for 10 minutes, and you think something is broken. On later (timer) wake-ups the sensor has already had power for a while, so the wait isn't needed and costs no battery life.</span></li>
   <li data-lines="62-69"><b class="what">Sensor first, then Wi-Fi.</b> If reading the DHT22 fails, we go to sleep <b>without switching Wi-Fi on</b>.
     <span class="why">Wi-Fi is the most expensive part. Switching it on to send "nothing" just wastes battery. Always order your tasks so that the cheap ones that might fail come first.</span></li>
-  <li data-lines="71-77"><b class="what">Connecting to MQTT and sending one JSON message.</b> A unique client ID is built from the MAC address. The message looks like <code>{"t":24.5,"h":40.0,"n":12}</code>.
+  <li data-lines="71-77"><b class="what">Connecting to MQTT and sending one JSON message.</b> A unique client ID is built from the MAC address plus a random number (in Wokwi, many students' boards can share the same MAC). The message looks like <code>{"t":24.5,"h":40.0,"n":12}</code>.
     <span class="why">One JSON message instead of three separate ones means one network round trip instead of three: a shorter awake time. The boot number <code>n</code> helps you spot on your dashboard whether a message went missing.</span></li>
   <li data-lines="78-81"><b class="what">Time for the packet to leave, then disconnect.</b> <code>mqtt.loop()</code> and a 50-millisecond pause give the packet a chance to actually leave the board; then the connection is closed properly.
     <span class="why">If you sleep right after publish, the packet is sometimes still sitting in the network queue and never reaches the server. 50 milliseconds is usually enough on a healthy connection; if messages go missing, raise this number a little.</span></li>
@@ -693,7 +748,7 @@ WiFi.config(ip, gateway, subnet, dns); // before WiFi.begin
     [ "esp:TX", "$serialMonitor:RX", "", [] ],
     [ "esp:RX", "$serialMonitor:TX", "", [] ],
     [ "dht1:VCC", "esp:3V3", "red", [] ],
-    [ "dht1:SDA", "esp:4", "blue", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
     [ "dht1:GND", "esp:GND.2", "black", [] ]
   ],
   "dependencies": {}
@@ -711,47 +766,6 @@ Awake 1480 ms, fails=0. Sleep 10 min</div>
 
 <div class="callout why"><div class="ct">Why MQTT and not a web server?</div>
 <p>A web server (lesson <a href="4-2.html">4.2</a>) has to stay awake all the time in case someone opens the page, which clashes with deep sleep. With MQTT, the device "pushes" its message whenever it wakes up and then leaves. Battery-powered devices are almost always "senders", not "servers".</p></div>
-
-<h2 id="battery">Batteries for beginners: lithium cells, regulators, chargers</h2>
-<p>(You saw the basics of powering a circuit, regulators and the "common ground" rule in the <a href="1-4.html#power">power section of lesson 1.4</a>; here we only add the points that are specific to batteries and sleep.) The most popular battery for the ESP32 is a single-cell lithium battery: either a <b>LiPo</b> (a flat pouch, usually with a JST connector) or a cylindrical <b>18650</b> cell. Both have a nominal voltage of 3.7 V: 4.2 V when full and about 3.0 V when nearly empty.</p>
-
-<div class="callout warn"><div class="ct">Don't connect the battery straight to 3V3</div>
-<p>The board's 3V3 pin goes straight to the ESP32, and the ESP32 can only tolerate up to about 3.6 V. A full battery is 4.2 V, so connecting it directly can damage the chip. Connecting it to the 5V pin isn't a good idea either: the AMS1117 regulator on the board needs about one volt of headroom, so with a 3.7 V input its output drops below 3 V and the board resets the moment Wi-Fi transmits (a brownout). On top of that, it still has its own quiescent draw of several milliamps.</p></div>
-
-<p>The right way is a <b>low-power LDO regulator</b> with two properties: (1) a <b>very low quiescent current</b>, just a few microamps, and (2) the ability to supply Wi-Fi's current bursts (a few hundred milliamps) with a small voltage drop.</p>
-<div class="table-wrap"><table>
-<tr><th>Regulator</th><th>Maximum current</th><th>Quiescent current (per datasheet)</th><th>Notes</th></tr>
-<tr><td>AMS1117-3.3 (on most boards)</td><td>About 1 A</td><td>About 5 mA</td><td>Not suitable for batteries</td></tr>
-<tr><td>HT7833</td><td>500 mA</td><td>A few microamps</td><td>A good, cheap choice for an ESP32 on a lithium battery</td></tr>
-<tr><td>MCP1700-3302</td><td>250 mA</td><td>About 1.6 µA</td><td>Excellent quiescent current, but 250 mA is borderline for Wi-Fi peaks; a large capacitor (e.g. 470 µF) on the output is required, and the board may still reset</td></tr>
-</table></div>
-<div class="callout info"><div class="ct">What does dropout mean?</div>
-<p>To give a steady 3.3 V, every regulator needs its input to be a little above 3.3 V. That gap is called the "dropout voltage". With a good LDO, the output stays at a proper 3.3 V down to a battery voltage of about 3.5 V; below that, the output sags a little. The ESP32 usually keeps working down to about 3 V, but Wi-Fi becomes unstable at low voltages. Always read the datasheet of the regulator you buy.</p></div>
-
-<h3>The charger: a TP4056 module</h3>
-<p>Charge a lithium battery <b>only</b> with a charger made for lithium cells. The cheapest option is a TP4056 module, which runs from USB and charges the battery up to 4.2 V. It comes in two versions: charger only, and a version <b>with protection</b> (it has a DW01 chip with transistors next to it, and separate OUT+ and OUT− outputs). Always buy the version with protection, and connect the load (the regulator and the ESP32) to <code>OUT+</code> and <code>OUT−</code>, not straight to the battery.</p>
-<div class="callout example"><div class="ct">Work it out: the charging current</div>
-<p>On a TP4056 module, a resistor called R_PROG sets the charging current. According to the datasheet it is roughly <code>I = 1200 ÷ R_PROG</code> (current in amps, resistance in ohms). Typical modules have 1.2 kΩ, which means 1 A. The safety rule: don't charge faster than 1C, the battery's capacity number. For a 500 mAh battery, 1 A is 2C and dangerous; you need to change R_PROG to about 2.4 kΩ so the current becomes 500 mA.</p></div>
-
-<div class="callout warn"><div class="ct">Lithium battery safety is no joke</div>
-<ul>
-  <li>Set aside any battery that is swollen, punctured, crushed or hot right away; never charge it.</li>
-  <li>Never short-circuit the terminals, not even for a moment. A lithium battery delivers a very large current that can make a wire red-hot and melt it.</li>
-  <li><b>Check the polarity of the JST connector before plugging it in.</b> Different manufacturers put the red and black wires in the connector the opposite way round; plugging it in reversed burns out the charger or the board.</li>
-  <li>Do your first few charges under supervision on a fireproof surface (a tile or a metal tray, for example), not on a bed or a carpet.</li>
-  <li>Don't use an "unprotected" 18650 cell without a protection circuit.</li>
-  <li>Don't leave a battery in direct sunlight or in a hot car.</li>
-</ul></div>
-
-<div class="wiring"><script type="application/json">{
-  "board":"ESP32 DevKitC (powered through the 3V3 pin)",
-  "parts":[
-    {"id":"CHG","name":"TP4056 module with protection","pins":[["B+","to battery positive"],["B-","to battery negative"],["OUT+","protected output +"],["OUT-","protected output −"]]},
-    {"id":"BAT","name":"3.7 V LiPo battery","pins":[["+","positive"],["-","negative"]]},
-    {"id":"LDO","name":"HT7833 regulator","pins":[["VIN","input"],["VOUT","3.3 V output"],["GND","ground"]]}
-  ],
-  "wires":[["BAT.+","CHG.B+","red"],["BAT.-","CHG.B-","black"],["CHG.OUT+","LDO.VIN","red"],["CHG.OUT-","LDO.GND","black"],["LDO.VOUT","3V3","red"],["LDO.GND","GND","black"]]
-}</script><figcaption>The complete battery power chain: battery → charger with protection → low-power LDO → 3V3 pin. Next to the LDO's input and output pins, fit the capacitors its datasheet asks for (for example 10 µF ceramic), plus a larger electrolytic capacitor (for example 100 to 470 µF) close to the ESP32. Never connect USB and this supply at the same time; two sources on the same 3V3 rail fight each other.</figcaption></div>
 
 <h2 id="video">Helpful videos</h2>
 <div class="video" data-yt="DYIlM0nRLT0" data-title="ESP32 Low Power Modes Explained: Active vs Deep Sleep vs Hibernate" data-channel="DroneBot Workshop" data-lang="English">
@@ -824,8 +838,8 @@ Awake 1480 ms, fails=0. Sleep 10 min</div>
 <details><summary>Hint</summary><p>One cycle = 300 seconds. <code>I_avg = (I_awake × 3 + I_sleep × 297) ÷ 300</code>. Use the same units everywhere: convert everything to mA (10 µA = 0.01 mA). Then divide the capacity by the result, and report 75 percent of it as the realistic figure.</p></details>
 </div>
 <div class="exercise"><div class="ct">Exercise 2: a wireless doorbell</div>
-<p>Write a program in which the board stays in deep sleep and wakes up from a button on GPIO33 (EXT0), connects to Wi-Fi, sends the message <code>ding</code> to your MQTT topic and goes back to sleep. If Wi-Fi doesn't connect within 8 seconds, it goes back to sleep without sending.</p>
-<details><summary>Hint</summary><p>Take the <code>connectWiFiFast()</code> function and the MQTT part from the data logger. Instead of the timer, use <code>esp_sleep_enable_ext0_wakeup(GPIO_NUM_33, 0)</code> and the RTC pull-up. Remember to wait for the button to be released before sleeping: <code>while (digitalRead(33) == LOW) delay(10);</code></p></details>
+<p>Write a program in which the board stays in deep sleep and wakes up from the button on GPIO27 (EXT0), connects to Wi-Fi, sends the message <code>ding</code> to your MQTT topic and goes back to sleep. If Wi-Fi doesn't connect within 8 seconds, it goes back to sleep without sending.</p>
+<details><summary>Hint</summary><p>Take the <code>connectWiFiFast()</code> function and the MQTT part from the data logger. Instead of the timer, use <code>esp_sleep_enable_ext0_wakeup(GPIO_NUM_27, 0)</code> and the RTC pull-up. Remember to wait for the button to be released before sleeping: <code>while (digitalRead(27) == LOW) delay(10);</code></p></details>
 <details><summary>Answer</summary>
 <div class="code" data-file="DoorBell.ino" id="exBell"><pre>
 #include &lt;WiFi.h&gt;
@@ -838,12 +852,12 @@ WiFiClient net;
 PubSubClient mqtt(net);
 
 void sleepNow() {
-  pinMode(33, INPUT_PULLUP);
-  while (digitalRead(33) == LOW) delay(10);      // wait until the button is released
+  pinMode(27, INPUT_PULLUP);
+  while (digitalRead(27) == LOW) delay(10);      // wait until the button is released
   WiFi.mode(WIFI_OFF);
-  esp_sleep_enable_ext0_wakeup(GPIO_NUM_33, 0);
-  rtc_gpio_pullup_en(GPIO_NUM_33);
-  rtc_gpio_pulldown_dis(GPIO_NUM_33);
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_27, 0);
+  rtc_gpio_pullup_en(GPIO_NUM_27);
+  rtc_gpio_pulldown_dis(GPIO_NUM_27);
   esp_deep_sleep_start();
 }
 
@@ -854,7 +868,8 @@ void setup() {
     while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - t0 &lt; 8000) delay(20);
     if (WiFi.status() == WL_CONNECTED) {
       mqtt.setServer("broker.hivemq.com", 1883);
-      if (mqtt.connect("esp32-doorbell-fa")) {
+      String id = "doorbell-" + WiFi.macAddress() + "-" + String(esp_random() &amp; 0xFFFF, HEX);   // unique: MAC + random
+      if (mqtt.connect(id.c_str())) {
         mqtt.publish("esp32fa/yourname/doorbell", "ding");
         mqtt.loop(); delay(50); mqtt.disconnect();
       }
@@ -868,7 +883,7 @@ void loop() {}
 <ol class="walk" data-for="exBell">
   <li data-lines="10-18"><b class="what">A sleep function that waits for the button to be released.</b> First we make the pin an input with a pull-up so we can read it, wait for the release, switch Wi-Fi off and set up EXT0.
     <span class="why">Without the waiting loop, if the user holds the button a little too long, the board wakes up again immediately and sends "ding" twice.</span></li>
-  <li data-lines="21-31"><b class="what">Send only if the button woke us.</b> On the first power-up (any other cause) we go straight to sleep. Wi-Fi gets at most 8 seconds.
+  <li data-lines="21-32"><b class="what">Send only if the button woke us.</b> On the first power-up (any other cause) we go straight to sleep. Wi-Fi gets at most 8 seconds.
     <span class="why">This way, connecting the battery doesn't cause a false "ding". The time limit inside the while is the "never wait forever" rule again. Make the client ID and the topic unique with your own name.</span></li>
 </ol>
 </details>

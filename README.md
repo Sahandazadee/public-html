@@ -15,7 +15,7 @@
 | Phil's Lab PCB Rules | github.com/Sahandazadee/pcb-rules | [open](https://sahandazadee.github.io/pcb-rules/) | منتقل شد به ریپوی جدا |
 | **KiCad 9 Tutorial** | kicad-9-tutorial/ | [open](https://sahandazadee.github.io/public-html/kicad-9-tutorial/) | 11 درس، FA/EN |
 | **C از صفر** | c-az-sefr/ | [open](https://sahandazadee.github.io/public-html/c-az-sefr/) | 18 درس تعاملی C برای embedded، فارسی RTL |
-| **ESP32 Persian Masterclass** | esp32-masterclass/ | [open](https://sahandazadee.github.io/public-html/esp32-masterclass/) | 22 درس ESP32 از صفر تا IoT (کارگاه عملی، موتورها، FreeRTOS/OTA، همه مدل‌های ESP32) + نقشه پایه، واژه‌نامه، جعبه‌ابزار و لیست خرید، برگه خلاصه PDF؛ دوزبانه فارسی و انگلیسی با دکمه تغییر زبان |
+| **ESP32 Persian Masterclass** | esp32-masterclass/ | [open](https://sahandazadee.github.io/public-html/esp32-masterclass/) | 24 درس ESP32 از صفر تا IoT (کارگاه عملی، موتورها، FreeRTOS/OTA، همه مدل‌های ESP32) + نقشه پایه، واژه‌نامه، جعبه‌ابزار و لیست خرید، برگه خلاصه PDF؛ دوزبانه فارسی و انگلیسی با دکمه تغییر زبان |
 
 ---
 

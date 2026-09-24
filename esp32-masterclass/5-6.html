@@ -1,0 +1,732 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>API اینترنتی، HTTPS و دستگاهی که ماه‌ها کار می‌کند · مستر کلاس ESP32</title>
+<meta name="description" content="فراخوانی API اینترنتی از ESP32 با HTTPS و ArduinoJson، بررسی گواهی با بسته گواهی داخلی (CA bundle)، هشدار روی گوشی با ntfy، چک‌لیست پایداری با علت ریست و نگهبان، و پروژه ترکیبی ایستگاه هوا.">
+<link rel="alternate" hreflang="fa" href="5-6.html"><link rel="alternate" hreflang="en" href="en/5-6.html">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="5-6">
+
+<p class="lede">دستگاهت حالا می‌تواند چند کار را هم‌زمان انجام دهد (درس ۵.۴)، از طریق Wi-Fi به‌روز شود و فایل نگه دارد (درس ۵.۵). در این آخرین درس از این سه درس، دستگاه دستش را به سمت دنیا دراز می‌کند. تا حالا ESP32 سرور بود و دیگران از آن چیزی می‌خواستند؛ حالا <b>کلاینت</b> می‌شود و از سرویس‌های اینترنتی از طریق یک <b>API</b> و با <b>HTTPS</b> رمزنگاری‌شده داده می‌گیرد و به گوشی‌ات هشدار می‌فرستد. بعد یک چک‌لیست برای دستگاهی می‌آید که ماه‌ها بدون دخالت کسی کار می‌کند، و در آخر پروژه‌ای که همه چیز این سه درس را کنار هم می‌گذارد: یک ایستگاه هوای بی‌سیم.</p>
+
+<div class="goals">
+  <div><h4>🎯 بعد از این درس می‌توانی</h4><ul>
+    <li>از یک API واقعی (هوای الان شهرت) با HTTPS داده بگیری و JSON را با فیلتر تجزیه کنی</li>
+    <li>بین <code>setInsecure</code>، یک گواهی ریشه و بسته گواهی داخلی (CA bundle) انتخاب کنی</li>
+    <li>با فشار یک دکمه، با ntfy به گوشی‌ات اعلان بفرستی</li>
+    <li>دستگاهی بسازی که ماه‌ها بدون تو کار کند و علت هر ریست را ثبت کند</li>
+    <li>Task، صف، Mutex، اعلان، LittleFS، OTA و API را در یک پروژه ترکیب کنی</li>
+  </ul></div>
+  <div><h4>🧰 پیش‌نیاز و وسایل</h4><ul>
+    <li>درس‌های <a href="5-4.html">۵.۴</a> (Task، صف، Mutex، اعلان) و <a href="5-5.html">۵.۵</a> (OTA، LittleFS)؛ <a href="4-1.html">۴.۱</a> (Wi-Fi، <code>secrets.h</code>)؛ درس <a href="5-1.html">۵.۱</a> (JSON و TLS) کمک می‌کند</li>
+    <li>برد ESP32 DevKitC و یک دکمه فشاری روی GPIO27</li>
+    <li>برای پروژه آخر: نمایشگر OLED ۰٫۹۶ اینچ SSD1306 روی I2C (SDA 21، SCL 22؛ درس <a href="3-3.html">۳.۳</a>)</li>
+    <li>یک گوشی با اپ رایگان ntfy (اندروید یا iOS) برای بخش هشدار</li>
+    <li>کتابخانه‌ها: <b>ArduinoJson</b> نسخه ۷ (Benoit Blanchon)، <b>Adafruit SSD1306</b> و <b>Adafruit GFX Library</b>؛ بقیه (WiFi، WebServer، HTTPClient، ArduinoOTA، LittleFS، Preferences) داخل Arduino-ESP32 core نسخه <b>3.x</b> هستند (تست‌شده با 3.3.12)</li>
+  </ul></div>
+</div>
+
+<div class="callout info"><div class="ct">نقشه درس</div>
+<p>ترتیب: <a href="#api">فراخوانی API</a> ← <a href="#ca">گواهی‌ها</a> ← <a href="#alert">هشدار روی گوشی</a> ← <a href="#robust">چک‌لیست پایداری</a> ← <a href="#project">پروژه ترکیبی</a>.</p></div>
+
+<!-- ======================= API ======================= -->
+<h2 id="api">فراخوانی API اینترنتی (HTTPS و JSON)</h2>
+<p>تا حالا ESP32 سرور بود (دیگران از او چیزی می‌خواستند). حالا برعکس: ESP32 <b>مشتری</b> (Client) می‌شود و از یک سرویس اینترنتی چیزی می‌پرسد. به آدرسی که یک سرویس برای جواب دادن به برنامه‌ها (نه انسان‌ها) آماده کرده <b>API</b> می‌گویند. جواب معمولا JSON است، همان قالبی که در درس ۵.۱ دیدی.</p>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>API مثل پنجره سفارش یک نانوایی است. لازم نیست بدانی داخل نانوایی چه خبر است؛ فقط باید زبان سفارش را بدانی («دو تا بربری») و نانوا جواب را در شکل مشخصی (کیسه نان) تحویل می‌دهد. آدرس URL سفارش توست و JSON کیسه نان.</p></div>
+
+<h3>هوای شهر تو از Open-Meteo</h3>
+<p><a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener">Open-Meteo</a> یک سرویس هواشناسی رایگان است که برای استفاده غیرتجاری کلید (API Key) و ثبت‌نام نمی‌خواهد. قبل از هر کدی، آدرس زیر را در مرورگر کامپیوترت باز کن تا ببینی جواب چه شکلی است؛ این عادت حرفه‌ای‌هاست:</p>
+<div class="code" data-lang="text" data-file="URL"><pre>
+https://api.open-meteo.com/v1/forecast?latitude=43.65&amp;longitude=-79.38&amp;current=temperature_2m,wind_speed_10m
+</pre></div>
+<p>آدرس سه بخش دارد: <code>latitude</code> و <code>longitude</code> (این‌جا عرض و طول جغرافیایی تورنتو؛ برای پیدا کردن عدد شهر خودت، در Google Maps یا OpenStreetMap روی شهرت راست‌کلیک کن: عدد اول عرض جغرافیایی و عدد دوم طول جغرافیایی است؛ غرب و جنوب منفی‌اند)، و <code>current</code> (کدام مقدارهای «همین الان» را می‌خواهی: دمای ۲ متری زمین و سرعت باد در ارتفاع ۱۰ متری). جواب چیزی شبیه این است (کوتاه‌شده):</p>
+<div class="code" data-lang="json" data-file="جواب سرور"><pre>
+{
+  "latitude": 43.64,
+  "longitude": -79.38,
+  "timezone": "GMT",
+  "current_units": { "time": "iso8601", "interval": "seconds",
+                     "temperature_2m": "°C", "wind_speed_10m": "km/h" },
+  "current": {
+    "time": "2026-09-23T10:15",
+    "interval": 900,
+    "temperature_2m": 21.3,
+    "wind_speed_10m": 14.8
+  }
+}
+</pre></div>
+<p>ما فقط دو عدد می‌خواهیم: <code>current.temperature_2m</code> و <code>current.wind_speed_10m</code>. بقیه اضافه است و RAM را هدر می‌دهد.</p>
+
+<h3>کتابخانه لازم: ArduinoJson 7</h3>
+<ol class="steps">
+  <li>Arduino IDE → <code>Tools › Manage Libraries</code> (آیکون کتاب).</li>
+  <li>عبارت <b>ArduinoJson</b> را جست‌وجو کن و <b>ArduinoJson by Benoit Blanchon</b> را نصب کن؛ مطمئن شو نسخه <b>7.x</b> است. وابستگی ندارد.</li>
+</ol>
+
+<div class="code" data-file="WeatherNow.ino" id="weather"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WiFiClientSecure.h&gt;
+#include &lt;HTTPClient.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#include "secrets.h"
+
+const char *URL =
+  "https://api.open-meteo.com/v1/forecast"
+  "?latitude=43.65&amp;longitude=-79.38"
+  "&amp;current=temperature_2m,wind_speed_10m";
+
+bool fetchWeather(float &amp;temp, float &amp;wind) {
+  WiFiClientSecure client;
+  client.setInsecure();              // فقط برای یادگیری! پایین‌تر روش درست را ببین
+  HTTPClient http;
+  http.setConnectTimeout(5000);      // حداکثر ۵ ثانیه برای وصل شدن
+  http.setTimeout(5000);             // حداکثر ۵ ثانیه برای جواب
+  http.useHTTP10(true);              // بدون chunked، برای خواندن جریانی
+  if (!http.begin(client, URL)) return false;
+
+  int code = http.GET();
+  if (code != HTTP_CODE_OK) {
+    Serial.printf("HTTP error: %d %s\n", code, http.errorToString(code).c_str());
+    http.end();
+    return false;
+  }
+
+  JsonDocument filter;               // فقط همین دو عدد را نگه دار
+  filter["current"]["temperature_2m"] = true;
+  filter["current"]["wind_speed_10m"] = true;
+
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, http.getStream(),
+                               DeserializationOption::Filter(filter));
+  http.end();
+  if (err) {
+    Serial.printf("JSON error: %s\n", err.c_str());
+    return false;
+  }
+  temp = doc["current"]["temperature_2m"] | NAN;   // اگر نبود: NAN
+  wind = doc["current"]["wind_speed_10m"] | NAN;
+  return !isnan(temp);
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.println("Wi-Fi OK");
+}
+
+void loop() {
+  float t, w;
+  if (fetchWeather(t, w)) {
+    Serial.printf("Now: %.1f C, wind %.1f km/h\n", t, w);
+  }
+  delay(10UL * 60 * 1000);           // هر ۱۰ دقیقه، نه هر ثانیه
+}
+</pre></div>
+<ol class="walk" data-for="weather">
+  <li data-lines="2-4"><b class="what">سه کتابخانه.</b> <code>WiFiClientSecure</code> برای اتصال رمزنگاری‌شده (HTTPS)، <code>HTTPClient</code> برای ساختن درخواست و خواندن جواب HTTP، و <code>ArduinoJson</code> برای تجزیه JSON.
+    <span class="why">در core 3.x اسم اصلی کلاس <code>NetworkClientSecure</code> است و <code>WiFiClientSecure</code> یک اسم مستعار سازگار با قبل است؛ هر دو یکی‌اند. ما اسم آشناتر را نگه داشتیم.</span></li>
+  <li data-lines="7-10"><b class="what">آدرس API.</b> رشته‌های کنار هم در C++ خودشان به هم می‌چسبند؛ آدرس را برای خوانایی در سه خط شکستیم.
+    <span class="why">پارامترها را با <code>&amp;</code> از هم جدا کن و فاصله نگذار. یک حرف اشتباه (مثلا <code>temperature_2</code>) باعث جواب خطای 400 می‌شود.</span></li>
+  <li data-lines="13-14"><b class="what">setInsecure: رمزنگاری بدون بررسی هویت.</b> اتصال رمز می‌شود ولی ESP32 بررسی نمی‌کند که طرف مقابل واقعا open-meteo.com است.
+    <span class="why">حقیقت صادقانه (مثل درس ۵.۱): برای گرفتن دمای عمومی که رازی نیست، خطرش کم است؛ بدترین حالت این است که کسی دمای دروغ به تو بدهد. ولی برای هر چیزی که رمز یا فرمان جابه‌جا می‌کند، هرگز setInsecure نگذار. روش درست (<code>useBuiltinCACertBundle</code>) را در مثال بعدی می‌بینی.</span></li>
+  <li data-lines="16-17"><b class="what">سقف زمان.</b> <code>setConnectTimeout</code> برای وصل شدن و <code>setTimeout</code> برای انتظار جواب، هر دو به میلی‌ثانیه.
+    <span class="why">بدون سقف زمان، اگر اینترنت کند یا سرور شلوغ باشد، برنامه ممکن است مدت زیادی منتظر بماند. دستگاه واقعی هیچ‌وقت نباید بی‌نهایت منتظر چیزی بماند.</span></li>
+  <li data-lines="18"><b class="what">useHTTP10.</b> درخواست را با HTTP نسخه 1.0 می‌فرستد.
+    <span class="why">در HTTP/1.1 سرور ممکن است جواب را «تکه‌تکه» (chunked) بفرستد و بین تکه‌ها عددهای اندازه بگذارد. چون ما جواب را مستقیم از جریان شبکه (<code>getStream</code>) به ArduinoJson می‌دهیم، آن عددها JSON را خراب می‌کنند. HTTP/1.0 تکه‌تکه ندارد. این توصیه رسمی مستندات ArduinoJson است.</span></li>
+  <li data-lines="21-26"><b class="what">GET و بررسی کد جواب.</b> <code>HTTP_CODE_OK</code> یعنی 200. عدد منفی یعنی اصلا به سرور نرسیدیم؛ <code>errorToString</code> آن را به متن تبدیل می‌کند (مثلا <code>connection refused</code> یا <code>read Timeout</code>).
+    <span class="why">کدهای مهم: 200 موفق، 400 آدرس غلط، 429 «زیادی درخواست دادی» (Rate limit)، 5xx خطای سرور. همیشه قبل از خواندن جواب، کد را بررسی کن و <code>http.end()</code> را در هر مسیری فراموش نکن تا حافظه آزاد شود.</span></li>
+  <li data-lines="28-30"><b class="what">فیلتر JSON.</b> یک سند کوچک که شکلش می‌گوید «از جواب فقط این دو فیلد را نگه دار».
+    <span class="why">جواب کامل چند صد بایت است و در APIهای دیگر (مثلا پیش‌بینی ۷ روزه ساعتی) ده‌ها کیلوبایت. با فیلتر، ArduinoJson بقیه را هنگام خواندن دور می‌ریزد و RAM کمی مصرف می‌شود.</span></li>
+  <li data-lines="32-39"><b class="what">deserializeJson مستقیم از شبکه.</b> جواب بدون ذخیره در یک String بزرگ، مستقیم از جریان شبکه خوانده می‌شود. اگر JSON ناقص یا خراب بود، <code>err</code> مقدار دارد و <code>err.c_str()</code> علت را می‌گوید (مثلا <code>IncompleteInput</code> یا <code>NoMemory</code>).
+    <span class="why">در نسخه ۷ فقط <code>JsonDocument</code> داریم که اندازه‌اش را خودش تنظیم می‌کند. در نسخه ۶ باید <code>StaticJsonDocument&lt;512&gt;</code> یا <code>DynamicJsonDocument</code> با اندازه دستی می‌نوشتی؛ کدهای قدیمی اینترنت با نسخه ۷ هشدار یا خطا می‌دهند.</span></li>
+  <li data-lines="40-42"><b class="what">عملگر <code>|</code> برای مقدار پیش‌فرض.</b> «اگر این فیلد بود مقدارش را بده، وگرنه NAN (نه‌عدد)».
+    <span class="why">اگر سرویس روزی اسم فیلد را عوض کند، به جای صفر دروغین (که شبیه دمای واقعی است!) NAN می‌گیری و می‌فهمی مشکلی هست.</span></li>
+  <li data-lines="57"><b class="what">هر ۱۰ دقیقه.</b> <code>10UL * 60 * 1000</code> میلی‌ثانیه؛ <code>UL</code> یعنی عدد بزرگ بدون علامت تا ضرب سرریز نکند.
+    <span class="why">Open-Meteo خودش داده «current» را حدودا هر ۱۵ دقیقه به‌روز می‌کند (فیلد <code>interval: 900</code>)؛ درخواست هر ثانیه فقط سرور را اذیت می‌کند و ممکن است IP تو را محدود کند. طبق شرایط Open-Meteo، استفاده رایگان فقط برای کار غیرتجاری است، با سقف کمتر از ۱۰ هزار درخواست در روز (و ۶۰۰ در دقیقه)، و داده با مجوز CC BY 4.0 است (اگر جایی منتشرش کردی، اسم Open-Meteo را بیاور). هر ۱۰ دقیقه یعنی ۱۴۴ درخواست در روز.</span></li>
+</ol>
+<div class="serial">Wi-Fi OK
+Now: 21.3 C, wind 14.8 km/h</div>
+
+<div class="wokwi" data-board="esp32" data-code-from="weather">
+<p>این برنامه در Wokwi هم کار می‌کند، چون Wokwi اینترنت واقعی و HTTPS را شبیه‌سازی می‌کند. در Wokwi به جای <code>secrets.h</code>، خط <code>#include "secrets.h"</code> را پاک کن و بالای برنامه بنویس: <code>#define WIFI_SSID "Wokwi-GUEST"</code> و <code>#define WIFI_PASS ""</code>. کتابخانه <b>ArduinoJson</b> را از زبانه Library Manager ی Wokwi اضافه کن. برد تنهاست و قطعه دیگری لازم نیست.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h3 id="ca">setInsecure یا گواهی؟ حقیقت کامل</h3>
+<div class="table-wrap"><table>
+<tr><th>روش</th><th>چه می‌کند</th><th>کی استفاده کنم</th></tr>
+<tr><td><code>setInsecure()</code></td><td>رمزنگاری دارد، ولی هویت سرور را بررسی نمی‌کند</td><td>فقط تست و داده عمومی بی‌خطر</td></tr>
+<tr><td><code>setCACert(ROOT_CA)</code></td><td>فقط به سروری اعتماد می‌کند که گواهی‌اش با این ریشه امضا شده (درس ۵.۱)</td><td>وقتی فقط با یک سرویس کار داری؛ ولی اگر سرویس صادرکننده گواهی‌اش را عوض کند، باید برنامه را آپدیت کنی (یک دلیل دیگر برای OTA!)</td></tr>
+<tr><td><code>useBuiltinCACertBundle()</code></td><td>از بسته حدود ۱۵۰ گواهی ریشه معتبر دنیا که داخل core است استفاده می‌کند (مثل مرورگرها)</td><td>بهترین تعادل برای بیشتر پروژه‌ها؛ در core 3.3.12 موجود است (در نسخه‌های قدیمی‌تر core نیست). حدود ۶۰ کیلوبایت به اندازه برنامه اضافه می‌کند.</td></tr>
+</table></div>
+
+<h3 id="alert">هشدار به گوشی: POST با JSON به ntfy</h3>
+<p>حالا برعکس: ESP32 خبری را <b>ارسال</b> می‌کند. <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy.sh</a> یک سرویس اعلان رایگان و بدون ثبت‌نام است: اپ ntfy را روی گوشی (اندروید یا iOS) نصب می‌کنی، یک «Topic» با اسم دلخواه را Subscribe می‌کنی، و هر پیامی که به آن Topic فرستاده شود، به شکل نوتیفیکیشن روی گوشی‌ات ظاهر می‌شود.</p>
+<div class="callout warn"><div class="ct">اسم Topic همان رمز است</div>
+<p>در ntfy.sh ثبت‌نامی نیست، پس هر کس اسم Topic تو را بداند می‌تواند پیام‌هایت را بخواند و برایت پیام جعلی بفرستد. اسمی مثل <code>test</code> یا <code>ali</code> انتخاب نکن؛ یک اسم طولانی و تصادفی مثل <code>home-alert-7f3k9q</code> بگذار و آن را در <code>secrets.h</code> نگه دار (فایل درس <a href="5-5.html">۵.۵</a> خط <code>#define NTFY_TOPIC "..."</code> را از قبل دارد؛ اگر فایل تو ندارد، اضافه‌اش کن). محدودیت ntfy.sh رایگان: حدود ۲۵۰ پیام در روز و هر پیام حداکثر ۴۰۹۶ بایت.</p></div>
+<p>مدار: یک دکمه فشاری بین <b>GPIO27</b> و <b>GND</b> (مقاومت Pull-up داخلی را روشن می‌کنیم؛ درس <a href="3-1.html">۳.۱</a>).</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"BTN1","name":"دکمه فشاری ۴ پایه","img":"button.svg","pins":[["1","به GPIO27"],["4","به GND (پایه قطری)"]]}
+  ],
+  "wires":[["GPIO27","BTN1.1","blue"],["BTN1.4","GND","black"]]
+}</script><figcaption>دکمه «زنگ در»: فشردن آن GPIO27 را به زمین وصل می‌کند (LOW). Pull-up داخلی در حالت عادی پین را HIGH نگه می‌دارد.</figcaption></div>
+
+<div class="code" data-file="DoorAlert_ntfy.ino" id="ntfy"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WiFiClientSecure.h&gt;
+#include &lt;HTTPClient.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#include "secrets.h"
+#ifndef NTFY_TOPIC
+#warning "NTFY_TOPIC is not defined in secrets.h"
+#define NTFY_TOPIC "change-me-to-a-random-name"
+#endif
+
+const int BUTTON_PIN = 27;          // دکمه بین GPIO27 و GND
+
+bool sendAlert(const char *title, const char *message) {
+  WiFiClientSecure client;
+  client.useBuiltinCACertBundle();  // بررسی واقعی هویت سرور
+  HTTPClient http;
+  http.setTimeout(5000);
+  if (!http.begin(client, "https://ntfy.sh/")) return false;
+  http.addHeader("Content-Type", "application/json");
+
+  JsonDocument msg;                 // {"topic":..,"title":..,"message":..}
+  msg["topic"] = NTFY_TOPIC;
+  msg["title"] = title;
+  msg["message"] = message;
+  msg["priority"] = 4;              // ۱ تا ۵؛ ۴ یعنی «مهم»
+  msg["tags"].add("warning");
+  String body;
+  serializeJson(msg, body);
+
+  int code = http.POST(body);
+  http.end();
+  Serial.printf("ntfy -&gt; %d\n", code);
+  return code == 200;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.println("Press the button to send an alert");
+}
+
+void loop() {
+  static unsigned long lastSent = 0;
+  if (digitalRead(BUTTON_PIN) == LOW &amp;&amp; millis() - lastSent &gt; 30000) {
+    lastSent = millis();            // حداکثر هر ۳۰ ثانیه یک هشدار
+    sendAlert("Door", "Front door opened!");
+  }
+  delay(20);
+}
+</pre></div>
+<ol class="walk" data-for="ntfy">
+  <li data-lines="15"><b class="what">useBuiltinCACertBundle.</b> این بار هویت سرور ntfy.sh واقعا بررسی می‌شود.
+    <span class="why">این پیام به گوشی تو می‌رود و ممکن است روزی «در باز شد» یا «نشت گاز» باشد؛ نمی‌خواهی کسی وسط راه آن را عوض کند.</span></li>
+  <li data-lines="18-19"><b class="what">آدرس ریشه و نوع محتوا.</b> برای فرستادن JSON باید به آدرس <b>ریشه</b> <code>https://ntfy.sh/</code> POST کنی (نه <code>https://ntfy.sh/topic</code>) و بگویی بدنه JSON است.
+    <span class="why">طبق مستندات ntfy، JSON فقط در آدرس ریشه پذیرفته می‌شود و اسم Topic داخل خود JSON می‌آید. روش ساده‌تر هم هست: POST متن خام به <code>https://ntfy.sh/اسم-topic</code> که کل متن می‌شود پیام.</span></li>
+  <li data-lines="21-28"><b class="what">ساختن JSON.</b> این بار برعکس deserialize: سند را پر می‌کنیم و <code>serializeJson</code> آن را به متن تبدیل می‌کند. <code>msg["tags"].add("warning")</code> یک آرایه می‌سازد که ntfy آن را به ایموجی ⚠️ تبدیل می‌کند.
+    <span class="why">هرگز JSON را با چسباندن رشته‌ها دستی نساز (<code>"{\"title\":\"" + ...</code>)؛ اگر متن پیام یک <code>"</code> داشته باشد، JSON خراب می‌شود. ArduinoJson علامت‌های خاص را خودش درست می‌کند.</span></li>
+  <li data-lines="25"><b class="what">اولویت ۱ تا ۵.</b> ۳ پیش‌فرض است، ۴ «بالا» با لرزش طولانی، ۵ «فوری».
+    <span class="why">برای هشدار واقعی ۴ یا ۵؛ برای گزارش روزانه ۲ که بی‌صدا در لیست اعلان‌ها می‌نشیند. اگر همه چیز فوری باشد، دیگر هیچ چیز فوری نیست.</span></li>
+  <li data-lines="30-33"><b class="what">POST و کد جواب.</b> ntfy در صورت موفقیت 200 برمی‌گرداند.
+    <span class="why">اگر 429 دیدی، یعنی از سقف درخواست عبور کرده‌ای؛ اگر عدد منفی، مشکل از شبکه یا گواهی است.</span></li>
+  <li data-lines="45-49"><b class="what">محدودیت ارسال.</b> بعد از هر هشدار تا ۳۰ ثانیه هشدار دیگری فرستاده نمی‌شود، حتی اگر دکمه نگه داشته شود.
+    <span class="why">بدون این، نگه داشتن دکمه برای ۲ ثانیه یعنی ده‌ها درخواست و ده‌ها نوتیفیکیشن، و چند دقیقه بعد سرویس تو را مسدود می‌کند. هر دستگاهی که به سرویس بیرونی پیام می‌دهد باید «ترمز» داشته باشد (Rate limiting).</span></li>
+</ol>
+
+<div class="callout info"><div class="ct">تلگرام و سرویس‌های دیگر</div>
+<p>کتابخانه <b>UniversalTelegramBot</b> (از Brian Lough) امکان ساختن ربات تلگرام با ESP32 را می‌دهد تا با پیام دادن به ربات، رله را خاموش و روشن کنی. هر سرویسی که انتخاب کنی، اول آدرسش را در مرورگری روی همان شبکه‌ای که دستگاه از آن استفاده می‌کند امتحان کن (بعضی شبکه‌های اداره و مدرسه سرویس‌ها را مسدود می‌کنند)، و یادت باشد سرویس بیرونی ممکن است قوانینش را عوض کند یا تعطیل شود. جایگزین‌های مستقل‌تر: MQTT روی سرور شخصی (درس <a href="5-1.html#mosquitto">۵.۱</a>)، یا نصب ntfy روی سرور خودت (ntfy متن‌باز است).</p></div>
+
+<!-- ======================= Robustness ======================= -->
+<h2 id="robust">چک‌لیست دستگاهی که ماه‌ها روشن می‌ماند</h2>
+<p>برنامه‌ای که ۱۰ دقیقه روی میز کار می‌کند با برنامه‌ای که ۶ ماه بدون دخالت کار می‌کند فرق دارد. مشکلاتی که در ۱۰ دقیقه دیده نمی‌شوند: حافظه‌ای که ذره‌ذره تکه‌تکه می‌شود، Wi-Fi ای که ساعت ۳ صبح قطع می‌شود، برقی که وسط نوشتن فایل می‌رود. قانون مهندسی: <b>فرض کن هر چیزی که ممکن است خراب شود، بالاخره خراب می‌شود</b>، و دستگاه باید خودش را جمع کند.</p>
+
+<div class="table-wrap"><table>
+<tr><th>خطر</th><th>علامت</th><th>درمان</th></tr>
+<tr><td>گیر کردن برنامه در یک حلقه یا انتظار</td><td>دستگاه «زنده» است ولی جواب نمی‌دهد</td><td><b>Watchdog</b>: loop و Taskهای مهم را به نگهبان معرفی کن تا در صورت گیر کردن، ریست شود</td></tr>
+<tr><td>قطع Wi-Fi یا اینترنت</td><td>بعد از قطعی مودم، دیگر داده نمی‌فرستد</td><td>اتصال دوباره خودکار با رویدادها و نگهبان millis (درس <a href="4-1.html#robust">۴.۱</a>)؛ هر عمل شبکه‌ای سقف زمان داشته باشد</td></tr>
+<tr><td>تکه‌تکه شدن حافظه (Heap fragmentation)</td><td>بعد از چند روز کرش یا خطای NoMemory، در حالی که «حافظه آزاد» زیاد به نظر می‌رسد</td><td>در کد طولانی‌مدت از ساختن و خراب کردن مداوم <code>String</code> بپرهیز؛ <code>reserve()</code> کن یا از <code>char[]</code> و <code>snprintf</code> استفاده کن</td></tr>
+<tr><td>برق ضعیف (Brownout)</td><td>ریست هنگام روشن شدن Wi-Fi یا رله</td><td>منبع ۵ ولت ۱ آمپر، کابل کوتاه، خازن ۱۰۰ تا ۴۷۰ میکروفاراد (درس <a href="4-1.html#power">۴.۱</a>)؛ هرگز Brownout Detector را خاموش نکن</td></tr>
+<tr><td>قطع برق وسط نوشتن فایل</td><td>فایل تنظیمات نصفه، دستگاه با تنظیمات خراب بالا می‌آید</td><td>اول در فایل موقت بنویس، بعد rename کن؛ همیشه مقدار پیش‌فرض داشته باش</td></tr>
+<tr><td>ندانستن علت ریست‌ها</td><td>«گاهی خودش ریست می‌شود» بدون سرنخ</td><td><code>esp_reset_reason()</code> را در شروع بخوان، چاپ کن و شمارنده‌اش را در Preferences نگه دار</td></tr>
+</table></div>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره: جعبه سیاه هواپیما</div>
+<p>هواپیما بعد از هر حادثه می‌گوید چه شد، چون جعبه سیاه دارد. دستگاه تو هم باید «جعبه سیاه» داشته باشد: هر بار که روشن می‌شود بگوید چرا ریست شده و تا حالا چند بار کرش کرده. بدون این، عیب‌یابی دستگاهی که در سقف است یعنی حدس زدن.</p></div>
+
+<div class="code" data-file="RobustBoot.ino" id="robustBoot"><pre>
+#include &lt;Preferences.h&gt;
+#include "esp_system.h"
+#include "esp_task_wdt.h"
+
+Preferences prefs;
+
+const char *resetReasonText(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON:   return "power on";
+    case ESP_RST_SW:        return "software (ESP.restart)";
+    case ESP_RST_PANIC:     return "PANIC (crash / Guru Meditation)";
+    case ESP_RST_INT_WDT:   return "interrupt watchdog";
+    case ESP_RST_TASK_WDT:  return "TASK WATCHDOG";
+    case ESP_RST_WDT:       return "other watchdog";
+    case ESP_RST_DEEPSLEEP: return "wake from deep sleep";
+    case ESP_RST_BROWNOUT:  return "BROWNOUT (weak power)";
+    default:                return "other/unknown";
+  }
+}
+
+void workerTask(void *param) {
+  esp_task_wdt_add(NULL);                      // این Task را به نگهبان معرفی کن
+  for (;;) {
+    // ... کار اصلی Task اینجاست ...
+    esp_task_wdt_reset();                      // «من زنده‌ام»
+    vTaskDelay(pdMS_TO_TICKS(1000));
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  esp_reset_reason_t why = esp_reset_reason();
+
+  prefs.begin("sys", false);                   // فضای نام "sys" در NVS
+  uint32_t boots = prefs.getUInt("boots", 0) + 1;
+  prefs.putUInt("boots", boots);
+  if (why == ESP_RST_PANIC || why == ESP_RST_TASK_WDT || why == ESP_RST_BROWNOUT) {
+    prefs.putUInt("crashes", prefs.getUInt("crashes", 0) + 1);
+  }
+  Serial.printf("Boot #%lu, reason: %s, crashes so far: %lu\n",
+                (unsigned long)boots, resetReasonText(why),
+                (unsigned long)prefs.getUInt("crashes", 0));
+  prefs.end();
+
+  enableLoopWDT();                             // اگر loop بیش از ۵ ثانیه گیر کرد: ریست
+  xTaskCreatePinnedToCore(workerTask, "worker", 3072, NULL, 1, NULL, 1);
+}
+
+String line;                                   // سراسری، یک بار رزرو شده
+
+void loop() {
+  line.reserve(64);                            // بعد از اولین بار کاری نمی‌کند
+  line = "uptime=";
+  line += millis() / 1000;
+  line += "s heap=";
+  line += ESP.getFreeHeap();
+  Serial.println(line);
+  delay(2000);                                 // اگر این را 6000 کنی، WDT ریست می‌کند
+}
+</pre></div>
+<ol class="walk" data-for="robustBoot">
+  <li data-lines="7-19"><b class="what">ترجمه علت ریست به متن.</b> <code>esp_reset_reason()</code> یک عدد از نوع <code>esp_reset_reason_t</code> برمی‌گرداند و ما مهم‌ترین‌ها را به متن خوانا تبدیل می‌کنیم.
+    <span class="why">سه علت که همیشه باید نگرانت کنند: <code>PANIC</code> (کرش، مثل Guru Meditation یا Stack overflow)، <code>TASK_WDT</code> (یک Task گیر کرده)، و <code>BROWNOUT</code> (برق ضعیف). <code>POWERON</code> یعنی برق وصل شد و <code>SW</code> یعنی خود برنامه <code>ESP.restart()</code> زده (مثلا بعد از OTA). نکته: فشار دادن دکمه EN روی ESP32 معمولا به شکل <code>POWERON</code> گزارش می‌شود.</span></li>
+  <li data-lines="21-28"><b class="what">معرفی یک Task به نگهبان.</b> <code>esp_task_wdt_add(NULL)</code> یعنی «Task فعلی را زیر نظر بگیر» و <code>esp_task_wdt_reset()</code> یعنی «من زنده‌ام».
+    <span class="why">از این لحظه اگر این Task بیش از ۵ ثانیه reset نکند، برد ریست می‌شود. reset را در جایی بگذار که <b>فقط وقتی کار واقعا جلو می‌رود</b> اجرا شود، نه در یک Task جداگانه که همیشه زنده است (آن وقت نگهبان را فریب داده‌ای). Taskی که کار طولانی مثل HTTPS دارد را با دقت اضافه کن، چون یک درخواست کند ممکن است از ۵ ثانیه بیشتر شود.</span></li>
+  <li data-lines="35-44"><b class="what">شمارنده‌ها در Preferences.</b> تعداد کل روشن شدن‌ها و تعداد ریست‌های «بد» در NVS ذخیره می‌شوند و با قطع برق پاک نمی‌شوند.
+    <span class="why">اگر بعد از یک هفته دیدی <code>crashes</code> عدد ۴۰ است، می‌دانی مشکلی هست، حتی اگر دستگاه «ظاهرا کار می‌کند». فقط در بوت می‌نویسیم، نه در loop، تا فلش فرسوده نشود. در پروژه واقعی این عددها را در صفحه وب یا با MQTT گزارش کن.</span></li>
+  <li data-lines="46"><b class="what">enableLoopWDT.</b> تابع آماده core که <code>loopTask</code> را به نگهبان معرفی می‌کند. خود core قبل از هر دور <code>loop()</code> نگهبان را reset می‌کند.
+    <span class="why">پس اگر یک دور loop بیش از ۵ ثانیه طول بکشد (مثلا در یک <code>while</code> منتظر سنسوری که قطع شده گیر کند)، برد خودش ریست می‌شود و کار از نو شروع می‌شود. ریست بهتر از یخ زدن همیشگی است.</span></li>
+  <li data-lines="50-58"><b class="what">String با reserve.</b> متغیر سراسری <code>line</code> یک بار ۶۴ بایت جا می‌گیرد و هر دور همان جا دوباره پر می‌شود.
+    <span class="why">هر بار که یک <code>String</code> بزرگ‌تر می‌شود، ممکن است جای جدیدی در Heap بگیرد و جای قبلی را خالی بگذارد. بعد از هزاران بار، Heap مثل پنیر سوراخ‌سوراخ می‌شود: جمع فضای آزاد زیاد است ولی هیچ تکه بزرگ پیوسته‌ای نمانده (و HTTPS یک تکه پیوسته چند ده کیلوبایتی لازم دارد). <code>reserve</code> جا را یک بار و از اول می‌گیرد. برای رشته‌های ثابت هم <code>char buf[64]</code> با <code>snprintf</code> امن‌ترین است. برای دیدن مشکل، علاوه بر <code>ESP.getFreeHeap()</code> عدد <code>ESP.getMaxAllocHeap()</code> (بزرگ‌ترین تکه آزاد) را هم چاپ کن.</span></li>
+  <li data-lines="59"><b class="what">آزمایش نگهبان.</b> اگر delay را به 6000 تغییر دهی، هر دور loop بیش از ۵ ثانیه می‌شود و برد ریست می‌شود؛ بعد از ریست، پیام <code>reason: TASK WATCHDOG</code> را می‌بینی.
+    <span class="why">هر مکانیزم ایمنی را یک بار عمدا تحریک کن تا مطمئن شوی واقعا کار می‌کند. نگهبانی که هرگز تست نشده، نگهبان نیست.</span></li>
+</ol>
+<div class="serial">Boot #1, reason: power on, crashes so far: 0
+uptime=0s heap=301244
+uptime=2s heap=301244
+...
+(بعد از تغییر delay به 6000)
+E (5412) task_wdt: Task watchdog got triggered. ...
+Boot #7, reason: TASK WATCHDOG, crashes so far: 1</div>
+
+<div class="callout tip"><div class="ct">نوشتن امن در برابر قطع برق</div>
+<p>فرض کن داری <code>config.json</code> را بازنویسی می‌کنی و درست وسط کار برق می‌رود. حالت "w" فایل قبلی را اول خالی کرده بود؛ حالا نه تنظیمات قدیمی داری نه جدید. الگوی درست (در پروژه پایین می‌بینی): ۱) در <code>config.tmp</code> بنویس، ۲) ببند، ۳) قبلی را پاک کن و <code>tmp</code> را به <code>config.json</code> تغییر نام بده. تغییر نام در LittleFS تقریبا لحظه‌ای است. و در هر حال، برنامه وقتی فایل تنظیمات نبود یا خراب بود، باید با <b>مقدار پیش‌فرض</b> بالا بیاید، نه این که کرش کند. برای مقدارهای کوچک، Preferences خودش این امنیت را دارد.</p></div>
+
+<!-- ======================= Project ======================= -->
+<h2 id="project">پروژه ترکیبی: ایستگاه هوای بی‌سیم</h2>
+<p>حالا همه را کنار هم می‌گذاریم. دستگاهی که:</p>
+<ul>
+  <li>صفحه تنظیماتش را از <b>LittleFS</b> سرو می‌کند و مختصات شهر را در یک فایل JSON ذخیره می‌کند؛</li>
+  <li>هر ۱۰ دقیقه در <b>Task</b> خودش هوا را از <b>Open-Meteo</b> می‌گیرد (و بلافاصله بعد از تغییر تنظیمات)؛</li>
+  <li>در یک Task دیگر آخرین مقدار را روی <b>OLED</b> نشان می‌دهد؛</li>
+  <li>با <b>ArduinoOTA</b> از راه دور آپدیت می‌شود.</li>
+</ul>
+
+<pre class="mermaid">flowchart LR
+  FS[("LittleFS<br/>index.html<br/>config.json")] --> LOOP["loopTask<br/>OTA و وب سرور"]
+  BROWSER(["مرورگر گوشی"]) <--> LOOP
+  IDE(["Arduino IDE<br/>آپدیت OTA"]) --> LOOP
+  LOOP <--> CFG{{"تنظیمات<br/>با Mutex"}}
+  CFG <--> WT["weatherTask<br/>هر ۱۰ دقیقه"]
+  LOOP -- "xTaskNotifyGive" --> WT
+  WT -- "HTTPS GET" --> API(["Open-Meteo"])
+  WT -- "xQueueOverwrite" --> BOX[("weatherBox<br/>صف یک‌خانه‌ای")]
+  BOX -- "xQueuePeek" --> DT["displayTask<br/>هر ۲ ثانیه"]
+  BOX -- "xQueuePeek" --> LOOP
+  DT --> OLED["OLED"]</pre>
+<p>هر سه Task روی هسته ۱ هستند؛ هسته ۰ برای Taskهای Wi-Fi و شبکه خود سیستم آزاد می‌ماند.</p>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"OLED","name":"OLED ۰٫۹۶ اینچ SSD1306 (I2C)","pins":[["GND","زمین"],["VCC","تغذیه ۳٫۳ ولت"],["SCL","ساعت I2C"],["SDA","داده I2C"]]}
+  ],
+  "wires":[["GND","OLED.GND","black"],["3V3","OLED.VCC","red"],["GPIO22","OLED.SCL","green"],["GPIO21","OLED.SDA","yellow"]]
+}</script><figcaption>همان سیم‌کشی درس ۳.۳: SDA به GPIO21، SCL به GPIO22، آدرس 0x3C.</figcaption></div>
+
+<ol class="steps">
+  <li><b>کتابخانه‌ها.</b> از Library Manager: <b>ArduinoJson by Benoit Blanchon</b> (نسخه ۷)، <b>Adafruit SSD1306 by Adafruit</b> (موقع نصب بپرس «Install all» تا <b>Adafruit GFX Library</b> و <b>Adafruit BusIO</b> هم نصب شوند).</li>
+  <li><b>Partition Scheme.</b> <code>Tools › Partition Scheme › Minimal SPIFFS (1.9MB APP with OTA/128KB SPIFFS)</code>. این برنامه روی core 3.3.12 حدود ۱٫۲۲ مگابایت (۱٬۲۷۶٬۰۰۰ بایت) است: با Default (سقف ۱٫۲۵ مگابایت یعنی ۱٬۳۱۰٬۷۲۰ بایت) به ۹۷٪ می‌رسد و با اولین ویژگی جدید «Sketch too big» می‌گیری. Minimal SPIFFS هم OTA دارد و هم جای رشد.</li>
+  <li><b>پوشه data</b> با فایل <code>index.html</code> پایین را بساز و با افزونه LittleFS (درس <a href="5-5.html#littlefs">۵.۵</a>) آپلود کن (با همان Partition Scheme).</li>
+  <li><b>برنامه را بار اول با USB</b> آپلود کن. از این به بعد پورت شبکه <code>weather-station</code> را در منوی Port می‌بینی.</li>
+</ol>
+
+<div class="code" data-file="data/index.html" data-lang="text" id="stationHtml"><pre>
+&lt;!doctype html&gt;
+&lt;html lang="fa" dir="rtl"&gt;
+&lt;head&gt;
+  &lt;meta charset="utf-8"&gt;
+  &lt;meta name="viewport" content="width=device-width,initial-scale=1"&gt;
+  &lt;title&gt;ایستگاه هوا&lt;/title&gt;
+&lt;/head&gt;
+&lt;body style="font-family:sans-serif;max-width:420px;margin:2em auto"&gt;
+  &lt;h2&gt;ایستگاه هوا&lt;/h2&gt;
+  &lt;p&gt;دما: &lt;b id="temp"&gt;...&lt;/b&gt; °C ، باد: &lt;b id="wind"&gt;...&lt;/b&gt; km/h&lt;/p&gt;
+  &lt;form method="POST" action="/api/config"&gt;
+    &lt;label&gt;عرض جغرافیایی &lt;input name="lat" id="lat"&gt;&lt;/label&gt;&lt;br&gt;
+    &lt;label&gt;طول جغرافیایی &lt;input name="lon" id="lon"&gt;&lt;/label&gt;&lt;br&gt;
+    &lt;button&gt;ذخیره&lt;/button&gt;
+  &lt;/form&gt;
+  &lt;script&gt;
+    fetch('/api/state').then(r =&gt; r.json()).then(s =&gt; {
+      for (const k of ['temp', 'wind', 'lat', 'lon']) {
+        const el = document.getElementById(k);
+        if (el.tagName === 'INPUT') el.value = s[k]; else el.textContent = s[k];
+      }
+    });
+  &lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</pre></div>
+<ol class="walk" data-for="stationHtml">
+  <li data-lines="11-15"><b class="what">فرم تنظیمات.</b> با زدن «ذخیره»، مرورگر مقدارهای <code>lat</code> و <code>lon</code> را با POST به <code>/api/config</code> می‌فرستد.
+    <span class="why">فرم HTML ساده بدون هیچ JavaScript کار می‌کند؛ حتی در ضعیف‌ترین مرورگر گوشی. سادگی یعنی پایداری.</span></li>
+  <li data-lines="16-23"><b class="what">پر کردن صفحه با داده زنده.</b> <code>/api/state</code> را می‌خواند و هر فیلد را در عنصر هم‌نامش می‌گذارد؛ برای input در <code>value</code> و برای بقیه در متن.
+    <span class="why">اگر هنوز هوایی گرفته نشده باشد، دما و باد <code>null</code> نشان داده می‌شوند (ArduinoJson مقدار NAN را به <code>null</code> تبدیل می‌کند، چون JSON استاندارد NaN ندارد).</span></li>
+</ol>
+
+<div class="code" data-file="WeatherStation.ino" id="station"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;ArduinoOTA.h&gt;
+#include &lt;LittleFS.h&gt;
+#include &lt;WiFiClientSecure.h&gt;
+#include &lt;HTTPClient.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include "secrets.h"
+#ifndef OTA_PASS
+#warning "OTA_PASS is not defined in secrets.h"
+#define OTA_PASS "change-me"
+#endif
+
+struct Weather { float temp; float wind; unsigned long at; };
+struct Config  { float lat; float lon; };
+
+WebServer server(80);
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+QueueHandle_t weatherBox;          // صندوق یک‌خانه‌ای: همیشه آخرین هوا
+SemaphoreHandle_t cfgMutex;        // قفل تنظیمات مشترک
+TaskHandle_t weatherHandle = NULL;
+Config cfg = {43.65, -79.38};      // پیش‌فرض: تورنتو
+
+// ---------- LittleFS: خواندن و ذخیره امن تنظیمات ----------
+void loadConfig() {
+  File f = LittleFS.open("/config.json", "r");
+  if (!f) return;                                  // هنوز ذخیره نشده
+  JsonDocument doc;
+  if (!deserializeJson(doc, f)) {
+    cfg.lat = doc["lat"] | cfg.lat;
+    cfg.lon = doc["lon"] | cfg.lon;
+  }
+  f.close();
+}
+
+bool saveConfig(const Config &amp;c) {
+  JsonDocument doc;
+  doc["lat"] = c.lat;
+  doc["lon"] = c.lon;
+  File f = LittleFS.open("/config.tmp", "w");      // اول در فایل موقت
+  if (!f) return false;
+  bool ok = serializeJson(doc, f) &gt; 0;
+  f.close();
+  if (!ok) return false;
+  LittleFS.remove("/config.json");
+  return LittleFS.rename("/config.tmp", "/config.json");  // بعد جابه‌جا
+}
+
+// ---------- Task هوا: هر ۱۰ دقیقه یا وقتی تنظیمات عوض شد ----------
+bool fetchWeather(float lat, float lon, Weather &amp;w) {
+  char url[160];
+  snprintf(url, sizeof(url),
+           "https://api.open-meteo.com/v1/forecast?latitude=%.2f&amp;longitude=%.2f"
+           "&amp;current=temperature_2m,wind_speed_10m", lat, lon);
+  WiFiClientSecure client;
+  client.useBuiltinCACertBundle();
+  HTTPClient http;
+  http.setConnectTimeout(5000);
+  http.setTimeout(5000);
+  http.useHTTP10(true);
+  if (!http.begin(client, url)) return false;
+  int code = http.GET();
+  bool ok = false;
+  if (code == HTTP_CODE_OK) {
+    JsonDocument filter;
+    filter["current"]["temperature_2m"] = true;
+    filter["current"]["wind_speed_10m"] = true;
+    JsonDocument doc;
+    if (!deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter))) {
+      w.temp = doc["current"]["temperature_2m"] | NAN;
+      w.wind = doc["current"]["wind_speed_10m"] | NAN;
+      w.at = millis();
+      ok = !isnan(w.temp);
+    }
+  }
+  http.end();
+  return ok;
+}
+
+void weatherTask(void *param) {
+  for (;;) {
+    if (WiFi.status() == WL_CONNECTED) {
+      xSemaphoreTake(cfgMutex, portMAX_DELAY);
+      Config c = cfg;                              // کپی، بعد قفل را پس بده
+      xSemaphoreGive(cfgMutex);
+      Weather w;
+      if (fetchWeather(c.lat, c.lon, w)) {
+        xQueueOverwrite(weatherBox, &amp;w);           // جای مقدار قبلی
+      }
+    }
+    // ۱۰ دقیقه بخواب، مگر این که کسی زودتر بیدارمان کند
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10UL * 60 * 1000));
+  }
+}
+
+// ---------- Task نمایش: هر ۲ ثانیه آخرین هوا روی OLED ----------
+void displayTask(void *param) {
+  Weather w;
+  for (;;) {
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.println(WiFi.localIP());
+    if (xQueuePeek(weatherBox, &amp;w, 0) == pdPASS) {  // نگاه کن، برندار
+      display.setTextSize(2);
+      display.printf("%.1f C\n", w.temp);
+      display.setTextSize(1);
+      display.printf("wind %.1f km/h\n", w.wind);
+      display.printf("%lu min ago", (millis() - w.at) / 60000);
+    } else {
+      display.println("waiting for data...");
+    }
+    display.display();
+    vTaskDelay(pdMS_TO_TICKS(2000));
+  }
+}
+
+// ---------- وب: صفحه از LittleFS، داده از کد ----------
+void handleState() {
+  Weather w = {NAN, NAN, 0};
+  xQueuePeek(weatherBox, &amp;w, 0);
+  JsonDocument doc;
+  xSemaphoreTake(cfgMutex, portMAX_DELAY);
+  doc["lat"] = cfg.lat;
+  doc["lon"] = cfg.lon;
+  xSemaphoreGive(cfgMutex);
+  doc["temp"] = w.temp;
+  doc["wind"] = w.wind;
+  String out;
+  serializeJson(doc, out);
+  server.send(200, "application/json", out);
+}
+
+void handleSave() {
+  Config c = {server.arg("lat").toFloat(), server.arg("lon").toFloat()};
+  if (c.lat &lt; -90 || c.lat &gt; 90 || c.lon &lt; -180 || c.lon &gt; 180) {
+    return server.send(400, "text/plain", "bad lat/lon");
+  }
+  xSemaphoreTake(cfgMutex, portMAX_DELAY);
+  cfg = c;
+  xSemaphoreGive(cfgMutex);
+  saveConfig(c);
+  xTaskNotifyGive(weatherHandle);                  // «همین الان دوباره بگیر»
+  server.sendHeader("Location", "/");
+  server.send(303);
+}
+
+void setup() {
+  Serial.begin(115200);
+  LittleFS.begin(true);
+  loadConfig();
+  weatherBox = xQueueCreate(1, sizeof(Weather));
+  cfgMutex = xSemaphoreCreateMutex();
+
+  Wire.begin(21, 22);
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.setTextColor(SSD1306_WHITE);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - t0 &lt; 20000) delay(250);
+
+  ArduinoOTA.setHostname("weather-station");
+  ArduinoOTA.setPassword(OTA_PASS);
+  ArduinoOTA.begin();
+
+  server.serveStatic("/", LittleFS, "/index.html");
+  server.on("/api/state", HTTP_GET, handleState);
+  server.on("/api/config", HTTP_POST, handleSave);
+  server.begin();
+
+  xTaskCreatePinnedToCore(weatherTask, "weather", 12288, NULL, 1, &amp;weatherHandle, 1);
+  xTaskCreatePinnedToCore(displayTask, "display", 4096, NULL, 1, NULL, 1);
+}
+
+void loop() {
+  ArduinoOTA.handle();
+  server.handleClient();
+  delay(2);
+}
+</pre></div>
+<ol class="walk" data-for="station">
+  <li data-lines="17-18"><b class="what">دو struct.</b> <code>Weather</code> یک بسته از دما، باد و زمان گرفتن است؛ <code>Config</code> مختصات.
+    <span class="why">بسته‌بندی داده‌های مرتبط در یک struct باعث می‌شود با یک <code>xQueueOverwrite</code> همه را با هم و یک‌جا جابه‌جا کنیم؛ هیچ‌وقت دمای جدید با زمان قدیمی قاطی نمی‌شود.</span></li>
+  <li data-lines="22"><b class="what">صف یک‌خانه‌ای به عنوان «صندوق نامه» (Mailbox).</b> صفی با طول ۱ که با <code>xQueueOverwrite</code> پر می‌شود و با <code>xQueuePeek</code> خوانده می‌شود.
+    <span class="why">در صف معمولی (درس <a href="5-4.html#queue">۵.۴</a>) هر داده یک بار خوانده و برداشته می‌شد. این‌جا دو خواننده داریم (OLED و وب) و هر دو فقط «آخرین هوا» را می‌خواهند؛ Peek نگاه می‌کند و برنمی‌دارد، Overwrite همیشه جای قبلی را می‌گیرد و هرگز «صف پر» نمی‌شود.</span></li>
+  <li data-lines="28-37"><b class="what">خواندن تنظیمات در بوت.</b> اگر فایل نبود یا JSON خراب بود، مقدار پیش‌فرض تورنتو (خط ۲۵) می‌ماند.
+    <span class="why">همان اصل چک‌لیست پایداری: دستگاه همیشه باید با تنظیمات ناقص هم بالا بیاید.</span></li>
+  <li data-lines="39-50"><b class="what">ذخیره امن.</b> اول <code>config.tmp</code>، بعد پاک کردن قبلی و تغییر نام.
+    <span class="why">اگر برق وسط <code>serializeJson</code> برود، config.json قبلی سالم است. <code>serializeJson(doc, f)</code> مستقیم در فایل می‌نویسد و تعداد بایت‌ها را برمی‌گرداند؛ صفر یعنی شکست.</span></li>
+  <li data-lines="53-81"><b class="what">fetchWeather.</b> همان کد مثال هوا در اوایل همین درس، با دو تفاوت: آدرس با <code>snprintf</code> از مختصات ساخته می‌شود، و این بار <code>useBuiltinCACertBundle</code> داریم.
+    <span class="why">snprintf در یک آرایه ثابت ۱۶۰ بایتی می‌نویسد و هرگز از آن بیرون نمی‌زند؛ هیچ String موقتی در Heap ساخته نمی‌شود. این Task ماه‌ها هر ۱۰ دقیقه اجرا می‌شود، پس دقیقا جایی است که تکه‌تکه شدن حافظه مهم است.</span></li>
+  <li data-lines="83-97"><b class="what">weatherTask.</b> تنظیمات را زیر قفل <b>کپی</b> می‌کند، قفل را فورا پس می‌دهد، بعد درخواست کند HTTPS را انجام می‌دهد و نتیجه را در صندوق می‌گذارد.
+    <span class="why">هرگز قفل را در طول یک کار کند (چند ثانیه HTTPS) نگه ندار، وگرنه صفحه وب هم که cfg را می‌خواهد همان‌قدر منتظر می‌ماند. «کپی کن، رها کن، بعد کار کن».</span></li>
+  <li data-lines="95"><b class="what">ulTaskNotifyTake با سقف ۱۰ دقیقه.</b> Task می‌خوابد تا یا ۱۰ دقیقه بگذرد، یا کسی با <code>xTaskNotifyGive</code> بیدارش کند.
+    <span class="why">«اعلان Task» (Task Notification) سبک‌ترین ابزار FreeRTOS برای «هی، بیدار شو» است. با vTaskDelay ی ساده، بعد از تغییر شهر باید تا ۱۰ دقیقه منتظر هوای جدید می‌ماندی.</span></li>
+  <li data-lines="100-118"><b class="what">displayTask.</b> هر ۲ ثانیه صفحه را از نو می‌کشد: IP، دما با حروف درشت، باد، و این که داده چند دقیقه پیش گرفته شده.
+    <span class="why">فقط همین Task به OLED (و I2C) دست می‌زند، پس برای نمایشگر Mutex لازم نیست. قانون ساده‌تر از قفل: <b>هر سخت‌افزار یک صاحب</b>. نمایش «چند دقیقه پیش» مهم است: اگر اینترنت یک روز قطع باشد، کاربر دمای دیروز را به جای امروز باور نمی‌کند.</span></li>
+  <li data-lines="121-134"><b class="what">/api/state.</b> آخرین هوا را از صندوق Peek می‌کند و تنظیمات را زیر قفل می‌خواند و همه را به شکل JSON برمی‌گرداند.
+    <span class="why">این تابع در loopTask اجرا می‌شود (داخل <code>server.handleClient</code>)، در حالی که weatherTask ممکن است هم‌زمان cfg را بخواند یا عوض شدنش را منتظر باشد؛ برای همین قفل لازم است.</span></li>
+  <li data-lines="136-148"><b class="what">/api/config.</b> ورودی را <b>اعتبارسنجی</b> می‌کند، در cfg و فایل ذخیره می‌کند، weatherTask را بیدار می‌کند و مرورگر را با کد 303 به صفحه اصلی برمی‌گرداند.
+    <span class="why">هرگز به ورودی کاربر اعتماد نکن: <code>toFloat()</code> برای متن نامعتبر صفر برمی‌گرداند و عرض جغرافیایی ۵۰۰ معنی ندارد. 303 باعث می‌شود رفرش صفحه فرم را دوباره نفرستد.</span></li>
+  <li data-lines="150-178"><b class="what">setup به ترتیب درست.</b> LittleFS و تنظیمات، بعد صف و قفل (قبل از هر Task)، OLED، Wi-Fi با سقف ۲۰ ثانیه، OTA، وب سرور، و در آخر Taskها.
+    <span class="why">اگر Wi-Fi در ۲۰ ثانیه وصل نشد، دستگاه متوقف نمی‌شود: <code>setAutoReconnect</code> بعدا وصلش می‌کند و weatherTask تا وصل شدن فقط منتظر می‌ماند. Stack ی weatherTask عمدا ۱۲ کیلوبایت است چون HTTPS سنگین است؛ بعد از چند روز با <code>uxTaskGetStackHighWaterMark</code> مقدار واقعی را اندازه بگیر.</span></li>
+  <li data-lines="180-184"><b class="what">loop کوچک.</b> فقط OTA و وب سرور، با یک <code>delay(2)</code>.
+    <span class="why">چون کار کند در Task جداست، loop همیشه در چند میلی‌ثانیه می‌چرخد و OTA و صفحه وب همیشه سریع جواب می‌دهند، حتی وسط یک درخواست HTTPS کند. این همان مشکلی بود که درس ۵.۴ را با آن شروع کردیم.</span></li>
+</ol>
+
+<div class="callout example"><div class="ct">در Wokwi چه چیزی را می‌توانی امتحان کنی؟</div>
+<p>Wokwi Wi-Fi (با <code>Wokwi-GUEST</code>)، HTTPS، OLED و FreeRTOS را شبیه‌سازی می‌کند، پس بخش هوا و نمایش کار می‌کند. ولی OTA و آپلود پوشه data در Wokwi وجود ندارند؛ بدون فایل index.html، صفحه اصلی خالی است ولی <code>/api/state</code> جواب می‌دهد. پروژه کامل را روی برد واقعی بساز.</p></div>
+
+<!-- ======================= Debug ======================= -->
+<h2 id="debug">وقتی کار نمی‌کند: عیب‌یابی قدم به قدم</h2>
+<div class="table-wrap"><table>
+<tr><th>علامت</th><th>علت محتمل</th><th>راه حل</th></tr>
+<tr><td>HTTPS: کد <code>-1</code> (connection refused) یا پیام <code>X509 - Certificate verification failed</code></td><td>DNS یا اینترنت نیست؛ سرویس از شبکه تو در دسترس نیست (مثلا شبکه اداره یا مدرسه آن را مسدود کرده)؛ گواهی ریشه غلط یا منقضی؛ Heap کم برای TLS</td><td>آدرس را در مرورگر گوشیِ روی همان Wi-Fi امتحان کن. برای تشخیص یک بار <code>setInsecure()</code> بگذار: اگر وصل شد، مشکل از گواهی است؛ <code>useBuiltinCACertBundle()</code> را امتحان کن. <code>ESP.getMaxAllocHeap()</code> را چاپ کن (TLS حدود ۴۰ کیلوبایت پیوسته می‌خواهد). ساعت: در core آردوینو بررسی تاریخ گواهی به طور پیش‌فرض خاموش است، پس ساعت غلط معمولا علت نیست؛ ولی داشتن ساعت درست با NTP (درس ۴.۱) عادت خوبی است و برخی کتابخانه‌ها و سرویس‌ها به آن نیاز دارند.</td></tr>
+<tr><td><code>JSON error: IncompleteInput</code> یا <code>InvalidInput</code></td><td>جواب chunked بوده؛ timeout وسط خواندن؛ سرور به جای JSON صفحه خطای HTML فرستاده</td><td><code>http.useHTTP10(true)</code>؛ timeout را بیشتر کن؛ کد HTTP را قبل از تجزیه بررسی کن.</td></tr>
+<tr><td><code>Task watchdog got triggered</code> و ریست</td><td>یک Task (یا loop با enableLoopWDT) بیش از ۵ ثانیه بدون وقفه کار کرده؛ حلقه انتظار <code>while(...){}</code></td><td>اسم Task مجرم در خط <code>CPU 0: ...</code> هست. در حلقه‌اش <code>vTaskDelay</code> بگذار یا کار را به تکه‌های کوچک‌تر بشکن؛ نگهبان را خاموش نکن.</td></tr>
+<tr><td>ntfy کد ۲۰۰ برمی‌گرداند ولی چیزی روی گوشی نمی‌آید</td><td>گوشی مشترک اسم موضوع دیگری است (یک غلط تایپی کافی است)؛ صرفه‌جویی باتری اپ اعلان‌ها را عقب می‌اندازد</td><td>آدرس <code>https://ntfy.sh/اسم-موضوع-تو</code> را در مرورگر باز کن: پیام‌های فرستاده‌شده آنجا دیده می‌شوند. اسم موضوع را دقیقا از <code>secrets.h</code> در اپ کپی کن.</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>دو قانون را با خودت ببر. <b>یک</b>، دستگاهی که علت ریست‌هایش را ثبت نمی‌کند، دستگاه حرفه‌ای نیست. از امروز در هر پروژه‌ای که بیش از یک روز روشن می‌ماند، کد «جعبه سیاه» چک‌لیست پایداری را بگذار. بعد از یک هفته که شمارنده کرش صفر ماند، آن وقت می‌توانی بگویی «کار می‌کند». <b>دو</b>، روی سرور دیگران مهمان مؤدبی باش: فاصله منطقی بین درخواست‌ها، سقف زمان برای هر درخواست، و ترمز برای هر هشدار. دستگاهی که هر ثانیه به یک API هجوم می‌برد مسدود می‌شود و آن وقت اصلا کار نمی‌کند.</p></div>
+
+<!-- ======================= Quiz ======================= -->
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">چرا در مثال هوا قبل از <code>deserializeJson(doc, http.getStream(), ...)</code> خط <code>http.useHTTP10(true)</code> را گذاشتیم؟</p>
+  <ol><li data-why="HTTP/1.0 سرعت را بیشتر نمی‌کند؛ هدف چیز دیگری است.">چون HTTP 1.0 سریع‌تر است</li><li>تا سرور جواب را chunked (تکه‌تکه با عددهای اندازه) نفرستد و JSON خوانده‌شده از جریان خراب نشود</li><li data-why="رمزنگاری به WiFiClientSecure مربوط است، نه نسخه HTTP.">چون HTTPS فقط با HTTP 1.0 کار می‌کند</li><li data-why="useHTTP10 ربطی به گواهی ندارد.">تا گواهی سرور بررسی نشود</li></ol>
+  <div class="fb">وقتی مستقیم از <code>getStream()</code> می‌خوانی، HTTPClient تکه‌ها را سرهم نمی‌کند. HTTP/1.0 این مشکل را از ریشه حذف می‌کند.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">دستگاهت از طریق ntfy هشدار «در باز شد» را به گوشی‌ات می‌فرستد. کدام تنظیم اتصال درست است؟</p>
+  <ol><li data-why="اتصال رمزنگاری می‌شود ولی هویت سرور بررسی نمی‌شود؛ کسی در میانه راه می‌تواند هشدار را بخواند یا عوض کند."><code>setInsecure()</code>، چون ساده‌تر است</li><li data-why="بدون رمزنگاری هر کسی در مسیر می‌تواند پیام را بخواند و عوض کند."><code>http://</code> ساده بدون رمزنگاری</li><li data-why="یک روز ممکن است هشدار بگوید «نشت گاز»؛ مهم است.">برای یک اعلان فرقی نمی‌کند</li><li><code>useBuiltinCACertBundle()</code></li></ol>
+  <div class="fb">برای هر چیزی که فرمان، رمز یا هشدار مهم حمل می‌کند، هویت سرور را بررسی کن. بسته داخلی این کار را بدون کپی کردن گواهی انجام می‌دهد.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">بعد از یک هفته، صفحه دستگاهت «crashes: 40» را نشان می‌دهد و علت آخرین ریست <code>TASK WATCHDOG</code> است. این به تو چه می‌گوید؟</p>
+  <ol><li>یک Task (یا loop) بارها بیش از ۵ ثانیه گیر کرده؛ باید پیدا کنی کدام</li><li data-why="تغذیه ضعیف به صورت BROWNOUT گزارش می‌شود.">منبع تغذیه خیلی ضعیف است</li><li data-why="نگهبان فقط وقتی فعال می‌شود که چیزی واقعا گیر کرده باشد.">همه چیز خوب است؛ نگهبان فقط سخت‌گیر است</li><li data-why="زدن EN معمولا POWERON گزارش می‌شود و کرش حساب نمی‌شود.">کسی ۴۰ بار دکمه EN را زده</li></ol>
+  <div class="fb">نگهبان با ریست کردن دستگاه را زنده نگه داشته، ولی باگ هنوز هست. خط <code>CPU 0: ...</code> در پیام نگهبان اسم مجرم را می‌گوید.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">در ایستگاه هوا، چرا weatherTask تنظیمات را زیر قفل کپی می‌کند و قفل را <b>قبل از</b> درخواست HTTPS پس می‌دهد؟</p>
+  <ol><li data-why="کپی چند بایت است؛ صرفه‌جویی در RAM هدف نیست.">برای صرفه‌جویی در RAM</li><li data-why="HTTPS وقتی قفلی گرفته شده هم کار می‌کند؛ دلیل این نیست.">چون HTTPS وقتی Mutex گرفته شده کار نمی‌کند</li><li>تا صفحه وب، که آن هم تنظیمات را لازم دارد، مجبور نشود چند ثانیه منتظر یک درخواست کند بماند</li><li data-why="Mutex در FreeRTOS تاریخ انقضا ندارد.">چون Mutex بعد از یک ثانیه منقضی می‌شود</li></ol>
+  <div class="fb">«کپی کن، رها کن، بعد کار کن»: قفل را فقط همان لحظه‌ای نگه دار که به داده مشترک دست می‌زنی، هرگز در طول یک کار کند.</div>
+</div>
+
+<!-- ======================= Exercises ======================= -->
+<h2 id="practice">تمرین‌ها</h2>
+<div class="exercise"><div class="ct">تمرین ۱: هشدار گرما</div>
+<p>برنامه هوا و ntfy را ترکیب کن: اگر دمای شهرت از ۳۰ درجه بیشتر شد، یک هشدار ntfy بفرست، ولی فقط <b>یک بار</b> تا وقتی دما دوباره زیر ۲۸ درجه نیامده. وضعیت «هشدار فرستاده شده» باید بعد از ریست هم یادش بماند.</p>
+<details><summary>راهنمایی</summary><p>فاصله ۳۰ و ۲۸ همان «هیسترزیس» است تا دمای ۳۰ و ۲۹٫۹ پشت سر هم ده‌ها هشدار نسازد. برای به یاد ماندن بعد از ریست، یک <code>bool</code> در Preferences کافی است؛ فقط وقتی مقدارش <b>عوض</b> شد بنویس.</p></details>
+<details><summary>جواب (بخش کلیدی)</summary>
+<div class="code" data-file="HeatAlert_part.ino"><pre>
+prefs.begin("alert", false);
+bool sent = prefs.getBool("sent", false);
+if (!sent &amp;&amp; t &gt; 30.0) {
+  if (sendAlert("Heat", "Above 30 C")) {
+    prefs.putBool("sent", true);   // فقط وقتی واقعا فرستاده شد
+  }
+} else if (sent &amp;&amp; t &lt; 28.0) {
+  prefs.putBool("sent", false);    // آماده برای هشدار بعدی
+}
+prefs.end();
+</pre></div></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۲: جعبه سیاه در صفحه وب</div>
+<p>«جعبه سیاه» چک‌لیست پایداری را به پروژه ایستگاه هوا اضافه کن: علت آخرین ریست، تعداد بوت‌ها و تعداد کرش‌ها را در <code>/api/state</code> برگردان و در index.html نشان بده. سپس با تغییر عمدی (مثلا یک حلقه بی‌پایان در loop بعد از ۱ دقیقه با enableLoopWDT) یک ریست نگهبان بساز و ببین در صفحه ثبت می‌شود. در آخر نسخه سالم را <b>با OTA</b> بفرست.</p>
+<details><summary>راهنمایی</summary><p>علت ریست را یک بار در setup بخوان و در یک متغیر سراسری <code>const char *</code> نگه دار؛ در handleState فقط آن را در JSON بگذار. برای تست OTA، مطمئن شو نسخه خراب هم هنوز <code>ArduinoOTA.handle()</code> را در ۱ دقیقه اول صدا می‌زند، وگرنه باید با کابل درستش کنی. (همین تجربه، توصیه مربی درباره OTA در درس <a href="5-5.html">۵.۵</a> را برایت واقعی می‌کند.)</p></details>
+</div>
+
+<div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
+<p>APIها را با HTTPS، سقف زمان، فیلتر JSON و فاصله منطقی صدا بزن، و هر جا چیز مهمی رد و بدل می‌شود هویت سرور را با بسته گواهی داخلی بررسی کن. دستگاهی که ماه‌ها کار می‌کند علت ریستش را ثبت می‌کند، کرش‌هایش را می‌شمارد، اجازه می‌دهد نگهبان وقتی گیر کرد ریستش کند، از تکه‌تکه شدن Heap دوری می‌کند و فایل‌ها را امن ذخیره می‌کند. ایستگاه هوا همه را کنار هم می‌گذارد: کار کند در Task خودش، داده در یک صندوق پستی تک‌خانه، تنظیمات در LittleFS و آپدیت با OTA.</p></div>
+
+<p>این پایان فصل ۵ است. در درس <a href="6-1.html">۶.۱</a> یاد می‌گیری دستگاهی مثل همین را با خواب عمیق و خواب سبک ماه‌ها با باتری روشن نگه داری.</p>
+
+</article>
+</body>
+</html>

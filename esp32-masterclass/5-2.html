@@ -31,10 +31,13 @@
   <div><h4>🧰 پیش‌نیاز و وسایل</h4><ul>
     <li>درس <a href="3-1.html">۳.۱</a> (دکمه و Debounce) و <a href="4-1.html">۴.۱</a> (Wi-Fi)</li>
     <li><b>دو</b> برد ESP32 و دو کابل USB دیتا (اگر یک کامپیوتر داری، دو پنجره Arduino IDE، هر کدام برای یک پورت)</li>
-    <li>برد A: یک دکمه فشاری</li>
+    <li>برد A: یک دکمه فشاری، و (برای پروژه ۲) یک LED + مقاومت ۲۲۰ اهم به عنوان چراغ «رسید»</li>
     <li>برد B: یک LED + مقاومت ۲۲۰ اهم، و (برای بخش دوطرفه) سنسور DHT22 + مقاومت ۱۰ کیلواهم</li>
   </ul></div>
 </div>
+
+<div class="callout warn"><div class="ct">این درس دو برد ESP32 واقعی لازم دارد</div>
+<p>ESP-NOW گفتگوی بین دو برد است، پس پروژه‌های ۱ و ۲ فقط با <b>دو</b> ESP32 کار می‌کنند (فهرست خرید دوره دقیقا برای همین درس یک برد دوم دارد). Wokwi ارتباط ESP-NOW بین دو برد را شبیه‌سازی نمی‌کند. با یک برد هم می‌توانی بخش اول درس (آدرس MAC و <a href="#struct">نمایش struct</a>، هر دو در Wokwi هم) را انجام دهی و بقیه را بخوانی تا وقتی برد دوم رسید آماده باشی.</p></div>
 
 <h2 id="what">ESP-NOW چیست؟</h2>
 <p>ESP-NOW از همان رادیوی ۲٫۴ گیگاهرتز Wi-Fi که داخل ESP32 است استفاده می‌کند، ولی کل تشریفات Wi-Fi (اتصال به مودم، گرفتن IP، TCP، دست دادن و...) را کنار می‌گذارد. هر پیام یک بسته کوچک است که مستقیم با «آدرس MAC» برد مقصد فرستاده می‌شود؛ درست مثل این که به جای رفتن به اداره پست، نامه را مستقیم از پنجره به همسایه بدهی.</p>
@@ -118,16 +121,77 @@ STA MAC: 24:6F:28:AB:CD:EF</div>
   <li><code>(uint8_t *)&amp;cmd</code> یعنی «آدرس متغیر cmd را به عنوان آرایه‌ای از بایت ببین». <code>&amp;</code> آدرس می‌دهد و <code>(uint8_t *)</code> نوع را عوض می‌کند، بدون این که داده‌ای تغییر کند.</li>
 </ul>
 
+<p>قبل از هر کد رادیویی، بیا همه این‌ها را با چشم خودمان ببینیم. برنامه زیر <b>فقط یک برد و هیچ رادیویی</b> لازم دارد: اندازه‌ها را چاپ می‌کند، بایت‌های واقعی یک پیام را نشان می‌دهد و آن‌ها را با <code>memcpy</code> دوباره «دریافت» می‌کند، دقیقا همان کاری که برد B خواهد کرد. آن را روی هر ESP32 یا در Wokwi اجرا کن (یک پروژه خالی ESP32؛ کد را در <code>sketch.ino</code> بچسبان و ▶ را بزن).</p>
+<div class="code" data-file="StructBytes.ino" id="structdemo"><pre>
+typedef struct {
+  uint32_t seq;     // شماره پیام
+  bool ledOn;       // LED روشن باشد؟
+} CommandMsg;
+
+typedef struct {
+  uint32_t seq;
+  bool ledOn;
+  float tempC;
+} ReplyMsg;
+
+CommandMsg cmd;     // سراسری، پس همه بایت‌ها (حتی Padding) از صفر شروع می‌کنند
+
+void printBytes(const char *label, const uint8_t *p, size_t n) {
+  Serial.printf("%s (%u bytes):", label, (unsigned)n);
+  for (size_t i = 0; i &lt; n; i++) Serial.printf(" %02X", p[i]);
+  Serial.println();
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  Serial.printf("sizeof(CommandMsg) = %u\n", (unsigned)sizeof(CommandMsg));
+  Serial.printf("sizeof(ReplyMsg)   = %u\n", (unsigned)sizeof(ReplyMsg));
+
+  cmd.seq = 258;                        // 258 = 0x00000102
+  cmd.ledOn = true;
+  printBytes("cmd", (uint8_t *)&amp;cmd, sizeof(cmd));
+
+  uint8_t air[sizeof(cmd)];             // فرض کن این بایت‌ها از هوا رد شده‌اند
+  memcpy(air, &amp;cmd, sizeof(cmd));       // فرستنده: struct به بایت
+  CommandMsg got;
+  memcpy(&amp;got, air, sizeof(got));       // گیرنده: بایت به struct
+  Serial.printf("got.seq = %lu, got.ledOn = %d\n", (unsigned long)got.seq, got.ledOn);
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="structdemo">
+  <li data-lines="1-10"><b class="what">دو قالب پیام.</b> همان دو struct که در این درس با رادیو فرستاده می‌شوند: فرمان (A به B) و جواب (B به A).
+    <span class="why">وقتی اول آن‌ها را در یک برنامه کوچک ببینی، بعدا که رادیو هم وارد ماجرا شد، به این بخش اطمینان داری.</span></li>
+  <li data-lines="12"><b class="what">یک متغیر پیام سراسری.</b> متغیر سراسری با همه بایت‌های صفر شروع می‌شود، حتی بایت‌های Padding.
+    <span class="why">بایت‌های Padding یک متغیر محلی ممکن است مقدار باقی‌مانده حافظه را داشته باشند و در خروجی آن سه جا عددهای تصادفی ببینی. بی‌ضرر است، ولی گیج‌کننده.</span></li>
+  <li data-lines="14-18"><b class="what">printBytes: هر حافظه‌ای را به شکل بایت نشان بده.</b> یک آدرس و یک طول می‌گیرد و هر بایت را به مبنای ۱۶ چاپ می‌کند (<code>%02X</code> یعنی «دو رقم هگز»).
+    <span class="why">این‌طوری پیام را همان‌طور می‌بینی که رادیو می‌بیند: فقط یک ردیف بایت، بدون اسم و بدون نوع.</span></li>
+  <li data-lines="23-24"><b class="what">چاپ اندازه‌ها.</b> باید ۸ و ۱۲ ببینی، نه ۵ و ۹.
+    <span class="why">این همان Padding کادر بالاست، این بار اندازه‌گیری‌شده به جای حساب‌شده. <code>sizeof</code> همیشه راست می‌گوید؛ برای همین کد رادیو همه طول‌ها را با آن می‌دهد.</span></li>
+  <li data-lines="26-28"><b class="what">پر کردن فرم و دیدن بایت‌هایش.</b> seq = 258 و ledOn = true. خروجی: <code>02 01 00 00 01 00 00 00</code>.
+    <span class="why">۲۵۸ در هگز می‌شود <code>0x00000102</code>. ESP32 <b>کوچک‌ترین</b> بایت را اول ذخیره می‌کند (به این می‌گویند «Little-endian»)، برای همین <code>02 01 00 00</code> می‌بینی. بعد bool می‌آید (<code>01</code>) و سه بایت Padding (<code>00 00 00</code>). لازم نیست این ترتیب را حفظ کنی؛ هر دو ESP32 از یک ترتیب استفاده می‌کنند و فقط همین مهم است.</span></li>
+  <li data-lines="30-34"><b class="what">یک سفر رادیویی خیالی.</b> <code>memcpy</code> اول struct را به یک آرایه بایت ساده تبدیل می‌کند (کاری که <code>esp_now_send</code> می‌کند) و دومی بایت‌ها را در یک struct تازه می‌ریزد (کاری که Callback دریافت می‌کند).
+    <span class="why">اگر <code>got.seq</code> برابر ۲۵۸ و <code>got.ledOn</code> برابر ۱ شد، «فرم» سالم رسیده است. در پروژه واقعی تنها فرق این است که آرایه بایت بین دو <code>memcpy</code> از هوا رد می‌شود.</span></li>
+</ol>
+<div class="serial">sizeof(CommandMsg) = 8
+sizeof(ReplyMsg)   = 12
+cmd (8 bytes): 02 01 00 00 01 00 00 00
+got.seq = 258, got.ledOn = 1</div>
+
 <h2 id="oneway">پروژه ۱: ریموت یک‌طرفه (دکمه روی A، LED روی B)</h2>
 
 <h3>سیم‌کشی برد A (فرستنده)</h3>
 <div class="wiring"><script type="application/json">{
   "board":"برد A (فرستنده)",
   "parts":[
-    {"id":"BTN","name":"دکمه فشاری","img":"button.svg","pins":[["1","یک طرف دکمه"],["2","طرف مقابل (قطری)"]]}
+    {"id":"BTN","name":"دکمه فشاری","img":"button.svg","pins":[["1","یک طرف دکمه"],["2","طرف مقابل (قطری)"]]},
+    {"id":"R1","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","طرف GPIO"],["2","طرف LED"]]},
+    {"id":"LED1","name":"LED (چراغ «رسید»، پروژه ۲)","img":"led.svg","pins":[["A","آند (+) پایه بلند"],["K","کاتد (−) پایه کوتاه"]]}
   ],
-  "wires":[["GPIO4","BTN.1","blue"],["BTN.2","GND","black"]]
-}</script><figcaption>دکمه بین GPIO4 و GND. مقاومت لازم نیست چون از Pull-up داخلی (<code>INPUT_PULLUP</code>) استفاده می‌کنیم: فشرده = LOW، رها = HIGH. دو پایه‌ای را انتخاب کن که با فشردن به هم وصل می‌شوند (معمولا دو پایه قطری).</figcaption></div>
+  "wires":[["GPIO27","BTN.1","blue"],["BTN.2","GND","black"],["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>دکمه بین GPIO27 و GND (پایه همیشگی دکمه در این دوره). مقاومت لازم نیست چون از Pull-up داخلی (<code>INPUT_PULLUP</code>) استفاده می‌کنیم: فشرده = LOW، رها = HIGH. دو پایه‌ای را انتخاب کن که با فشار به هم وصل می‌شوند (معمولا دو پایه قطری). LED روی GPIO4 چراغ «رسید گرفتم» پروژه ۲ است؛ پروژه ۱ از آن استفاده نمی‌کند.</figcaption></div>
 
 <h3>سیم‌کشی برد B (گیرنده)</h3>
 <div class="wiring"><script type="application/json">{
@@ -138,8 +202,8 @@ STA MAC: 24:6F:28:AB:CD:EF</div>
     {"id":"DHT1","name":"DHT22 (فقط پروژه ۲)","img":"dht22.svg","pins":[["VCC","۳٫۳ ولت"],["DATA","داده"],["NC","وصل نمی‌شود"],["GND","زمین"]]},
     {"id":"R2","name":"مقاومت ۱۰ کیلواهم","img":"resistor.svg","pins":[["1","به 3V3"],["2","به DATA"]]}
   ],
-  "wires":[["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"],["3V3","DHT1.VCC","red"],["GPIO27","DHT1.DATA","blue"],["DHT1.GND","GND","black"],["R2.1","3V3","red"],["R2.2","DHT1.DATA","blue"]]
-}</script><figcaption>LED روی GPIO4 با مقاومت ۲۲۰ اهم. سنسور DHT22 روی GPIO27 با Pull-up ده کیلواهم را فقط برای پروژه دوطرفه لازم داری؛ برای پروژه ۱ می‌توانی آن را نبندی.</figcaption></div>
+  "wires":[["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"],["3V3","DHT1.VCC","red"],["GPIO13","DHT1.DATA","blue"],["DHT1.GND","GND","black"],["R2.1","3V3","red"],["R2.2","DHT1.DATA","blue"]]
+}</script><figcaption>LED روی GPIO4 با مقاومت ۲۲۰ اهم. سنسور DHT22 روی GPIO13 با Pull-up ده کیلواهم را فقط برای پروژه دوطرفه لازم داری؛ برای پروژه ۱ می‌توانی آن را نگذاری.</figcaption></div>
 
 <h3>کد برد A (فرستنده)</h3>
 <div class="code" data-file="Sender_OneWay.ino — برد A" id="send1"><pre>
@@ -149,7 +213,7 @@ STA MAC: 24:6F:28:AB:CD:EF</div>
 // MAC برد B را اینجا بنویس (از برنامه GetMac)
 uint8_t receiverMac[] = {0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF};
 
-const int BUTTON_PIN = 4;
+const int BUTTON_PIN = 27;
 
 // قالب پیام: باید در فرستنده و گیرنده دقیقا یکی باشد
 typedef struct {
@@ -323,7 +387,7 @@ void loop() {
 [B] Got #2 -&gt; LED OFF</div>
 
 <div class="callout info"><div class="ct">در Wokwi چه؟</div>
-<p>در زمان نوشتن این درس، شبیه‌ساز Wokwi <b>ارتباط ESP-NOW بین دو برد</b> را شبیه‌سازی نمی‌کند (درخواست این قابلیت در مخزن wokwi-features هنوز باز است). پس این درس فقط با دو برد واقعی کامل می‌شود. برنامه GetMac را می‌توانی در Wokwi اجرا کنی، ولی MAC مجازی آن به کار برد واقعی نمی‌آید.</p></div>
+<p>در زمان نوشتن این درس، شبیه‌ساز Wokwi <b>ارتباط ESP-NOW بین دو برد</b> را شبیه‌سازی نمی‌کند (درخواست این قابلیت در مخزن wokwi-features هنوز باز است). پس این درس فقط با دو برد واقعی کامل می‌شود. برنامه GetMac را می‌توانی در Wokwi اجرا کنی، ولی MAC مجازی آن به کار برد واقعی نمی‌آید. برنامه نمایش struct در بخش <a href="#struct">قالب پیام</a> بدون هیچ مشکلی در Wokwi اجرا می‌شود، چون از رادیو استفاده نمی‌کند.</p></div>
 
 <h2 id="twoway">پروژه ۲: ارتباط دوطرفه با تایید و دما</h2>
 <p>در پروژه ۱ برد A فقط می‌دانست رادیوی B بسته را گرفته. ولی آیا LED واقعا روشن شد؟ در پروژه ۲، B بعد از اجرای فرمان یک <b>جواب</b> برمی‌گرداند: شماره همان فرمان، وضعیت واقعی LED و دمای محیط خودش. A اگر تا ۵۰۰ میلی‌ثانیه جواب نگرفت، اعلام خطا می‌کند. این الگوی «درخواست، جواب، مهلت» (Request/Response + Timeout) پایه همه پروتکل‌های قابل اعتماد است.</p>
@@ -344,8 +408,8 @@ void loop() {
 #include &lt;esp_now.h&gt;
 
 uint8_t boardB[] = {0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF};   // MAC برد B
-const int BUTTON_PIN = 4;
-const int STATUS_LED = 2;      // LED داخلی برد (اگر برد تو دارد)
+const int BUTTON_PIN = 27;
+const int STATUS_LED = 4;      // LED وضعیت دوره (+۲۲۰ اهم)
 
 typedef struct {
   uint32_t seq;
@@ -431,8 +495,8 @@ void loop() {
 }
 </pre></div>
 <ol class="walk" data-for="twoA">
-  <li data-lines="4-6"><b class="what">MAC برد B و دو پین.</b> دکمه روی GPIO4 و LED وضعیت روی GPIO2.
-    <span class="why">LED روی GPIO2 در بیشتر بردهای بازار ایران داخلی است (درس ۲.۳)، پس برای «رسید گرفتم» سیم‌کشی اضافه لازم نیست. اگر برد تو ندارد، فقط Serial را نگاه کن.</span></li>
+  <li data-lines="4-6"><b class="what">MAC برد B و دو پین.</b> دکمه روی GPIO27 و LED وضعیت روی GPIO4، همان پایه‌های همیشگی دوره.
+    <span class="why">LED وضعیت همان LED بیرونی + مقاومت ۲۲۰ اهم است که از درس ۲.۲ استفاده کرده‌ای، پس روی هر بردی کار می‌کند. (بعضی بردها روی GPIO2 یک LED داخلی هم دارند، ولی ESP32-DevKitC ندارد.)</span></li>
   <li data-lines="8-17"><b class="what">دو قالب پیام.</b> <code>CommandMsg</code> (۸ بایت) از A به B و <code>ReplyMsg</code> (۱۲ بایت) از B به A.
     <span class="why">چون دو قالب اندازه متفاوت دارند، گیرنده از روی <code>len</code> می‌فهمد کدام است. در پروژه‌های بزرگ‌تر یک بایت اول «نوع پیام» می‌گذارند.</span></li>
   <li data-lines="19-25"><b class="what">وضعیت برنامه.</b> <code>waiting</code> یعنی «منتظر جوابم»، <code>sentAt</code> زمان ارسال برای محاسبه مهلت و تاخیر.
@@ -459,7 +523,7 @@ void loop() {
 #include &lt;DHT.h&gt;
 
 const int LED_PIN = 4;
-DHT dht(27, DHT22);
+DHT dht(13, DHT22);
 
 typedef struct {
   uint32_t seq;
@@ -520,8 +584,8 @@ void loop() {
 }
 </pre></div>
 <ol class="walk" data-for="twoB">
-  <li data-lines="3,6"><b class="what">سنسور DHT22 روی GPIO27.</b> همان کتابخانه Adafruit درس ۳.۳.
-    <span class="why">GPIO27 پایه امنی است و چون DHT22 دیجیتال است، هم‌زمانی با رادیو (که ADC2 را درگیر می‌کند) مشکلی ندارد.</span></li>
+  <li data-lines="3,6"><b class="what">سنسور DHT22 روی GPIO13.</b> همان کتابخانه Adafruit درس ۳.۳.
+    <span class="why">GPIO13 پایه همیشگی DHT22 در این دوره و پایه امنی است و چون DHT22 دیجیتال است، هم‌زمانی با رادیو (که ADC2 را درگیر می‌کند) مشکلی ندارد.</span></li>
   <li data-lines="8-17"><b class="what">دو قالب، کپی دقیق برد A.</b> ترتیب و نوع خانه‌ها باید با A یکی باشد.
     <span class="why">اگر در B به جای <code>float</code> بنویسی <code>double</code>، اندازه ۱۶ بایت می‌شود و A (که ۱۲ بایت انتظار دارد) پیام را به خاطر چک طول دور می‌ریزد؛ خوشبختانه به جای خواندن عدد غلط!</span></li>
   <li data-lines="23-28"><b class="what">ذخیره MAC فرستنده.</b> علاوه بر پیام، آدرس فرستنده را از <code>info-&gt;src_addr</code> کپی می‌کنیم.
@@ -551,7 +615,7 @@ void loop() {
 <p>هسته ۳ آردوینو علاوه بر API کلاسیک <code>esp_now.h</code> (که در این درس یاد گرفتی) یک کتابخانه شیءگرا به اسم <b>ESP_NOW</b> (فایل <code>ESP32_NOW.h</code>) دارد. در آن یک شیء سراسری <code>ESP_NOW</code> هست (<code>ESP_NOW.begin()</code>، <code>ESP_NOW.getMaxDataLen()</code> و...) و برای هر همتا از کلاس <code>ESP_NOW_Peer</code> ارث‌بری می‌کنی و توابع <code>onReceive</code> و <code>onSent</code> آن را بازنویسی می‌کنی. مثال‌های آماده‌اش در <code>File › Examples › ESP_NOW</code> هستند (مثل <code>ESP_NOW_Broadcast_Master</code> و <code>ESP_NOW_Serial</code>). ما API کلاسیک را یاد دادیم چون ۹۰٪ کدهای اینترنت و مستندات ESP-IDF با آن است؛ وقتی آن را فهمیدی، کتابخانه جدید را در یک ساعت یاد می‌گیری.</p></div>
 
 <h2 id="wifi">ESP-NOW و Wi-Fi با هم: قانون کانال مشترک</h2>
-<p>رادیوی ESP32 فقط یکی است و در هر لحظه روی <b>یک کانال</b> (۱ تا ۱۳ در ایران) کار می‌کند. وقتی برد B به مودم وصل می‌شود (مثلا برای فرستادن داده به MQTT)، رادیوی آن مجبور است روی <b>کانال مودم</b> برود، مثلا کانال ۶. حالا اگر برد A هنوز روی کانال ۱ باشد، پیام‌هایش هرگز به B نمی‌رسد.</p>
+<p>رادیوی ESP32 فقط یکی است و در هر لحظه روی <b>یک کانال</b> (۱ تا ۱۳ در اروپا و بیشتر جاهای دنیا، ۱ تا ۱۱ در آمریکای شمالی) کار می‌کند. وقتی برد B به مودم وصل می‌شود (مثلا برای فرستادن داده به MQTT)، رادیوی آن مجبور است روی <b>کانال مودم</b> برود، مثلا کانال ۶. حالا اگر برد A هنوز روی کانال ۱ باشد، پیام‌هایش هرگز به B نمی‌رسد.</p>
 <div class="callout analogy"><div class="ct">مثال از زندگی روزمره: فرکانس رادیو</div>
 <p>دو نفر با بی‌سیم حرف می‌زنند. اگر یکی بی‌سیمش را روی کانال ۶ بگذارد تا با پایگاه (مودم) هم در تماس باشد، دیگری هم باید روی کانال ۶ برود، وگرنه صدای همدیگر را نمی‌شنوند.</p></div>
 
@@ -667,7 +731,28 @@ void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
 <div class="exercise"><div class="ct">تمرین ۲: ارسال دوباره (Retry)</div>
 <p>در برد A پروژه ۲، اگر در ۵۰۰ میلی‌ثانیه جواب نیامد، <b>همان</b> فرمان (با همان seq) را حداکثر ۳ بار دوباره بفرست و فقط بعد از شکست سوم اعلام خطا کن. چرا باید seq ثابت بماند؟</p>
 <details><summary>راهنمایی</summary><p>یک شمارنده <code>int tries</code> اضافه کن. در بخش Timeout اگر <code>tries &lt; 3</code> بود، <code>esp_now_send</code> را با همان <code>cmd</code> صدا بزن، <code>tries++</code> و <code>sentAt = millis()</code>. در <code>sendCommand</code>، <code>tries = 0</code>.</p></details>
-<details><summary>جواب</summary><p>seq ثابت می‌ماند تا اگر پیام اول رسیده بود ولی فقط جوابش گم شده بود، B بفهمد این همان فرمان قبلی است (با نگه داشتن آخرین seq اجراشده) و LED را دوباره برعکس نکند. به این ویژگی «Idempotent» (تکرار بی‌ضرر) می‌گویند؛ همان مشکلی که QoS 2 در MQTT حل می‌کند.</p></details>
+<details><summary>جواب</summary><p>seq ثابت می‌ماند تا اگر پیام اول رسیده بود ولی فقط جوابش گم شده بود، B بفهمد این همان فرمان قبلی است و آن را دوباره اجرا نکند. در پروژه ما فرمان حالت مطلق را می‌برد («LED روشن»)، پس تکرارش اتفاقا بی‌ضرر است؛ ولی فرمانی مثل «برعکس کن» یا «زنگ را یک بار بزن» دو بار اجرا می‌شد. به این ویژگی «Idempotent» (تکرار بی‌ضرر) می‌گویند؛ همان مشکلی که QoS 2 در MQTT حل می‌کند. روی برد B آخرین seq اجراشده را نگه دار؛ اگر همان seq دوباره آمد، کار را انجام نده ولی <b>باز هم جواب بفرست</b>، چون به احتمال زیاد همان جواب بوده که گم شده:</p>
+<div class="code" data-file="BoardB_Dedupe.ino (loop برد B، پروژه ۲)"><pre>
+uint32_t lastSeq = 0;                     // سراسری: آخرین فرمان اجراشده
+
+void loop() {
+  if (!gotMsg) return;
+  gotMsg = false;
+  bool repeat = (incoming.seq == lastSeq);
+  if (!repeat) {                          // فرمان جدید: فقط یک بار اجرا کن
+    lastSeq = incoming.seq;
+    digitalWrite(LED_PIN, incoming.ledOn ? HIGH : LOW);
+  }
+  // ... اضافه کردن A به دفترچه در بار اول، دقیقا مثل قبل ...
+  ReplyMsg reply;                         // هر بار جواب بده، حتی برای تکراری
+  reply.seq = incoming.seq;
+  reply.ledOn = digitalRead(LED_PIN);     // وضعیت واقعی پایه LED
+  reply.tempC = dht.readTemperature();
+  esp_now_send(senderMac, (uint8_t *)&amp;reply, sizeof(reply));
+  Serial.printf("#%lu %s\n", (unsigned long)incoming.seq, repeat ? "repeat: reply only" : "new: done");
+}
+</pre></div>
+<p>seq در A از ۱ شروع می‌شود، پس <code>lastSeq = 0</code> هیچ‌وقت با یک فرمان واقعی یکی نیست. اگر B ریست شود، <code>lastSeq</code> به ۰ برمی‌گردد و اشکالی ندارد: فرمان بعدی A به هر حال شماره تازه دارد.</p></details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۳: پیدا کردن خودکار کانال</div>
 <p>برد A را طوری بنویس که در setup شبکه مودم را با <code>WiFi.scanNetworks()</code> پیدا کند، کانالش را بخواند و خودش روی آن برود. دیگر لازم نیست عدد کانال را دستی بنویسی.</p>

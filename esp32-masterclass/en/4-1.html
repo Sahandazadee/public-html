@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Wi-Fi: a stable connection with automatic reconnect · ESP32 Masterclass</title>
-<meta name="description" content="Networking from zero for beginners: IP, DHCP, SSID and 2.4 GHz; scanning for Wi-Fi, connecting with a timeout, automatic reconnect with events and millis, keeping your password out of the code, and getting Iran time over NTP on the ESP32 (core 3.x).">
+<meta name="description" content="Networking from zero for beginners: IP, DHCP, SSID and 2.4 GHz; scanning for Wi-Fi, connecting with a timeout, automatic reconnect with events and millis, keeping your password out of the code, and getting your local time (with daylight saving) over NTP on the ESP32 (core 3.x).">
 <link rel="alternate" hreflang="fa" href="../4-1.html"><link rel="alternate" hreflang="en" href="4-1.html">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
@@ -25,10 +25,10 @@
     <li>Scan the Wi-Fi networks around you with the ESP32</li>
     <li>Connect with a timeout and work out why it failed from the status code</li>
     <li>Build a connection that comes back by itself after a dropout, without freezing your program</li>
-    <li>Keep your Wi-Fi password out of your code and get the exact Iran time from the internet</li>
+    <li>Keep your Wi-Fi password out of your code and get the exact local time from the internet</li>
   </ul></div>
   <div><h4>🧰 Prerequisites and parts</h4><ul>
-    <li>Lesson <a href="2-3.html">2.3</a> (Blink and the Serial Monitor) and lesson <a href="3-1.html">3.1</a> (<code>millis()</code>)</li>
+    <li>Lesson <a href="2-2.html">2.2</a> (Blink and the Serial Monitor) and lesson <a href="3-1.html">3.1</a> (<code>millis()</code>)</li>
     <li>An ESP32 DevKitC board and a USB data cable</li>
     <li>One LED and a 220 Ω resistor (for a network status light)</li>
     <li>A router or a phone hotspot on the <b>2.4 GHz</b> band (or just Wokwi)</li>
@@ -63,10 +63,12 @@
 <p>You never told your phone to use the IP <code>192.168.1.23</code>. The router runs a service called <b>DHCP</b> that automatically "lends" a free IP to every device that joins. The loan has a time limit (say, 24 hours), which is why your board's IP might be slightly different tomorrow.</p>
 <div class="callout example"><div class="ct">With numbers: the four DHCP steps</div>
 <p>The ESP32 powers up and shouts: "Can anyone give me an IP?" (Discover). The router answers: "<code>192.168.1.37</code> is free" (Offer). The ESP32 says: "I'll take that one" (Request). The router confirms: "It's yours for 86400 seconds" (Ack). All of this usually takes less than a second. In our code, the moment this step finishes is the <code>GOT_IP</code> event.</p></div>
+<div class="callout tip"><div class="ct">Want the board to always have the same IP?</div>
+<p>The easiest and cleanest way is in the router: most routers have a "DHCP reservation" (or "static lease") page where you pick the ESP32 by its MAC address and give it a fixed number. Your code stays unchanged. The alternative is to set it in code, before <code>WiFi.begin</code>: <code>WiFi.config(IPAddress(192,168,1,50), IPAddress(192,168,1,1), IPAddress(255,255,255,0), IPAddress(192,168,1,1));</code> (the address, the gateway, the subnet mask and a DNS server). Pick a number outside the range the router hands out by DHCP, or two devices may end up with the same address. In lesson 4.2 you'll also meet mDNS, which lets you reach the board by name, so the number matters less.</p></div>
 
 <h3>SSID, password and MAC</h3>
 <ul>
-  <li><b>SSID</b> is the name of the Wi-Fi network; it's what you see in your phone's Wi-Fi list (for example <code>Irancell-TD-5G</code> or <code>Home</code>). It is case-sensitive: <code>Home</code> and <code>home</code> are two different networks.</li>
+  <li><b>SSID</b> is the name of the Wi-Fi network; it's what you see in your phone's Wi-Fi list (for example <code>Home</code> or <code>Home_5G</code>). It is case-sensitive: <code>Home</code> and <code>home</code> are two different networks.</li>
   <li><b>Password:</b> on WPA2 networks it must be 8 to 63 characters long. The ESP32 compares it exactly, character by character.</li>
   <li><b>MAC address</b> is a 6-byte ID written into the chip at the factory, like <code>24:0A:C4:12:34:56</code>. The router uses it to tell devices apart. Some routers only let in "allowed" MAC addresses (MAC filtering).</li>
 </ul>
@@ -408,7 +410,7 @@ void loop() {}
 </ul>
 
 <h3>Wiring diagram: a network status LED</h3>
-<p>We put an LED on GPIO4 so you can see the status even without the Serial Monitor: <b>steady on = connected</b>, <b>fast blinking = disconnected</b>. The wiring is exactly the same as in lesson 2.3.</p>
+<p>We put an LED on GPIO4 so you can see the status even without the Serial Monitor: <b>steady on = connected</b>, <b>fast blinking = disconnected</b>. The wiring is exactly the same as in lesson 2.2.</p>
 <div class="wiring"><script type="application/json">{
   "board":"ESP32 DevKitC",
   "parts":[
@@ -426,7 +428,7 @@ void loop() {}
 
 const int LED_PIN = 4;                        // network status LED
 const unsigned long RETRY_MS = 10000;         // one manual retry every 10 seconds
-const char* TZ_IRAN = "&lt;+0330&gt;-3:30";         // Iran time, no daylight saving
+const char* TZ_INFO = "EST5EDT,M3.2.0,M11.1.0"; // Toronto/New York: put yours
 
 volatile bool wifiUp = false;                 // do we have an IP right now?
 unsigned long lastRetry = 0, lastBlink = 0, lastPrint = 0;
@@ -465,7 +467,7 @@ void setup() {
   WiFi.begin(WIFI_SSID, WIFI_PASS);           // we don't wait!
   Serial.println("[WiFi] Connecting in background...");
 
-  configTzTime(TZ_IRAN, "pool.ntp.org", "time.google.com");
+  configTzTime(TZ_INFO, "pool.ntp.org", "time.google.com");
 }
 
 void loop() {
@@ -505,7 +507,7 @@ void loop() {
 <ol class="walk" data-for="codeRobust">
   <li data-lines="1-3"><b class="what">Three includes.</b> <code>WiFi.h</code> for the network, <code>time.h</code> for working with time and date (the standard C library), and our own <code>secrets.h</code> for the name and password.
     <span class="why">Because <code>WIFI_SSID</code> and <code>WIFI_PASS</code> are now defined in <code>secrets.h</code>, there's no password in this file anymore. You can publish this file without worrying.</span></li>
-  <li data-lines="5-7"><b class="what">Constants.</b> The LED pin, the retry interval (10 seconds) and the Iran time zone string, which we explain in detail further down.
+  <li data-lines="5-7"><b class="what">Constants.</b> The LED pin, the retry interval (10 seconds) and the time zone string (here Toronto and New York; you'll put in your own city's string, explained in detail further down).
     <span class="why">10 seconds is a good balance: short enough to reconnect soon after the router comes back, long enough not to wear out the router (and ourselves) with back-to-back attempts.</span></li>
   <li data-lines="9-11"><b class="what">State variables.</b> <code>wifiUp</code> says whether we have an IP right now. The word <code>volatile</code> tells the compiler "this variable may be changed from somewhere else, so really read it from memory every time".
     <span class="why">The event function runs in a <b>task</b> (a separate thread of execution) apart from loop. <code>volatile</code> prevents loop from keeping a stale copy of the value in the processor's registers and missing the change.</span></li>
@@ -562,7 +564,7 @@ void loop() {
 <p>In very old tutorials (core version 1.x), the events had names like <code>SYSTEM_EVENT_STA_DISCONNECTED</code> and <code>SYSTEM_EVENT_STA_GOT_IP</code>, and the disconnect reason was read with <code>info.disconnected.reason</code>. From core 2.x the names changed to <code>ARDUINO_EVENT_WIFI_STA_...</code> and <code>info.wifi_sta_disconnected.reason</code>, and core 3.x (the current version) uses the same names. If old code won't compile, change these names first.</p></div>
 
 <div class="wokwi" data-board="esp32" data-code-from="codeRobust">
-<p>You can run this program in Wokwi too. It needs two extra steps: (1) in the Wokwi editor, click the arrow next to the tabs, choose <b>New file…</b> and name it <code>secrets.h</code>; fill it in like the sample above, but with <code>"Wokwi-GUEST"</code> for the name and <code>""</code> for the password. (2) Replace diagram.json with the one below, which has an LED on GPIO4. After a few seconds the LED goes steady and the Tehran time is printed in the Serial Monitor. You can't test a Wi-Fi dropout in Wokwi; try that on a real board by switching off the router.</p>
+<p>You can run this program in Wokwi too. It needs two extra steps: (1) in the Wokwi editor, click the arrow next to the tabs, choose <b>New file…</b> and name it <code>secrets.h</code>; fill it in like the sample above, but with <code>"Wokwi-GUEST"</code> for the name and <code>""</code> for the password. (2) Replace diagram.json with the one below, which has an LED on GPIO4. After a few seconds the LED goes steady and the local time for the zone in <code>TZ_INFO</code> is printed in the Serial Monitor. You can't test a Wi-Fi dropout in Wokwi; try that on a real board by switching off the router.</p>
 <script type="application/json">{
   "version": 1,
   "author": "ESP32 Persian Masterclass",
@@ -583,21 +585,65 @@ void loop() {
 }</script>
 </div>
 
-<h2 id="ntp">Exact time from the internet: NTP and the Iran time zone</h2>
+<h2 id="ntp">Exact time from the internet: NTP and your time zone</h2>
 <p>The ESP32 has no battery-backed clock. Every time it powers up, it thinks it's 1970! But when it's online, it can ask <b>NTP servers</b> (Network Time Protocol) for the exact world time. <code>pool.ntp.org</code> is a free, worldwide pool of thousands of time servers.</p>
 <div class="callout analogy"><div class="ct">An everyday example</div>
-<p>It's like setting your wristwatch by the time announcement on the radio. The radio announces <b>Greenwich</b> time (UTC), and you have to know how far ahead Tehran is. NTP is the radio, and the "time zone" is knowing that difference.</p></div>
-<p>Iran is <b>3 hours 30 minutes ahead of UTC</b>. Important: Iran permanently dropped daylight saving time in <b>September 2022 (Shahrivar 1401)</b>, and since then it stays on UTC+3:30 all year round. So our time zone string has no daylight-saving rule at all:</p>
+<p>It's like setting your wristwatch by the time announcement on the radio. The radio announces <b>Greenwich</b> time (UTC), and you have to know how far your city is from it, and whether it's summer time right now. NTP is the radio, and the "time zone string" is that knowledge, written down once.</p></div>
+<p>NTP always delivers UTC. To turn it into local time, the ESP32 needs a <b>time zone string</b> in the POSIX format. It looks cryptic, but it's only a few pieces. Take Toronto and New York, <code>EST5EDT,M3.2.0,M11.1.0</code>:</p>
 <div class="table-wrap"><table>
-<tr><th>Part of the string <code>&lt;+0330&gt;-3:30</code></th><th>Meaning</th></tr>
-<tr><td><code>&lt;+0330&gt;</code></td><td>The short name of the zone (for display only). In the POSIX format, a name that contains digits or signs must be inside <code>&lt; &gt;</code>.</td></tr>
-<tr><td><code>-3:30</code></td><td>The offset from UTC. <b>The sign is reversed!</b> In the POSIX format it means "how much you must <b>add</b> to local time to get UTC". Tehran is 3:30 ahead, so you have to <b>subtract</b> 3:30: <code>-3:30</code>.</td></tr>
-<tr><td>(nothing else)</td><td>Because there's no daylight saving time, the second part (like <code>,M3.4.2/0,...</code> in older code) doesn't exist.</td></tr>
+<tr><th>Piece</th><th>Meaning</th></tr>
+<tr><td><code>EST</code></td><td>The name of standard (winter) time; for display only.</td></tr>
+<tr><td><code>5</code></td><td>The offset from UTC. <b>The sign is reversed!</b> In the POSIX format it means "how much you must <b>add</b> to local time to get UTC". Toronto is 5 hours <b>behind</b> UTC, so you add 5: a plain <code>5</code>. Berlin is 1 hour ahead, so it's written <code>-1</code>.</td></tr>
+<tr><td><code>EDT</code></td><td>The name of daylight saving (summer) time. Just having it means "this place has summer time, one hour ahead".</td></tr>
+<tr><td><code>M3.2.0</code></td><td>When summer time starts: <b>M</b>onth 3 (March), week 2, day 0 (Sunday), so "the second Sunday of March", at 2:00 by default.</td></tr>
+<tr><td><code>M11.1.0</code></td><td>When it ends: the first Sunday of November. A <code>/3</code> after a rule (as in Berlin's <code>M10.5.0/3</code>) means "at 3:00" instead of 2:00.</td></tr>
 </table></div>
-<div class="callout warn"><div class="ct">Careful: old Iran time zone strings are wrong</div>
-<p>In tutorials from before 2022 you'll see strings like <code>IRST-3:30IRDT,...</code> that include daylight saving time. If you use them, your board's clock will be one hour ahead during the first half of the Iranian year. There's another way too: <code>configTime(12600, 0, "pool.ntp.org");</code>, where 12600 seconds is 3.5 × 3600 and the zero means no daylight saving. The result is the same, but the <code>configTzTime</code> version is easier to read.</p></div>
+<p>The big win: once the string is right, the ESP32 switches between winter and summer time by itself, on the right night, every year. Some common strings:</p>
+<div class="table-wrap"><table>
+<tr><th>Place</th><th>Time zone string</th></tr>
+<tr><td>Toronto, New York, Montreal</td><td><code>EST5EDT,M3.2.0,M11.1.0</code></td></tr>
+<tr><td>Chicago, Winnipeg</td><td><code>CST6CDT,M3.2.0,M11.1.0</code></td></tr>
+<tr><td>Denver, Calgary</td><td><code>MST7MDT,M3.2.0,M11.1.0</code></td></tr>
+<tr><td>Vancouver, Los Angeles, Seattle</td><td><code>PST8PDT,M3.2.0,M11.1.0</code></td></tr>
+<tr><td>London</td><td><code>GMT0BST,M3.5.0/1,M10.5.0</code></td></tr>
+<tr><td>Berlin, Paris, Madrid, Rome, Amsterdam</td><td><code>CET-1CEST,M3.5.0,M10.5.0/3</code></td></tr>
+<tr><td>Tehran (no daylight saving time since 2022)</td><td><code>&lt;+0330&gt;-3:30</code></td></tr>
+<tr><td>UTC itself (no time zone)</td><td><code>UTC0</code></td></tr>
+</table></div>
+<div class="callout tip"><div class="ct">How to find your own string</div>
+<p>Search for your city (for example <code>America/Toronto</code> or <code>Europe/Berlin</code>) in the <a href="https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv" target="_blank" rel="noopener">zones.csv list of the posix_tz_db project</a> and copy the string next to it. On a Mac or Linux computer you can also read it from the system: <code>tail -n 1 /usr/share/zoneinfo/America/Toronto</code> prints exactly this format. Then put it in <code>TZ_INFO</code> in the code above.</p></div>
+<div class="callout warn"><div class="ct">Careful: the two most common mistakes</div>
+<p>1) The reversed sign: writing <code>EST-5...</code> for Toronto puts your clock 10 hours off. 2) A string without the summer-time part (just <code>EST5</code>) is correct all winter and one hour off all summer. You'll also see <code>configTime(-5 * 3600, 3600, "pool.ntp.org");</code> in tutorials: a fixed offset in seconds plus a fixed one-hour DST. It can't know <b>when</b> summer time starts and ends, so <code>configTzTime</code> with a full string is the better habit.</p></div>
+
+<h3 id="struct-tm">Reading the pieces of the time: struct tm</h3>
+<p><code>getLocalTime(&amp;t)</code> fills a <code>struct tm</code>: a small box with one drawer for each part of the date and time. You read a drawer with a dot: <code>t.tm_hour</code>.</p>
+<div class="table-wrap"><table>
+<tr><th>Field</th><th>Range</th><th>Watch out</th></tr>
+<tr><td><code>tm_hour</code>, <code>tm_min</code>, <code>tm_sec</code></td><td>0–23, 0–59, 0–59</td><td>24-hour clock: 10 p.m. is 22</td></tr>
+<tr><td><code>tm_mday</code></td><td>1–31</td><td>Day of the month; the only field that starts at 1</td></tr>
+<tr><td><code>tm_mon</code></td><td>0–11</td><td><b>January is 0!</b> Add 1 before printing</td></tr>
+<tr><td><code>tm_year</code></td><td>years since 1900</td><td>2026 is stored as 126; add 1900</td></tr>
+<tr><td><code>tm_wday</code></td><td>0–6</td><td>0 = Sunday, 6 = Saturday</td></tr>
+</table></div>
+<div class="code" data-file="struct_tm_snippet" id="codeTm"><pre>
+struct tm t;
+if (getLocalTime(&amp;t, 10)) {
+  if (t.tm_hour == 22 &amp;&amp; t.tm_min == 0) {
+    Serial.println("It's 10 p.m.: time for the night light");
+  }
+  Serial.printf("Date: %d-%02d-%02d\n", t.tm_year + 1900, t.tm_mon + 1, t.tm_mday);
+}
+</pre></div>
+<ol class="walk" data-for="codeTm">
+  <li data-lines="1-2"><b class="what">Fill the box.</b> <code>struct tm t;</code> makes an empty box, and <code>getLocalTime</code> fills it. It returns <code>false</code> if the time hasn't been synced yet.
+    <span class="why">The <code>&amp;</code> hands the function the box's address so it can write into it (you'll meet <code>&amp;</code> properly in lesson 4.3). The 10 means "wait at most 10 ms", as in the program above.</span></li>
+  <li data-lines="3-5"><b class="what">A schedule.</b> "If it's 22:00" is simply two comparisons.
+    <span class="why">This check is true for the whole minute 22:00, so in a real project also remember that you already did the job today (a <code>bool</code>), or it runs thousands of times in that minute.</span></li>
+  <li data-lines="6"><b class="what">Printing a date.</b> Year + 1900, month + 1; <code>%02d</code> pads with a zero (<code>09</code>).
+    <span class="why">These two "+" are the classic struct tm traps. For a whole formatted string, <code>strftime</code> (in the program above) does it all for you.</span></li>
+</ol>
 <div class="callout why"><div class="ct">Why does exact time matter?</div>
-<p>To timestamp sensor readings (logging temperature to an SD card), to switch on the yard light at exactly 7 p.m., and so that the logs and messages you send to the internet in chapter 5 (MQTT, HTTP) carry the real time. One subtle point: on many devices and libraries, a secure connection (HTTPS or MQTT over TLS) checks the certificate's validity dates against the device's clock and fails without the correct time. In Arduino-ESP32 core 3.3, <code>WiFiClientSecure</code> does <b>not</b> check the certificate dates by default, so the connection works even without NTP; still, make getting the time a habit, because other libraries and chips may be stricter, and a log without timestamps is useless for troubleshooting. (HTTPS details are in <a href="5-4.html#api">lesson 5.4</a>.)</p></div>
+<p>To timestamp sensor readings (logging temperature to an SD card), to switch on the yard light at exactly 7 p.m., and so that the logs and messages you send to the internet in chapter 5 (MQTT, HTTP) carry the real time. One subtle point: on many devices and libraries, a secure connection (HTTPS or MQTT over TLS) checks the certificate's validity dates against the device's clock and fails without the correct time. In Arduino-ESP32 core 3.3, <code>WiFiClientSecure</code> does <b>not</b> check the certificate dates by default, so the connection works even without NTP; still, make getting the time a habit, because other libraries and chips may be stricter, and a log without timestamps is useless for troubleshooting. (HTTPS details are in <a href="5-6.html#api">lesson 5.6</a>.)</p></div>
 
 <h2 id="power">Enough power: why does the board reset when Wi-Fi turns on?</h2>
 <p>The Wi-Fi radio draws a lot of current while transmitting: up to about <b>250 mA</b> in short pulses, while without Wi-Fi about 40 to 50 mA is enough. If the power supply is weak (a thin, long USB cable, an unpowered USB hub port, a cheap power bank), the 3.3 V rail dips for a moment (you saw the power path from USB to the regulator in <a href="1-4.html#power">lesson 1.4</a>), and a built-in protection circuit (the <span class="term" data-t="Brownout">Brownout Detector</span>) resets the board to prevent erratic behavior.</p>
@@ -636,7 +682,7 @@ rst:0xc (SW_CPU_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)</div>
 <tr><td>It connects, but GOT_IP never arrives</td><td>The router's DHCP is full or turned off</td><td>Restart the router; in the router settings, raise the number of devices DHCP may serve.</td></tr>
 <tr><td>University or hotel Wi-Fi with a login page</td><td>Captive portal</td><td>The ESP32 can't type a username into that page. Use your phone's hotspot.</td></tr>
 <tr><td><code>Brownout detector was triggered</code> and constant resets</td><td>Weak power when the radio turns on</td><td>See the <a href="#power">enough power</a> section: a better cable, a capacitor, or lower transmit power.</td></tr>
-<tr><td>The clock is off by one hour</td><td>An old time zone string with daylight saving time</td><td>Use <code>"&lt;+0330&gt;-3:30"</code>.</td></tr>
+<tr><td>The clock is off by one hour</td><td>A time zone string without the summer-time part, or with the wrong rules</td><td>Use your city's full string (including the part after the comma) from the table in the <a href="#ntp">NTP section</a>.</td></tr>
 </table></div>
 
 <div class="callout coach"><div class="ct">Coach's advice</div>
@@ -660,9 +706,9 @@ rst:0xc (SW_CPU_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)</div>
   <div class="fb">The event function is like a doorbell: it just announces. The main program makes the decisions and does the work.</div>
 </div>
 <div class="quiz" data-answer="1">
-  <p class="q">Which is the correct Iran time zone string for <code>configTzTime</code> in core 3.x?</p>
-  <ol><li><code>"&lt;+0330&gt;-3:30"</code></li><li data-why="The sign is reversed in the POSIX format; +3:30 means 3:30 behind UTC."><code>"&lt;+0330&gt;+3:30"</code></li><li data-why="Iran has had no daylight saving time since 2022; this string has a daylight-saving rule."><code>"IRST-3:30IRDT,J79/24,J263/24"</code></li><li data-why="That's Greenwich time, not Tehran."><code>"UTC0"</code></li></ol>
-  <div class="fb">An offset 3:30 ahead of UTC, with the reversed POSIX sign, and no daylight-saving part.</div>
+  <p class="q">Which time zone string is correct for Toronto, with automatic daylight saving time?</p>
+  <ol><li><code>"EST5EDT,M3.2.0,M11.1.0"</code></li><li data-why="The sign is reversed in the POSIX format; -5 would mean 5 hours ahead of UTC."><code>"EST-5EDT,M3.2.0,M11.1.0"</code></li><li data-why="There's no summer-time part: right in winter, one hour off all summer."><code>"EST5"</code></li><li data-why="That's Greenwich time, not Toronto."><code>"UTC0"</code></li></ol>
+  <div class="fb">5 hours behind UTC is written as a positive 5 (the POSIX sign is reversed), and the rules after the comma tell the ESP32 when summer time starts and ends.</div>
 </div>
 <div class="quiz" data-answer="2">
   <p class="q">Your board's RSSI is <code>-83 dBm</code> and the connection keeps dropping. What is the best first step?</p>
@@ -718,7 +764,7 @@ void loop() {
 </div>
 
 <div class="callout info"><div class="ct">The lesson in three lines</div>
-<p>The ESP32 sees only 2.4 GHz Wi-Fi, gets a local IP from the router through DHCP, and needs an RSSI better than −70 for stable operation. <code>WiFi.begin</code> only starts connecting; with <code>onEvent</code> (GOT_IP and DISCONNECTED), <code>setAutoReconnect</code> and a <code>millis()</code> watchdog you build a connection that never locks up loop. Keep your password in <code>secrets.h</code> and get Iran time with <code>configTzTime("&lt;+0330&gt;-3:30", ...)</code>.</p></div>
+<p>The ESP32 sees only 2.4 GHz Wi-Fi, gets a local IP from the router through DHCP, and needs an RSSI better than −70 for stable operation. <code>WiFi.begin</code> only starts connecting; with <code>onEvent</code> (GOT_IP and DISCONNECTED), <code>setAutoReconnect</code> and a <code>millis()</code> watchdog you build a connection that never locks up loop. Keep your password in <code>secrets.h</code> and get local time with <code>configTzTime("EST5EDT,M3.2.0,M11.1.0", ...)</code> (or your own city's string).</p></div>
 
 </article>
 </body>

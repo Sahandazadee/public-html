@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>آپدیت بی‌سیم OTA و LittleFS: به‌روزرسانی بدون کابل، نگه‌داری فایل · مستر کلاس ESP32</title>
+<meta name="description" content="تقسیم حافظه فلش ESP32 به پارتیشن‌ها، آپدیت بی‌سیم با ArduinoOTA و صفحه آپدیت وب با رمز، برگشت خودکار (Rollback) از آپدیت خراب، و سیستم فایل LittleFS برای صفحه وب، تنظیمات و لاگ.">
+<link rel="alternate" hreflang="fa" href="5-5.html"><link rel="alternate" hreflang="en" href="en/5-5.html">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="5-5">
+
+<p class="lede">فرض کن دستگاهت تمام شده و داخل سقف کاذب نصبش کرده‌ای تا چراغ‌ها را کنترل کند. یک هفته بعد یک باگ پیدا می‌کنی. بدون ابزارهای این درس باید نردبان بیاوری، سقف را باز کنی و لپ‌تاپ را با کابل USB بالا ببری. این درس دومین درس از سه درس مسیر «اسکچ سرگرمی» تا «دستگاه واقعی» است. <b>OTA</b> (آپدیت بی‌سیم) را یاد می‌گیری تا برنامه جدید را از پشت میزت و از طریق Wi-Fi بفرستی، و <b>LittleFS</b> را، یک سیستم فایل کوچک داخل حافظه فلش ESP32 که صفحه وب، تنظیمات و لاگ در آن هم از قطع برق جان سالم به در می‌برند و هم از برنامه جدید. در این مسیر می‌بینی حافظه فلش چطور به <b>پارتیشن‌ها</b> تقسیم شده و <b>برگشت خودکار</b> (Rollback) چطور تو را از یک آپدیت خراب نجات می‌دهد.</p>
+
+<div class="goals">
+  <div><h4>🎯 بعد از این درس می‌توانی</h4><ul>
+    <li>نقشه پارتیشن‌های فلش را بخوانی و Partition Scheme ای انتخاب کنی که OTA را زنده نگه دارد</li>
+    <li>برنامه را بدون کابل، از طریق Wi-Fi روی برد بریزی (با ArduinoOTA و با صفحه آپدیت وب رمزدار)</li>
+    <li>از برگشت خودکار استفاده کنی تا آپدیت خراب خودبه‌خود به نسخه قبلی برگردد</li>
+    <li>فایل را در حافظه فلش بنویسی، به آخرش اضافه کنی، بخوانی و فهرست بگیری، و صفحه وب را از LittleFS سرو کنی</li>
+    <li>برای هر نوع داده بین Preferences، LittleFS و کارت SD انتخاب کنی</li>
+  </ul></div>
+  <div><h4>🧰 پیش‌نیاز و وسایل</h4><ul>
+    <li>درس‌های <a href="4-1.html">۴.۱</a> (Wi-Fi و الگوی <code>secrets.h</code>) و <a href="4-2.html">۴.۲</a> (WebServer، رشته خام، mDNS)؛ <a href="3-1.html">۳.۱</a> (millis)؛ گوشه C++ درس <a href="5-4.html#cpp">۵.۴</a> (لامبدا) کمک می‌کند</li>
+    <li>برد ESP32 DevKitC با LED وضعیت (و مقاومت ۲۲۰ اهم) روی GPIO4؛ چیز دیگری لازم نیست</li>
+    <li>کامپیوتری روی همان شبکه Wi-Fi برد، و Arduino IDE نسخه 2.2.1 یا جدیدتر (برای افزونه آپلود LittleFS)</li>
+    <li>کتابخانه اضافه لازم نیست: ArduinoOTA، Update، WebServer و LittleFS داخل Arduino-ESP32 core نسخه <b>3.x</b> هستند (این درس با 3.3.12 تست شده)</li>
+    <li>این درس برد واقعی می‌خواهد: Wokwi نه OTA دارد و نه آپلود فایل</li>
+  </ul></div>
+</div>
+
+<div class="callout info"><div class="ct">نقشه درس</div>
+<p>ترتیب: <a href="#ota">پارتیشن‌ها و OTA</a> ← <a href="#rollback-auto">برگشت خودکار</a> ← <a href="#littlefs">LittleFS</a> ← <a href="#storage">چه چیزی را کجا ذخیره کنم</a>.</p></div>
+
+<!-- ======================= OTA ======================= -->
+<h2 id="ota">آپدیت بی‌سیم (OTA)، برنامه‌ریزی بدون کابل</h2>
+<p>دستگاهت را داخل سقف کاذب نصب کرده‌ای تا چراغ‌ها را کنترل کند. یک هفته بعد یک باگ پیدا می‌کنی. بدون OTA باید نردبان بیاوری، سقف را باز کنی، لپ‌تاپ را با کابل USB بالا ببری. با <b>OTA</b> (Over-The-Air، «از راه هوا») برنامه جدید را از پشت میزت، از طریق همان Wi-Fi، روی برد می‌ریزی.</p>
+
+<h3>OTA پشت صحنه چطور کار می‌کند؟ (پارتیشن‌ها)</h3>
+<p>حافظه فلش ۴ مگابایتی ESP32 مثل یک هارد دیسک به چند «پارتیشن» تقسیم شده است. نقشه این تقسیم را در منوی <code>Tools › Partition Scheme</code> انتخاب می‌کنی. نکته کلیدی OTA این است: برای آپدیت امن باید <b>دو جای برنامه</b> (app0 و app1) وجود داشته باشد. برنامه جدید در جای خالی نوشته می‌شود، در حالی که برنامه فعلی هنوز در حال اجراست. فقط وقتی دانلود کامل و سالم تمام شد، یک «یادداشت» کوچک (پارتیشن <code>otadata</code>) عوض می‌شود که «از دفعه بعد از جای دیگر بوت کن». اگر وسط آپدیت برق برود، برنامه قدیمی دست‌نخورده باقی است.</p>
+
+<figure><div class="frame"><svg viewBox="0 0 760 260" style="direction:ltr" role="img" aria-label="نقشه پارتیشن‌های Default 4MB">
+  <style>.pt{font:13px Vazirmatn,sans-serif;fill:#fff}.pl{font:12px JetBrains Mono,monospace;fill:currentColor}.ph{font:bold 14px Vazirmatn,sans-serif;fill:currentColor}</style>
+  <text x="380" y="22" text-anchor="middle" class="ph" direction="rtl">Default 4MB with spiffs: فلش ۴ مگابایتی</text>
+  <rect x="20" y="40" width="30" height="60" fill="#888"/><text x="35" y="118" text-anchor="middle" class="pl">boot</text>
+  <rect x="50" y="40" width="20" height="60" fill="#12a37f"/><text x="60" y="135" text-anchor="middle" class="pl">nvs</text>
+  <rect x="70" y="40" width="10" height="60" fill="#e0781f"/><text x="75" y="152" text-anchor="middle" class="pl">otadata</text>
+  <rect x="80" y="40" width="240" height="60" fill="#2f7af0"/><text x="200" y="75" text-anchor="middle" class="pt">app0 (1.25MB)</text>
+  <rect x="320" y="40" width="240" height="60" fill="#8b4fd6"/><text x="440" y="75" text-anchor="middle" class="pt">app1 (1.25MB)</text>
+  <rect x="560" y="40" width="165" height="60" fill="#d6457a"/><text x="642" y="75" text-anchor="middle" class="pt">spiffs (1.375MB)</text>
+  <rect x="725" y="40" width="15" height="60" fill="#555"/><text x="732" y="118" text-anchor="middle" class="pl">core</text>
+  <text x="200" y="175" text-anchor="middle" class="ph" direction="rtl">برنامه فعلی در حال اجرا</text>
+  <text x="440" y="175" text-anchor="middle" class="ph" direction="rtl">برنامه جدید اینجا نوشته می‌شود</text>
+  <text x="642" y="175" text-anchor="middle" class="ph" direction="rtl">LittleFS از همین استفاده می‌کند</text>
+  <path d="M200 190 C 260 235, 380 235, 440 190" fill="none" stroke="currentColor" stroke-width="2" marker-end="url(#ar)"/>
+  <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+  <text x="320" y="245" text-anchor="middle" class="ph" direction="rtl">بعد از آپدیت موفق، otadata می‌گوید: از app1 بوت کن</text>
+</svg></div>
+<figcaption>نقشه واقعی فایل <code>default.csv</code> در core 3.3.12 (به نسبت، تقریبی رسم شده). عدد ۱٫۲۵ مگابایت همان «1.2MB APP» در منو است.</figcaption></figure>
+
+<div class="table-wrap"><table>
+<tr><th>گزینه در منوی Partition Scheme (برد ESP32 Dev Module)</th><th>جای برنامه</th><th>OTA؟</th><th>فضای فایل (LittleFS)</th></tr>
+<tr><td><b>Default 4MB with spiffs (1.2MB APP/1.5MB SPIFFS)</b></td><td>۲ × ۱٫۲۵ مگابایت</td><td>✅ دارد</td><td>حدود ۱٫۴ مگابایت</td></tr>
+<tr><td><b>Minimal SPIFFS (1.9MB APP with OTA/128KB SPIFFS)</b></td><td>۲ × ۱٫۹ مگابایت</td><td>✅ دارد</td><td>۱۲۸ کیلوبایت</td></tr>
+<tr><td>No OTA (2MB APP/2MB SPIFFS)</td><td>۱ × ۲ مگابایت</td><td>❌ ندارد</td><td>حدود ۱٫۹ مگابایت</td></tr>
+<tr><td>Huge APP (3MB No OTA/1MB SPIFFS)</td><td>۱ × ۳ مگابایت</td><td>❌ ندارد</td><td>حدود ۹۰۰ کیلوبایت</td></tr>
+<tr><td>No FS 4MB (2MB APP x2)</td><td>۲ × حدود ۱٫۹ مگابایت</td><td>✅ دارد</td><td>❌ ندارد</td></tr>
+</table></div>
+<div class="callout warn"><div class="ct">دام رایج: Huge APP و OTA</div>
+<p>وقتی برنامه بزرگ می‌شود (Wi-Fi + بلوتوث + HTTPS)، خطای <code>Sketch too big</code> می‌گیری و بسیاری از آموزش‌ها می‌گویند «Huge APP را انتخاب کن». آن کار خطا را برطرف می‌کند ولی <b>OTA را برای همیشه می‌کشد</b>، چون فقط یک جای برنامه دارد. برای دستگاهی که OTA لازم دارد، <b>Minimal SPIFFS</b> را انتخاب کن: برنامه تا ۱٫۹ مگابایت و OTA سالم. فقط فضای فایل به ۱۲۸ کیلوبایت کم می‌شود که برای یک صفحه تنظیمات کافی است. یادت باشد تغییر Partition Scheme فقط با آپلود USB اعمال می‌شود.</p></div>
+
+<h3>روش اول: ArduinoOTA، آپلود از خود Arduino IDE</h3>
+<p>کتابخانه <code>ArduinoOTA</code> داخل core است. برد را روی شبکه «اعلام» می‌کند (با mDNS، همان درس <a href="4-2.html#mdns">۴.۲</a>) و روی پورت <b>3232</b> منتظر برنامه جدید می‌ماند. اول فایل <code>secrets.h</code> درس ۴.۱ را کامل‌تر کن؛ این نسخه همه رمزهای این درس را دارد:</p>
+<div class="code" data-file="secrets.h" id="secrets54"><pre>
+#pragma once
+#define WIFI_SSID "MyHomeWiFi"
+#define WIFI_PASS "my-strong-password"
+#define OTA_PASS  "ota-pass-2026"      // رمز آپدیت بی‌سیم
+#define WEB_USER  "admin"              // نام کاربری صفحه آپدیت وب
+#define WEB_PASS  "change-me-now"      // رمز صفحه آپدیت وب
+#define NTFY_TOPIC "home-alert-7f3k9q" // اسم Topic ی ntfy: حدس‌ناپذیر
+</pre></div>
+<ol class="walk" data-for="secrets54">
+  <li data-lines="2-3"><b class="what">رمز Wi-Fi.</b> همان دو خط درس ۴.۱.
+    <span class="why">یک فایل رمز برای همه برنامه‌های درس‌های ۵.۵ و ۵.۶؛ هر برنامه فقط خط‌هایی را که لازم دارد استفاده می‌کند.</span></li>
+  <li data-lines="4"><b class="what">رمز OTA.</b> کسی که این رمز را نداند نمی‌تواند برنامه برد را عوض کند.
+    <span class="why">OTA بدون رمز یعنی هر کسی که به Wi-Fi تو وصل است (مهمان، همسایه‌ای که رمز را دارد، یک گوشی آلوده) می‌تواند هر برنامه‌ای روی دستگاهت بریزد.</span></li>
+  <li data-lines="5-6"><b class="what">نام کاربری و رمز صفحه آپدیت وب.</b> برای روش دوم، کمی بعدتر در همین درس.
+    <span class="why">جدا از رمز OTA، تا اگر یکی لو رفت دیگری امن بماند.</span></li>
+  <li data-lines="7"><b class="what">اسم Topic ی ntfy.</b> برای بخش هشدار به گوشی در درس <a href="5-6.html#alert">۵.۶</a>. همین حالا اضافه‌اش می‌کنیم تا همین یک فایل برای هر دو درس کافی باشد.
+    <span class="why">در ntfy.sh اسم Topic خودش حکم رمز را دارد؛ پس جای آن هم در secrets.h است.</span></li>
+</ol>
+
+<div class="code" data-file="BasicOTA.ino" id="otaBasic"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;ArduinoOTA.h&gt;
+#include "secrets.h"             // WIFI_SSID، WIFI_PASS، OTA_PASS
+#ifndef OTA_PASS                 // اگر در secrets.h نبود، هشدار بده
+#warning "OTA_PASS is not defined in secrets.h"
+#define OTA_PASS "change-me"
+#endif
+
+const int LED_PIN = 4;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) {   // برای سادگی؛ نسخه پایدار در درس ۴.۱
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.printf("\nIP: %s\n", WiFi.localIP().toString().c_str());
+
+  ArduinoOTA.setHostname("esp32-kitchen");  // اسم در منوی Port
+  ArduinoOTA.setPassword(OTA_PASS);         // بدون رمز، هر کسی می‌تواند فلش کند
+  ArduinoOTA
+    .onStart([]() { Serial.println("OTA start"); })
+    .onEnd([]() { Serial.println("\nOTA done, rebooting"); })
+    .onProgress([](unsigned int done, unsigned int total) {
+      Serial.printf("OTA %u%%\r", done * 100 / total);
+    })
+    .onError([](ota_error_t err) { Serial.printf("OTA error %u\n", err); });
+  ArduinoOTA.begin();                       // از اینجا به بعد منتظر آپدیت است
+  Serial.println("OTA ready");
+}
+
+void loop() {
+  ArduinoOTA.handle();                      // هر دور: «آپدیت نیامده؟»
+  static unsigned long last = 0;            // چشمک بدون delay (درس ۳.۱)
+  static bool on = false;
+  if (millis() - last &gt;= 500) {
+    last = millis();
+    on = !on;
+    digitalWrite(LED_PIN, on);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="otaBasic">
+  <li data-lines="2"><b class="what">کتابخانه ArduinoOTA.</b> جزو core است، نصب لازم ندارد.
+    <span class="why">WiFi.h را هم لازم داریم چون OTA روی شبکه کار می‌کند.</span></li>
+  <li data-lines="4-7"><b class="what">محافظ #ifndef.</b> اگر در <code>secrets.h</code> خط <code>OTA_PASS</code> را ننوشته باشی، کامپایلر یک هشدار نارنجی نشان می‌دهد و رمز موقت <code>change-me</code> گذاشته می‌شود.
+    <span class="why">برنامه با secrets.h قدیمی درس ۴.۱ هم کامپایل می‌شود، ولی هشدار یادت می‌اندازد که رمز واقعی بگذاری. هشدارهای کامپایلر را هرگز نادیده نگیر.</span></li>
+  <li data-lines="14-20"><b class="what">وصل شدن به Wi-Fi.</b> نسخه ساده برای کوتاه ماندن مثال.
+    <span class="why">در دستگاه واقعی از نسخه پایدار درس <a href="4-1.html#robust">۴.۱</a> با سقف زمان و اتصال دوباره خودکار استفاده کن. OTA بدون Wi-Fi کار نمی‌کند.</span></li>
+  <li data-lines="22"><b class="what">setHostname.</b> اسم برد روی شبکه؛ همان چیزی که در منوی Port می‌بینی.
+    <span class="why">اگر اسم ندهی، چیزی مثل <code>esp32-a0b1c2d3e4f5</code> (بر اساس MAC) می‌گیرد. وقتی سه دستگاه در خانه داری، «esp32-kitchen» خیلی بهتر است. فقط از حروف کوچک انگلیسی، عدد و خط تیره استفاده کن.</span></li>
+  <li data-lines="23"><b class="what">setPassword.</b> رمز OTA. Arduino IDE موقع آپلود آن را از تو می‌پرسد.
+    <span class="why">در core 3.3 احراز هویت OTA با SHA-256 است (نسخه‌های قدیمی MD5 داشتند که دیگر امن حساب نمی‌شود). اگر نمی‌خواهی رمز خام در برنامه باشد، از <code>setPasswordHash</code> با هش SHA-256 رمز استفاده کن.</span></li>
+  <li data-lines="24-30"><b class="what">رویدادها (Callback).</b> چهار تابع کوچک برای شروع، پایان، پیشرفت و خطا. <code>[]() { ... }</code> یک «تابع بی‌نام» (lambda) در C++ است (<a href="5-4.html#cpp">گوشه C++</a> درس ۵.۴ را ببین).
+    <span class="why">در <code>onStart</code> در پروژه واقعی موتورها و رله‌ها را خاموش کن و فایل‌ها را ببند؛ چند ثانیه بعد برد ریست می‌شود و نباید چیزی نیمه‌کاره بماند.</span></li>
+  <li data-lines="31"><b class="what">ArduinoOTA.begin.</b> از اینجا به بعد برد روی شبکه اعلام حضور می‌کند و منتظر آپدیت است.
+    <span class="why">باید <b>بعد</b> از وصل شدن Wi-Fi صدا زده شود.</span></li>
+  <li data-lines="36"><b class="what">ArduinoOTA.handle در هر دور loop.</b> بررسی می‌کند آیا کسی می‌خواهد آپدیت بفرستد.
+    <span class="why">اگر loop جایی با delay طولانی یا حلقه انتظار گیر کند، OTA جواب نمی‌دهد و IDE خطای «No response from device» می‌گیرد. برای همین چشمک LED را با <code>millis()</code> نوشتیم، نه delay.</span></li>
+</ol>
+
+<h3>قدم‌به‌قدم: اولین آپدیت بی‌سیم</h3>
+<ol class="steps">
+  <li><b>بار اول حتما با کابل USB.</b> برد هنوز کد OTA را ندارد، پس نمی‌تواند برنامه را از هوا بگیرد. برنامه بالا را مثل همیشه با USB آپلود کن. (Partition Scheme باید OTA داشته باشد؛ Default کافی است.)</li>
+  <li><b>Serial Monitor را ببین.</b> باید IP و <code>OTA ready</code> را ببینی.</li>
+  <li><b>کامپیوتر و برد روی یک شبکه.</b> لپ‌تاپ باید به <b>همان</b> مودم وصل باشد (نه اینترنت گوشی، نه شبکه مهمان مودم که دستگاه‌ها را از هم جدا می‌کند).</li>
+  <li><b>پورت شبکه را انتخاب کن.</b> کابل USB را جدا کن (یا بگذار بماند) و منوی <code>Tools › Port</code> را باز کن. زیر عنوان <b>Network ports</b> چیزی مثل <code>esp32-kitchen at 192.168.1.50</code> ظاهر می‌شود. اگر نیست، ۳۰ ثانیه صبر کن و منو را دوباره باز کن؛ IDE هر چند ثانیه شبکه را می‌گردد.</li>
+  <li><b>یک تغییر کوچک بده</b> (مثلا 500 را 100 کن تا LED سریع‌تر چشمک بزند) و دکمه Upload را بزن. IDE رمز را می‌پرسد: همان <code>OTA_PASS</code>.</li>
+  <li><b>نتیجه.</b> نوار پیشرفت <code>Uploading: [====    ] 45%</code> را می‌بینی. بعد برد خودش ریست می‌شود و LED با سرعت جدید چشمک می‌زند. Serial Monitor شبکه‌ای وجود ندارد؛ برای دیدن پیام‌ها هنوز کابل لازم است (یا لاگ را از طریق وب یا MQTT بفرست).</li>
+</ol>
+
+<div class="callout warn"><div class="ct">مهم: هر برنامه جدید هم باید کد OTA داشته باشد</div>
+<p>اگر برنامه‌ای را از هوا بریزی که <code>ArduinoOTA.begin</code> و <code>handle</code> ندارد (یا در setup گیر می‌کند، یا Wi-Fi اشتباه دارد)، این آخرین آپدیت بی‌سیم تو بود! دفعه بعد باید نردبان و کابل بیاوری. عادت کن: کد OTA را اول از همه در هر برنامه بگذار و قبل از فرستادن به دستگاه سقفی، آن را روی یک برد روی میز تست کن.</p></div>
+
+<h3>روش دوم: صفحه آپدیت در مرورگر (Update + WebServer)</h3>
+<p>ArduinoOTA فقط از داخل Arduino IDE و در همان شبکه کار می‌کند. گاهی می‌خواهی فایل برنامه را به کس دیگری بدهی (مثلا به مشتری) تا بدون نصب Arduino IDE آپدیت کند. راه حل: یک صفحه وب روی خود ESP32 که فایل <code>.bin</code> را می‌گیرد. کتابخانه <code>Update</code> (داخل core) نوشتن در پارتیشن دوم را انجام می‌دهد.</p>
+
+<h4>ساختن فایل .bin</h4>
+<ol class="steps">
+  <li>در Arduino IDE منوی <code>Sketch › Export Compiled Binary</code> را بزن (میان‌بر <kbd>Alt</kbd>+<kbd>Ctrl</kbd>+<kbd>S</kbd>).</li>
+  <li>بعد از کامپایل، در پوشه پروژه یک پوشه <code>build</code> ساخته می‌شود و داخل آن پوشه‌ای با اسم برد (مثلا <code>esp32.esp32.esp32</code>). با <code>Sketch › Show Sketch Folder</code> بازش کن.</li>
+  <li>چند فایل <code>.bin</code> می‌بینی. فایل درست همان است که اسمش <b>فقط</b> <code>اسم‌پروژه.ino.bin</code> است. فایل‌های <code>.bootloader.bin</code>، <code>.partitions.bin</code> و <code>.merged.bin</code> را برای OTA نفرست؛ آن‌ها برای فلش کامل با کابل هستند.</li>
+</ol>
+
+<div class="code" data-file="WebUpdate.ino" id="otaWeb"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;Update.h&gt;
+#include "secrets.h"
+#ifndef WEB_USER
+#warning "WEB_USER/WEB_PASS are not defined in secrets.h"
+#define WEB_USER "admin"
+#define WEB_PASS "change-me"
+#endif
+
+WebServer server(80);
+
+const char UPDATE_PAGE[] PROGMEM = R"HTML(
+&lt;!doctype html&gt;&lt;meta charset="utf-8"&gt;
+&lt;h3&gt;Firmware update&lt;/h3&gt;
+&lt;form method="POST" action="/update" enctype="multipart/form-data"&gt;
+  &lt;input type="file" name="firmware" accept=".bin"&gt;
+  &lt;button&gt;Upload&lt;/button&gt;
+&lt;/form&gt;)HTML";
+
+void handlePage() {
+  if (!server.authenticate(WEB_USER, WEB_PASS)) {
+    return server.requestAuthentication();          // پنجره نام کاربری و رمز
+  }
+  server.send(200, "text/html", UPDATE_PAGE);
+}
+
+void handleUploadDone() {                           // بعد از تمام شدن آپلود
+  if (!server.authenticate(WEB_USER, WEB_PASS)) {
+    return server.requestAuthentication();
+  }
+  bool ok = !Update.hasError();
+  server.send(200, "text/plain", ok ? "OK, rebooting..." : Update.errorString());
+  if (ok) {
+    delay(500);
+    ESP.restart();                                  // با برنامه جدید بالا بیا
+  }
+}
+
+void handleUploadChunk() {                          // برای هر تکه از فایل
+  if (!server.authenticate(WEB_USER, WEB_PASS)) return;
+  HTTPUpload &amp;up = server.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    Serial.printf("Update: %s\n", up.filename.c_str());
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) Update.printError(Serial);
+  } else if (up.status == UPLOAD_FILE_WRITE) {
+    if (Update.write(up.buf, up.currentSize) != up.currentSize) {
+      Update.printError(Serial);
+    }
+  } else if (up.status == UPLOAD_FILE_END) {
+    if (Update.end(true)) Serial.printf("Done: %u bytes\n", up.totalSize);
+    else Update.printError(Serial);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.printf("Open http://%s/\n", WiFi.localIP().toString().c_str());
+  server.on("/", HTTP_GET, handlePage);
+  server.on("/update", HTTP_POST, handleUploadDone, handleUploadChunk);
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();
+}
+</pre></div>
+<ol class="walk" data-for="otaWeb">
+  <li data-lines="3"><b class="what">کتابخانه Update.</b> رابط ساده برای نوشتن برنامه جدید در پارتیشن OTA خالی.
+    <span class="why">خود ArduinoOTA هم در پشت صحنه از همین کتابخانه استفاده می‌کند. ما فقط راه رسیدن فایل را (به جای IDE، مرورگر) عوض کرده‌ایم.</span></li>
+  <li data-lines="13-19"><b class="what">صفحه HTML با فرم آپلود.</b> <code>enctype="multipart/form-data"</code> یعنی «این فرم فایل می‌فرستد». <code>R"HTML( ... )HTML"</code> همان رشته خام درس ۴.۲ است.
+    <span class="why">بدون enctype مرورگر فقط اسم فایل را می‌فرستد، نه محتوای آن را. <code>accept=".bin"</code> فقط پنجره انتخاب فایل را به فایل‌های bin محدود می‌کند (امنیت نیست، راحتی است).</span></li>
+  <li data-lines="21-26"><b class="what">صفحه اصلی با رمز.</b> <code>server.authenticate</code> نام کاربری و رمز را بررسی می‌کند؛ اگر غلط بود، <code>requestAuthentication</code> پنجره ورود مرورگر را باز می‌کند.
+    <span class="why">صفحه آپدیت بدون رمز یعنی هر کسی در شبکه می‌تواند دستگاهت را صاحب شود. این احراز هویت ساده (Basic/Digest) روی HTTP رمزنگاری نشده است، پس فقط در شبکه خانگی مورد اعتماد استفاده کن و هرگز این صفحه را با Port Forwarding روی اینترنت باز نکن.</span></li>
+  <li data-lines="62"><b class="what">server.on با دو تابع.</b> برای آپلود فایل، WebServer دو تابع می‌خواهد: <code>handleUploadChunk</code> که برای <b>هر تکه</b> از فایل صدا زده می‌شود، و <code>handleUploadDone</code> که بعد از تمام شدن کل آپلود جواب را به مرورگر می‌فرستد.
+    <span class="why">فایل bin حدود یک مگابایت است و RAM آزاد ESP32 حدود ۳۰۰ کیلوبایت. پس نمی‌شود کل فایل را اول در RAM گرفت؛ باید آن را تکه‌تکه (هر بار چند کیلوبایت) گرفت و فورا در فلش نوشت.</span></li>
+  <li data-lines="43-45"><b class="what">شروع: Update.begin.</b> در اولین تکه، پارتیشن OTA خالی آماده (پاک) می‌شود. <code>UPDATE_SIZE_UNKNOWN</code> یعنی «اندازه را نمی‌دانم، تا جای خالی هست بنویس».
+    <span class="why">اگر پارتیشن OTA وجود نداشته باشد (Huge APP)، همین‌جا خطا می‌گیری و Update.printError علتش را در Serial چاپ می‌کند.</span></li>
+  <li data-lines="46-49"><b class="what">نوشتن هر تکه.</b> <code>Update.write</code> تکه را در فلش می‌نویسد و تعداد بایت نوشته‌شده را برمی‌گرداند.
+    <span class="why">اگر عدد با اندازه تکه یکی نبود، یعنی نوشتن خراب شد. بررسی کن، حدس نزن.</span></li>
+  <li data-lines="50-52"><b class="what">پایان: Update.end(true).</b> بررسی می‌کند فایل کامل و سالم است (سربرگ و checksum برنامه) و اگر بود، otadata را عوض می‌کند تا دفعه بعد از برنامه جدید بوت شود.
+    <span class="why">اگر فایل اشتباهی (مثلا یک عکس یا فایل merged) فرستاده باشی، همین‌جا رد می‌شود و برنامه قبلی سالم می‌ماند. این همان امنیت دو پارتیشن است.</span></li>
+  <li data-lines="32-37"><b class="what">جواب و ریست.</b> اگر خطایی نبود، «OK» را برای مرورگر می‌فرستد، نیم ثانیه صبر می‌کند تا پیام برسد، و <code>ESP.restart()</code>.
+    <span class="why">برنامه جدید فقط بعد از ریست اجرا می‌شود. بدون delay، ممکن است برد قبل از رسیدن جواب به مرورگر ریست شود و تو فکر کنی آپدیت شکست خورده.</span></li>
+</ol>
+<p>استفاده: آدرس IP برد را در مرورگر باز کن، نام کاربری و رمز را بزن، فایل <code>.ino.bin</code> را انتخاب و Upload کن. حدود ۱۰ تا ۲۰ ثانیه بعد «OK, rebooting...» را می‌بینی.</p>
+
+<div class="callout tip"><div class="ct">میان‌بر: کتابخانه آماده HTTPUpdateServer</div>
+<p>core 3.x یک کتابخانه به اسم <code>HTTPUpdateServer</code> هم دارد که همین صفحه را با دو خط به WebServer تو اضافه می‌کند. ما عمدا نسخه دستی را نوشتیم تا بفهمی پشت صحنه چه می‌گذرد. در آموزش‌های اینترنتی کتابخانه‌هایی مثل ElegantOTA را هم می‌بینی؛ نسخه‌های قدیمی آن (AsyncElegantOTA) منسوخ شده‌اند.</p></div>
+
+<div class="callout tip"><div class="ct">کشیدن آپدیت از یک سرور: HTTPUpdate</div>
+<p>هر دو روش بالا «هل دادن» هستند: تو برنامه را به برد می‌فرستی. وقتی چند دستگاه داری، «کشیدن» راحت‌تر است: هر دستگاه هر وقت تو بگویی (با یک دکمه، یک پیام MQTT، یا روزی یک بار) یک فایل <code>.bin</code> جدید را از یک آدرس وب دانلود می‌کند. کتابخانه داخلی <code>HTTPUpdate</code> این کار را با یک فراخوانی انجام می‌دهد. برای امتحان، فایل <code>.ino.bin</code> را در یک پوشه روی کامپیوترت بگذار و در همان پوشه <code>python -m http.server 8000</code> را اجرا کن. اگر موفق شود، برد خودش با برنامه جدید ریست می‌شود. برای محصول واقعی از HTTPS (درس <a href="5-6.html#api">۵.۶</a>) استفاده کن و نسخه فعلی را به عنوان ورودی سوم <code>update()</code> بده تا سرور بتواند جواب «آپدیت نداریم» بدهد، به جای این که هر بار همان فایل را دوباره بفرستد.</p></div>
+<div class="code" data-file="HTTPUpdate (snippet)"><pre>
+#include &lt;HTTPUpdate.h&gt;
+// ... بعد از وصل شدن Wi-Fi:
+WiFiClient client;
+t_httpUpdate_return r = httpUpdate.update(client, "http://192.168.1.10:8000/firmware.bin");
+if (r == HTTP_UPDATE_FAILED) {
+  Serial.printf("Update failed: %s\n", httpUpdate.getLastErrorString().c_str());
+}
+</pre></div>
+
+<h3 id="rollback-auto">برگشت خودکار (Rollback): اگر برنامه جدید خراب بود چه؟</h3>
+<p>فرض کن برنامه جدید باگی دارد که باعث می‌شود به Wi-Fi وصل نشود. حالا دیگر OTA هم کار نمی‌کند! ESP-IDF برای این حالت «برگشت خودکار» دارد و در core آردوینو ۳ هم روشن است (<code>CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y</code>). ایده: برنامه جدید بعد از اولین بوت «در حال آزمایش» است. اگر خودش اعلام کند «من سالمم»، ماندگار می‌شود؛ اگر قبل از آن ریست شود یا خودش بگوید «خرابم»، bootloader به برنامه قبلی برمی‌گردد.</p>
+<p>به طور پیش‌فرض core آردوینو برنامه جدید را بلافاصله در شروع کار «سالم» اعلام می‌کند. برای این که خودت تصمیم بگیری:</p>
+<div class="code" data-file="RollbackCheck.ino" id="rollback"><pre>
+#include &lt;WiFi.h&gt;
+#include "esp_ota_ops.h"
+#include "secrets.h"
+
+// به core می‌گوییم: «تأیید برنامه جدید را خودم انجام می‌دهم»
+extern "C" bool verifyRollbackLater() {
+  return true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - t0 &lt; 30000) delay(500);
+
+  if (WiFi.status() == WL_CONNECTED) {
+    esp_ota_mark_app_valid_cancel_rollback();   // «این نسخه سالم است»
+    Serial.println("New firmware confirmed");
+  } else {
+    Serial.println("No Wi-Fi: rolling back");
+    esp_ota_mark_app_invalid_rollback_and_reboot();  // برگرد به نسخه قبلی
+  }
+}
+
+void loop() {
+  delay(1000);
+}
+</pre></div>
+<ol class="walk" data-for="rollback">
+  <li data-lines="6-8"><b class="what">verifyRollbackLater.</b> core این تابع را به شکل «ضعیف» (weak) تعریف کرده که <code>false</code> برمی‌گرداند. وقتی خودت آن را با <code>true</code> بنویسی، نسخه تو جایگزین می‌شود و core تأیید خودکار را انجام نمی‌دهد. <code>extern "C"</code> ضروری است: تابع core در یک فایل C تعریف شده و بدون آن، کامپایلر C++ اسم تابع تو را تغییر می‌دهد (name mangling)؛ برنامه بدون هیچ خطایی کامپایل می‌شود ولی نسخه تو هرگز صدا زده نمی‌شود.
+    <span class="why">این الگوی «تابع weak» در core آردوینو زیاد است: راهی برای تغییر رفتار داخلی بدون دست زدن به فایل‌های core.</span></li>
+  <li data-lines="16-18"><b class="what">تأیید.</b> اگر Wi-Fi در ۳۰ ثانیه وصل شد، <code>esp_ota_mark_app_valid_cancel_rollback()</code> می‌گوید «این نسخه ماندگار است».
+    <span class="why">معیار سلامت را خودت انتخاب کن: وصل شدن به Wi-Fi، جواب دادن سرور MQTT، یا هر چیزی که برای ادامه OTA لازم است.</span></li>
+  <li data-lines="19-22"><b class="what">رد کردن.</b> <code>esp_ota_mark_app_invalid_rollback_and_reboot()</code> برد را ریست می‌کند و bootloader نسخه قبلی را اجرا می‌کند.
+    <span class="why">اگر برنامه با کابل USB ریخته شده باشد، نسخه قبلی معتبری نیست و این تابع فقط خطا برمی‌گرداند؛ پس روی میز با آن کاری نمی‌شود. این مکانیزم فقط بعد از یک آپدیت OTA معنا دارد.</span></li>
+</ol>
+
+<div class="callout warn"><div class="ct">امنیت OTA را جدی بگیر</div>
+<p>OTA یعنی «راهی برای عوض کردن مغز دستگاه از راه دور». اگر این راه باز باشد، مهاجم هم می‌تواند از آن استفاده کند. حداقل‌ها: ۱) همیشه رمز بگذار؛ ۲) پورت 3232 و صفحه آپدیت را هرگز با Port Forwarding روی اینترنت باز نکن؛ ۳) برای دستگاهی که به دیگران می‌فروشی، OTA امضاشده (Signed OTA، مثال <code>SignedOTA</code> در کتابخانه ArduinoOTA) و Secure Boot را مطالعه کن تا فقط برنامه امضاشده با کلید خصوصی خودت پذیرفته شود.</p></div>
+<p class="note">OTA و آپلود فایل LittleFS در Wokwi شبیه‌سازی نمی‌شوند (Wokwi برنامه را مستقیم در حافظه شبیه‌ساز می‌گذارد و پورت شبکه‌ای برای IDE ندارد). این دو را روی برد واقعی تمرین کن.</p>
+
+<!-- ======================= LittleFS ======================= -->
+<h2 id="littlefs">LittleFS، یک فلش‌مموری کوچک داخل ESP32</h2>
+<p>در درس ۴.۲ صفحه وب را به شکل یک رشته بزرگ داخل کد C++ نوشتیم. کار می‌کرد، ولی هر تغییر کوچک در رنگ یک دکمه یعنی کامپایل و آپلود دوباره کل برنامه. و اگر بخواهی تنظیمات (مثلا شهر انتخابی کاربر) یا لاگ چند روزه را نگه داری، متغیرها با ریست پاک می‌شوند. <b>LittleFS</b> یک «سیستم فایل» است: بخشی از حافظه فلش (همان پارتیشن <code>spiffs</code> در شکل بالا) را مثل یک فلش‌مموری کوچک با پوشه و فایل در اختیارت می‌گذارد. فایل‌ها با خاموش شدن برق و حتی با آپلود برنامه جدید (با USB یا OTA) باقی می‌مانند.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>برنامه تو مثل آشپز است و RAM مثل میز کارش: سریع ولی با تعطیلی رستوران (قطع برق) پاک می‌شود. LittleFS مثل <b>قفسه دفترها</b> در آشپزخانه است: دستور غذاها (صفحه وب) و دفتر حساب (لاگ) آنجا می‌ماند، حتی اگر آشپز عوض شود (برنامه جدید).</p></div>
+
+<div class="callout why"><div class="ct">چرا LittleFS و نه SPIFFS؟</div>
+<p>SPIFFS سیستم فایل قدیمی‌تر ESP32 است که پوشه واقعی ندارد و با قطع برق وسط نوشتن آسیب‌پذیرتر است؛ Espressif آن را دیگر توسعه نمی‌دهد. LittleFS برای میکروکنترلر طراحی شده: در برابر قطع برق مقاوم است (Power-loss resilient) و نوشتن را روی کل حافظه پخش می‌کند تا یک نقطه از فلش زود فرسوده نشود (Wear leveling). اسم پارتیشن هنوز «spiffs» است ولی LittleFS به راحتی از همان استفاده می‌کند.</p></div>
+
+<h3>نوشتن، اضافه کردن، خواندن و فهرست فایل‌ها</h3>
+<div class="code" data-file="LittleFS_Basics.ino" id="fsBasics"><pre>
+#include &lt;LittleFS.h&gt;
+
+void listFiles(const char *dir) {
+  File root = LittleFS.open(dir);
+  File f = root.openNextFile();
+  while (f) {
+    Serial.printf("  %-20s %6u bytes\n", f.name(), (unsigned)f.size());
+    f = root.openNextFile();
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  if (!LittleFS.begin(true)) {               // true = اگر خراب بود، فرمت کن
+    Serial.println("LittleFS mount failed");
+    return;
+  }
+  Serial.printf("FS: %u of %u bytes used\n",
+                (unsigned)LittleFS.usedBytes(), (unsigned)LittleFS.totalBytes());
+
+  File f = LittleFS.open("/note.txt", "w");  // w = بساز یا از اول بنویس
+  f.println("Hello from ESP32!");
+  f.close();                                 // بستن = ذخیره قطعی
+
+  f = LittleFS.open("/log.txt", "a");        // a = به آخر فایل اضافه کن
+  f.printf("boot at %lu ms\n", millis());
+  f.close();
+
+  f = LittleFS.open("/log.txt", "r");        // r = فقط خواندن
+  Serial.println("--- log.txt ---");
+  while (f.available()) {
+    Serial.write(f.read());
+  }
+  f.close();
+
+  Serial.println("--- files ---");
+  listFiles("/");
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="fsBasics">
+  <li data-lines="1"><b class="what">کتابخانه LittleFS.</b> داخل core است.
+    <span class="why">نصب جدا لازم نیست. کتابخانه‌های قدیمی مثل «LITTLEFS by lorol» را نصب نکن؛ آن‌ها مال core 1.x بودند و با core 3 تداخل دارند.</span></li>
+  <li data-lines="15-18"><b class="what">LittleFS.begin(true).</b> سیستم فایل را «سوار» (mount) می‌کند. ورودی <code>true</code> یعنی «اگر نتوانستی سوار کنی (مثلا بار اول که هنوز فرمت نشده)، فرمت کن».
+    <span class="why">بار اولی که روی برد نو اجرا می‌کنی، پارتیشن خالی و فرمت‌نشده است و بدون <code>true</code> همیشه «mount failed» می‌گیری. ولی دقت کن: اگر فایل‌ها واقعا خراب شده باشند، <code>true</code> همه را پاک می‌کند. برای دستگاهی با داده ارزشمند، اول با <code>false</code> امتحان کن و فرمت را آگاهانه انجام بده.</span></li>
+  <li data-lines="19-20"><b class="what">فضای کل و مصرف‌شده.</b> <code>totalBytes</code> و <code>usedBytes</code>.
+    <span class="why">با Partition Scheme پیش‌فرض حدود ۱٫۳ تا ۱٫۴ مگابایت می‌بینی؛ با Minimal SPIFFS فقط ۱۲۸ کیلوبایت. قبل از ذخیره لاگ طولانی، همیشه جای خالی را بدان.</span></li>
+  <li data-lines="22-24"><b class="what">حالت "w": نوشتن از اول.</b> فایل را می‌سازد؛ اگر از قبل بود، محتوایش را <b>پاک</b> می‌کند. بعد مثل Serial با <code>println</code> و <code>printf</code> در آن می‌نویسی.
+    <span class="why">اسم فایل همیشه با <code>/</code> شروع می‌شود (مسیر کامل). <code>close()</code> را فراموش نکن: تا فایل بسته نشود، ممکن است آخرین تکه داده هنوز در RAM باشد و با قطع برق از بین برود.</span></li>
+  <li data-lines="26-28"><b class="what">حالت "a": اضافه کردن.</b> به انتهای فایل اضافه می‌کند و قبلی‌ها را نگه می‌دارد.
+    <span class="why">برای لاگ همیشه "a". با هر بار ریست، یک خط <code>boot at ...</code> اضافه می‌شود. دکمه EN را چند بار بزن و ببین فایل بلندتر می‌شود؛ این ثابت می‌کند داده بعد از ریست مانده است.</span></li>
+  <li data-lines="30-35"><b class="what">حالت "r": خواندن.</b> <code>available()</code> می‌گوید چند بایت دیگر مانده و <code>read()</code> یک بایت برمی‌گرداند.
+    <span class="why">خواندن بایت به بایت برای فایل‌های کوچک ساده و کم‌حافظه است. برای فایل بزرگ، <code>f.readStringUntil('\n')</code> خط به خط می‌خواند.</span></li>
+  <li data-lines="3-10"><b class="what">فهرست فایل‌ها.</b> پوشه را باز می‌کنیم و با <code>openNextFile()</code> یکی‌یکی جلو می‌رویم تا فایل خالی (false) برگردد.
+    <span class="why">ابزار عیب‌یابی عالی: وقتی صفحه وب پیدا نمی‌شود، اول ببین فایل واقعا روی برد هست و اسمش دقیقا چیست (حروف بزرگ و کوچک فرق دارند).</span></li>
+</ol>
+<div class="serial">FS: 8192 of 1441792 bytes used
+--- log.txt ---
+boot at 523 ms
+boot at 519 ms
+--- files ---
+  log.txt                  30 bytes
+  note.txt                 18 bytes</div>
+
+<h3>صفحه وب از LittleFS</h3>
+<p>حالا صفحه وب را از کد C++ بیرون می‌کشیم. در پوشه پروژه (کنار فایل <code>.ino</code>) یک پوشه به اسم دقیق <code>data</code> بساز و این دو فایل را در آن بگذار:</p>
+<div class="code" data-lang="text" data-file="پوشه پروژه"><pre>
+LittleFS_Web/
+├── LittleFS_Web.ino
+├── secrets.h
+└── data/
+    ├── index.html
+    └── style.css
+</pre></div>
+<div class="code" data-file="data/index.html" data-lang="text" id="fsIndex"><pre>
+&lt;!doctype html&gt;
+&lt;html lang="fa" dir="rtl"&gt;
+&lt;head&gt;
+  &lt;meta charset="utf-8"&gt;
+  &lt;meta name="viewport" content="width=device-width,initial-scale=1"&gt;
+  &lt;title&gt;دستگاه من&lt;/title&gt;
+  &lt;link rel="stylesheet" href="/style.css"&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;h1&gt;سلام از LittleFS!&lt;/h1&gt;
+  &lt;p&gt;این صفحه از حافظه فلش ESP32 خوانده شد، نه از داخل کد.&lt;/p&gt;
+  &lt;p&gt;دما: &lt;b id="t"&gt;...&lt;/b&gt;&lt;/p&gt;
+  &lt;script&gt;
+    fetch('/api/temp').then(r =&gt; r.json())
+      .then(d =&gt; document.getElementById('t').textContent = d.t + ' °C');
+  &lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</pre></div>
+<ol class="walk" data-for="fsIndex">
+  <li data-lines="2-8"><b class="what">یک صفحه HTML معمولی.</b> فارسی و راست‌چین، با فایل CSS جدا.
+    <span class="why">حالا می‌توانی صفحه را روی کامپیوتر با دوبار کلیک در مرورگر ببینی و طراحی کنی، بدون کامپایل. فقط <code>fetch</code> آن روی کامپیوتر جواب نمی‌گیرد.</span></li>
+  <li data-lines="12-16"><b class="what">داده زنده با fetch.</b> صفحه ثابت است، ولی دما را از آدرس <code>/api/temp</code> که برنامه ESP32 می‌سازد می‌گیرد (همان الگوی درس ۴.۲).
+    <span class="why">جداسازی تمیز: «ظاهر» در فایل‌ها، «داده» در کد. طراح وب و برنامه‌نویس ESP32 می‌توانند جدا کار کنند.</span></li>
+</ol>
+<div class="code" data-file="data/style.css" data-lang="text" id="fsCss"><pre>
+body { font-family: sans-serif; max-width: 480px; margin: 2em auto; }
+h1   { color: #2f7af0; }
+</pre></div>
+<ol class="walk" data-for="fsCss">
+  <li data-lines="1-2"><b class="what">ظاهر صفحه در فایل جدا.</b> فونت، عرض حداکثر ۴۸۰ پیکسل (برای گوشی) و رنگ آبی تیتر.
+    <span class="why">فایل CSS را مرورگر جدا درخواست می‌کند (<code>/style.css</code>)، پس برنامه ESP32 باید برای این آدرس هم جواب داشته باشد؛ خط ۱۹ برنامه پایین همین کار را می‌کند.</span></li>
+</ol>
+
+<div class="code" data-file="LittleFS_Web.ino" id="fsWeb"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;LittleFS.h&gt;
+#include "secrets.h"
+
+WebServer server(80);
+
+void setup() {
+  Serial.begin(115200);
+  if (!LittleFS.begin(true)) {
+    Serial.println("LittleFS mount failed");
+  }
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.printf("Open http://%s/\n", WiFi.localIP().toString().c_str());
+
+  // فایل‌های ثابت مستقیم از LittleFS (بعد از LittleFS.begin)
+  server.serveStatic("/", LittleFS, "/index.html");
+  server.serveStatic("/style.css", LittleFS, "/style.css", "max-age=3600");
+
+  // داده زنده از کد
+  server.on("/api/temp", []() {
+    float t = temperatureRead();               // دمای داخلی تراشه (تقریبی)
+    server.send(200, "application/json", "{\"t\":" + String(t, 1) + "}");
+  });
+  server.onNotFound([]() { server.send(404, "text/plain", "Not found"); });
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();
+}
+</pre></div>
+<ol class="walk" data-for="fsWeb">
+  <li data-lines="10-12"><b class="what">سوار کردن LittleFS قبل از هر چیز.</b>
+    <span class="why"><code>serveStatic</code> در لحظه تعریف بررسی می‌کند که مسیر یک فایل است یا پوشه؛ اگر LittleFS هنوز سوار نشده باشد، اشتباه تشخیص می‌دهد.</span></li>
+  <li data-lines="18"><b class="what">serveStatic برای صفحه اصلی.</b> «هر کس آدرس <code>/</code> را خواست، فایل <code>/index.html</code> را از LittleFS بفرست». نوع محتوا (text/html) را از پسوند فایل حدس می‌زند.
+    <span class="why">یک خط به جای یک تابع کامل. نکته ریز: اگر به جای فایل یک <b>پوشه</b> بدهی (مثلا <code>serveStatic("/", LittleFS, "/")</code>)، کتابخانه برای آدرس <code>/</code> دنبال <code>index.htm</code> (بدون l) می‌گردد، نه index.html. ما برای جلوگیری از این دام، مسیر فایل را دقیق دادیم.</span></li>
+  <li data-lines="19"><b class="what">فایل CSS با Cache.</b> ورودی چهارم <code>"max-age=3600"</code> به مرورگر می‌گوید «این فایل را تا یک ساعت دوباره نخواه».
+    <span class="why">ESP32 یک سرور ضعیف است؛ هر درخواست کمتر یعنی جواب سریع‌تر به بقیه. برای index.html کش نگذاشتیم تا تغییراتت فورا دیده شود.</span></li>
+  <li data-lines="22-25"><b class="what">مسیر داده زنده.</b> <code>temperatureRead()</code> دمای داخلی تراشه را می‌دهد (دقیق نیست، فقط برای نمایش) و به شکل JSON فرستاده می‌شود.
+    <span class="why">در پروژه واقعی به جای آن دمای DHT22 یا هر سنسور دیگر را بگذار.</span></li>
+</ol>
+
+<h3>آپلود پوشه data روی برد (Arduino IDE 2)</h3>
+<p>Arduino IDE 2 برای ریختن پوشه <code>data</code> روی LittleFS یک افزونه لازم دارد: <a href="https://github.com/earlephilhower/arduino-littlefs-upload" target="_blank" rel="noopener">arduino-littlefs-upload</a> از Earle Philhower (سازنده core ی RP2040). از Arduino IDE نسخه 2.2.1 به بعد کار می‌کند.</p>
+<ol class="steps">
+  <li><b>دانلود.</b> به صفحه <a href="https://github.com/earlephilhower/arduino-littlefs-upload/releases" target="_blank" rel="noopener">Releases</a> برو و آخرین فایل <code>arduino-littlefs-upload-x.y.z.vsix</code> را دانلود کن (از حالت zip خارجش نکن).</li>
+  <li><b>پوشه plugins.</b> در ویندوز به <code>C:\Users\اسم‌کاربر\.arduinoIDE\</code> برو و اگر پوشه <code>plugins</code> نیست، بسازش. در مک و لینوکس: <code>~/.arduinoIDE/plugins/</code>. دقت کن اسم پوشه با نقطه شروع می‌شود (<code>.arduinoIDE</code>) و در ویندوز ممکن است پنهان باشد.</li>
+  <li><b>کپی و راه‌اندازی دوباره.</b> فایل vsix را در پوشه plugins بگذار و Arduino IDE را کامل ببند و باز کن.</li>
+  <li><b>Serial Monitor را ببند.</b> اگر باز باشد، آپلود با خطای «port doesn't exist» شکست می‌خورد.</li>
+  <li><b>اجرا.</b> <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> (در مک <kbd>⌘</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>) را بزن و فرمان <b>Upload LittleFS to Pico/ESP8266/ESP32</b> را انتخاب کن. افزونه از روی Partition Scheme انتخابی تو، اندازه و محل پارتیشن را می‌فهمد، یک تصویر LittleFS از پوشه data می‌سازد و با کابل USB روی برد می‌ریزد.</li>
+  <li><b>حالا برنامه را آپلود کن</b> (یا قبلش؛ ترتیب مهم نیست). این دو آپلود جدا از هم هستند: آپلود برنامه فایل‌ها را پاک نمی‌کند و آپلود LittleFS برنامه را.</li>
+</ol>
+<div class="callout warn"><div class="ct">دو دام رایج</div>
+<p>۱) Partition Scheme موقع آپلود LittleFS و موقع آپلود برنامه <b>باید یکی باشد</b>؛ اگر اولی را با Default و دومی را با Minimal SPIFFS بریزی، برنامه پارتیشن را جای دیگری می‌بیند و «mount failed» یا فایل‌های گم‌شده می‌گیری. ۲) آپلود LittleFS کل پارتیشن را <b>بازنویسی</b> می‌کند؛ لاگ‌ها و تنظیماتی که برنامه روی برد ساخته بود پاک می‌شوند. همین افزونه در Wokwi کار نمی‌کند؛ در Wokwi فایل‌ها را باید با کد بسازی (مثل برنامه LittleFS_Basics).</p></div>
+
+<h3 id="storage">کجا چه چیزی را ذخیره کنم؟ Preferences، LittleFS یا کارت SD</h3>
+<div class="table-wrap"><table>
+<tr><th></th><th>Preferences (NVS)</th><th>LittleFS</th><th>کارت SD</th></tr>
+<tr><td>شکل داده</td><td>کلید و مقدار: <code>"boots" = 42</code></td><td>فایل و پوشه</td><td>فایل و پوشه (FAT32)</td></tr>
+<tr><td>اندازه</td><td>کوچک (پارتیشن nvs حدود ۲۰ کیلوبایت)</td><td>ده‌ها کیلوبایت تا چند مگابایت</td><td>گیگابایت‌ها</td></tr>
+<tr><td>بهترین کاربرد</td><td>تنظیمات کوچک، شمارنده، رمز Wi-Fi، آخرین وضعیت رله</td><td>صفحه وب، فایل JSON تنظیمات، لاگ کوتاه</td><td>لاگ طولانی، عکس (ESP32-CAM)، داده‌ای که با کامپیوتر می‌خوانی</td></tr>
+<tr><td>مقاومت در قطع برق</td><td>خیلی خوب (هر کلید اتمیک نوشته می‌شود)</td><td>خوب (طراحی مقاوم)</td><td>ضعیف‌تر؛ قطع برق وسط نوشتن می‌تواند FAT را خراب کند</td></tr>
+<tr><td>سخت‌افزار اضافه</td><td>ندارد</td><td>ندارد</td><td>ماژول SD و ۴ سیم SPI (درس <a href="3-3.html">۳.۳</a>)</td></tr>
+<tr><td>با آپلود برنامه پاک می‌شود؟</td><td>خیر</td><td>خیر (ولی آپلود LittleFS پاکش می‌کند)</td><td>خیر</td></tr>
+</table></div>
+<div class="callout tip"><div class="ct">فلش هم عمر دارد</div>
+<p>هر خانه حافظه فلش حدود ۱۰ هزار تا ۱۰۰ هزار بار پاک‌شدن را تحمل می‌کند. LittleFS و NVS نوشتن را پخش می‌کنند، ولی اگر هر ثانیه یک خط لاگ بنویسی، در چند ماه ضرر می‌زنی. قانون: فقط وقتی مقدار <b>عوض شد</b> ذخیره کن (نه در هر دور loop)، و لاگ پرتکرار را در RAM جمع کن و مثلا هر ۱۰ دقیقه یک‌جا بنویس.</p></div>
+
+<!-- ======================= Debug ======================= -->
+<h2 id="debug">وقتی کار نمی‌کند: عیب‌یابی قدم به قدم</h2>
+<div class="table-wrap"><table>
+<tr><th>علامت</th><th>علت محتمل</th><th>راه حل</th></tr>
+<tr><td>پورت شبکه (OTA) در منوی Port دیده نمی‌شود</td><td>کامپیوتر و برد در یک شبکه نیستند (شبکه مهمان، اینترنت گوشی)؛ فایروال ویندوز mDNS را بسته؛ مودم ارتباط دستگاه‌ها را جدا کرده (AP/Client Isolation)؛ برنامه روی برد کد OTA ندارد</td><td>Serial Monitor را ببین که «OTA ready» چاپ شده باشد. هر دو را به یک مودم وصل کن. یک بار که Arduino IDE اجازه شبکه خواست، «Allow» بزن. IP برد را ping کن. منو را بعد از ۳۰ ثانیه دوباره باز کن.</td></tr>
+<tr><td>OTA شروع می‌شود ولی با <code>No response from device</code> یا <code>Authentication Failed</code> قطع می‌شود</td><td>loop جایی گیر کرده و <code>ArduinoOTA.handle()</code> دیر صدا زده می‌شود؛ رمز غلط؛ Wi-Fi ضعیف</td><td>delay طولانی را از loop بردار؛ رمز را بررسی کن؛ برد را نزدیک مودم ببر.</td></tr>
+<tr><td><code>Sketch too big</code> یا <code>text section exceeds available space</code></td><td>برنامه از جای برنامه در Partition Scheme بزرگ‌تر است</td><td>برای حفظ OTA: <b>Minimal SPIFFS</b>. فقط اگر OTA لازم نیست: Huge APP. تغییر پارتیشن را با USB آپلود کن.</td></tr>
+<tr><td>آپدیت وب: <code>Not Enough Space</code> یا خطا در <code>Update.begin</code></td><td>Partition Scheme بدون OTA انتخاب شده</td><td>پارتیشن با دو app (Default یا Minimal SPIFFS) انتخاب کن و یک بار با USB آپلود کن.</td></tr>
+<tr><td><code>LittleFS mount failed</code></td><td>بار اول و فرمت‌نشده (با <code>begin(false)</code>)؛ Partition Scheme موقع آپلود LittleFS با آپلود برنامه فرق دارد؛ پارتیشنی به اسم spiffs وجود ندارد (No FS)</td><td><code>LittleFS.begin(true)</code>؛ هر دو آپلود با یک Partition Scheme؛ پارتیشنی با فضای فایل انتخاب کن.</td></tr>
+<tr><td>صفحه وب «Not found» می‌دهد ولی LittleFS سوار شده</td><td>پوشه data آپلود نشده یا اسم فایل فرق دارد (Index.html، index.htm)؛ serveStatic قبل از LittleFS.begin</td><td>با برنامه LittleFS_Basics فهرست فایل‌ها را ببین؛ ترتیب setup را درست کن.</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>OTA بار اول مثل جادو است و دقیقا همان موقع است که آدم‌ها بی‌احتیاط می‌شوند. دو قانون من: <b>یک</b>، هیچ‌وقت برنامه‌ای را با OTA روی دستگاهی که به آن دسترسی نداری نفرست که قبلا همان برنامه را روی یک برد روی میز، با قطع و وصل Wi-Fi و قطع برق، تست نکرده‌ای. من دستگاه‌هایی دیده‌ام که به خاطر یک خط اشتباه در setup، مجبور شدند آن‌ها را از پشت‌بام پایین بیاورند. Rollback تور نجات توست، نه نقشه‌ات. <b>دو</b>، با فلش مثل دفتری با تعداد صفحه محدود رفتار کن: وقتی چیزی عوض شد بنویس، نه در هر دور loop، و همیشه بدان چقدر جای خالی داری. همین امروز برنامه LittleFS_Basics را آپلود کن و ده بار دکمه EN را بزن: وقتی ده خط در <code>log.txt</code> دیدی، فایلی را که از ریست جان سالم به در می‌برد فهمیده‌ای.</p></div>
+
+<!-- ======================= Quiz ======================= -->
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="4">
+  <p class="q">برنامه‌ات «Sketch too big» می‌دهد و دستگاه باید OTA داشته باشد. کدام Partition Scheme را انتخاب می‌کنی؟</p>
+  <ol><li data-why="Huge APP فقط یک جای برنامه دارد؛ OTA دیگر کار نمی‌کند.">Huge APP (3MB No OTA/1MB SPIFFS)</li><li data-why="No OTA همان‌طور که از اسمش پیداست جای دوم ندارد.">No OTA (2MB APP/2MB SPIFFS)</li><li data-why="همین الان هم پیش‌فرض است و جا نشده.">Default 4MB with spiffs</li><li>Minimal SPIFFS (1.9MB APP with OTA/128KB SPIFFS)</li></ol>
+  <div class="fb">Minimal SPIFFS دو جای برنامه ۱٫۹ مگابایتی دارد: هم برنامه بزرگ‌تر جا می‌شود هم OTA می‌ماند. فقط فضای فایل ۱۲۸ کیلوبایت می‌شود.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">دستگاهت در سقف است. بعد از یک آپدیت OTA دیگر در منوی Port دیده نمی‌شود و Wi-Fi هم وصل نیست. کدام کار از قبل می‌توانست جلوی این را بگیرد؟</p>
+  <ol><li data-why="رمز OTA ربطی به وصل نشدن Wi-Fi برنامه جدید ندارد.">برداشتن رمز OTA</li><li data-why="Huge APP اصلا OTA ندارد و وضع را بدتر می‌کرد.">انتخاب Huge APP</li><li>تست برنامه جدید روی یک برد روی میز، و استفاده از Rollback که فقط بعد از وصل شدن Wi-Fi نسخه جدید را تأیید می‌کند</li><li data-why="خاموش کردن نگهبان مشکل را پنهان می‌کند، حل نمی‌کند.">خاموش کردن Watchdog</li></ol>
+  <div class="fb">با <code>verifyRollbackLater()</code> و تأیید دستی بعد از وصل شدن Wi-Fi، نسخه خراب خودبه‌خود به نسخه قبلی برمی‌گردد. و هیچ چیز جای تست روی میز را نمی‌گیرد.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">در صفحه آپدیت وب، کدام فایل از پوشه <code>build</code> را انتخاب می‌کنی؟</p>
+  <ol><li data-why="فایل merged یک تصویر کامل با بوت‌لودر و جدول پارتیشن است، برای فلش کامل با کابل."><code>ProjectName.ino.merged.bin</code></li><li><code>ProjectName.ino.bin</code></li><li data-why="این فقط جدول پارتیشن است، نه برنامه تو."><code>ProjectName.ino.partitions.bin</code></li><li data-why="این بوت‌لودر است که OTA هیچ‌وقت عوضش نمی‌کند."><code>ProjectName.ino.bootloader.bin</code></li></ol>
+  <div class="fb">OTA فقط خود برنامه را عوض می‌کند، پس فایل ساده <code>.ino.bin</code> را می‌خواهد. <code>Update.end(true)</code> فایل را بررسی می‌کند و فایل اشتباه را رد می‌کند و برنامه قبلی سالم می‌ماند.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">فایل لاگ تو باید همه خط‌های قبلی را نگه دارد و در هر بوت یک خط تازه اضافه کند. آن را با کدام حالت باز می‌کنی؟</p>
+  <ol><li><code>LittleFS.open("/log.txt", "a")</code></li><li data-why="حالت &quot;w&quot; اول فایل را خالی می‌کند؛ فقط خط آخر می‌ماند."><code>LittleFS.open("/log.txt", "w")</code></li><li data-why="حالت &quot;r&quot; فقط خواندنی است؛ با آن نمی‌توانی بنویسی."><code>LittleFS.open("/log.txt", "r")</code></li><li data-why="آن وقت هر بار همه خط‌های قبلی از دست می‌روند.">فایل را پاک کن و دوباره بساز</li></ol>
+  <div class="fb">حالت "a" (append) به آخر فایل اضافه می‌کند و محتوای قبلی را نگه می‌دارد. حالت "w" از یک فایل خالی شروع می‌کند.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">پوشه data را با Partition Scheme پیش‌فرض (Default) آپلود کردی و برنامه را با Minimal SPIFFS. برنامه می‌گوید <code>LittleFS mount failed</code>. چرا؟</p>
+  <ol><li data-why="افزونه کارش را کرده؛ مشکل جایی است که نوشته.">افزونه آپلود LittleFS خراب است</li><li data-why="دو فایل کوچک خیلی کمتر از ۱۲۸ کیلوبایت هستند.">index.html خیلی بزرگ است</li><li>دو آپلود از دو نقشه پارتیشن متفاوت استفاده کرده‌اند، پس برنامه سیستم فایل را جای دیگری جست‌وجو می‌کند</li><li data-why="false فقط فرمت خودکار را خاموش می‌کند؛ پارتیشن را جابه‌جا نمی‌کند.">باید <code>LittleFS.begin(false)</code> را صدا بزنی</li></ol>
+  <div class="fb">آپلود LittleFS و آپلود برنامه باید با <b>یک</b> Partition Scheme انجام شوند. یک بار انتخابش کن و دیگر عوضش نکن.</div>
+</div>
+
+<!-- ======================= Exercises ======================= -->
+<h2 id="practice">تمرین‌ها</h2>
+<div class="exercise"><div class="ct">تمرین ۱: دفترچه بوت در صفحه وب</div>
+<p>LittleFS_Basics و LittleFS_Web را ترکیب کن: در هر بوت یک خط با شماره بوت به آخر <code>/log.txt</code> اضافه کن، و یک آدرس <code>/log</code> بساز که کل فایل را به صورت متن ساده در مرورگر نشان بدهد. چند بار EN را بزن و صفحه را تازه کن: فهرست باید هر بار یک خط بلندتر شود.</p>
+<details><summary>راهنمایی</summary><p>برای پیدا کردن شماره بوت، فایل را یک بار موقع روشن شدن بخوان و خط‌هایش را بشمار (هر <code>'\n'</code> یک خط است)، بعد یکی اضافه کن. برای <code>/log</code> فایل را با "r" باز کن و با <code>server.streamFile(f, "text/plain")</code> بفرست، بعد <code>f.close()</code>. آن را کش نکن، چون عوض می‌شود.</p></details>
+</div>
+<div class="exercise"><div class="ct">تمرین ۲: اولین تعمیر بی‌سیم واقعی</div>
+<p>ArduinoOTA را به LittleFS_Web اضافه کن (نام میزبان <code>esp32-files</code> و رمز از <code>secrets.h</code>) و یک بار با USB آپلودش کن. بعد برد را با شارژر گوشی و دور از کامپیوتر روشن کن. با OTA آدرس <code>/api/temp</code> را طوری تغییر بده که زمان روشن بودن (به ثانیه) را هم برگرداند، و در مرورگر بررسی کن صفحه هنوز باز می‌شود. این آزمایش درباره فایل‌های LittleFS چه چیزی را ثابت می‌کند؟</p>
+<details><summary>راهنمایی</summary><p><code>ArduinoOTA.begin()</code> را بعد از وصل شدن Wi-Fi صدا بزن و <code>ArduinoOTA.handle()</code> را کنار <code>server.handleClient()</code> در loop بگذار. Partition Scheme را بین آپلود USB و آپلودهای OTA عوض نکن. JSON می‌تواند این شکلی شود: <code>{"t":41.2,"up":1234}</code>.</p></details>
+</div>
+
+<div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
+<p>OTA دو پارتیشن برنامه (Default یا Minimal SPIFFS، هرگز Huge APP) و یک رمز می‌خواهد؛ اولین آپلود همیشه با USB است و هر برنامه جدید باید دوباره کد OTA را داشته باشد. با Rollback نسخه جدید فقط وقتی می‌ماند که ثابت کند به Wi-Fi وصل می‌شود. LittleFS یک درایو کوچک و مقاوم در برابر قطع برق داخل فلش است برای صفحه وب، تنظیمات JSON و لاگ کوتاه؛ با برنامه جدید پاک نمی‌شود، ولی با آپلود دوباره LittleFS پاک می‌شود.</p></div>
+
+<p>در درس بعد (<a href="5-6.html">۵.۶</a>) ESP32 کلاینت می‌شود: با HTTPS از APIهای اینترنتی داده می‌گیرد، به گوشی‌ات هشدار می‌فرستد و یاد می‌گیرد ماه‌ها خودش کار کند. در آخر Taskها، OTA و LittleFS را در یک ایستگاه هوا کنار هم می‌گذاری.</p>
+
+</article>
+</body>
+</html>

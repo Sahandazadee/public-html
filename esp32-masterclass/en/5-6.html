@@ -1,0 +1,732 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Web APIs, HTTPS and a device that runs for months · ESP32 Masterclass</title>
+<meta name="description" content="Calling internet APIs from the ESP32 over HTTPS with ArduinoJson, checking certificates with the built-in CA bundle, phone alerts with ntfy, a reliability checklist with reset reasons and the watchdog, and a combined weather-station project.">
+<link rel="alternate" hreflang="fa" href="../5-6.html"><link rel="alternate" hreflang="en" href="5-6.html">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%232f7af0'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%233cc9a0'/%3E%3C/svg%3E">
+<script defer src="../assets/course.js"></script>
+<script defer src="../assets/glossary-en.js"></script>
+<script defer src="../assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="5-6">
+
+<p class="lede">Your device can now juggle several jobs (lesson 5.4), update itself over Wi-Fi and keep files (lesson 5.5). In this last lesson of the three, it reaches out to the world. Until now the ESP32 was the server that others asked for things; now it becomes a <b>client</b> that asks internet services for data through an <b>API</b>, over encrypted <b>HTTPS</b>, and sends alerts to your phone. Then comes a checklist for a device that runs for months without anyone touching it, and finally a project that puts everything from these three lessons together: a wireless weather station.</p>
+
+<div class="goals">
+  <div><h4>🎯 After this lesson you can</h4><ul>
+    <li>Get data from a real API (the current weather in your city) over HTTPS and parse the JSON with a filter</li>
+    <li>Choose between <code>setInsecure</code>, a single root certificate and the built-in CA bundle</li>
+    <li>Send a notification to your phone with ntfy when a button is pressed</li>
+    <li>Build a device that runs for months without you and records the cause of every reset</li>
+    <li>Combine tasks, a queue, a mutex, a notification, LittleFS, OTA and an API in one project</li>
+  </ul></div>
+  <div><h4>🧰 Prerequisites and parts</h4><ul>
+    <li>Lessons <a href="5-4.html">5.4</a> (tasks, queues, mutex, notifications) and <a href="5-5.html">5.5</a> (OTA, LittleFS); <a href="4-1.html">4.1</a> (Wi-Fi, <code>secrets.h</code>); lesson <a href="5-1.html">5.1</a> (JSON and TLS) helps</li>
+    <li>An ESP32-DevKitC board and a push button on GPIO27</li>
+    <li>For the final project: a 0.96 inch SSD1306 OLED display on I2C (SDA 21, SCL 22; lesson <a href="3-3.html">3.3</a>)</li>
+    <li>A phone with the free ntfy app (Android or iOS) for the alert section</li>
+    <li>Libraries: <b>ArduinoJson</b> version 7 (Benoit Blanchon), <b>Adafruit SSD1306</b> and <b>Adafruit GFX Library</b>; the rest (WiFi, WebServer, HTTPClient, ArduinoOTA, LittleFS, Preferences) are built into the Arduino-ESP32 core <b>3.x</b> (tested with 3.3.12)</li>
+  </ul></div>
+</div>
+
+<div class="callout info"><div class="ct">Lesson map</div>
+<p>The order: <a href="#api">calling an API</a> → <a href="#ca">certificates</a> → <a href="#alert">phone alerts</a> → <a href="#robust">reliability checklist</a> → <a href="#project">combined project</a>.</p></div>
+
+<!-- ======================= API ======================= -->
+<h2 id="api">Calling internet APIs (HTTPS and JSON)</h2>
+<p>Until now the ESP32 was the server (others asked it for things). Now it's the other way round: the ESP32 becomes a <b>client</b> and asks an internet service for something. An address that a service has set up to answer programs (not people) is called an <b>API</b>. The answer is usually JSON, the same format you saw in lesson 5.1.</p>
+<div class="callout analogy"><div class="ct">An everyday example</div>
+<p>An API is like the order window of a bakery. You don't need to know what goes on inside the bakery; you only need to know how to order ("two baguettes, please"), and the baker hands the answer back in a fixed form (a bag of bread). The URL is your order and the JSON is the bag of bread.</p></div>
+
+<h3>The weather in your city from Open-Meteo</h3>
+<p><a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener">Open-Meteo</a> is a free weather service that needs no key (API key) and no sign-up for non-commercial use. Before writing any code, open the address below in your computer's browser to see what the answer looks like; that's a professional habit:</p>
+<div class="code" data-lang="text" data-file="URL"><pre>
+https://api.open-meteo.com/v1/forecast?latitude=43.65&amp;longitude=-79.38&amp;current=temperature_2m,wind_speed_10m
+</pre></div>
+<p>The address has three parts: <code>latitude</code> and <code>longitude</code> (here the geographic coordinates of Toronto; to find your own, right-click your city in Google Maps or OpenStreetMap: the first number shown is the latitude and the second the longitude; west and south are negative), and <code>current</code> (which "right now" values you want: the temperature 2 meters above the ground and the wind speed at a height of 10 meters). The answer looks something like this (shortened):</p>
+<div class="code" data-lang="json" data-file="Server response"><pre>
+{
+  "latitude": 43.64,
+  "longitude": -79.38,
+  "timezone": "GMT",
+  "current_units": { "time": "iso8601", "interval": "seconds",
+                     "temperature_2m": "°C", "wind_speed_10m": "km/h" },
+  "current": {
+    "time": "2026-09-23T10:15",
+    "interval": 900,
+    "temperature_2m": 21.3,
+    "wind_speed_10m": 14.8
+  }
+}
+</pre></div>
+<p>We only want two numbers: <code>current.temperature_2m</code> and <code>current.wind_speed_10m</code>. The rest is extra and wastes RAM.</p>
+
+<h3>The library you need: ArduinoJson 7</h3>
+<ol class="steps">
+  <li>Arduino IDE → <code>Tools › Manage Libraries</code> (the book icon).</li>
+  <li>Search for <b>ArduinoJson</b> and install <b>ArduinoJson by Benoit Blanchon</b>; make sure it's version <b>7.x</b>. It has no dependencies.</li>
+</ol>
+
+<div class="code" data-file="WeatherNow.ino" id="weather"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WiFiClientSecure.h&gt;
+#include &lt;HTTPClient.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#include "secrets.h"
+
+const char *URL =
+  "https://api.open-meteo.com/v1/forecast"
+  "?latitude=43.65&amp;longitude=-79.38"
+  "&amp;current=temperature_2m,wind_speed_10m";
+
+bool fetchWeather(float &amp;temp, float &amp;wind) {
+  WiFiClientSecure client;
+  client.setInsecure();              // for learning only! see the right way below
+  HTTPClient http;
+  http.setConnectTimeout(5000);      // at most 5 seconds to connect
+  http.setTimeout(5000);             // at most 5 seconds for the answer
+  http.useHTTP10(true);              // no chunking, so we can read the stream
+  if (!http.begin(client, URL)) return false;
+
+  int code = http.GET();
+  if (code != HTTP_CODE_OK) {
+    Serial.printf("HTTP error: %d %s\n", code, http.errorToString(code).c_str());
+    http.end();
+    return false;
+  }
+
+  JsonDocument filter;               // keep only these two numbers
+  filter["current"]["temperature_2m"] = true;
+  filter["current"]["wind_speed_10m"] = true;
+
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, http.getStream(),
+                               DeserializationOption::Filter(filter));
+  http.end();
+  if (err) {
+    Serial.printf("JSON error: %s\n", err.c_str());
+    return false;
+  }
+  temp = doc["current"]["temperature_2m"] | NAN;   // if missing: NAN
+  wind = doc["current"]["wind_speed_10m"] | NAN;
+  return !isnan(temp);
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.println("Wi-Fi OK");
+}
+
+void loop() {
+  float t, w;
+  if (fetchWeather(t, w)) {
+    Serial.printf("Now: %.1f C, wind %.1f km/h\n", t, w);
+  }
+  delay(10UL * 60 * 1000);           // every 10 minutes, not every second
+}
+</pre></div>
+<ol class="walk" data-for="weather">
+  <li data-lines="2-4"><b class="what">Three libraries.</b> <code>WiFiClientSecure</code> for the encrypted connection (HTTPS), <code>HTTPClient</code> for building the request and reading the HTTP answer, and <code>ArduinoJson</code> for parsing the JSON.
+    <span class="why">In core 3.x the real class name is <code>NetworkClientSecure</code>, and <code>WiFiClientSecure</code> is a backward-compatible alias; both are the same thing. We kept the more familiar name.</span></li>
+  <li data-lines="7-10"><b class="what">The API address.</b> In C++, strings placed side by side are joined automatically; we split the address over three lines for readability.
+    <span class="why">Separate the parameters with <code>&amp;</code> and don't put in any spaces. One wrong letter (for example <code>temperature_2</code>) gets you a 400 error answer.</span></li>
+  <li data-lines="13-14"><b class="what">setInsecure: encryption without identity checking.</b> The connection is encrypted, but the ESP32 doesn't check that the other side really is open-meteo.com.
+    <span class="why">The honest truth (as in lesson 5.1): for fetching a public temperature that isn't secret, the risk is small; the worst case is that someone feeds you a fake temperature. But for anything that carries passwords or commands, never use setInsecure. You'll see the right way (<code>useBuiltinCACertBundle</code>) in the next example.</span></li>
+  <li data-lines="16-17"><b class="what">Time limits.</b> <code>setConnectTimeout</code> for connecting and <code>setTimeout</code> for waiting for the answer, both in milliseconds.
+    <span class="why">Without a time limit, if the internet is slow or the server is busy, the program may wait a long time. A real device should never wait forever for anything.</span></li>
+  <li data-lines="18"><b class="what">useHTTP10.</b> Sends the request using HTTP version 1.0.
+    <span class="why">In HTTP/1.1 the server may send the answer in "chunks" (chunked encoding), with size numbers between the chunks. Because we hand the answer straight from the network stream (<code>getStream</code>) to ArduinoJson, those numbers would corrupt the JSON. HTTP/1.0 has no chunking. This is the official recommendation of the ArduinoJson documentation.</span></li>
+  <li data-lines="21-26"><b class="what">GET and checking the response code.</b> <code>HTTP_CODE_OK</code> means 200. A negative number means we never reached the server at all; <code>errorToString</code> turns it into text (for example <code>connection refused</code> or <code>read Timeout</code>).
+    <span class="why">The important codes: 200 success, 400 bad address, 429 "too many requests" (rate limit), 5xx server error. Always check the code before reading the answer, and don't forget <code>http.end()</code> on every path, so memory is freed.</span></li>
+  <li data-lines="28-30"><b class="what">A JSON filter.</b> A small document whose shape says "from the answer, keep only these two fields".
+    <span class="why">The full answer is a few hundred bytes, and with other APIs (for example a 7-day hourly forecast) it can be tens of kilobytes. With a filter, ArduinoJson throws the rest away while reading, and very little RAM is used.</span></li>
+  <li data-lines="32-39"><b class="what">deserializeJson straight from the network.</b> The answer is read directly from the network stream, without storing it in a big String first. If the JSON is incomplete or broken, <code>err</code> is set and <code>err.c_str()</code> gives the reason (for example <code>IncompleteInput</code> or <code>NoMemory</code>).
+    <span class="why">Version 7 has only <code>JsonDocument</code>, which sizes itself. In version 6 you had to write <code>StaticJsonDocument&lt;512&gt;</code> or <code>DynamicJsonDocument</code> with a hand-picked size; old code from the internet gives warnings or errors with version 7.</span></li>
+  <li data-lines="40-42"><b class="what">The <code>|</code> operator for a default value.</b> "If this field exists, give me its value; otherwise NAN (not a number)".
+    <span class="why">If the service renames the field one day, you get NAN instead of a fake zero (which looks like a real temperature!), and you know something is wrong.</span></li>
+  <li data-lines="57"><b class="what">Every 10 minutes.</b> <code>10UL * 60 * 1000</code> milliseconds; <code>UL</code> means a big unsigned number, so the multiplication doesn't overflow.
+    <span class="why">Open-Meteo itself only updates the "current" data about every 15 minutes (the <code>interval: 900</code> field); asking every second just bothers the server and may get your IP limited. Under Open-Meteo's terms, free use is for non-commercial purposes only, with a limit of fewer than 10,000 requests per day (and 600 per minute), and the data is licensed CC BY 4.0 (if you publish it somewhere, credit Open-Meteo). Every 10 minutes means 144 requests per day.</span></li>
+</ol>
+<div class="serial">Wi-Fi OK
+Now: 21.3 C, wind 14.8 km/h</div>
+
+<div class="wokwi" data-board="esp32" data-code-from="weather">
+<p>This program works in Wokwi too, because Wokwi simulates real internet access and HTTPS. In Wokwi, instead of <code>secrets.h</code>, delete the <code>#include "secrets.h"</code> line and write at the top of the program: <code>#define WIFI_SSID "Wokwi-GUEST"</code> and <code>#define WIFI_PASS ""</code>. Add the <b>ArduinoJson</b> library from Wokwi's Library Manager tab. The board is on its own; no other parts are needed.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<h3 id="ca">setInsecure or a certificate? The whole truth</h3>
+<div class="table-wrap"><table>
+<tr><th>Method</th><th>What it does</th><th>When to use it</th></tr>
+<tr><td><code>setInsecure()</code></td><td>Encrypts, but doesn't check the server's identity</td><td>Only for testing and harmless public data</td></tr>
+<tr><td><code>setCACert(ROOT_CA)</code></td><td>Trusts only a server whose certificate is signed by this root (lesson 5.1)</td><td>When you work with just one service; but if the service changes its certificate issuer, you have to update the program (one more reason for OTA!)</td></tr>
+<tr><td><code>useBuiltinCACertBundle()</code></td><td>Uses the bundle of about 150 trusted root certificates from around the world that is built into the core (like browsers do)</td><td>The best balance for most projects; available in core 3.3.12 (not in older core versions). It adds about 60 KB to the program size.</td></tr>
+</table></div>
+
+<h3 id="alert">An alert to your phone: POST with JSON to ntfy</h3>
+<p>Now the other direction: the ESP32 <b>sends</b> news. <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy.sh</a> is a free notification service with no sign-up: you install the ntfy app on your phone (Android or iOS), subscribe to a "topic" with any name you like, and every message sent to that topic appears as a notification on your phone.</p>
+<div class="callout warn"><div class="ct">The topic name is the password</div>
+<p>ntfy.sh has no accounts, so anyone who knows your topic name can read your messages and send you fake ones. Don't pick a name like <code>test</code> or <code>ali</code>; use a long random name like <code>home-alert-7f3k9q</code> and keep it in <code>secrets.h</code> (the file from lesson <a href="5-5.html">5.5</a> already has the line <code>#define NTFY_TOPIC "..."</code>; if yours doesn't, add it). The limits of free ntfy.sh: about 250 messages per day, and at most 4096 bytes per message.</p></div>
+<p>The circuit: one push button between <b>GPIO27</b> and <b>GND</b> (we turn on the internal pull-up resistor; lesson <a href="3-1.html">3.1</a>).</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"BTN1","name":"4-pin push button","img":"button.svg","pins":[["1","to GPIO27"],["4","to GND (diagonal leg)"]]}
+  ],
+  "wires":[["GPIO27","BTN1.1","blue"],["BTN1.4","GND","black"]]
+}</script><figcaption>The "doorbell" button: pressing it connects GPIO27 to ground (LOW). The internal pull-up keeps the pin HIGH the rest of the time.</figcaption></div>
+
+<div class="code" data-file="DoorAlert_ntfy.ino" id="ntfy"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WiFiClientSecure.h&gt;
+#include &lt;HTTPClient.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#include "secrets.h"
+#ifndef NTFY_TOPIC
+#warning "NTFY_TOPIC is not defined in secrets.h"
+#define NTFY_TOPIC "change-me-to-a-random-name"
+#endif
+
+const int BUTTON_PIN = 27;          // button between GPIO27 and GND
+
+bool sendAlert(const char *title, const char *message) {
+  WiFiClientSecure client;
+  client.useBuiltinCACertBundle();  // really checks the server's identity
+  HTTPClient http;
+  http.setTimeout(5000);
+  if (!http.begin(client, "https://ntfy.sh/")) return false;
+  http.addHeader("Content-Type", "application/json");
+
+  JsonDocument msg;                 // {"topic":..,"title":..,"message":..}
+  msg["topic"] = NTFY_TOPIC;
+  msg["title"] = title;
+  msg["message"] = message;
+  msg["priority"] = 4;              // 1 to 5; 4 means "high"
+  msg["tags"].add("warning");
+  String body;
+  serializeJson(msg, body);
+
+  int code = http.POST(body);
+  http.end();
+  Serial.printf("ntfy -&gt; %d\n", code);
+  return code == 200;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.println("Press the button to send an alert");
+}
+
+void loop() {
+  static unsigned long lastSent = 0;
+  if (digitalRead(BUTTON_PIN) == LOW &amp;&amp; millis() - lastSent &gt; 30000) {
+    lastSent = millis();            // at most one alert every 30 seconds
+    sendAlert("Door", "Front door opened!");
+  }
+  delay(20);
+}
+</pre></div>
+<ol class="walk" data-for="ntfy">
+  <li data-lines="15"><b class="what">useBuiltinCACertBundle.</b> This time the identity of the ntfy.sh server really is checked.
+    <span class="why">This message goes to your phone, and one day it might say "the door opened" or "gas leak"; you don't want anyone changing it on the way.</span></li>
+  <li data-lines="18-19"><b class="what">The root address and the content type.</b> To send JSON you must POST to the <b>root</b> address <code>https://ntfy.sh/</code> (not <code>https://ntfy.sh/topic</code>) and say that the body is JSON.
+    <span class="why">According to the ntfy documentation, JSON is only accepted at the root address, and the topic name goes inside the JSON itself. There is also a simpler way: POST plain text to <code>https://ntfy.sh/your-topic-name</code>, and the whole text becomes the message.</span></li>
+  <li data-lines="21-28"><b class="what">Building the JSON.</b> This time it's the reverse of deserialize: we fill the document, and <code>serializeJson</code> turns it into text. <code>msg["tags"].add("warning")</code> creates an array, which ntfy turns into the ⚠️ emoji.
+    <span class="why">Never build JSON by hand by gluing strings together (<code>"{\"title\":\"" + ...</code>); if the message text contains a <code>"</code>, the JSON breaks. ArduinoJson takes care of special characters for you.</span></li>
+  <li data-lines="25"><b class="what">Priority 1 to 5.</b> 3 is the default, 4 is "high" with a long vibration, 5 is "urgent".
+    <span class="why">Use 4 or 5 for a real alert; use 2 for a daily report, which sits silently in the notification list. If everything is urgent, nothing is urgent anymore.</span></li>
+  <li data-lines="30-33"><b class="what">POST and the response code.</b> On success, ntfy returns 200.
+    <span class="why">If you see 429, you've gone over the request limit; if it's a negative number, the problem is the network or the certificate.</span></li>
+  <li data-lines="45-49"><b class="what">A sending limit.</b> After each alert, no other alert is sent for 30 seconds, even if the button is held down.
+    <span class="why">Without this, holding the button for 2 seconds means dozens of requests and dozens of notifications, and a few minutes later the service blocks you. Every device that sends messages to an outside service needs "brakes" (rate limiting).</span></li>
+</ol>
+
+<div class="callout info"><div class="ct">Telegram and other services</div>
+<p>The <b>UniversalTelegramBot</b> library (by Brian Lough) lets you build a Telegram bot with the ESP32, so you can switch a relay on and off by messaging the bot. Whatever service you choose, test its address first in a browser on the same network the device will use (some office and school networks block services), and remember that an outside service can change its rules or shut down. More independent alternatives: MQTT on your own server (lesson <a href="5-1.html#mosquitto">5.1</a>), or running ntfy on your own server (ntfy is open source).</p></div>
+
+<!-- ======================= Robustness ======================= -->
+<h2 id="robust">A checklist for a device that stays on for months</h2>
+<p>A program that works on your desk for 10 minutes is different from a program that works for 6 months without anyone touching it. Problems you never see in 10 minutes: memory that slowly breaks into fragments, Wi-Fi that drops at 3 a.m., power that goes out in the middle of writing a file. The engineering rule: <b>assume that anything that can go wrong eventually will</b>, and the device must pick itself back up.</p>
+
+<div class="table-wrap"><table>
+<tr><th>Risk</th><th>Symptom</th><th>Cure</th></tr>
+<tr><td>The program gets stuck in a loop or a wait</td><td>The device is "alive" but doesn't respond</td><td><b>Watchdog</b>: register loop and the important tasks with the watchdog, so the board resets if they get stuck</td></tr>
+<tr><td>Wi-Fi or internet drops</td><td>After the router goes down, it never sends data again</td><td>Automatic reconnection with events and a millis watchdog (lesson <a href="4-1.html#robust">4.1</a>); every network operation needs a time limit</td></tr>
+<tr><td>Heap fragmentation</td><td>A crash or a NoMemory error after a few days, even though "free memory" looks plentiful</td><td>In long-running code, avoid constantly creating and destroying <code>String</code>s; use <code>reserve()</code>, or use <code>char[]</code> with <code>snprintf</code></td></tr>
+<tr><td>Weak power (brownout)</td><td>Resets when Wi-Fi or a relay switches on</td><td>A 5 V, 1 A supply, a short cable, a 100 to 470 µF capacitor (lesson <a href="4-1.html#power">4.1</a>); never turn off the brownout detector</td></tr>
+<tr><td>Power cut in the middle of writing a file</td><td>A half-written settings file; the device boots with broken settings</td><td>Write to a temporary file first, then rename it; always have default values</td></tr>
+<tr><td>Not knowing why resets happen</td><td>"Sometimes it resets by itself", with no clue why</td><td>Read <code>esp_reset_reason()</code> at startup, print it, and keep a counter in Preferences</td></tr>
+</table></div>
+
+<div class="callout analogy"><div class="ct">An everyday example: an airplane's black box</div>
+<p>After every incident, an airplane can tell what happened, because it has a black box. Your device needs a "black box" too: every time it powers up, it should say why it reset and how many times it has crashed so far. Without that, troubleshooting a device in the ceiling is just guessing.</p></div>
+
+<div class="code" data-file="RobustBoot.ino" id="robustBoot"><pre>
+#include &lt;Preferences.h&gt;
+#include "esp_system.h"
+#include "esp_task_wdt.h"
+
+Preferences prefs;
+
+const char *resetReasonText(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON:   return "power on";
+    case ESP_RST_SW:        return "software (ESP.restart)";
+    case ESP_RST_PANIC:     return "PANIC (crash / Guru Meditation)";
+    case ESP_RST_INT_WDT:   return "interrupt watchdog";
+    case ESP_RST_TASK_WDT:  return "TASK WATCHDOG";
+    case ESP_RST_WDT:       return "other watchdog";
+    case ESP_RST_DEEPSLEEP: return "wake from deep sleep";
+    case ESP_RST_BROWNOUT:  return "BROWNOUT (weak power)";
+    default:                return "other/unknown";
+  }
+}
+
+void workerTask(void *param) {
+  esp_task_wdt_add(NULL);                      // register this task with the watchdog
+  for (;;) {
+    // ... the task's real work goes here ...
+    esp_task_wdt_reset();                      // "I'm alive"
+    vTaskDelay(pdMS_TO_TICKS(1000));
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  esp_reset_reason_t why = esp_reset_reason();
+
+  prefs.begin("sys", false);                   // "sys" namespace in NVS
+  uint32_t boots = prefs.getUInt("boots", 0) + 1;
+  prefs.putUInt("boots", boots);
+  if (why == ESP_RST_PANIC || why == ESP_RST_TASK_WDT || why == ESP_RST_BROWNOUT) {
+    prefs.putUInt("crashes", prefs.getUInt("crashes", 0) + 1);
+  }
+  Serial.printf("Boot #%lu, reason: %s, crashes so far: %lu\n",
+                (unsigned long)boots, resetReasonText(why),
+                (unsigned long)prefs.getUInt("crashes", 0));
+  prefs.end();
+
+  enableLoopWDT();                             // if loop is stuck over 5 s: reset
+  xTaskCreatePinnedToCore(workerTask, "worker", 3072, NULL, 1, NULL, 1);
+}
+
+String line;                                   // global, reserved once
+
+void loop() {
+  line.reserve(64);                            // does nothing after the first time
+  line = "uptime=";
+  line += millis() / 1000;
+  line += "s heap=";
+  line += ESP.getFreeHeap();
+  Serial.println(line);
+  delay(2000);                                 // change this to 6000 and the WDT resets
+}
+</pre></div>
+<ol class="walk" data-for="robustBoot">
+  <li data-lines="7-19"><b class="what">Turning the reset reason into text.</b> <code>esp_reset_reason()</code> returns a number of type <code>esp_reset_reason_t</code>, and we turn the most important ones into readable text.
+    <span class="why">Three reasons that should always worry you: <code>PANIC</code> (a crash, such as a Guru Meditation or a stack overflow), <code>TASK_WDT</code> (a task got stuck), and <code>BROWNOUT</code> (weak power). <code>POWERON</code> means power was connected, and <code>SW</code> means the program itself called <code>ESP.restart()</code> (after an OTA update, for example). Note: pressing the EN button on the ESP32 is usually reported as <code>POWERON</code>.</span></li>
+  <li data-lines="21-28"><b class="what">Registering a task with the watchdog.</b> <code>esp_task_wdt_add(NULL)</code> means "watch the current task", and <code>esp_task_wdt_reset()</code> means "I'm alive".
+    <span class="why">From this moment, if this task doesn't reset the watchdog for more than 5 seconds, the board resets. Put the reset where it runs <b>only when the work is really making progress</b>, not in a separate task that is always alive (then you'd be fooling the watchdog). Add a task that does long jobs such as HTTPS with care, because one slow request can take more than 5 seconds.</span></li>
+  <li data-lines="35-44"><b class="what">Counters in Preferences.</b> The total number of boots and the number of "bad" resets are stored in NVS and aren't lost when the power goes off.
+    <span class="why">If after a week you see <code>crashes</code> is 40, you know something is wrong, even if the device "seems to work". We only write at boot, not in loop, so the flash doesn't wear out. In a real project, report these numbers on the web page or over MQTT.</span></li>
+  <li data-lines="46"><b class="what">enableLoopWDT.</b> A ready-made core function that registers <code>loopTask</code> with the watchdog. The core itself resets the watchdog before every pass of <code>loop()</code>.
+    <span class="why">So if one pass of loop takes more than 5 seconds (for example it gets stuck in a <code>while</code> waiting for a sensor that has been disconnected), the board resets itself and starts over. A reset is better than freezing forever.</span></li>
+  <li data-lines="50-58"><b class="what">A String with reserve.</b> The global variable <code>line</code> grabs 64 bytes once, and every pass refills that same space.
+    <span class="why">Every time a <code>String</code> grows, it may take a new spot in the heap and leave the old one empty. After thousands of times, the heap becomes full of holes, like Swiss cheese: the total free space is large, but no big continuous piece is left (and HTTPS needs a continuous piece of several tens of kilobytes). <code>reserve</code> takes the space once, up front. For fixed-size strings, <code>char buf[64]</code> with <code>snprintf</code> is the safest. To see the problem, print <code>ESP.getMaxAllocHeap()</code> (the largest free block) as well as <code>ESP.getFreeHeap()</code>.</span></li>
+  <li data-lines="59"><b class="what">Testing the watchdog.</b> If you change the delay to 6000, each pass of loop takes more than 5 seconds and the board resets; after the reset you'll see the message <code>reason: TASK WATCHDOG</code>.
+    <span class="why">Trigger every safety mechanism on purpose once, to make sure it really works. A watchdog that has never been tested isn't a watchdog.</span></li>
+</ol>
+<div class="serial">Boot #1, reason: power on, crashes so far: 0
+uptime=0s heap=301244
+uptime=2s heap=301244
+...
+(after changing the delay to 6000)
+E (5412) task_wdt: Task watchdog got triggered. ...
+Boot #7, reason: TASK WATCHDOG, crashes so far: 1</div>
+
+<div class="callout tip"><div class="ct">Writing safely in case of power loss</div>
+<p>Suppose you're rewriting <code>config.json</code> and the power goes out right in the middle. Mode "w" had already emptied the old file; now you have neither the old settings nor the new ones. The right pattern (you'll see it in the project below): 1) write to <code>config.tmp</code>, 2) close it, 3) delete the old file and rename the <code>tmp</code> file to <code>config.json</code>. Renaming in LittleFS is almost instant. And in any case, when the settings file is missing or broken, the program must come up with <b>default values</b>, not crash. For small values, Preferences already has this safety built in.</p></div>
+
+<!-- ======================= Project ======================= -->
+<h2 id="project">Combined project: a wireless weather station</h2>
+<p>Now let's put everything together. A device that:</p>
+<ul>
+  <li>serves its settings page from <b>LittleFS</b> and stores the city's coordinates in a JSON file;</li>
+  <li>fetches the weather from <b>Open-Meteo</b> every 10 minutes in its own <b>task</b> (and right after the settings change);</li>
+  <li>shows the latest value on an <b>OLED</b> in another task;</li>
+  <li>updates remotely with <b>ArduinoOTA</b>.</li>
+</ul>
+
+<pre class="mermaid">flowchart LR
+  FS[("LittleFS<br/>index.html<br/>config.json")] --> LOOP["loopTask<br/>OTA and web server"]
+  BROWSER(["Phone browser"]) <--> LOOP
+  IDE(["Arduino IDE<br/>OTA update"]) --> LOOP
+  LOOP <--> CFG{{"Settings<br/>with mutex"}}
+  CFG <--> WT["weatherTask<br/>every 10 minutes"]
+  LOOP -- "xTaskNotifyGive" --> WT
+  WT -- "HTTPS GET" --> API(["Open-Meteo"])
+  WT -- "xQueueOverwrite" --> BOX[("weatherBox<br/>one-slot queue")]
+  BOX -- "xQueuePeek" --> DT["displayTask<br/>every 2 seconds"]
+  BOX -- "xQueuePeek" --> LOOP
+  DT --> OLED["OLED"]</pre>
+<p>All three tasks are on core 1; core 0 stays free for the system's own Wi-Fi and network tasks.</p>
+
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"OLED","name":"0.96 inch SSD1306 OLED (I2C)","pins":[["GND","ground"],["VCC","3.3 V power"],["SCL","I2C clock"],["SDA","I2C data"]]}
+  ],
+  "wires":[["GND","OLED.GND","black"],["3V3","OLED.VCC","red"],["GPIO22","OLED.SCL","green"],["GPIO21","OLED.SDA","yellow"]]
+}</script><figcaption>The same wiring as lesson 3.3: SDA to GPIO21, SCL to GPIO22, address 0x3C.</figcaption></div>
+
+<ol class="steps">
+  <li><b>Libraries.</b> From the Library Manager: <b>ArduinoJson by Benoit Blanchon</b> (version 7), <b>Adafruit SSD1306 by Adafruit</b> (when it asks during install, choose "Install all" so <b>Adafruit GFX Library</b> and <b>Adafruit BusIO</b> are installed too).</li>
+  <li><b>Partition Scheme.</b> <code>Tools › Partition Scheme › Minimal SPIFFS (1.9MB APP with OTA/128KB SPIFFS)</code>. On core 3.3.12 this program is about 1.22 MB (1,276,000 bytes): with Default (a limit of 1.25 MB, or 1,310,720 bytes) it reaches 97%, and the first new feature you add gets you "Sketch too big". Minimal SPIFFS has both OTA and room to grow.</li>
+  <li><b>Create the data folder</b> with the <code>index.html</code> file below and upload it with the LittleFS plugin (lesson <a href="5-5.html#littlefs">5.5</a>; using the same Partition Scheme).</li>
+  <li><b>Upload the program over USB the first time.</b> From then on you'll see the network port <code>weather-station</code> in the Port menu.</li>
+</ol>
+
+<div class="code" data-file="data/index.html" data-lang="text" id="stationHtml"><pre>
+&lt;!doctype html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+  &lt;meta charset="utf-8"&gt;
+  &lt;meta name="viewport" content="width=device-width,initial-scale=1"&gt;
+  &lt;title&gt;Weather station&lt;/title&gt;
+&lt;/head&gt;
+&lt;body style="font-family:sans-serif;max-width:420px;margin:2em auto"&gt;
+  &lt;h2&gt;Weather station&lt;/h2&gt;
+  &lt;p&gt;Temperature: &lt;b id="temp"&gt;...&lt;/b&gt; °C, wind: &lt;b id="wind"&gt;...&lt;/b&gt; km/h&lt;/p&gt;
+  &lt;form method="POST" action="/api/config"&gt;
+    &lt;label&gt;Latitude &lt;input name="lat" id="lat"&gt;&lt;/label&gt;&lt;br&gt;
+    &lt;label&gt;Longitude &lt;input name="lon" id="lon"&gt;&lt;/label&gt;&lt;br&gt;
+    &lt;button&gt;Save&lt;/button&gt;
+  &lt;/form&gt;
+  &lt;script&gt;
+    fetch('/api/state').then(r =&gt; r.json()).then(s =&gt; {
+      for (const k of ['temp', 'wind', 'lat', 'lon']) {
+        const el = document.getElementById(k);
+        if (el.tagName === 'INPUT') el.value = s[k]; else el.textContent = s[k];
+      }
+    });
+  &lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</pre></div>
+<ol class="walk" data-for="stationHtml">
+  <li data-lines="11-15"><b class="what">The settings form.</b> When you press "Save", the browser sends the <code>lat</code> and <code>lon</code> values with a POST to <code>/api/config</code>.
+    <span class="why">A plain HTML form works without any JavaScript, even in the weakest phone browser. Simplicity means reliability.</span></li>
+  <li data-lines="16-23"><b class="what">Filling the page with live data.</b> It reads <code>/api/state</code> and puts each field into the element with the same name: into <code>value</code> for an input, and into the text for everything else.
+    <span class="why">If no weather has been fetched yet, the temperature and wind show as <code>null</code> (ArduinoJson turns NAN into <code>null</code>, because standard JSON has no NaN).</span></li>
+</ol>
+
+<div class="code" data-file="WeatherStation.ino" id="station"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;ArduinoOTA.h&gt;
+#include &lt;LittleFS.h&gt;
+#include &lt;WiFiClientSecure.h&gt;
+#include &lt;HTTPClient.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include "secrets.h"
+#ifndef OTA_PASS
+#warning "OTA_PASS is not defined in secrets.h"
+#define OTA_PASS "change-me"
+#endif
+
+struct Weather { float temp; float wind; unsigned long at; };
+struct Config  { float lat; float lon; };
+
+WebServer server(80);
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+QueueHandle_t weatherBox;          // one-slot mailbox: always the latest weather
+SemaphoreHandle_t cfgMutex;        // lock for the shared settings
+TaskHandle_t weatherHandle = NULL;
+Config cfg = {43.65, -79.38};      // default: Toronto
+
+// ---------- LittleFS: reading and safely saving the settings ----------
+void loadConfig() {
+  File f = LittleFS.open("/config.json", "r");
+  if (!f) return;                                  // not saved yet
+  JsonDocument doc;
+  if (!deserializeJson(doc, f)) {
+    cfg.lat = doc["lat"] | cfg.lat;
+    cfg.lon = doc["lon"] | cfg.lon;
+  }
+  f.close();
+}
+
+bool saveConfig(const Config &amp;c) {
+  JsonDocument doc;
+  doc["lat"] = c.lat;
+  doc["lon"] = c.lon;
+  File f = LittleFS.open("/config.tmp", "w");      // temporary file first
+  if (!f) return false;
+  bool ok = serializeJson(doc, f) &gt; 0;
+  f.close();
+  if (!ok) return false;
+  LittleFS.remove("/config.json");
+  return LittleFS.rename("/config.tmp", "/config.json");  // then swap it in
+}
+
+// ---------- Weather task: every 10 minutes, or when the settings change ----------
+bool fetchWeather(float lat, float lon, Weather &amp;w) {
+  char url[160];
+  snprintf(url, sizeof(url),
+           "https://api.open-meteo.com/v1/forecast?latitude=%.2f&amp;longitude=%.2f"
+           "&amp;current=temperature_2m,wind_speed_10m", lat, lon);
+  WiFiClientSecure client;
+  client.useBuiltinCACertBundle();
+  HTTPClient http;
+  http.setConnectTimeout(5000);
+  http.setTimeout(5000);
+  http.useHTTP10(true);
+  if (!http.begin(client, url)) return false;
+  int code = http.GET();
+  bool ok = false;
+  if (code == HTTP_CODE_OK) {
+    JsonDocument filter;
+    filter["current"]["temperature_2m"] = true;
+    filter["current"]["wind_speed_10m"] = true;
+    JsonDocument doc;
+    if (!deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter))) {
+      w.temp = doc["current"]["temperature_2m"] | NAN;
+      w.wind = doc["current"]["wind_speed_10m"] | NAN;
+      w.at = millis();
+      ok = !isnan(w.temp);
+    }
+  }
+  http.end();
+  return ok;
+}
+
+void weatherTask(void *param) {
+  for (;;) {
+    if (WiFi.status() == WL_CONNECTED) {
+      xSemaphoreTake(cfgMutex, portMAX_DELAY);
+      Config c = cfg;                              // copy, then give the lock back
+      xSemaphoreGive(cfgMutex);
+      Weather w;
+      if (fetchWeather(c.lat, c.lon, w)) {
+        xQueueOverwrite(weatherBox, &amp;w);           // replaces the previous value
+      }
+    }
+    // sleep 10 minutes, unless someone wakes us up sooner
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10UL * 60 * 1000));
+  }
+}
+
+// ---------- Display task: latest weather on the OLED every 2 seconds ----------
+void displayTask(void *param) {
+  Weather w;
+  for (;;) {
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.println(WiFi.localIP());
+    if (xQueuePeek(weatherBox, &amp;w, 0) == pdPASS) {  // look, don't take
+      display.setTextSize(2);
+      display.printf("%.1f C\n", w.temp);
+      display.setTextSize(1);
+      display.printf("wind %.1f km/h\n", w.wind);
+      display.printf("%lu min ago", (millis() - w.at) / 60000);
+    } else {
+      display.println("waiting for data...");
+    }
+    display.display();
+    vTaskDelay(pdMS_TO_TICKS(2000));
+  }
+}
+
+// ---------- Web: page from LittleFS, data from code ----------
+void handleState() {
+  Weather w = {NAN, NAN, 0};
+  xQueuePeek(weatherBox, &amp;w, 0);
+  JsonDocument doc;
+  xSemaphoreTake(cfgMutex, portMAX_DELAY);
+  doc["lat"] = cfg.lat;
+  doc["lon"] = cfg.lon;
+  xSemaphoreGive(cfgMutex);
+  doc["temp"] = w.temp;
+  doc["wind"] = w.wind;
+  String out;
+  serializeJson(doc, out);
+  server.send(200, "application/json", out);
+}
+
+void handleSave() {
+  Config c = {server.arg("lat").toFloat(), server.arg("lon").toFloat()};
+  if (c.lat &lt; -90 || c.lat &gt; 90 || c.lon &lt; -180 || c.lon &gt; 180) {
+    return server.send(400, "text/plain", "bad lat/lon");
+  }
+  xSemaphoreTake(cfgMutex, portMAX_DELAY);
+  cfg = c;
+  xSemaphoreGive(cfgMutex);
+  saveConfig(c);
+  xTaskNotifyGive(weatherHandle);                  // "fetch again right now"
+  server.sendHeader("Location", "/");
+  server.send(303);
+}
+
+void setup() {
+  Serial.begin(115200);
+  LittleFS.begin(true);
+  loadConfig();
+  weatherBox = xQueueCreate(1, sizeof(Weather));
+  cfgMutex = xSemaphoreCreateMutex();
+
+  Wire.begin(21, 22);
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.setTextColor(SSD1306_WHITE);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - t0 &lt; 20000) delay(250);
+
+  ArduinoOTA.setHostname("weather-station");
+  ArduinoOTA.setPassword(OTA_PASS);
+  ArduinoOTA.begin();
+
+  server.serveStatic("/", LittleFS, "/index.html");
+  server.on("/api/state", HTTP_GET, handleState);
+  server.on("/api/config", HTTP_POST, handleSave);
+  server.begin();
+
+  xTaskCreatePinnedToCore(weatherTask, "weather", 12288, NULL, 1, &amp;weatherHandle, 1);
+  xTaskCreatePinnedToCore(displayTask, "display", 4096, NULL, 1, NULL, 1);
+}
+
+void loop() {
+  ArduinoOTA.handle();
+  server.handleClient();
+  delay(2);
+}
+</pre></div>
+<ol class="walk" data-for="station">
+  <li data-lines="17-18"><b class="what">Two structs.</b> <code>Weather</code> is a package of temperature, wind and the time it was fetched; <code>Config</code> holds the coordinates.
+    <span class="why">Packing related data into one struct lets a single <code>xQueueOverwrite</code> move it all together, in one piece; a new temperature never gets mixed up with an old time.</span></li>
+  <li data-lines="22"><b class="what">A one-slot queue as a "mailbox".</b> A queue of length 1 that is filled with <code>xQueueOverwrite</code> and read with <code>xQueuePeek</code>.
+    <span class="why">In the ordinary queue (lesson <a href="5-4.html#queue">5.4</a>), each piece of data was read and removed once. Here we have two readers (the OLED and the web page), and both just want "the latest weather"; Peek looks without removing, and Overwrite always replaces the previous value and never finds the queue "full".</span></li>
+  <li data-lines="28-37"><b class="what">Reading the settings at boot.</b> If the file doesn't exist or the JSON is broken, the Toronto default (line 25) stays.
+    <span class="why">The same principle as the reliability checklist: the device must always boot, even with incomplete settings.</span></li>
+  <li data-lines="39-50"><b class="what">Saving safely.</b> First <code>config.tmp</code>, then delete the old file and rename.
+    <span class="why">If the power goes out in the middle of <code>serializeJson</code>, the previous config.json is still intact. <code>serializeJson(doc, f)</code> writes straight into the file and returns the number of bytes; zero means failure.</span></li>
+  <li data-lines="53-81"><b class="what">fetchWeather.</b> The same code as the weather example earlier in this lesson, with two differences: the address is built from the coordinates with <code>snprintf</code>, and this time we use <code>useBuiltinCACertBundle</code>.
+    <span class="why">snprintf writes into a fixed 160-byte array and never runs past its end; no temporary String is created on the heap. This task runs every 10 minutes for months, so this is exactly where heap fragmentation matters.</span></li>
+  <li data-lines="83-97"><b class="what">weatherTask.</b> It <b>copies</b> the settings under the lock, gives the lock back right away, then does the slow HTTPS request and puts the result in the mailbox.
+    <span class="why">Never hold a lock during a slow job (several seconds of HTTPS), or the web page, which also needs cfg, has to wait just as long. "Copy, release, then work".</span></li>
+  <li data-lines="95"><b class="what">ulTaskNotifyTake with a 10-minute limit.</b> The task sleeps until either 10 minutes pass or someone wakes it with <code>xTaskNotifyGive</code>.
+    <span class="why">A task notification is FreeRTOS's lightest tool for "hey, wake up". With a plain vTaskDelay, after changing the city you'd have to wait up to 10 minutes for the new weather.</span></li>
+  <li data-lines="100-118"><b class="what">displayTask.</b> Every 2 seconds it redraws the screen: the IP address, the temperature in large text, the wind, and how many minutes ago the data was fetched.
+    <span class="why">Only this task touches the OLED (and I2C), so the display doesn't need a mutex. A rule simpler than locks: <b>every piece of hardware has one owner</b>. Showing "minutes ago" matters: if the internet is down for a day, the user won't mistake yesterday's temperature for today's.</span></li>
+  <li data-lines="121-134"><b class="what">/api/state.</b> Peeks the latest weather from the mailbox, reads the settings under the lock, and returns everything as JSON.
+    <span class="why">This function runs in loopTask (inside <code>server.handleClient</code>), while weatherTask may be reading cfg at the same moment, or waiting for it to change; that's why the lock is needed.</span></li>
+  <li data-lines="136-148"><b class="what">/api/config.</b> It <b>validates</b> the input, saves it in cfg and in the file, wakes up weatherTask, and sends the browser back to the main page with code 303.
+    <span class="why">Never trust user input: <code>toFloat()</code> returns zero for invalid text, and a latitude of 500 makes no sense. The 303 makes sure that refreshing the page doesn't resend the form.</span></li>
+  <li data-lines="150-178"><b class="what">setup in the right order.</b> LittleFS and the settings, then the queue and the lock (before any task), the OLED, Wi-Fi with a 20-second limit, OTA, the web server, and finally the tasks.
+    <span class="why">If Wi-Fi doesn't connect within 20 seconds, the device doesn't stop: <code>setAutoReconnect</code> connects it later, and weatherTask simply waits until then. weatherTask's stack is deliberately 12 KB because HTTPS is heavy; after a few days, measure the real value with <code>uxTaskGetStackHighWaterMark</code>.</span></li>
+  <li data-lines="180-184"><b class="what">A tiny loop.</b> Only OTA and the web server, with a <code>delay(2)</code>.
+    <span class="why">Because the slow work lives in a separate task, loop always comes round in a few milliseconds, and OTA and the web page always answer quickly, even in the middle of a slow HTTPS request. That's exactly the problem lesson 5.4 started with.</span></li>
+</ol>
+
+<div class="callout example"><div class="ct">What can you try in Wokwi?</div>
+<p>Wokwi simulates Wi-Fi (with <code>Wokwi-GUEST</code>), HTTPS, the OLED and FreeRTOS, so the weather and display parts work. But OTA and uploading the data folder don't exist in Wokwi; without the index.html file the main page is empty, but <code>/api/state</code> still answers. Build the complete project on a real board.</p></div>
+
+<!-- ======================= Debug ======================= -->
+<h2 id="debug">When it doesn't work: step-by-step troubleshooting</h2>
+<div class="table-wrap"><table>
+<tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+<tr><td>HTTPS: code <code>-1</code> (connection refused) or the message <code>X509 - Certificate verification failed</code></td><td>No DNS or no internet; the service isn't reachable from your network (an office or school network may block it, for example); wrong or expired root certificate; not enough heap for TLS</td><td>Try the address in a phone browser on the same Wi-Fi. To diagnose, use <code>setInsecure()</code> once: if it connects, the problem is the certificate; try <code>useBuiltinCACertBundle()</code>. Print <code>ESP.getMaxAllocHeap()</code> (TLS needs about 40 KB in one continuous block). The clock: in the Arduino core, checking a certificate's dates is off by default, so a wrong clock is usually not the cause; but having the correct time via NTP (lesson 4.1) is a good habit, and some libraries and services need it.</td></tr>
+<tr><td><code>JSON error: IncompleteInput</code> or <code>InvalidInput</code></td><td>The answer was chunked; a timeout in the middle of reading; the server sent an HTML error page instead of JSON</td><td><code>http.useHTTP10(true)</code>; increase the timeout; check the HTTP code before parsing.</td></tr>
+<tr><td><code>Task watchdog got triggered</code> and a reset</td><td>A task (or loop, with enableLoopWDT) worked for more than 5 seconds without a break; a busy-wait loop <code>while(...){}</code></td><td>The culprit task's name is in the <code>CPU 0: ...</code> line. Put a <code>vTaskDelay</code> in its loop or break the work into smaller pieces; don't turn off the watchdog.</td></tr>
+<tr><td>ntfy returns 200 but nothing appears on the phone</td><td>The phone is subscribed to a different topic name (one typo is enough); the app's battery saver delays notifications</td><td>Open <code>https://ntfy.sh/your-topic-name</code> in a browser: sent messages show up there. Copy the topic name from <code>secrets.h</code> into the app exactly.</td></tr>
+</table></div>
+
+<div class="callout coach"><div class="ct">Coach's corner</div>
+<p>Two rules to take away. <b>One</b>, a device that doesn't record the cause of its resets isn't a professional device. From today on, in every project that stays on for more than a day, include the "black box" code from the reliability checklist. Once the crash counter has stayed at zero for a week, then you can say "it works". <b>Two</b>, be a polite guest on other people's servers: a sensible interval, time limits on every request, and brakes on every alert. A device that hammers an API every second gets blocked, and then it doesn't work at all.</p></div>
+
+<!-- ======================= Quiz ======================= -->
+<h2 id="quiz">Lesson quiz</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">In the weather example, why did we put <code>http.useHTTP10(true)</code> before <code>deserializeJson(doc, http.getStream(), ...)</code>?</p>
+  <ol><li data-why="HTTP/1.0 doesn't make things faster; the goal is something else.">Because HTTP 1.0 is faster</li><li>So the server doesn't send the answer chunked (in pieces with size numbers), which would corrupt the JSON read from the stream</li><li data-why="Encryption is WiFiClientSecure's job, not the HTTP version's.">Because HTTPS only works with HTTP 1.0</li><li data-why="useHTTP10 has nothing to do with certificates.">So the server's certificate isn't checked</li></ol>
+  <div class="fb">When you read straight from <code>getStream()</code>, HTTPClient doesn't stitch the chunks back together. HTTP/1.0 removes the problem at its root.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">Your device sends a "door opened" alert to your phone through ntfy. Which connection setting is right?</p>
+  <ol><li data-why="The connection is encrypted but the server's identity isn't checked; someone in the middle could read or change the alert."><code>setInsecure()</code>, because it's simpler</li><li data-why="Without encryption anyone on the way can read and change the message.">Plain <code>http://</code> with no encryption</li><li data-why="One day the alert might say &quot;gas leak&quot;; it matters.">It doesn't matter for a notification</li><li><code>useBuiltinCACertBundle()</code></li></ol>
+  <div class="fb">For anything that carries commands, passwords or important alerts, check the server's identity. The built-in bundle does it without you having to copy a certificate.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">After a week, your device's page shows "crashes: 40" and the last reset reason is <code>TASK WATCHDOG</code>. What does that tell you?</p>
+  <ol><li>A task (or loop) got stuck for more than 5 seconds, again and again; find out which one</li><li data-why="Weak power is reported as BROWNOUT.">The power supply is too weak</li><li data-why="The watchdog only fires when something really is stuck.">Everything is fine; the watchdog is just strict</li><li data-why="Pressing EN is usually reported as POWERON, and it isn't counted as a crash.">Someone pressed the EN button 40 times</li></ol>
+  <div class="fb">The watchdog kept the device alive by resetting it, but the bug is still there. The <code>CPU 0: ...</code> line in the watchdog message names the culprit.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">In the weather station, why does weatherTask copy the settings under the lock and give the lock back <b>before</b> the HTTPS request?</p>
+  <ol><li data-why="The copy is a few bytes; saving RAM isn't the point.">To save RAM</li><li data-why="HTTPS works fine while a lock is held; that's not the reason.">Because HTTPS doesn't work while a mutex is held</li><li>So the web page, which also needs the settings, doesn't have to wait seconds for a slow request</li><li data-why="A FreeRTOS mutex has no expiry time.">Because a mutex expires after one second</li></ol>
+  <div class="fb">"Copy, release, then work": hold a lock only for the moment you touch the shared data, never during a slow job.</div>
+</div>
+
+<!-- ======================= Exercises ======================= -->
+<h2 id="practice">Exercises</h2>
+<div class="exercise"><div class="ct">Exercise 1: heat alert</div>
+<p>Combine the weather program and the ntfy program: if the temperature in your city goes above 30 degrees, send an ntfy alert, but only <b>once</b>, until the temperature drops back below 28 degrees. The "alert already sent" state must be remembered even after a reset.</p>
+<details><summary>Hint</summary><p>The gap between 30 and 28 is "hysteresis", so that temperatures of 30 and 29.9 one after another don't create dozens of alerts. To remember across resets, a <code>bool</code> in Preferences is enough; write it only when its value <b>changes</b>.</p></details>
+<details><summary>Answer (the key part)</summary>
+<div class="code" data-file="HeatAlert_part.ino"><pre>
+prefs.begin("alert", false);
+bool sent = prefs.getBool("sent", false);
+if (!sent &amp;&amp; t &gt; 30.0) {
+  if (sendAlert("Heat", "Above 30 C")) {
+    prefs.putBool("sent", true);   // only once it was really sent
+  }
+} else if (sent &amp;&amp; t &lt; 28.0) {
+  prefs.putBool("sent", false);    // ready for the next alert
+}
+prefs.end();
+</pre></div></details>
+</div>
+<div class="exercise"><div class="ct">Exercise 2: the black box on the web page</div>
+<p>Add the "black box" from the reliability checklist to the weather-station project: return the reason for the last reset, the number of boots and the number of crashes in <code>/api/state</code>, and show them in index.html. Then make a deliberate change (for example, an endless loop in loop after 1 minute, with enableLoopWDT) to trigger a watchdog reset, and check that it gets recorded on the page. Finally, send the fixed version <b>over OTA</b>.</p>
+<details><summary>Hint</summary><p>Read the reset reason once in setup and keep it in a global <code>const char *</code> variable; in handleState just put it into the JSON. For the OTA test, make sure the broken version still calls <code>ArduinoOTA.handle()</code> during that first minute, or you'll have to fix it with the cable. (This very experience will make the coach's OTA advice in lesson <a href="5-5.html">5.5</a> real for you.)</p></details>
+</div>
+
+<div class="callout info"><div class="ct">The lesson in three lines</div>
+<p>Call APIs with HTTPS, time limits, a JSON filter and a sensible interval, and check the server's identity with the built-in CA bundle whenever something important travels. A device that runs for months records why it reset, counts its crashes, lets the watchdog restart it when it gets stuck, avoids heap fragmentation and saves files safely. The weather station puts it all together: slow work in its own task, data in a one-slot mailbox, settings in LittleFS and updates over OTA.</p></div>
+
+<p>That's the end of chapter 5. In lesson <a href="6-1.html">6.1</a> you learn to make a device like this last for months on a battery, with deep sleep and light sleep.</p>
+
+</article>
+</body>
+</html>
