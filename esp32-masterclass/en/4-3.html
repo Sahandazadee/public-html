@@ -456,17 +456,229 @@ Advertising again</div>
 <div class="exercise"><div class="ct">Exercise 1: a blink command</div>
 <p>Add a <code>blink</code> command to the Bluetooth Classic program that blinks the LED 5 times (200 ms on and 200 ms off each time) and then returns it to its previous state. Also add a <code>help</code> command that sends a list of all the commands.</p>
 <details><summary>Hint</summary><p>The simplest version is a <code>for</code> loop with <code>delay</code> inside <code>handleCommand</code> (2 seconds). The professional version (no delay): set a variable <code>blinksLeft = 10</code>, and in loop use the <code>millis()</code> pattern to flip the LED every 200 milliseconds and subtract one from blinksLeft. Which one did you choose, and why?</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>Wokwi doesn't simulate Bluetooth; try this on a real board with the Serial Bluetooth Terminal app on an Android phone. In the app (it shows the lines you sent in another color):</p>
+<pre class="serial">help
+Commands: on / off / status / blink / help
+on
+OK: LED is ON
+blink
+OK: blinking 5 times
+status
+LED is ON
+Blink done, LED is ON
+hello
+Unknown command. Type help</pre>
+<ul>
+<li>After <code>blink</code> you see exactly 5 blinks, and the whole thing takes 2 seconds (time it with your phone's stopwatch).</li>
+<li>If the LED was on before, it stays on after the blinks; if it was off, it stays off.</li>
+<li>Send <code>status</code> in the middle of a blink: the reply comes at once, before "Blink done". That proves the program didn't wait (no delay).</li>
+<li>The Serial Monitor on the computer also shows each command, for example <code>Command: [blink]</code>.</li>
+</ul>
+<p><b>If it doesn't work:</b></p>
+<ul>
+<li>The ESP32 isn't in the Bluetooth list: is the code running on an original ESP32 (not a C3/S3)? The iPhone doesn't support this part.</li>
+<li>Every command gets two replies or an empty "Unknown command": that shouldn't happen because empty lines are ignored; if it does, set the app's line ending to CR+LF or LF.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>The complete <code>BT_Classic_LED</code> program with the <code>blink</code> and <code>help</code> commands (the professional version, with no delay):</p>
+<div class="code" data-file="BT_Classic_Blink.ino" id="ex1ans"><pre>
+#include &lt;BluetoothSerial.h&gt;
+
+// If your board is a C3 or S3, this stops the compile (they have no Classic)
+#if !defined(CONFIG_BT_SPP_ENABLED)
+#error "Bluetooth Classic (SPP) is only available on the original ESP32"
+#endif
+
+BluetoothSerial SerialBT;           // the "wireless serial port"
+const int LED_PIN = 4;
+bool ledOn = false;
+String line = "";                   // incoming characters collect here
+bool blinking = false;              // is a blink sequence running?
+int blinkStep = 0;                  // 0..9 = the ten on/off halves, 10 = restore
+unsigned long lastBlinkStep = 0;
+
+void handleCommand(String cmd) {
+  cmd.trim();                       // remove extra spaces, \r and \n
+  cmd.toLowerCase();                // so "ON" and "On" are accepted too
+  if (cmd.length() == 0) return;    // ignore empty lines
+
+  Serial.printf("Command: [%s]\n", cmd.c_str());
+  if (cmd == "on") {
+    ledOn = true;
+    SerialBT.println("OK: LED is ON");
+  } else if (cmd == "off") {
+    ledOn = false;
+    SerialBT.println("OK: LED is OFF");
+  } else if (cmd == "status") {
+    SerialBT.println(ledOn ? "LED is ON" : "LED is OFF");
+  } else if (cmd == "blink") {
+    blinking = true;                // loop does the actual blinking
+    blinkStep = 0;
+    lastBlinkStep = millis() - 200; // so the first step happens right away
+    SerialBT.println("OK: blinking 5 times");
+  } else if (cmd == "help") {
+    SerialBT.println("Commands: on / off / status / blink / help");
+  } else {
+    SerialBT.println("Unknown command. Type help");
+  }
+  if (!blinking) digitalWrite(LED_PIN, ledOn ? HIGH : LOW);
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  if (!SerialBT.begin("ESP32-LED")) {           // the name the phone sees
+    Serial.println("Bluetooth init failed!");
+    while (true) delay(1000);                   // no point going on without Bluetooth
+  }
+  Serial.println("Bluetooth ready. Pair your phone with 'ESP32-LED'");
+}
+
+void loop() {
+  while (SerialBT.available()) {                // as long as new characters are waiting
+    char c = SerialBT.read();
+    if (c == '\n' || c == '\r') {               // end of a command
+      handleCommand(line);
+      line = "";
+    } else if (line.length() &lt; 32) {            // length cap, to keep memory safe
+      line += c;
+    }
+  }
+
+  // blinking without delay: one step every 200 ms
+  if (blinking &amp;&amp; millis() - lastBlinkStep &gt;= 200) {
+    lastBlinkStep = millis();
+    if (blinkStep &lt; 10) {
+      digitalWrite(LED_PIN, blinkStep % 2 == 0 ? HIGH : LOW);   // even = on, odd = off
+      blinkStep++;
+    } else {
+      blinking = false;                         // done: back to the previous state
+      digitalWrite(LED_PIN, ledOn ? HIGH : LOW);
+      SerialBT.println(ledOn ? "Blink done, LED is ON" : "Blink done, LED is OFF");
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="ex1ans">
+  <li data-lines="12-14"><b class="what">The blink memory.</b> <code>blinking</code> says a blink sequence is running, <code>blinkStep</code> is the step number (0 to 10) and <code>lastBlinkStep</code> is the time of the last step.
+    <span class="why">5 blinks = 10 halves (on, off, on...) plus one final step that restores the previous state. It is the same idea as <code>blinksLeft</code> in the hint, just counting up.</span></li>
+  <li data-lines="30-34"><b class="what">The blink command: just start it.</b> handleCommand doesn't blink by itself; it only sets the state and replies at once.
+    <span class="why"><code>millis() - 200</code> means "pretend 200 ms have passed since the last step", so the first flash starts without a pause. <code>ledOn</code> is untouched, so the previous state is remembered automatically.</span></li>
+  <li data-lines="35-38"><b class="what">help, and the unknown message.</b> help sends a list of all the commands, and the "unknown" message now points to help.
+    <span class="why">A help command means the user doesn't need to read the code to find out what the device can do.</span></li>
+  <li data-lines="40"><b class="what">During a blink, loop owns the LED.</b> If you send <code>on</code> or <code>off</code> mid-blink, only <code>ledOn</code> changes.
+    <span class="why">That way two parts of the program don't fight over the LED; the new state is applied when the blink ends.</span></li>
+  <li data-lines="65-73"><b class="what">Blinking in loop, with no delay.</b> One step every 200 ms: even steps on, odd steps off. At step 10 the LED goes back to <code>ledOn</code> and a "done" message is sent.
+    <span class="why">The timing: 0 on, 200 off, ... 1600 on, 1800 off, 2000 restore; exactly 5 full blinks in 2 seconds. We chose the no-delay version: with <code>delay</code> inside handleCommand the board would be deaf for 2 seconds and wouldn't answer <code>status</code> or any other command.</span></li>
+</ol>
+</details>
 </div>
 <div class="exercise"><div class="ct">Exercise 2: notify a potentiometer</div>
 <p>In the BLE program, instead of the counter, notify the value of a potentiometer on GPIO34 (as in lesson 4.2) every 500 milliseconds, but <b>only when the value has changed by more than 20 units</b>.</p>
 <details><summary>Hint</summary><p>Keep a variable <code>int lastSent = -100;</code>. In loop: <code>int v = analogRead(34); if (abs(v - lastSent) &gt; 20) { ... notify ...; lastSent = v; }</code>. Why the 20-unit condition? Because the ADC is a bit noisy, and without it messages would keep going out even when you aren't touching the potentiometer.</p></details>
-<details><summary>Answer</summary>
-<div class="code" data-file="BLE_Pot (loop part)" id="codeEx3"><pre>
-const int POT_PIN = 34;                     // ADC1
-int lastSent = -100;                        // chosen so the first reading is always sent
+<details class="expect"><summary>What should you see?</summary>
+<p>Wokwi has no Bluetooth, so test with a real board and the nRF Connect app. In nRF Connect, connect, open the service <code>0582d484-...</code> and tap the triple-arrow (subscribe) button on the characteristic <code>e8f00efd-...</code>. If you see no value, tap the read button (down arrow) once to fetch the current value; the first notify may have gone out before you subscribed. In the Serial Monitor (the numbers are yours):</p>
+<pre class="serial">Advertising as ESP32-BLE-LED ...
+Phone connected
+notify: pot=2047
+notify: pot=2311
+notify: pot=2894
+notify: pot=4095</pre>
+<ul>
+<li>While you don't touch the knob, <b>no</b> new messages arrive (neither on the phone nor on Serial). If the number keeps changing by small amounts, the 20-unit condition isn't working.</li>
+<li>Turn the knob quickly from one end to the other: only a few messages arrive, at most two per second.</li>
+<li>Turn the knob very slowly: you still get a message each time the total change passes 20.</li>
+<li>Disconnect and reconnect: once reconnected, the current value is sent without touching the knob.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>The complete <code>BLE_LED_Counter</code> program, notifying the potentiometer instead of the counter:</p>
+<div class="code" data-file="BLE_Pot.ino" id="codeEx3"><pre>
+#include &lt;BLEDevice.h&gt;
+#include &lt;BLEServer.h&gt;
+#include &lt;BLEUtils.h&gt;
+#include &lt;BLE2902.h&gt;
+
+// Our own unique IDs (UUIDs), made with a random UUID generator
+#define SERVICE_UUID       "0582d484-de7b-45b7-b730-09a9fae5cbf4"
+#define LED_CHAR_UUID      "851c0eca-a1b1-4b1e-9a56-9f9f546e7ab6"
+#define COUNTER_CHAR_UUID  "e8f00efd-6510-4206-8140-d2feea0d4aa7"
+
+const int LED_PIN = 4;
+BLEServer* pServer = nullptr;
+BLECharacteristic* pLedChar = nullptr;
+BLECharacteristic* pCounterChar = nullptr;
+volatile bool deviceConnected = false;
+bool wasConnected = false;
+const int POT_PIN = 34;                     // potentiometer (ADC1)
+int lastSent = -100;                        // far from any ADC value: the first reading is always sent
+unsigned long lastNotify = 0;
+
+// 1) When the phone connects or disconnects
+class ServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* s) override {
+    deviceConnected = true;
+    Serial.println("Phone connected");
+  }
+  void onDisconnect(BLEServer* s) override {
+    deviceConnected = false;
+    Serial.println("Phone disconnected");
+  }
+};
+
+// 2) When the phone writes something to the LED characteristic
+class LedCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* c) override {
+    String v = c-&gt;getValue();               // in core 3.x its type is String
+    v.trim();
+    v.toLowerCase();
+    Serial.printf("LED write: [%s]\n", v.c_str());
+    if (v == "on" || v == "1") {
+      digitalWrite(LED_PIN, HIGH);
+      c-&gt;setValue("on");
+    } else if (v == "off" || v == "0") {
+      digitalWrite(LED_PIN, LOW);
+      c-&gt;setValue("off");
+    }
+  }
+};
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+
+  BLEDevice::init("ESP32-BLE-LED");                 // the name in the scan list
+  pServer = BLEDevice::createServer();
+  pServer-&gt;setCallbacks(new ServerCallbacks());
+
+  BLEService* service = pServer-&gt;createService(SERVICE_UUID);
+
+  pLedChar = service-&gt;createCharacteristic(
+      LED_CHAR_UUID,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
+  pLedChar-&gt;setCallbacks(new LedCallbacks());
+  pLedChar-&gt;setValue("off");
+
+  pCounterChar = service-&gt;createCharacteristic(
+      COUNTER_CHAR_UUID,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+  pCounterChar-&gt;addDescriptor(new BLE2902());       // the phone's on/off switch for notify
+
+  service-&gt;start();
+
+  BLEAdvertising* adv = BLEDevice::getAdvertising();
+  adv-&gt;addServiceUUID(SERVICE_UUID);
+  adv-&gt;setScanResponse(true);
+  BLEDevice::startAdvertising();
+  Serial.println("Advertising as ESP32-BLE-LED ...");
+}
 
 void loop() {
   unsigned long now = millis();
+
+  // 3) Every 500 ms: send the pot value, but only if it really changed
   if (deviceConnected &amp;&amp; now - lastNotify &gt;= 500) {
     lastNotify = now;
     int v = analogRead(POT_PIN);            // 0 to 4095
@@ -475,25 +687,56 @@ void loop() {
       pCounterChar-&gt;setValue(msg);
       pCounterChar-&gt;notify();
       lastSent = v;
+      Serial.println("notify: " + msg);
     }
   }
-  // ... the "advertise again" part, same as before ...
+
+  // 4) Phone gone? Advertise again so others can find us
+  if (!deviceConnected &amp;&amp; wasConnected) {
+    delay(500);                                     // give the Bluetooth stack a moment
+    pServer-&gt;startAdvertising();
+    Serial.println("Advertising again");
+    wasConnected = false;
+  }
+  if (deviceConnected &amp;&amp; !wasConnected) {
+    wasConnected = true;
+    lastSent = -100;                              // a new phone: send the current value right away
+  }
 }
 </pre></div>
 <ol class="walk" data-for="codeEx3">
-  <li data-lines="1-2"><b class="what">The pin and the last value sent.</b> Put these two lines at the top of the program, next to the other global variables. <code>-100</code> is deliberately far from every possible ADC value.
-    <span class="why">The distance from <code>-100</code> to any number from 0 to 4095 is more than 20, so the first reading is always sent and the phone sees the real value right from the start.</span></li>
-  <li data-lines="5-8"><b class="what">The time guard.</b> The same millis pattern as the main program, this time every 500 ms; we only read the potentiometer while a phone is connected.
-    <span class="why">The <code>deviceConnected</code> and <code>lastNotify</code> variables come from the main program; this loop replaces the old loop, it doesn't go next to it (two loop functions won't compile).</span></li>
-  <li data-lines="9-14"><b class="what">Only real changes.</b> If the difference from the last value sent is more than 20, notify the text <code>pot=...</code> and update <code>lastSent</code>.
-    <span class="why">Comparing with the "last value sent" (not the last value read) means that slow changes also add up and eventually get sent; it's the same deadband from lesson 3.2. We reused the counter characteristic so no new UUID is needed.</span></li>
-  <li data-lines="16"><b class="what">Don't forget to advertise again.</b> Keep the "advertise again" part from the end of the main program's loop right here.
-    <span class="why">Without them, the ESP32 goes invisible after the first disconnect.</span></li>
+  <li data-lines="17-18"><b class="what">The pin and the last value sent.</b> They replace the <code>counter</code> variable. <code>-100</code> is deliberately far from every possible ADC value.
+    <span class="why">The distance from <code>-100</code> to any number from 0 to 4095 is more than 20, so the first reading is always sent and the phone has the real value from the start.</span></li>
+  <li data-lines="84-86"><b class="what">The time guard.</b> The same millis pattern as the main program, this time every 500 ms; we only read the potentiometer while a phone is connected.
+    <span class="why">At most two messages per second: good for the battery, and it doesn't flood the phone.</span></li>
+  <li data-lines="87-92"><b class="what">Only real changes.</b> If the difference from the last value sent is more than 20, notify the text <code>pot=...</code> and update <code>lastSent</code>.
+    <span class="why">Comparing with the "last value sent" (not the last value read) means slow changes also add up and eventually get sent; it's the same deadband as in lesson 3.2. We reused the counter characteristic so no new UUID is needed.</span></li>
+  <li data-lines="105"><b class="what">A new phone, a fresh value.</b> When a new phone connects, <code>lastSent</code> goes back to −100.
+    <span class="why">Without this line, if the knob hasn't moved since the previous connection, the new phone would get no message at all. The "advertise again" part above this line is unchanged.</span></li>
 </ol>
 </details>
 </div>
 <div class="exercise"><div class="ct">Exercise 3: think (no code)</div>
 <p>You want to build a battery-powered temperature sensor for a room so you can see its temperature on your phone. Bluetooth Classic, BLE, or Wi-Fi with a web server (lesson 4.2)? Write one advantage and one drawback for each, and explain your choice with a reason. If you also want to see the temperature from work, does your answer change?</p>
+<details class="expect"><summary>What should you see?</summary>
+<p>Your answer is good if it has these four things:</p>
+<ul>
+<li>At least one <b>correct</b> advantage and one drawback for each of the three options (see the table in the full answer).</li>
+<li>The choice for the room: <b>BLE</b>, with <b>battery use</b> as the reason. (Wi-Fi is acceptable only if you said the device is plugged in or spends most of its time in deep sleep.)</li>
+<li>For viewing from work: your answer <b>changes</b>, because BLE only reaches about 10 m and lesson 4.2's web server can only be seen inside your home network.</li>
+<li>The remote solution: the data has to go to the internet (a cloud service, for example MQTT in lesson 5.1), rather than the phone connecting straight to the ESP32.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="table-wrap"><table>
+<tr><th>Option</th><th>Advantage</th><th>Drawback</th></tr>
+<tr><td>Bluetooth Classic</td><td>Simple: it works like a wireless Serial, and a terminal app is enough.</td><td>High power use (not for batteries); doesn't work with the iPhone; only the original ESP32 has it.</td></tr>
+<tr><td>BLE</td><td>Very low power: with sleep between measurements it runs for months on a battery; works with iPhone and Android.</td><td>Short range (about 10 m, a room or two); you need an app such as nRF Connect or your own; UUIDs and characteristics are more complex.</td></tr>
+<tr><td>Wi-Fi with a web server</td><td>Any browser works and no app is needed; reachable from the whole home network.</td><td>The most power-hungry: the server has to stay awake and connected to answer, so a battery lasts days, not months.</td></tr>
+</table></div>
+<p><b>The choice for the room: BLE.</b> The device runs on a battery and the phone is usually in the same home; BLE uses the least power and works with every phone. (With lesson 6.1's deep sleep, the battery lasts even longer.)</p>
+<p><b>From work: the answer changes.</b> At work your phone is out of BLE range, and the ESP32's web server has a private address inside your home (for example 192.168.1.37) that can't be seen from the internet; opening a port on the router is a serious security risk. The right way: the sensor wakes every few minutes, sends the temperature over Wi-Fi to a cloud service (MQTT in lesson 5.1) and goes back to sleep (lesson 6.1); your phone reads the temperature from that cloud service. Another way: keep the BLE sensor, and let an always-on ESP32 at home act as a "gateway" that passes the data from BLE to the internet.</p>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">The lesson in three lines</div>

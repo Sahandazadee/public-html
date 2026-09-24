@@ -643,7 +643,16 @@ void loop() {
 <div class="exercise"><div class="ct">Exercise 1: breathing without delay</div>
 <p>Rewrite the breathing LED program with millis and no delay at all: every 8 milliseconds the duty changes by one in the current direction, and the direction reverses at 0 and 255. Then add the button from lesson 3.1 (GPIO27) to pause and resume the breathing.</p>
 <details><summary>Hint</summary><p>You need two variables: <code>int duty = 0;</code> and <code>int step = 1;</code>. Each time it's time for a step: <code>duty += step; if (duty &lt;= 0 || duty &gt;= 255) step = -step;</code>. <code>||</code> means "or".</p></details>
-<details><summary>Answer</summary>
+<details class="expect"><summary>What should you see?</summary>
+<p>This program prints nothing; watch the LED:</p>
+<ul>
+<li>The LED fades up smoothly in about 2 seconds and down in about 2 seconds: 255 steps × 8 ms ≈ 2.04 s each way, so each "breath" takes about 4.1 s. In 20 seconds you see roughly 5 full breaths.</li>
+<li>Press the button (GPIO27) mid-breath: the light freezes at its current brightness (it doesn't go off, and it doesn't go to full).</li>
+<li>Press again: breathing carries on from the same point in the same direction, with no jump.</li>
+<li>Each press acts only once. If one press makes the breathing stop for a moment and then start again, the debouncing isn't right.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
 <div class="code" data-file="Breathing_Millis.ino" id="ex1ans"><pre>
 const int LED_PIN = 4;
 const int BUTTON_PIN = 27;
@@ -688,15 +697,184 @@ void loop() {
   <li data-lines="26-31"><b class="what">One step every 8 ms, unless paused.</b> The duty moves by one and the direction reverses at both ends.
     <span class="why">Exactly the millis pattern from lesson 3.1; loop never waits, so no button press is lost. While paused, the LED simply keeps its current brightness.</span></li>
 </ol>
+<div class="wokwi" data-board="esp32" data-code-from="ex1ans">
+<p>Click the green button in the simulator to pause the breathing and resume it.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-pushbutton", "id": "btn1", "top": 150, "left": -150, "attrs": {"color": "green"}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": {"color": "red"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:27", "btn1:1.r", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
 </details>
 </div>
 <div class="exercise"><div class="ct">Exercise 2: a light meter needle</div>
 <p>Combine the night-light circuit from lesson 3.1 (LDR on GPIO35) with the servo on GPIO32. Make the servo act like the needle of a light meter, showing the light level between 0 (dark) and 180 (bright).</p>
 <details><summary>Hint</summary><p>In our circuit, dark = high voltage. So write the map the other way round: <code>map(mv, 300, 3100, 180, 0)</code>, then <code>constrain</code>. Don't forget the 2-degree deadband.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>A sample output (the millivolt numbers depend on your room's light, but the link between millivolts and angle must be exactly this):</p>
+<pre class="serial">LDR=1700 mV  angle=90
+LDR=2400 mV  angle=45
+LDR=2950 mV  angle=10
+LDR=650 mV  angle=158</pre>
+<ul>
+<li>Check the maths: 1700 mV must give 90 degrees, 2400 mV must give 45 and 2950 mV must give 10. If your numbers don't follow this rule, the map is wrong.</li>
+<li>Cover the LDR with your hand: the needle moves toward 0. Shine your phone's flashlight on it: toward 180.</li>
+<li>While the light is steady, no new lines are printed and the servo is quiet (the deadband is working).</li>
+<li>The angle never goes below 0 or above 180, even in total darkness or very strong light.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="Light_Meter_Servo.ino" id="ex2ans"><pre>
+#include &lt;ESP32Servo.h&gt;
+
+const int LDR_PIN = 35;                 // middle of the LDR divider (lesson 3.1)
+const int SERVO_PIN = 32;
+Servo needle;                           // the servo is our "needle"
+int lastAngle = -1;                     // no angle written yet
+
+uint32_t readLdrMv() {
+  uint32_t sum = 0;
+  for (int i = 0; i &lt; 8; i++) sum += analogReadMilliVolts(LDR_PIN);
+  return sum / 8;                       // average of 8 samples
+}
+
+void setup() {
+  Serial.begin(115200);
+  needle.setPeriodHertz(50);
+  needle.attach(SERVO_PIN, 500, 2400);
+}
+
+void loop() {
+  uint32_t mv = readLdrMv();
+  int angle = map(mv, 300, 3100, 180, 0);   // dark = high voltage = 0 degrees
+  angle = constrain(angle, 0, 180);
+
+  if (abs(angle - lastAngle) &gt;= 2) {        // 2-degree deadband
+    needle.write(angle);
+    lastAngle = angle;
+    Serial.printf("LDR=%lu mV  angle=%d\n", (unsigned long)mv, angle);
+  }
+  delay(50);
+}
+</pre></div>
+<ol class="walk" data-for="ex2ans">
+  <li data-lines="3-6"><b class="what">Two familiar parts.</b> The LDR on GPIO35 from lesson 3.1 and the servo on GPIO32 from this lesson. <code>lastAngle = -1</code> means "nothing written yet".
+    <span class="why">Every angle from 1 to 180 is at least 2 away from −1, so the first reading is written straight away. The only exception is 0 (very dark at start-up); then the servo simply stays where it was.</span></li>
+  <li data-lines="8-11"><b class="what">An average of 8 samples.</b> Exactly the function from the night light.
+    <span class="why">A shaky needle is hard to read; averaging reduces the ADC noise before it reaches the servo.</span></li>
+  <li data-lines="22-23"><b class="what">A reversed map, then constrain.</b> 300 mV (bright) → 180 degrees and 3100 mV (dark) → 0 degrees. For example, 1700 mV gives exactly 90 degrees.
+    <span class="why">In our circuit darkness raises the voltage, so we swapped 180 and 0. <code>map</code> doesn't limit its output (100 mV, for example, becomes 192), so <code>constrain</code> is needed to keep impossible commands away from the servo.</span></li>
+  <li data-lines="25-28"><b class="what">A 2-degree deadband.</b> The servo only moves, and a line is only printed, when the angle changes by at least 2 degrees.
+    <span class="why">The same trick as <code>Pot_Servo</code>: without it the servo keeps twitching one degree back and forth and buzzing.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="ex2ans">
+<p>Before running, add the <code>ESP32Servo</code> library in Wokwi's Library Manager. Click the light sensor module and move the lux slider; the servo should follow it.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": 40, "left": -260, "attrs": {}},
+    {"type": "wokwi-servo", "id": "servo1", "top": 40, "left": 200, "attrs": {}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.1", "black", [] ],
+    [ "ldr1:AO", "esp:35", "blue", [] ],
+    [ "servo1:GND", "esp:GND.2", "black", [] ],
+    [ "servo1:V+", "esp:5V", "red", [] ],
+    [ "servo1:PWM", "esp:32", "orange", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 <div class="exercise"><div class="ct">Exercise 3: a siren</div>
 <p>Use the buzzer to build a siren whose frequency glides smoothly from 600 to 1200 Hz in 1 second and back again. Then think: why couldn't you do this by changing the duty?</p>
 <details><summary>Hint</summary><p>One for loop from 600 to 1200 in steps of 10 with <code>delay(8)</code>, and one loop in reverse. Pitch depends on frequency; the duty only changes the loudness and the "color" of the sound a little.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>You hear a police-style siren ("wee-oo, wee-oo"), about once per second. In the Serial Monitor:</p>
+<pre class="serial">One cycle: 961 ms
+One cycle: 961 ms
+One cycle: 960 ms</pre>
+<ul>
+<li>The number should be close to 960 (120 steps × 8 ms); a millisecond or two more is normal, because <code>ledcWriteTone</code> itself takes a little time.</li>
+<li>The sound glides up and down smoothly, with no audible steps and no pause at either end.</li>
+<li>If all you hear is a click, your buzzer is active, not passive (see the active buzzer box in this lesson).</li>
+</ul>
+<p><b>The answer to the thinking question:</b> pitch (how high or low a sound is) is how many times per second the buzzer's disc moves back and forth; that is the <b>frequency</b>. Duty only changes the width of each pulse at the same fixed frequency. The number of pulses per second stays the same, so the note stays the same; only the loudness and the "color" of the sound change a little (50% duty gives the loudest sound).</p>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="Siren.ino" id="ex3ans"><pre>
+// Siren: 600 -&gt; 1200 Hz and back, about once a second
+const int BUZZER_PIN = 25;
+
+void setup() {
+  Serial.begin(115200);
+  ledcAttach(BUZZER_PIN, 2000, 10);
+}
+
+void loop() {
+  unsigned long start = millis();
+  for (int f = 600; f &lt; 1200; f += 10) {    // up: 600, 610 ... 1190 (60 steps)
+    ledcWriteTone(BUZZER_PIN, f);
+    delay(8);
+  }
+  for (int f = 1200; f &gt; 600; f -= 10) {    // down: 1200, 1190 ... 610 (60 steps)
+    ledcWriteTone(BUZZER_PIN, f);
+    delay(8);
+  }
+  Serial.printf("One cycle: %lu ms\n", millis() - start);
+}
+</pre></div>
+<ol class="walk" data-for="ex3ans">
+  <li data-lines="2-6"><b class="what">The same buzzer set-up.</b> A passive buzzer on GPIO25 and <code>ledcAttach</code>, as in the melody program.
+    <span class="why">The pin must be attached to LEDC before <code>ledcWriteTone</code>.</span></li>
+  <li data-lines="11-13"><b class="what">Going up.</b> The frequency goes from 600 to 1190 in 10 Hz steps, 8 ms each: 60 steps × 8 ms = 480 ms.
+    <span class="why">A 10 Hz step is small enough that your ear doesn't hear the stairs; the sound glides.</span></li>
+  <li data-lines="15-19"><b class="what">Coming back, and measuring.</b> From 1200 down to 610: again 60 steps and 480 ms. At the end, the time for one full cycle is printed.
+    <span class="why">We wrote the conditions with <code>&lt;</code> and <code>&gt;</code> (not ≤ and ≥) so 600 and 1200 aren't played twice in a row. In total 120 steps × 8 ms = 960 ms, about one second; printing the time is how you prove it yourself.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="ex3ans">
+<p>Turn your browser's sound on; Wokwi plays the buzzer's sound.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-buzzer", "id": "bz1", "top": 30, "left": -150, "attrs": {"volume": "0.2"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "bz1:1", "esp:25", "orange", [] ],
+    [ "bz1:2", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">The lesson in three lines</div>

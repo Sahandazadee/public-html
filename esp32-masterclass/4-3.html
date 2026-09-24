@@ -456,44 +456,287 @@ Advertising again</div>
 <div class="exercise"><div class="ct">تمرین ۱: فرمان blink</div>
 <p>به برنامه بلوتوث کلاسیک فرمان <code>blink</code> اضافه کن که LED را ۵ بار (هر بار ۲۰۰ میلی‌ثانیه روشن و ۲۰۰ خاموش) چشمک بزند و در پایان به حالت قبلی برگردد. فرمان <code>help</code> هم فهرست همه فرمان‌ها را بفرستد.</p>
 <details><summary>راهنمایی</summary><p>ساده‌ترین نسخه یک حلقه <code>for</code> با <code>delay</code> داخل <code>handleCommand</code> است (۲ ثانیه). نسخه حرفه‌ای (بدون delay): یک متغیر <code>blinksLeft = 10</code> تنظیم کن و در loop با الگوی <code>millis()</code> هر ۲۰۰ میلی‌ثانیه LED را برعکس کن و یکی از blinksLeft کم کن. کدام را انتخاب کردی و چرا؟</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>ویکوی بلوتوث را شبیه‌سازی نمی‌کند؛ با برد واقعی و برنامه Serial Bluetooth Terminal روی گوشی اندروید امتحان کن. در برنامه (خط‌هایی که خودت فرستادی را هم با رنگ دیگر نشان می‌دهد):</p>
+<pre class="serial">help
+Commands: on / off / status / blink / help
+on
+OK: LED is ON
+blink
+OK: blinking 5 times
+status
+LED is ON
+Blink done, LED is ON
+hello
+Unknown command. Type help</pre>
+<ul>
+<li>بعد از <code>blink</code> دقیقا ۵ بار چشمک می‌بینی و کل آن ۲ ثانیه طول می‌کشد (با کرنومتر گوشی بسنج).</li>
+<li>اگر LED قبلش روشن بود، بعد از چشمک روشن می‌ماند؛ اگر خاموش بود، خاموش.</li>
+<li>وسط چشمک <code>status</code> بفرست: جواب فورا می‌آید، قبل از «Blink done». این ثابت می‌کند برنامه منتظر نمانده (بدون delay).</li>
+<li>در Serial Monitor کامپیوتر هم هر فرمان را می‌بینی، مثلا <code>Command: [blink]</code>.</li>
+</ul>
+<p><b>اگر کار نکرد:</b></p>
+<ul>
+<li>ESP32 در فهرست بلوتوث نیست: کد روی ESP32 اصلی است (نه C3/S3)؟ آیفون این بخش را پشتیبانی نمی‌کند.</li>
+<li>هر فرمان دو بار جواب می‌دهد یا «Unknown command» خالی می‌آید: نباید پیش بیاید چون خط خالی نادیده گرفته می‌شود؛ اگر آمد، تنظیم پایان خط برنامه را روی CR+LF یا LF بگذار.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>برنامه کامل <code>BT_Classic_LED</code> با فرمان‌های <code>blink</code> و <code>help</code> (نسخه حرفه‌ای، بدون delay):</p>
+<div class="code" data-file="BT_Classic_Blink.ino" id="ex1ans"><pre>
+#include &lt;BluetoothSerial.h&gt;
+
+// اگر برد تو C3 یا S3 است، این خط جلوی کامپایل را می‌گیرد (Classic ندارند)
+#if !defined(CONFIG_BT_SPP_ENABLED)
+#error "Bluetooth Classic (SPP) is only available on the original ESP32"
+#endif
+
+BluetoothSerial SerialBT;           // «پورت سریال بی‌سیم»
+const int LED_PIN = 4;
+bool ledOn = false;
+String line = "";                   // حروف رسیده را اینجا جمع می‌کنیم
+bool blinking = false;              // آیا یک سری چشمک در جریان است؟
+int blinkStep = 0;                  // ۰ تا ۹ = ده نیمه روشن/خاموش، ۱۰ = برگرداندن
+unsigned long lastBlinkStep = 0;
+
+void handleCommand(String cmd) {
+  cmd.trim();                       // فاصله و \r و \n اضافه را پاک کن
+  cmd.toLowerCase();                // "ON" و "On" هم قبول شود
+  if (cmd.length() == 0) return;    // خط خالی را نادیده بگیر
+
+  Serial.printf("Command: [%s]\n", cmd.c_str());
+  if (cmd == "on") {
+    ledOn = true;
+    SerialBT.println("OK: LED is ON");
+  } else if (cmd == "off") {
+    ledOn = false;
+    SerialBT.println("OK: LED is OFF");
+  } else if (cmd == "status") {
+    SerialBT.println(ledOn ? "LED is ON" : "LED is OFF");
+  } else if (cmd == "blink") {
+    blinking = true;                // خود چشمک را loop انجام می‌دهد
+    blinkStep = 0;
+    lastBlinkStep = millis() - 200; // تا اولین قدم فورا انجام شود
+    SerialBT.println("OK: blinking 5 times");
+  } else if (cmd == "help") {
+    SerialBT.println("Commands: on / off / status / blink / help");
+  } else {
+    SerialBT.println("Unknown command. Type help");
+  }
+  if (!blinking) digitalWrite(LED_PIN, ledOn ? HIGH : LOW);
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  if (!SerialBT.begin("ESP32-LED")) {           // اسمی که گوشی می‌بیند
+    Serial.println("Bluetooth init failed!");
+    while (true) delay(1000);                   // بدون بلوتوث ادامه نمی‌دهیم
+  }
+  Serial.println("Bluetooth ready. Pair your phone with 'ESP32-LED'");
+}
+
+void loop() {
+  while (SerialBT.available()) {                // تا وقتی حرف تازه رسیده
+    char c = SerialBT.read();
+    if (c == '\n' || c == '\r') {               // پایان یک فرمان
+      handleCommand(line);
+      line = "";
+    } else if (line.length() &lt; 32) {            // سقف طول، برای امنیت حافظه
+      line += c;
+    }
+  }
+
+  // چشمک بدون delay: هر ۲۰۰ms یک قدم
+  if (blinking &amp;&amp; millis() - lastBlinkStep &gt;= 200) {
+    lastBlinkStep = millis();
+    if (blinkStep &lt; 10) {
+      digitalWrite(LED_PIN, blinkStep % 2 == 0 ? HIGH : LOW);   // زوج = روشن، فرد = خاموش
+      blinkStep++;
+    } else {
+      blinking = false;                         // تمام: برگشت به حالت قبلی
+      digitalWrite(LED_PIN, ledOn ? HIGH : LOW);
+      SerialBT.println(ledOn ? "Blink done, LED is ON" : "Blink done, LED is OFF");
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="ex1ans">
+  <li data-lines="12-14"><b class="what">حافظه چشمک.</b> <code>blinking</code> می‌گوید چشمک در جریان است، <code>blinkStep</code> شماره قدم (۰ تا ۱۰) و <code>lastBlinkStep</code> زمان آخرین قدم.
+    <span class="why">۵ چشمک = ۱۰ نیمه (روشن، خاموش، روشن...) و یک قدم آخر برای برگرداندن حالت قبلی. این همان ایده <code>blinksLeft</code> راهنمایی است، فقط رو به بالا می‌شمارد.</span></li>
+  <li data-lines="30-34"><b class="what">فرمان blink: فقط شروع.</b> handleCommand خودش چشمک نمی‌زند؛ فقط حالت را تنظیم می‌کند و فورا جواب می‌دهد.
+    <span class="why"><code>millis() - 200</code> یعنی «وانمود کن ۲۰۰ms از قدم قبلی گذشته» تا اولین روشن شدن بدون مکث باشد. <code>ledOn</code> دست نمی‌خورد، پس حالت قبلی خودبه‌خود حفظ است.</span></li>
+  <li data-lines="35-38"><b class="what">help و پیام ناشناخته.</b> help فهرست همه فرمان‌ها را می‌فرستد و پیام «ناشناخته» حالا به help اشاره می‌کند.
+    <span class="why">فرمان help یعنی کاربر لازم نیست کد را بخواند تا بفهمد دستگاه چه کارهایی بلد است.</span></li>
+  <li data-lines="40"><b class="what">در حین چشمک، LED دست loop است.</b> اگر وسط چشمک <code>on</code> یا <code>off</code> بفرستی، فقط <code>ledOn</code> عوض می‌شود.
+    <span class="why">این‌طوری دو بخش برنامه سر LED دعوا نمی‌کنند؛ حالت جدید در پایان چشمک اعمال می‌شود.</span></li>
+  <li data-lines="65-73"><b class="what">چشمک در loop، بدون delay.</b> هر ۲۰۰ms یک قدم: قدم زوج روشن، فرد خاموش. در قدم ۱۰، LED به <code>ledOn</code> برمی‌گردد و پیام پایان می‌رود.
+    <span class="why">زمان‌بندی: ۰ روشن، ۲۰۰ خاموش، ... ۱۶۰۰ روشن، ۱۸۰۰ خاموش، ۲۰۰۰ برگشت؛ یعنی ۵ چشمک کامل در ۲ ثانیه. ما نسخه بدون delay را انتخاب کردیم: با <code>delay</code> داخل handleCommand برد ۲ ثانیه کر می‌شد و به <code>status</code> یا فرمان دیگری جواب نمی‌داد.</span></li>
+</ol>
+</details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۲: notify پتانسیومتر</div>
 <p>در برنامه BLE، به جای شمارنده، مقدار یک پتانسیومتر روی GPIO34 (مثل درس ۴.۲) را هر ۵۰۰ میلی‌ثانیه notify کن؛ ولی <b>فقط وقتی مقدار بیش از ۲۰ واحد تغییر کرده</b>.</p>
 <details><summary>راهنمایی</summary><p>یک متغیر <code>int lastSent = -100;</code> نگه دار. در loop: <code>int v = analogRead(34); if (abs(v - lastSent) &gt; 20) { ... notify ...; lastSent = v; }</code>. چرا شرط ۲۰ واحد؟ چون ADC کمی نویز دارد و بدون آن، حتی وقتی به پتانسیومتر دست نمی‌زنی، مدام پیام می‌رود.</p></details>
-<details><summary>جواب</summary>
-<div class="code" data-file="BLE_Pot (تکه loop)" id="codeEx3"><pre>
-const int POT_PIN = 34;                     // ADC1
-int lastSent = -100;                        // طوری که اولین بار حتما بفرستد
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>ویکوی بلوتوث ندارد؛ با برد واقعی و برنامه nRF Connect امتحان کن. در nRF Connect وصل شو، سرویس <code>0582d484-...</code> را باز کن و روی characteristic <code>e8f00efd-...</code> دکمه سه‌فلش (subscribe) را بزن. اگر مقداری نمی‌بینی، یک بار دکمه read (فلش رو به پایین) را بزن تا مقدار فعلی بیاید؛ اولین notify ممکن است قبل از subscribe فرستاده شده باشد. در Serial Monitor (عددها مال توست):</p>
+<pre class="serial">Advertising as ESP32-BLE-LED ...
+Phone connected
+notify: pot=2047
+notify: pot=2311
+notify: pot=2894
+notify: pot=4095</pre>
+<ul>
+<li>وقتی به پیچ دست نمی‌زنی، <b>هیچ</b> پیام تازه‌ای نمی‌آید (نه در گوشی، نه در Serial). اگر عدد مدام با اختلاف کم عوض می‌شود، شرط ۲۰ واحد کار نمی‌کند.</li>
+<li>پیچ را سریع از یک سر به سر دیگر بچرخان: فقط چند پیام می‌آید، حداکثر دو تا در ثانیه.</li>
+<li>پیچ را خیلی آهسته بچرخان: باز هم هر وقت مجموع تغییر از ۲۰ گذشت یک پیام می‌آید.</li>
+<li>قطع و وصل کن: بعد از وصل شدن دوباره، مقدار فعلی بدون تکان دادن پیچ فرستاده می‌شود.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>برنامه کامل <code>BLE_LED_Counter</code> که به جای شمارنده، پتانسیومتر را notify می‌کند:</p>
+<div class="code" data-file="BLE_Pot.ino" id="codeEx3"><pre>
+#include &lt;BLEDevice.h&gt;
+#include &lt;BLEServer.h&gt;
+#include &lt;BLEUtils.h&gt;
+#include &lt;BLE2902.h&gt;
+
+// شناسه‌های یکتای (UUID) خودمان — با یک مولد UUID تصادفی ساخته شده‌اند
+#define SERVICE_UUID       "0582d484-de7b-45b7-b730-09a9fae5cbf4"
+#define LED_CHAR_UUID      "851c0eca-a1b1-4b1e-9a56-9f9f546e7ab6"
+#define COUNTER_CHAR_UUID  "e8f00efd-6510-4206-8140-d2feea0d4aa7"
+
+const int LED_PIN = 4;
+BLEServer* pServer = nullptr;
+BLECharacteristic* pLedChar = nullptr;
+BLECharacteristic* pCounterChar = nullptr;
+volatile bool deviceConnected = false;
+bool wasConnected = false;
+const int POT_PIN = 34;                     // پتانسیومتر (ADC1)
+int lastSent = -100;                        // دور از هر عدد ADC: اولین خواندن حتما فرستاده می‌شود
+unsigned long lastNotify = 0;
+
+// ۱) وقتی گوشی وصل یا قطع می‌شود
+class ServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* s) override {
+    deviceConnected = true;
+    Serial.println("Phone connected");
+  }
+  void onDisconnect(BLEServer* s) override {
+    deviceConnected = false;
+    Serial.println("Phone disconnected");
+  }
+};
+
+// ۲) وقتی گوشی روی characteristic چراغ چیزی می‌نویسد
+class LedCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* c) override {
+    String v = c-&gt;getValue();               // در core 3.x نوعش String است
+    v.trim();
+    v.toLowerCase();
+    Serial.printf("LED write: [%s]\n", v.c_str());
+    if (v == "on" || v == "1") {
+      digitalWrite(LED_PIN, HIGH);
+      c-&gt;setValue("on");
+    } else if (v == "off" || v == "0") {
+      digitalWrite(LED_PIN, LOW);
+      c-&gt;setValue("off");
+    }
+  }
+};
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+
+  BLEDevice::init("ESP32-BLE-LED");                 // اسم در لیست اسکن
+  pServer = BLEDevice::createServer();
+  pServer-&gt;setCallbacks(new ServerCallbacks());
+
+  BLEService* service = pServer-&gt;createService(SERVICE_UUID);
+
+  pLedChar = service-&gt;createCharacteristic(
+      LED_CHAR_UUID,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
+  pLedChar-&gt;setCallbacks(new LedCallbacks());
+  pLedChar-&gt;setValue("off");
+
+  pCounterChar = service-&gt;createCharacteristic(
+      COUNTER_CHAR_UUID,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+  pCounterChar-&gt;addDescriptor(new BLE2902());       // کلید روشن/خاموش notify برای گوشی
+
+  service-&gt;start();
+
+  BLEAdvertising* adv = BLEDevice::getAdvertising();
+  adv-&gt;addServiceUUID(SERVICE_UUID);
+  adv-&gt;setScanResponse(true);
+  BLEDevice::startAdvertising();
+  Serial.println("Advertising as ESP32-BLE-LED ...");
+}
 
 void loop() {
   unsigned long now = millis();
+
+  // ۳) هر ۵۰۰ms: مقدار پتانسیومتر را بفرست، ولی فقط اگر واقعا عوض شده
   if (deviceConnected &amp;&amp; now - lastNotify &gt;= 500) {
     lastNotify = now;
-    int v = analogRead(POT_PIN);            // 0 تا 4095
+    int v = analogRead(POT_PIN);            // ۰ تا ۴۰۹۵
     if (abs(v - lastSent) &gt; 20) {           // فقط تغییر واقعی، نه نویز
       String msg = "pot=" + String(v);
       pCounterChar-&gt;setValue(msg);
       pCounterChar-&gt;notify();
       lastSent = v;
+      Serial.println("notify: " + msg);
     }
   }
-  // ... بخش «آگهی دوباره» مثل قبل ...
+
+  // ۴) گوشی رفت؟ دوباره آگهی بده تا بقیه پیدایمان کنند
+  if (!deviceConnected &amp;&amp; wasConnected) {
+    delay(500);                                     // فرصت به پشته بلوتوث
+    pServer-&gt;startAdvertising();
+    Serial.println("Advertising again");
+    wasConnected = false;
+  }
+  if (deviceConnected &amp;&amp; !wasConnected) {
+    wasConnected = true;
+    lastSent = -100;                              // گوشی تازه: مقدار فعلی را فورا بفرست
+  }
 }
 </pre></div>
 <ol class="walk" data-for="codeEx3">
-  <li data-lines="1-2"><b class="what">پین و آخرین مقدار فرستاده‌شده.</b> این دو خط را بالای برنامه، کنار بقیه متغیرهای سراسری بگذار. <code>-100</code> عمدا از هر عدد ممکن ADC دور است.
-    <span class="why">فاصله <code>-100</code> تا هر عدد ۰ تا ۴۰۹۵ بیش از ۲۰ است، پس اولین خواندن حتما فرستاده می‌شود و گوشی از همان اول مقدار واقعی را می‌بیند.</span></li>
-  <li data-lines="5-8"><b class="what">نگهبان زمان.</b> همان الگوی millis برنامه اصلی، این بار هر ۵۰۰ms؛ فقط وقتی گوشی وصل است پتانسیومتر را می‌خوانیم.
-    <span class="why">متغیرهای <code>deviceConnected</code> و <code>lastNotify</code> از برنامه اصلی می‌آیند؛ این loop جایگزین loop قبلی است، نه اضافه بر آن (دو تابع loop کامپایل نمی‌شود).</span></li>
-  <li data-lines="9-14"><b class="what">فقط تغییر واقعی.</b> اگر اختلاف با آخرین مقدار فرستاده‌شده بیش از ۲۰ بود، متن <code>pot=...</code> را notify کن و <code>lastSent</code> را به‌روز کن.
-    <span class="why">مقایسه با «آخرین فرستاده‌شده» (نه آخرین خوانده‌شده) باعث می‌شود تغییرهای آهسته هم بالاخره جمع شوند و فرستاده شوند؛ همان منطقه مرده درس ۳.۲. ما از همان characteristic شمارنده استفاده کردیم تا UUID جدید لازم نباشد.</span></li>
-  <li data-lines="16"><b class="what">آگهی دوباره را فراموش نکن.</b> بخش «آگهی دوباره» در انتهای loop برنامه اصلی را همین‌جا نگه دار.
-    <span class="why">بدون آن، بعد از اولین قطع شدن، ESP32 نامرئی می‌شود.</span></li>
+  <li data-lines="17-18"><b class="what">پین و آخرین مقدار فرستاده‌شده.</b> به جای متغیر <code>counter</code>. <code>-100</code> عمدا از هر عدد ممکن ADC دور است.
+    <span class="why">فاصله <code>-100</code> تا هر عدد ۰ تا ۴۰۹۵ بیش از ۲۰ است، پس اولین خواندن حتما فرستاده می‌شود و گوشی از همان اول مقدار واقعی را دارد.</span></li>
+  <li data-lines="84-86"><b class="what">نگهبان زمان.</b> همان الگوی millis برنامه اصلی، این بار هر ۵۰۰ms؛ فقط وقتی گوشی وصل است پتانسیومتر را می‌خوانیم.
+    <span class="why">حداکثر دو پیام در ثانیه؛ هم برای باتری خوب است و هم گوشی را غرق پیام نمی‌کند.</span></li>
+  <li data-lines="87-92"><b class="what">فقط تغییر واقعی.</b> اگر اختلاف با آخرین مقدار فرستاده‌شده بیش از ۲۰ بود، متن <code>pot=...</code> را notify کن و <code>lastSent</code> را به‌روز کن.
+    <span class="why">مقایسه با «آخرین فرستاده‌شده» (نه آخرین خوانده‌شده) باعث می‌شود تغییرهای آهسته هم بالاخره جمع شوند و فرستاده شوند؛ همان منطقه مرده درس ۳.۲. از همان characteristic شمارنده استفاده کردیم تا UUID جدید لازم نباشد.</span></li>
+  <li data-lines="105"><b class="what">گوشی تازه، مقدار تازه.</b> وقتی یک گوشی تازه وصل می‌شود، <code>lastSent</code> دوباره ۱۰۰- می‌شود.
+    <span class="why">بدون این خط، اگر پیچ از اتصال قبلی تکان نخورده باشد، گوشی جدید هیچ پیامی نمی‌گرفت. بخش «آگهی دوباره» بالای این خط دست نخورده است.</span></li>
 </ol>
 </details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۳: فکر کن (بدون کد)</div>
 <p>می‌خواهی یک سنسور دمای باتری‌خور برای اتاق بسازی که دمایش را روی گوشی ببینی. بلوتوث کلاسیک، BLE یا Wi-Fi با وب سرور (درس ۴.۲)؟ برای هر کدام یک مزیت و یک عیب بنویس و انتخابت را با دلیل توضیح بده. اگر بخواهی دما را از محل کار هم ببینی، جوابت عوض می‌شود؟</p>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>جواب تو خوب است اگر این چهار چیز را داشته باشد:</p>
+<ul>
+<li>برای هر سه گزینه دست‌کم یک مزیت و یک عیب <b>درست</b> (جدول جواب کامل را ببین).</li>
+<li>انتخاب برای اتاق: <b>BLE</b>، با دلیل <b>مصرف باتری</b>. (Wi-Fi هم قابل قبول است فقط اگر گفته باشی دستگاه به برق وصل است یا بیشتر وقت در خواب عمیق است.)</li>
+<li>برای دیدن از محل کار: جوابت <b>عوض می‌شود</b>، چون BLE فقط حدود ۱۰ متر برد دارد و وب سرور درس ۴.۲ فقط داخل شبکه خانه دیده می‌شود.</li>
+<li>راه‌حل از راه دور: داده باید به اینترنت برود (یک سرویس ابری، مثلا MQTT در درس ۵.۱)، نه این که گوشی مستقیم به ESP32 وصل شود.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="table-wrap"><table>
+<tr><th>گزینه</th><th>مزیت</th><th>عیب</th></tr>
+<tr><td>بلوتوث کلاسیک</td><td>ساده: مثل یک Serial بی‌سیم است و یک برنامه ترمینال کافی است.</td><td>مصرف زیاد (مناسب باتری نیست)؛ روی آیفون کار نمی‌کند؛ فقط ESP32 اصلی آن را دارد.</td></tr>
+<tr><td>BLE</td><td>مصرف خیلی کم: با خواب بین اندازه‌گیری‌ها ماه‌ها با باتری کار می‌کند؛ روی آیفون و اندروید.</td><td>برد کوتاه (حدود ۱۰ متر، یکی دو اتاق)؛ برنامه‌ای مثل nRF Connect یا برنامه خودت لازم است؛ مفهوم UUID و characteristic پیچیده‌تر است.</td></tr>
+<tr><td>Wi-Fi و وب سرور</td><td>هر مرورگری کافی است و برنامه لازم نیست؛ در کل شبکه خانه دیده می‌شود.</td><td>پرمصرف‌ترین: سرور باید همیشه بیدار و وصل باشد تا جواب بدهد، پس باتری روزها دوام می‌آورد نه ماه‌ها.</td></tr>
+</table></div>
+<p><b>انتخاب برای اتاق: BLE.</b> دستگاه باتری‌خور است و گوشی هم معمولا در همان خانه است؛ BLE کمترین مصرف را دارد و روی هر گوشی کار می‌کند. (با خواب عمیق درس ۶.۱ عمر باتری باز هم بیشتر می‌شود.)</p>
+<p><b>از محل کار: جواب عوض می‌شود.</b> گوشی در محل کار در برد BLE نیست، و وب سرور ESP32 یک آدرس خصوصی داخل خانه دارد (مثلا ۱۹۲.۱۶۸.۱.۳۷) که از اینترنت دیده نمی‌شود؛ باز کردن پورت روی مودم هم خطر امنیتی جدی است. راه درست: سنسور هر چند دقیقه بیدار شود، با Wi-Fi دما را به یک سرویس ابری بفرستد (MQTT در درس ۵.۱) و دوباره بخوابد (درس ۶.۱)؛ گوشی دما را از همان سرویس ابری می‌بیند. راه دیگر: سنسور BLE بماند و یک ESP32 همیشه‌روشن در خانه نقش «دروازه» را بازی کند و داده را از BLE به اینترنت برساند.</p>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>

@@ -738,7 +738,73 @@ hello 3</div>
 }</script>
 </div>
 <div class="exercise"><div class="ct">امتحان کن: عمدا خرابش کن</div>
-<p>۱) وسط اجرا سیم GPIO17 ← GPIO16 را دربیاور: پیام‌ها قطع می‌شوند، ولی برنامه از کار نمی‌افتد. ۲) سرعت را در <code>Serial2.begin</code> به 4800 تغییر بده و آپلود کن: باز هم کار می‌کند، چون هر دو سر همان یک UART هستند. ۳) حالا با Serial2 بفرست و با Serial1 دریافت کن: <code>Serial1.begin(4800, SERIAL_8N1, 26, 14);</code> را اضافه کن، سیم را طوری جابه‌جا کن که از GPIO17 به GPIO26 برود و به جای <code>Serial2</code> از <code>Serial1</code> بخوان. با 9600 در یک طرف و 4800 در طرف دیگر کاراکترهای درهم می‌بینی: همان مشکل «سرعت ناهمسان» جدول عیب‌یابی، با چشم خودت. (GPIO26 و GPIO14 در این درس آزادند؛ بعد از آزمایش سیم را جدا کن.)</p>
+<p>۱) وسط اجرا سیم GPIO17 ← GPIO16 را دربیاور: پیام‌ها قطع می‌شوند، ولی برنامه از کار نمی‌افتد. ۲) سرعت را در <code>Serial2.begin</code> به 4800 تغییر بده و آپلود کن: باز هم کار می‌کند، چون هر دو سر همان یک UART هستند. ۳) حالا سرعت <code>Serial2.begin</code> را به 9600 برگردان، با Serial2 بفرست و با Serial1 دریافت کن: <code>Serial1.begin(4800, SERIAL_8N1, 26, 14);</code> را اضافه کن، سیم را طوری جابه‌جا کن که از GPIO17 به GPIO26 برود و به جای <code>Serial2</code> از <code>Serial1</code> بخوان. با 9600 در یک طرف و 4800 در طرف دیگر کاراکترهای درهم می‌بینی: همان مشکل «سرعت ناهمسان» جدول عیب‌یابی، با چشم خودت. (GPIO26 و GPIO14 در این درس آزادند؛ بعد از آزمایش سیم را جدا کن.)</p>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<ul>
+<li><b>مرحله ۱:</b> با درآوردن سیم، خط‌های <code>hello</code> قطع می‌شوند (شاید یکی دو علامت عجیب هم از پین شناور ببینی). با وصل دوباره، ادامه می‌دهد ولی شماره می‌پرد، مثلا از <code>hello 7</code> به <code>hello 12</code>: پیام‌هایی که در این فاصله فرستاده شدند گم شده‌اند، جایی ذخیره نمی‌شوند.</li>
+<li><b>مرحله ۲:</b> با 4800 خروجی دقیقا مثل قبل است (<code>hello 1</code>، <code>hello 2</code>...)، چون فرستنده و گیرنده یک UART با یک سرعت‌اند.</li>
+<li><b>مرحله ۳:</b> به جای <code>hello N</code>، هر ثانیه چند علامت درهم می‌بینی، چیزی شبیه این (علامت‌ها هر بار فرق می‌کنند):</li>
+</ul>
+<pre class="serial">Mismatch test: 9600 -&gt; 4800
+�f��x
+��f�
+�x��f</pre>
+<ul>
+<li>برای اطمینان، در کد جواب 4800 را به 9600 تغییر بده و دوباره آپلود کن: باید دوباره <code>hello 1</code>، <code>hello 2</code>... تمیز ببینی. این ثابت می‌کند مشکل فقط سرعت بود، نه سیم.</li>
+<li>اگر در مرحله ۳ اصلا هیچ چیزی نمی‌آید، سیم را چک کن: باید از GPIO17 به GPIO26 برود، نه به GPIO16.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>مرحله ۱ و ۲ کد تازه‌ای نمی‌خواهند (همان <code>UART_Loopback</code>). کد کامل مرحله ۳:</p>
+<div class="code" data-file="UART_Baud_Mismatch.ino" id="ex0ans"><pre>
+// مرحله ۳: Serial2 با 9600 می‌فرستد، Serial1 با 4800 گوش می‌دهد (سیم: GPIO17 ← GPIO26)
+unsigned long lastSend = 0;
+int counter = 0;
+
+void setup() {
+  Serial.begin(115200);
+  Serial2.begin(9600, SERIAL_8N1, 16, 17);   // فرستنده: TX2 = GPIO17
+  Serial1.begin(4800, SERIAL_8N1, 26, 14);   // گیرنده: RX1 = GPIO26، سرعت عمدا اشتباه!
+  Serial.println("Mismatch test: 9600 -&gt; 4800");
+}
+
+void loop() {
+  if (millis() - lastSend &gt;= 1000) {         // ثانیه‌ای یک بار بفرست، مثل قبل
+    lastSend = millis();
+    counter++;
+    Serial2.printf("hello %d\n", counter);
+  }
+  while (Serial1.available()) {              // حالا از Serial1 بخوان، نه Serial2
+    Serial.write(Serial1.read());
+  }
+}
+</pre></div>
+<ol class="walk" data-for="ex0ans">
+  <li data-lines="7-8"><b class="what">دو UART جدا با دو سرعت.</b> Serial2 روی 9600 از GPIO17 می‌فرستد؛ Serial1 روی 4800 روی GPIO26 گوش می‌دهد (TX آن، GPIO14، استفاده نمی‌شود).
+    <span class="why">در مراحل ۱ و ۲ فرستنده و گیرنده <b>همان</b> UART بودند، پس سرعتشان همیشه یکی بود. فقط با دو UART جدا می‌شود سرعت ناهمسان را واقعا دید.</span></li>
+  <li data-lines="13-16"><b class="what">فرستادن مثل قبل.</b> همان <code>hello N</code> هر ثانیه.
+    <span class="why">فرستنده تغییری نکرده؛ پس هر خرابی‌ای که می‌بینی فقط تقصیر سمت گیرنده است.</span></li>
+  <li data-lines="18-19"><b class="what">گوش دادن با Serial1.</b> هر بایتی که Serial1 گرفت، بی‌تغییر به Serial Monitor می‌رود.
+    <span class="why">گیرنده هر بیت را دو برابر طولانی‌تر از واقعیت فرض می‌کند، پس بیت‌ها را قاطی می‌خواند: بایت‌های کمتر و بی‌معنی.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="ex0ans">
+<p>این بار سیم از پین 17 به پین 26 همان برد می‌رود. بعد از دیدن علامت‌های درهم، 4800 را به 9600 تغییر بده و دوباره اجرا کن.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:17", "esp:26", "yellow", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 
 <h3 id="gps">ماژول GPS NEO-6M</h3>
@@ -984,11 +1050,173 @@ Lat=35.702058  Lon=51.409054  Sats=7  Alt=1190.2m</div>
 <div class="exercise"><div class="ct">تمرین ۱: نمودار دما روی OLED</div>
 <p>پروژه ایستگاه هواشناسی را طوری تغییر بده که ۶۴ خواندن آخر دما را در یک آرایه نگه دارد و در نیمه راست صفحه (x از ۶۴ تا ۱۲۷) یک نمودار خطی ساده بکشد. دمای ۱۵ درجه پایین نمودار و ۳۵ درجه بالای آن باشد.</p>
 <details><summary>راهنمایی</summary><p><code>float hist[64];</code> و هر بار مقادیر را یک خانه جلو ببر (یا یک اندیس چرخشی نگه دار). برای هر نقطه: <code>int y = map(t * 10, 150, 350, 63, 0);</code> (ضرب در ۱۰ چون map با عدد صحیح کار می‌کند) و <code>display.drawLine(x1, y1, x2, y2, SSD1306_WHITE)</code> بین نقاط پشت سر هم. y را با <code>constrain</code> در ۰ تا ۶۳ نگه دار.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>روی OLED: سمت چپ دما و رطوبت با عدد درشت، سمت راست یک خط جداکننده و نمودار که از x=۶۴ شروع می‌شود و هر ۲ ثانیه یک پیکسل به راست رشد می‌کند. بعد از حدود ۲ دقیقه و ۸ ثانیه (۶۴ نقطه) به لبه راست می‌رسد و از آن به بعد به چپ می‌خزد. در Serial Monitor (با DHT22 روی ۲۴٫۵ و بعد ۳۰ درجه):</p>
+<pre class="serial">T=24.5 C  H=40.0 %  y=34  points=1
+T=24.5 C  H=40.0 %  y=34  points=2
+T=24.5 C  H=40.0 %  y=34  points=3
+...
+T=30.0 C  H=40.0 %  y=16  points=64
+T=30.0 C  H=40.0 %  y=16  points=64</pre>
+<p>y باید با این جدول بخواند (شاید ±۱، چون دمای اعشاری مثل ۲۴٫۳ در حافظه کمی کمتر ذخیره می‌شود و map اعشار را دور می‌ریزد):</p>
+<div class="table-wrap"><table>
+<tr><th>دما</th><th>y (از بالای صفحه)</th></tr>
+<tr><td>۱۵٫۰ یا کمتر</td><td>۶۳ (پایین‌ترین ردیف)</td></tr>
+<tr><td>۲۴٫۵</td><td>۳۴</td></tr>
+<tr><td>۳۰٫۰</td><td>۱۶</td></tr>
+<tr><td>۳۵٫۰ یا بیشتر</td><td>۰ (بالاترین ردیف)</td></tr>
+</table></div>
+<ul>
+<li>به سنسور ها کن یا بین انگشت‌هایت گرم کن: خط نمودار در سمت راست بالا می‌رود.</li>
+<li><code>points</code> تا ۶۴ بالا می‌رود و بعد روی ۶۴ می‌ماند؛ اگر بیشتر شد، از آرایه بیرون نوشته‌ای.</li>
+<li>هیچ عددی روی نمودار نمی‌افتد و هیچ خطی از لبه صفحه بیرون نمی‌زند.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="Weather_Graph.ino" id="ex1ans"><pre>
+// ایستگاه هواشناسی + نمودار ۶۴ دمای آخر
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+DHT dht(13, DHT22);
+
+const int HIST_LEN = 64;          // یک نقطه برای هر ستون پیکسل، x = ۶۴ تا ۱۲۷
+float hist[HIST_LEN];
+int histCount = 0;                // تا الان چند خواندن ذخیره شده
+unsigned long lastRead = 0;
+
+void addReading(float t) {
+  if (histCount &lt; HIST_LEN) {
+    hist[histCount] = t;          // هنوز در حال پر شدن
+    histCount++;
+  } else {
+    for (int i = 0; i &lt; HIST_LEN - 1; i++) hist[i] = hist[i + 1];   // یک خانه به چپ
+    hist[HIST_LEN - 1] = t;       // جدیدترین در لبه راست
+  }
+}
+
+int tempToY(float t) {
+  int y = map(t * 10, 150, 350, 63, 0);   // ۱۵ درجه ← ۶۳ (پایین)، ۳۵ درجه ← ۰ (بالا)
+  return constrain(y, 0, 63);
+}
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found!");
+    while (true) delay(1000);
+  }
+  display.setTextColor(SSD1306_WHITE);
+  dht.begin();
+}
+
+void loop() {
+  if (millis() - lastRead &lt; 2000) return;
+  lastRead = millis();
+
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) {
+    Serial.println("DHT22 read error");
+    return;
+  }
+  addReading(t);
+
+  display.clearDisplay();
+  // نیمه چپ: عددها (حداکثر ۶۴ پیکسل پهنا)
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("Temp C");
+  display.setTextSize(2);
+  display.setCursor(0, 12);
+  display.printf("%.1f", t);
+  display.setTextSize(1);
+  display.setCursor(0, 36);
+  display.println("Hum %");
+  display.setTextSize(2);
+  display.setCursor(0, 48);
+  display.printf("%.1f", h);
+
+  // نیمه راست: نمودار
+  display.drawFastVLine(63, 0, 64, SSD1306_WHITE);   // یک خط جداکننده
+  if (histCount == 1) display.drawPixel(64, tempToY(hist[0]), SSD1306_WHITE);
+  for (int i = 1; i &lt; histCount; i++) {
+    display.drawLine(64 + i - 1, tempToY(hist[i - 1]), 64 + i, tempToY(hist[i]), SSD1306_WHITE);
+  }
+  display.display();
+
+  Serial.printf("T=%.1f C  H=%.1f %%  y=%d  points=%d\n", t, h, tempToY(t), histCount);
+}
+</pre></div>
+<ol class="walk" data-for="ex1ans">
+  <li data-lines="10-13"><b class="what">حافظه نمودار.</b> یک آرایه ۶۴تایی برای دماها و <code>histCount</code> که می‌گوید چند خانه‌اش پر شده.
+    <span class="why">نیمه راست صفحه دقیقا ۶۴ ستون پیکسل دارد؛ هر خواندن یک ستون. تا ۶۴ خواندن جمع نشده، نباید خانه‌های خالی (صفر) را بکشیم، وگرنه یک خط تا پایین صفحه می‌افتد.</span></li>
+  <li data-lines="15-21"><b class="what">اضافه کردن یک خواندن.</b> تا آرایه پر نشده، ته آن اضافه کن؛ بعد از آن، همه را یک خانه به چپ ببر و جدیدترین را در خانه آخر بگذار.
+    <span class="why">این همان «هر بار مقادیر را یک خانه جلو ببر» راهنمایی است: قدیمی‌ترین عدد از سمت چپ بیرون می‌افتد و نمودار مثل نوار کاغذی به چپ می‌خزد.</span></li>
+  <li data-lines="25-27"><b class="what">تبدیل دما به ارتفاع پیکسل.</b> <code>t * 10</code> دما را به دهم درجه می‌برد (۲۴٫۵ ← ۲۴۵) و map آن را به ۶۳ (پایین) تا ۰ (بالا) می‌برد.
+    <span class="why">در OLED، y از بالا شروع می‌شود؛ پس دمای بیشتر باید y کمتر بگیرد، برای همین ۶۳ و ۰ برعکس نوشته شده‌اند. <code>constrain</code> دمای بیرون از ۱۵ تا ۳۵ را به لبه می‌چسباند تا بیرون صفحه نقاشی نکنیم.</span></li>
+  <li data-lines="42-51"><b class="what">هر ۲ ثانیه یک خواندن معتبر.</b> همان نگهبان millis برنامه ایستگاه؛ فقط خواندن سالم به نمودار اضافه می‌شود.
+    <span class="why">یک nan در آرایه، نمودار را خراب می‌کند؛ پس اول isnan، بعد addReading. با ۲ ثانیه در هر نقطه، ۶۴ نقطه حدود ۲ دقیقه و ۸ ثانیه تاریخچه است.</span></li>
+  <li data-lines="55-66"><b class="what">نیمه چپ: عددهای کوچک‌تر.</b> عنوان با اندازه ۱ و عدد با اندازه ۲، ولی بدون واحد کنار عدد.
+    <span class="why">در اندازه ۲ هر حرف ۱۲ پیکسل پهناست؛ <code>24.5</code> (چهار حرف) ۴۸ پیکسل می‌شود و در نیمه چپ جا می‌شود، ولی <code>24.5 C</code> (شش حرف، ۷۲ پیکسل) روی نمودار می‌افتاد. برای همین واحد به عنوان منتقل شد.</span></li>
+  <li data-lines="69-72"><b class="what">نیمه راست: نمودار.</b> یک خط عمودی در x=63 به عنوان جداکننده، بعد بین هر دو نقطه پشت سر هم یک خط. نقطه i در ستون <code>64 + i</code> است.
+    <span class="why">حلقه از i=1 شروع می‌شود چون هر خط به نقطه قبلی نیاز دارد. وقتی فقط یک خواندن داریم، خطی وجود ندارد؛ پس یک پیکسل می‌کشیم تا صفحه خالی نماند.</span></li>
+  <li data-lines="76"><b class="what">گزارش برای خودت.</b> دما، رطوبت، y محاسبه‌شده و تعداد نقطه‌ها.
+    <span class="why">با چاپ y می‌توانی حساب map را با قلم و کاغذ چک کنی، بدون این که روی صفحه کوچک پیکسل بشماری.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="ex1ans">
+<p>همان مدار ایستگاه هواشناسی. کتابخانه‌های <code>Adafruit SSD1306</code> و <code>DHT sensor library</code> را در Library Manager ویکوی اضافه کن. روی DHT22 کلیک کن و دما را بین ۱۵ و ۳۵ عوض کن تا نمودار بالا و پایین برود.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "board-ssd1306", "id": "oled1", "top": 60, "left": 200, "attrs": {"i2cAddress": "0x3c"}},
+    {"type": "wokwi-dht22", "id": "dht1", "top": -20, "left": -150, "attrs": {"temperature": "24.5", "humidity": "40"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۲: لاگر دما روی کارت SD</div>
 <p>DHT22 و کارت SD را ترکیب کن: هر ۱۰ ثانیه یک خط <code>millis,temp,humidity</code> به <code>/weather.csv</code> اضافه کن. خواندن‌های nan را ننویس. فایل را بعدا در اکسل باز کن و نمودار بکش.</p>
 <details><summary>راهنمایی</summary><p>DHT22 روی GPIO13 است و با پین‌های SPI (۵، ۱۸، ۱۹، ۲۳) تداخلی ندارد. در loop با millis هر ۱۰۰۰۰ms: بخوان، با isnan چک کن، <code>SD.open(..., FILE_APPEND)</code>، <code>f.printf("%lu,%.1f,%.1f\n", millis(), t, h)</code> و close.</p></details>
-<details><summary>جواب</summary>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>اولین خط حدود ۱۰ ثانیه بعد از روشن شدن می‌آید و بعد هر ۱۰ ثانیه یکی (عددها مال اتاق توست):</p>
+<pre class="serial">logged 24.5 C 40.0 %
+logged 24.5 C 40.0 %
+logged 24.6 C 40.1 %</pre>
+<p>کارت را در کامپیوتر بگذار و <code>weather.csv</code> را با یک ویرایشگر متن باز کن؛ باید این شکلی باشد (millis هر بار چند میلی‌ثانیه بیشتر از مضرب ۱۰۰۰۰ است، چون خواندن DHT22 کمی طول می‌کشد):</p>
+<div class="code" data-file="weather.csv" data-lang="text"><pre>
+millis,temp,humidity
+10003,24.5,40.0
+20004,24.5,40.0
+30004,24.6,40.1
+</pre></div>
+<ul>
+<li>سرتیتر <code>millis,temp,humidity</code> فقط <b>یک بار</b>، در خط اول. برد را با EN ریست کن: سرتیتر دوباره نوشته نمی‌شود، ولی millis دوباره از حدود ۱۰۰۰۰ شروع می‌شود (برای همین در لاگرهای واقعی ساعت واقعی را از NTP می‌نویسند؛ درس ۴.۱).</li>
+<li>سیم داده DHT22 را دربیاور: <code>DHT error, skipped</code> می‌بینی و هیچ خط خرابی (nan) به فایل اضافه نمی‌شود.</li>
+<li>در اکسل: <code>Data › From Text/CSV</code> (یا دوبار کلیک روی فایل)، ستون <code>temp</code> را انتخاب کن و <code>Insert › Line Chart</code>. باید یک خط صاف با تغییرهای کوچک ببینی، بدون پرش به صفر.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
 <div class="code" data-file="Weather_Logger.ino" id="ex2ans"><pre>
 #include &lt;SPI.h&gt;
 #include &lt;SD.h&gt;
@@ -1032,11 +1260,124 @@ void loop() {
   <li data-lines="27-31"><b class="what">نوشتن امن.</b> nan رد می‌شود، اگر فایل باز نشد رد می‌شود، و بعد از هر خط close.
     <span class="why">لاگر معمولا ساعت‌ها بدون نظارت کار می‌کند؛ باید با هر خطای تکی کنار بیاید و قطع برق ناگهانی حداکثر یک خط را از بین ببرد.</span></li>
 </ol>
+<div class="wokwi" data-board="esp32" data-code-from="ex2ans">
+<p>DHT22 و کارت microSD مجازی کنار هم؛ هیچ پینی مشترک نیست. کتابخانه <code>DHT sensor library</code> را اضافه کن. در ویکوی خط‌های <code>logged</code> را در Serial Monitor می‌بینی؛ برای باز کردن خود فایل در اکسل، کارت واقعی لازم است.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-microsd-card", "id": "sd1", "top": 40, "left": 220, "attrs": {}},
+    {"type": "wokwi-dht22", "id": "dht1", "top": -20, "left": -150, "attrs": {"temperature": "24.5", "humidity": "40"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "sd1:GND", "esp:GND.2", "black", [] ],
+    [ "sd1:VCC", "esp:3V3", "red", [] ],
+    [ "sd1:DO", "esp:19", "blue", [] ],
+    [ "sd1:DI", "esp:23", "orange", [] ],
+    [ "sd1:SCK", "esp:18", "green", [] ],
+    [ "sd1:CS", "esp:5", "purple", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
 </details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۳: سرعت‌سنج GPS روی OLED</div>
 <p>با TinyGPSPlus سرعت (<code>gps.speed.kmph()</code>) را با اندازه متن ۳ و تعداد ماهواره‌ها را با اندازه ۱ روی OLED نشان بده. تا Fix نگرفته، «Searching...» و تعداد حروف دریافتی را نشان بده. با یک پاوربانک در ماشین یا دوچرخه امتحان کن.</p>
 <details><summary>راهنمایی</summary><p>OLED روی I2C (۲۱، ۲۲) و GPS روی UART2 (۱۶، ۱۷) هیچ پین مشترکی ندارند. حلقه <code>gps.encode</code> را بدون delay نگه دار و صفحه را فقط هر ۵۰۰ms با millis به‌روز کن. از <code>gps.speed.isValid()</code> هم استفاده کن.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>Wokwi ماژول GPS ندارد؛ این تمرین را با سخت‌افزار واقعی و زیر آسمان باز انجام بده. روی OLED اول سه خط کوچک می‌بینی: <code>Searching...</code>، <code>chars: ...</code> و <code>sats: ...</code>. بعد از Fix (از ۳۰ ثانیه تا چند دقیقه در فضای باز)، بالای صفحه <code>Sats: 7</code> و وسط آن سرعت با عدد درشت، مثلا <code>14.8</code> و کنارش <code>km/h</code>. Serial Monitor همان را متنی نشان می‌دهد (عددها نمونه‌اند):</p>
+<pre class="serial">searching  chars=1893  sats=0
+searching  chars=2115  sats=0
+searching  chars=2342  sats=3
+fix  speed=0.4 km/h  sats=6
+fix  speed=0.2 km/h  sats=7
+fix  speed=14.8 km/h  sats=8</pre>
+<ul>
+<li>قبل از Fix، <code>chars</code> باید هر نیم ثانیه به اندازه تقریبا ثابتی بالا برود (معمولا ۱۰۰ تا ۲۵۰ تا؛ جمله‌های NMEA قبل از Fix کوتاه‌ترند).</li>
+<li>وقتی ایستاده‌ای، سرعت صفر مطلق نیست و بین ۰ و حدود ۱٫۵ کیلومتر بر ساعت می‌لرزد؛ این نویز طبیعی GPS است، نه اشکال کد.</li>
+<li>پیاده‌روی حدود ۴ تا ۶، دوچرخه حدود ۱۵ تا ۲۵ کیلومتر بر ساعت نشان می‌دهد؛ با سرعت‌سنج ماشین مقایسه کن: باید تا حدود ۱ کیلومتر بر ساعت یکی باشند.</li>
+</ul>
+<p><b>اگر کار نکرد:</b></p>
+<ul>
+<li><code>chars</code> صفر می‌ماند: TX ماژول باید به GPIO16 (RX2) برود، نه GPIO17؛ سرعت 9600 را چک کن.</li>
+<li><code>chars</code> بالا می‌رود ولی Fix نمی‌آید: داخل خانه معمولا Fix نمی‌گیرد؛ کنار پنجره یا بیرون برو و چند دقیقه صبر کن. LED ماژول بعد از Fix چشمک می‌زند.</li>
+<li>OLED سیاه است ولی Serial کار می‌کند: <code>OLED not found!</code> را چک کن؛ سیم SDA/SCL و آدرس 0x3C (درس اسکنر I2C).</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="GPS_Speedometer.ino" id="ex3ans"><pre>
+// سرعت‌سنج GPS روی OLED
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;TinyGPSPlus.h&gt;
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+TinyGPSPlus gps;
+unsigned long lastDraw = 0;
+
+void setup() {
+  Serial.begin(115200);
+  Serial2.begin(9600, SERIAL_8N1, 16, 17);   // GPS روی UART2
+  Wire.begin(21, 22);                        // OLED روی I2C
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found!");
+    while (true) delay(1000);
+  }
+  display.setTextColor(SSD1306_WHITE);
+}
+
+void loop() {
+  while (Serial2.available()) {              // تغذیه parser، بدون هیچ انتظاری
+    gps.encode(Serial2.read());
+  }
+
+  if (millis() - lastDraw &lt; 500) return;     // فقط دو بار در ثانیه دوباره بکش
+  lastDraw = millis();
+  unsigned long sats = gps.satellites.value();
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  if (gps.location.isValid() &amp;&amp; gps.speed.isValid()) {
+    display.printf("Sats: %lu", sats);
+    display.setTextSize(3);                  // حروف ۱۸×۲۴ پیکسلی
+    display.setCursor(0, 20);
+    display.printf("%.1f", gps.speed.kmph());
+    display.setTextSize(1);
+    display.setCursor(98, 36);
+    display.print("km/h");
+    Serial.printf("fix  speed=%.1f km/h  sats=%lu\n", gps.speed.kmph(), sats);
+  } else {
+    display.println("Searching...");
+    display.printf("chars: %lu\n", (unsigned long)gps.charsProcessed());
+    display.printf("sats:  %lu", sats);
+    Serial.printf("searching  chars=%lu  sats=%lu\n", (unsigned long)gps.charsProcessed(), sats);
+  }
+  display.display();
+}
+</pre></div>
+<ol class="walk" data-for="ex3ans">
+  <li data-lines="7-9"><b class="what">دو شیء و یک ساعت.</b> نمایشگر، parser جی‌پی‌اس و زمان آخرین نقاشی.
+    <span class="why">OLED روی I2C (۲۱، ۲۲) و GPS روی UART2 (۱۶، ۱۷) هیچ پین مشترکی ندارند؛ فقط هر دو به 3V3 و GND وصل‌اند.</span></li>
+  <li data-lines="23-24"><b class="what">همه حروف به parser.</b> هر حرفی که رسیده، همین حالا به <code>gps.encode</code> داده می‌شود.
+    <span class="why">بافر UART فقط چند صد بایت جا دارد و GPS هر ثانیه تا حدود ۵۰۰ حرف می‌فرستد؛ اگر loop جایی delay داشت، حروف گم می‌شدند و Fix هرگز کامل نمی‌شد.</span></li>
+  <li data-lines="27-29"><b class="what">نگهبان ۵۰۰ms.</b> صفحه دو بار در ثانیه به‌روز می‌شود. تعداد ماهواره‌ها یک بار خوانده می‌شود.
+    <span class="why">کشیدن و فرستادن کل صفحه روی I2C چند ده میلی‌ثانیه طول می‌کشد؛ انجام دادنش در هر دور loop، وقت خواندن GPS را می‌گرفت.</span></li>
+  <li data-lines="34-42"><b class="what">با Fix: سرعت درشت.</b> تعداد ماهواره‌ها با اندازه ۱ بالای صفحه، سرعت با اندازه ۳ و واحد km/h کوچک کنارش.
+    <span class="why">در اندازه ۳ هر حرف ۱۸ پیکسل پهناست؛ حتی <code>123.4</code> (پنج حرف، ۹۰ پیکسل) جا می‌شود و km/h از x=۹۸ شروع می‌شود تا روی عدد نیفتد. هر دو <code>isValid</code> لازم است تا عدد کهنه یا صفرِ بی‌معنی نشان ندهیم.</span></li>
+  <li data-lines="44-47"><b class="what">بدون Fix: وضعیت جست‌وجو.</b> «Searching...»، تعداد حروف دریافتی و ماهواره‌ها.
+    <span class="why">عدد <code>chars</code> مهم‌ترین ابزار عیب‌یابی است: اگر بالا می‌رود، سیم‌کشی و سرعت درست است و فقط باید منتظر آسمان باز بمانی؛ اگر صفر می‌ماند، مشکل سیم TX/RX است.</span></li>
+</ol>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>

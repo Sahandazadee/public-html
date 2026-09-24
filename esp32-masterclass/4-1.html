@@ -720,47 +720,366 @@ rst:0xc (SW_CPU_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)</div>
 <div class="exercise"><div class="ct">تمرین ۱: سیگنال‌سنج با LED</div>
 <p>برنامه <code>WiFiConnect</code> را طوری تغییر بده که بعد از اتصال، LED روی GPIO4 سرعت چشمکش به قدرت سیگنال بستگی داشته باشد: RSSI بهتر از ‎−60 → ثابت روشن؛ بین ‎−60 و ‎−75 → چشمک آهسته (هر ۵۰۰ میلی‌ثانیه)؛ بدتر از ‎−75 → چشمک سریع (هر ۱۰۰ میلی‌ثانیه). بدون delay.</p>
 <details><summary>راهنمایی</summary><p>در loop، RSSI را بخوان و با if یک متغیر <code>interval</code> تعیین کن. بعد همان الگوی <code>now - lastBlink &gt;= interval</code> درس ۳.۱. یادت باشد RSSI منفی است: «بهتر از ‎−60» یعنی <code>rssi &gt; -60</code>.</p></details>
-<details><summary>جواب</summary>
-<div class="code" data-file="SignalMeter_loop.ino" id="codeEx1"><pre>
-// بالای برنامه:  const int LED_PIN = 4;   و در setup:  pinMode(LED_PIN, OUTPUT);
-void loop() {
-  static unsigned long lastBlink = 0;
-  static bool ledState = false;
-  int rssi = WiFi.RSSI();                 // وقتی وصل نیست، 0 برمی‌گرداند
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>نمونه خروجی، وقتی برد را از کنار مودم به اتاق‌های دورتر بردیم و آخر سر مودم را خاموش کردیم (عددها در خانه تو فرق دارند):</p>
+<pre class="serial">Connecting to Home.....
+Connected!
+IP address : 192.168.1.37
+Gateway    : 192.168.1.1
+MAC address: 24:0A:C4:12:34:56
+RSSI       : -52 dBm
+status=CONNECTED (3)  RSSI=-53 dBm  LED=steady
+status=CONNECTED (3)  RSSI=-68 dBm  LED=slow blink
+status=CONNECTED (3)  RSSI=-79 dBm  LED=fast blink
+status=CONNECTION_LOST (5)  RSSI=0 dBm  LED=fast blink</pre>
+<ul>
+<li>ستون LED همیشه باید با RSSI همان خط بخواند: بالاتر از ‎−60 «steady»، بین ‎−60 و ‎−75 «slow blink»، پایین‌تر «fast blink».</li>
+<li>چشمک آهسته یعنی نیم ثانیه روشن، نیم ثانیه خاموش؛ چشمک سریع ۵ بار در ثانیه.</li>
+<li>برای دیدن تغییر لازم نیست راه بروی: انتهای برد را که آنتن روی آن است در مشت بگیر؛ بدن تو سیگنال را چند دسی‌بل ضعیف‌تر می‌کند.</li>
+<li>مودم را خاموش کن: بعد از چند ثانیه RSSI صفر و وضعیت غیر از CONNECTED می‌شود و LED تند چشمک می‌زند، نه ثابت روشن.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="SignalMeter.ino" id="codeEx1"><pre>
+#include &lt;WiFi.h&gt;
 
-  if (WiFi.status() == WL_CONNECTED &amp;&amp; rssi &gt; -60) {
-    ledState = true;                      // سیگنال خوب: ثابت روشن
+const char* WIFI_SSID = "Wokwi-GUEST";    // نام شبکه خودت را اینجا بنویس
+const char* WIFI_PASS = "";               // رمز شبکه (برای Wokwi خالی)
+const unsigned long TIMEOUT_MS = 15000;   // حداکثر ۱۵ ثانیه صبر
+const int LED_PIN = 4;                    // LED سیگنال
+
+// عدد وضعیت را به یک اسم قابل فهم تبدیل می‌کند
+const char* statusName(wl_status_t s) {
+  switch (s) {
+    case WL_IDLE_STATUS:     return "IDLE (0)";
+    case WL_NO_SSID_AVAIL:   return "NO_SSID_AVAIL (1)";
+    case WL_CONNECTED:       return "CONNECTED (3)";
+    case WL_CONNECT_FAILED:  return "CONNECT_FAILED (4)";
+    case WL_CONNECTION_LOST: return "CONNECTION_LOST (5)";
+    case WL_DISCONNECTED:    return "DISCONNECTED (6)";
+    default:                 return "OTHER";
+  }
+}
+
+bool connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.printf("Connecting to %s", WIFI_SSID);
+
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    if (millis() - start &gt; TIMEOUT_MS) {            // سقف زمان
+      Serial.printf("\nFailed! status = %s\n", statusName(WiFi.status()));
+      return false;
+    }
+    Serial.print(".");
+    delay(500);
+  }
+  Serial.println("\nConnected!");
+  return true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  if (connectWiFi()) {
+    Serial.print("IP address : "); Serial.println(WiFi.localIP());
+    Serial.print("Gateway    : "); Serial.println(WiFi.gatewayIP());
+    Serial.print("MAC address: "); Serial.println(WiFi.macAddress());
+    Serial.printf("RSSI       : %d dBm\n", WiFi.RSSI());
   } else {
-    unsigned long interval = (rssi &gt; -75 &amp;&amp; rssi != 0) ? 500 : 100;
+    Serial.println("Check SSID, password, and that the network is 2.4 GHz");
+  }
+}
+
+void loop() {
+  static unsigned long lastBlink = 0, lastPrint = 0;
+  static bool ledState = false;
+  int rssi = WiFi.RSSI();                         // وقتی وصل نیست ۰
+  bool connected = (WiFi.status() == WL_CONNECTED);
+  unsigned long interval = 0;                     // ۰ = ثابت روشن
+
+  if (connected &amp;&amp; rssi &gt; -60) {
+    ledState = true;                              // سیگنال خوب: ثابت روشن
+  } else {
+    interval = (connected &amp;&amp; rssi &gt; -75) ? 500 : 100;
     if (millis() - lastBlink &gt;= interval) {
       lastBlink = millis();
       ledState = !ledState;
     }
   }
   digitalWrite(LED_PIN, ledState ? HIGH : LOW);
+
+  if (millis() - lastPrint &gt;= 5000) {             // هر ۵ ثانیه یک گزارش
+    lastPrint = millis();
+    Serial.printf("status=%s  RSSI=%d dBm  LED=%s\n", statusName(WiFi.status()), rssi,
+                  interval == 0 ? "steady" : (interval == 500 ? "slow blink" : "fast blink"));
+  }
 }
 </pre></div>
 <ol class="walk" data-for="codeEx1">
-  <li data-lines="1"><b class="what">یادداشت برای بقیه برنامه.</b> این فقط loop است؛ include، <code>connectWiFi</code> و setup همان برنامه <code>WiFiConnect</code> می‌مانند و فقط این دو خط به آن اضافه می‌شود.
-    <span class="why">در تمرین‌ها فقط بخشی را که عوض می‌شود می‌نویسیم تا تغییر واقعی گم نشود.</span></li>
-  <li data-lines="3-5"><b class="what">حافظه LED و خواندن RSSI.</b> <code>static</code> یعنی مقدار بین دورهای loop حفظ می‌شود.
-    <span class="why">RSSI را یک بار در هر دور می‌خوانیم و در همه شرط‌ها از همان عدد استفاده می‌کنیم؛ مثل «یک بار ساعت را بخوان» در درس ۳.۱.</span></li>
-  <li data-lines="7-8"><b class="what">سیگنال خوب: ثابت روشن.</b> فقط اگر واقعا وصل است <b>و</b> RSSI از ‎−60 بهتر است.
-    <span class="why">بررسی <code>WL_CONNECTED</code> لازم است چون وقتی قطع هستیم RSSI صفر است و صفر از ‎−60 «بزرگ‌تر» است؛ بدون آن، قطع بودن با «سیگنال عالی» اشتباه گرفته می‌شد.</span></li>
-  <li data-lines="9-15"><b class="what">چشمک آهسته یا سریع.</b> بین ‎−60 و ‎−75 فاصله ۵۰۰ms، بدتر از آن یا قطع، ۱۰۰ms؛ بعد همان الگوی millis.
-    <span class="why"><code>rssi != 0</code> حالت قطع را به گروه «سریع» می‌فرستد تا با نگاه به LED بفهمی مشکل جدی است.</span></li>
-  <li data-lines="16"><b class="what">نوشتن روی پین.</b> یک بار در انتهای loop.
+  <li data-lines="6"><b class="what">تغییر ۱: پین LED.</b> بقیه بالای برنامه (include، نام و رمز شبکه، <code>statusName</code> و <code>connectWiFi</code>) دقیقا همان <code>WiFiConnect</code> است.
+    <span class="why">LED وضعیت طبق نقشه پین دوره همیشه روی GPIO4 است.</span></li>
+  <li data-lines="41"><b class="what">تغییر ۲: خروجی کردن پین.</b> یک خط در setup، قبل از اتصال.
+    <span class="why">setup بقیه‌اش دست نخورده: اتصال با timeout و چاپ IP.</span></li>
+  <li data-lines="53-57"><b class="what">حافظه و یک بار خواندن.</b> <code>static</code> یعنی مقدار بین دورهای loop حفظ می‌شود. RSSI و وضعیت اتصال یک بار در هر دور خوانده می‌شوند. <code>interval = 0</code> یعنی «ثابت روشن».
+    <span class="why">در همه شرط‌ها از همان یک عدد استفاده می‌کنیم؛ مثل «یک بار ساعت را بخوان» در درس ۳.۱.</span></li>
+  <li data-lines="59-60"><b class="what">سیگنال خوب: ثابت روشن.</b> فقط اگر واقعا وصل هستیم <b>و</b> RSSI از ‎−60 بهتر است.
+    <span class="why">وقتی قطع هستیم RSSI صفر است و صفر از ‎−60 «بزرگ‌تر» است؛ بدون شرط <code>connected</code>، قطع بودن با «سیگنال عالی» اشتباه گرفته می‌شد.</span></li>
+  <li data-lines="62-65"><b class="what">چشمک آهسته یا سریع.</b> وصل و بین ‎−60 و ‎−75: ۵۰۰ms؛ بدتر از آن یا قطع: ۱۰۰ms. بعد همان الگوی millis.
+    <span class="why">حالت قطع هم به گروه «سریع» می‌رود تا با یک نگاه به LED بفهمی مشکل جدی است.</span></li>
+  <li data-lines="68"><b class="what">نوشتن روی پین.</b> یک بار در هر دور.
     <span class="why">تصمیم در چند شاخه، نوشتن در یک جا: کد مرتب‌تر و پیدا کردن اشکال راحت‌تر است.</span></li>
+  <li data-lines="70-73"><b class="what">گزارش هر ۵ ثانیه.</b> وضعیت، RSSI و این که LED الان چه می‌کند. عبارت <code>?:</code> دو بار پشت هم آمده: اگر ۰ بود «steady»، وگرنه اگر ۵۰۰ بود «slow blink»، وگرنه «fast blink».
+    <span class="why">با این خط می‌توانی رفتار LED را با عدد RSSI مقایسه کنی و مطمئن شوی مرزهای ‎−60 و ‎−75 درست کار می‌کنند.</span></li>
 </ol>
+<div class="wokwi" data-board="esp32" data-code-from="codeEx1">
+<p>در ویکوی برد به <code>Wokwi-GUEST</code> وصل می‌شود. RSSI شبکه مجازی عوض نمی‌شود، پس فقط یکی از سه حالت را می‌بینی؛ عدد RSSI در Serial Monitor را با رفتار LED مقایسه کن. تغییر واقعی را با برد واقعی امتحان کن.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": {"color": "green"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
 </details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۲: دفتر قطعی‌ها</div>
 <p>به برنامه <code>RobustWiFi</code> دو چیز اضافه کن: (الف) یک شمارنده که هر بار Wi-Fi قطع شد یکی زیاد شود، (ب) هر بار که دوباره IP گرفت، چاپ کند «بعد از X ثانیه برگشت». بعد مودم را دو بار خاموش و روشن کن و خروجی را ببین.</p>
 <details><summary>راهنمایی</summary><p>در رویداد DISCONNECTED فقط وقتی <code>wifiUp</code> هنوز true است شمارنده را زیاد کن و زمان را در <code>downSince = millis()</code> نگه دار؛ چون وقتی مودم خاموش است، رویداد DISCONNECTED پشت سر هم تکرار می‌شود. در GOT_IP اختلاف <code>millis() - downSince</code> را چاپ کن. این متغیرها را هم volatile تعریف کن.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>مودم را خاموش کن، حدود نیم دقیقه صبر کن، روشنش کن و منتظر بمان تا دوباره IP بگیرد؛ بعد یک بار دیگر. نمونه خروجی (عددها و دلیل‌ها در خانه تو فرق دارند):</p>
+<pre class="serial">[WiFi] Connecting in background...
+[WiFi] Linked to router, waiting for IP...
+[WiFi] Got IP: 192.168.1.37
+[Time] 2026-09-23 14:05:12  RSSI -54 dBm
+[WiFi] Outage #1 started
+[WiFi] Disconnected, reason 200 (BEACON_TIMEOUT)
+[WiFi] Disconnected, reason 201 (NO_AP_FOUND)
+[WiFi] Still offline -&gt; reconnect()
+[WiFi] Disconnected, reason 201 (NO_AP_FOUND)
+...
+[WiFi] Linked to router, waiting for IP...
+[WiFi] Got IP: 192.168.1.37
+[WiFi] Back after 71 s (outages so far: 1)
+...
+[WiFi] Outage #2 started
+...
+[WiFi] Got IP: 192.168.1.37
+[WiFi] Back after 64 s (outages so far: 2)</pre>
+<ul>
+<li><code>Outage #N started</code> برای هر خاموش کردن مودم دقیقا <b>یک</b> بار چاپ می‌شود، حتی اگر ده‌ها خط <code>Disconnected</code> پشت سرش بیاید.</li>
+<li>بعد از اولین IP (لحظه روشن شدن برد) هیچ <code>Back after</code>ی نمی‌آید.</li>
+<li>عدد «Back after» باید تقریبا با کرنومتر گوشی بخواند. این زمان از لحظه‌ای است که ESP32 فهمید قطع شده (چند ثانیه بعد از خاموش کردن) تا وقتی که مودم کامل بالا آمد؛ بیشتر مودم‌ها روشن شدنشان ۳۰ تا ۶۰ ثانیه طول می‌کشد.</li>
+<li>بعد از دو بار خاموش و روشن کردن، عدد آخر <code>outages so far: 2</code> است.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>بقیه برنامه دقیقا همان <code>RobustWiFi</code> است (با همان فایل <code>secrets.h</code> کنارش). سه جا تغییر کرده:</p>
+<div class="code" data-file="RobustWiFi_Outages.ino" id="ex2ans"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;time.h&gt;
+#include "secrets.h"                          // WIFI_SSID و WIFI_PASS اینجا هستند
+
+const int LED_PIN = 4;                        // LED وضعیت شبکه
+const unsigned long RETRY_MS = 10000;         // هر ۱۰ ثانیه یک بار تلاش دستی
+const char* TZ_INFO = "EST5EDT,M3.2.0,M11.1.0"; // تورنتو/نیویورک: مال خودت را بگذار
+
+volatile bool wifiUp = false;                 // آیا الان IP داریم؟
+volatile uint32_t outageCount = 0;            // چند بار Wi-Fi قطع شده
+volatile unsigned long downSince = 0;         // قطعی فعلی از کی شروع شد
+volatile bool waitingForReturn = false;       // در طول یک قطعی شمرده‌شده true
+unsigned long lastRetry = 0, lastBlink = 0, lastPrint = 0;
+bool ledState = false;
+
+// این تابع را خود کتابخانه Wi-Fi صدا می‌زند، هر وقت اتفاقی بیفتد
+void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+  switch (event) {
+    case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+      Serial.println("[WiFi] Linked to router, waiting for IP...");
+      break;
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      wifiUp = true;
+      Serial.print("[WiFi] Got IP: ");
+      Serial.println(IPAddress(info.got_ip.ip_info.ip.addr));
+      if (waitingForReturn) {                 // برگشت بعد از یک قطعی شمرده‌شده
+        waitingForReturn = false;
+        Serial.printf("[WiFi] Back after %lu s (outages so far: %lu)\n",
+                      (millis() - downSince) / 1000, (unsigned long)outageCount);
+      }
+      break;
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      if (wifiUp) {                           // فقط اولین رویداد هر قطعی شمرده می‌شود
+        outageCount++;
+        downSince = millis();
+        waitingForReturn = true;
+        Serial.printf("[WiFi] Outage #%lu started\n", (unsigned long)outageCount);
+      }
+      wifiUp = false;
+      Serial.printf("[WiFi] Disconnected, reason %d (%s)\n",
+                    info.wifi_sta_disconnected.reason,
+                    WiFi.disconnectReasonName((wifi_err_reason_t)info.wifi_sta_disconnected.reason));
+      break;
+    default:
+      break;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+
+  WiFi.onEvent(onWiFiEvent);                  // قبل از begin ثبت کن
+  WiFi.setHostname("esp32-lab");              // اسم برد در لیست مودم
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);                // بعد از قطعی، خودش دوباره وصل شود
+  WiFi.begin(WIFI_SSID, WIFI_PASS);           // منتظر نمی‌مانیم!
+  Serial.println("[WiFi] Connecting in background...");
+
+  configTzTime(TZ_INFO, "pool.ntp.org", "time.google.com");
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  // ۱) نگهبان: اگر هنوز آفلاینیم، هر ۱۰ ثانیه یک هل کوچک بده
+  if (!wifiUp &amp;&amp; now - lastRetry &gt;= RETRY_MS) {
+    lastRetry = now;
+    Serial.println("[WiFi] Still offline -&gt; reconnect()");
+    WiFi.disconnect();
+    WiFi.reconnect();
+  }
+
+  // ۲) LED: وصل = ثابت روشن، قطع = چشمک سریع
+  if (wifiUp) {
+    ledState = true;
+  } else if (now - lastBlink &gt;= 200) {
+    lastBlink = now;
+    ledState = !ledState;
+  }
+  digitalWrite(LED_PIN, ledState ? HIGH : LOW);
+
+  // ۳) هر ۵ ثانیه ساعت و قدرت سیگنال را چاپ کن
+  if (now - lastPrint &gt;= 5000) {
+    lastPrint = now;
+    struct tm t;
+    if (getLocalTime(&amp;t, 10)) {               // حداکثر ۱۰ میلی‌ثانیه صبر
+      char buf[24];
+      strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &amp;t);
+      Serial.printf("[Time] %s  RSSI %d dBm\n", buf, WiFi.RSSI());
+    } else {
+      Serial.println("[Time] not synced yet");
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="ex2ans">
+  <li data-lines="10-12"><b class="what">سه متغیر تازه.</b> شمارنده قطعی‌ها، زمان شروع قطعی فعلی، و یک پرچم که می‌گوید «منتظر برگشتن هستیم».
+    <span class="why">این متغیرها در تابع رویداد عوض می‌شوند که کتابخانه Wi-Fi آن را از یک وظیفه (task) دیگر صدا می‌زند؛ <code>volatile</code> به کامپایلر می‌گوید هر بار مقدار تازه را از حافظه بخواند. <code>unsigned long</code> همان نوع <code>millis()</code> است.</span></li>
+  <li data-lines="26-29"><b class="what">در GOT_IP: «بعد از X ثانیه برگشت».</b> اگر یک قطعی شمرده‌شده در جریان بود، طول آن (میلی‌ثانیه تقسیم بر ۱۰۰۰) و تعداد کل قطعی‌ها چاپ می‌شود.
+    <span class="why">پرچم لازم است چون اولین GOT_IP بعد از روشن شدن، برگشت از قطعی نیست و نباید «Back after» چاپ کند.</span></li>
+  <li data-lines="33-37"><b class="what">در DISCONNECTED: فقط اولین بار.</b> اگر <code>wifiUp</code> هنوز true است، این اولین رویداد قطعی است: شمارنده یکی زیاد، زمان ثبت و پرچم روشن می‌شود. بعد از آن خط قبلی <code>wifiUp = false</code> اجرا می‌شود.
+    <span class="why">وقتی مودم خاموش است، DISCONNECTED هر چند ثانیه تکرار می‌شود (و <code>reconnect()</code> نگهبان هم رویداد تازه می‌سازد)؛ بدون این شرط، یک قطعی ۵۰ ثانیه‌ای ده‌ها بار شمرده می‌شد.</span></li>
+</ol>
+</details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۳: دو نقش هم‌زمان (AP+STA)</div>
 <p>برنامه‌ای بنویس که هم به مودم خانه وصل شود و هم شبکه خودش را به اسم <code>ESP32-Lab</code> بسازد. هر دو IP را چاپ کن. با گوشی به <code>ESP32-Lab</code> وصل شو و ببین چه IPای می‌گیری.</p>
 <details><summary>راهنمایی</summary><p><code>WiFi.mode(WIFI_AP_STA)</code>، بعد <code>WiFi.softAP(...)</code> و <code>WiFi.begin(...)</code>. IP ایستگاه از <code>WiFi.localIP()</code> و IP نقطه دسترسی از <code>WiFi.softAPIP()</code>. توجه: در این حالت کانال AP مجبور است با کانال مودم یکی باشد، چون ESP32 فقط یک رادیو دارد.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>ویکوی حالت AP ندارد؛ این تمرین را با برد واقعی و گوشی انجام بده. نمونه خروجی (IP ایستگاه و کانال مال مودم توست):</p>
+<pre class="serial">Connecting to router.....
+STA IP (from router): 192.168.1.37
+Router channel: 6
+AP started
+AP IP (ESP32-Lab):   192.168.4.1
+STA connected  |  AP clients: 0
+STA connected  |  AP clients: 1</pre>
+<ul>
+<li>دو IP از دو خانواده مختلف: IP ایستگاه شبیه IP بقیه دستگاه‌های خانه (مثلا ۱۹۲.۱۶۸.۱.x) و IP نقطه دسترسی <code>192.168.4.1</code>.</li>
+<li>در فهرست Wi-Fi گوشی <code>ESP32-Lab</code> را می‌بینی. با رمز <code>lab12345</code> وصل شو و در جزئیات اتصال نگاه کن: گوشی معمولا <code>192.168.4.2</code> می‌گیرد (اولین دستگاه) و Router یا Gateway آن <code>192.168.4.1</code> است.</li>
+<li>بعد از وصل شدن گوشی، خط وضعیت <code>AP clients: 1</code> نشان می‌دهد و ایستگاه همچنان <code>connected</code> است.</li>
+</ul>
+<p><b>اگر کار نکرد:</b></p>
+<ul>
+<li>گوشی می‌گوید «اینترنت ندارد»: درست است! ESP32 اینترنت مودم را به شبکه خودش نمی‌دهد. گزینه «ماندن در این شبکه» را بزن.</li>
+<li><code>AP failed</code>: رمز کمتر از ۸ حرف است.</li>
+<li><code>Router not reachable</code>: نام و رمز در <code>secrets.h</code> یا مودم ۵ گیگاهرتزی؛ AP باز هم روی کانال ۱ ساخته می‌شود ولی چون ایستگاه مدام دنبال مودم می‌گردد، ممکن است ناپایدار باشد.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="AP_STA.ino" id="ex3ans"><pre>
+#include &lt;WiFi.h&gt;
+#include "secrets.h"                            // WIFI_SSID و WIFI_PASS مودم خانه
+
+const char* AP_SSID = "ESP32-Lab";
+const char* AP_PASS = "lab12345";               // حداقل ۸ حرف
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.mode(WIFI_AP_STA);                       // هر دو نقش هم‌زمان
+
+  // ۱) ایستگاه: اول به مودم خانه وصل شو (حداکثر ۱۵ ثانیه)
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting to router");
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - start &lt; 15000) {
+    Serial.print(".");
+    delay(500);
+  }
+  Serial.println();
+  int channel = 1;                              // اگر مودم در دسترس نبود
+  if (WiFi.status() == WL_CONNECTED) {
+    channel = WiFi.channel();
+    Serial.print("STA IP (from router): ");
+    Serial.println(WiFi.localIP());
+    Serial.printf("Router channel: %d\n", channel);
+  } else {
+    Serial.println("Router not reachable; starting the AP anyway");
+  }
+
+  // ۲) نقطه دسترسی: شبکه خودمان، روی کانال مودم
+  bool ok = WiFi.softAP(AP_SSID, AP_PASS, channel);
+  Serial.println(ok ? "AP started" : "AP failed");
+  Serial.print("AP IP (ESP32-Lab):   ");
+  Serial.println(WiFi.softAPIP());
+}
+
+void loop() {
+  static unsigned long last = 0;
+  if (millis() - last &gt;= 5000) {                // هر ۵ ثانیه یک خط وضعیت
+    last = millis();
+    Serial.printf("STA %s  |  AP clients: %d\n",
+                  WiFi.status() == WL_CONNECTED ? "connected" : "offline",
+                  WiFi.softAPgetStationNum());
+  }
+}
+</pre></div>
+<ol class="walk" data-for="ex3ans">
+  <li data-lines="2-5"><b class="what">دو شبکه، دو رمز.</b> رمز مودم در <code>secrets.h</code> (مثل RobustWiFi) و نام و رمز شبکه خودمان اینجا.
+    <span class="why">رمز AP باید حداقل ۸ حرف باشد، وگرنه <code>softAP</code> شکست می‌خورد.</span></li>
+  <li data-lines="9"><b class="what">هر دو نقش.</b> ESP32 هم‌زمان ایستگاه (مثل گوشی) و نقطه دسترسی (مثل مودم) است.
+    <span class="why">در این حالت دو MAC و دو IP داری، ولی فقط یک رادیو.</span></li>
+  <li data-lines="12-25"><b class="what">اول ایستگاه.</b> اتصال با timeout ۱۵ ثانیه (مثل WiFiConnect)، بعد چاپ IP ایستگاه و کانال مودم.
+    <span class="why">کانال مودم را اول باید بدانیم: رادیو فقط روی یک کانال کار می‌کند، پس AP مجبور است همان کانال مودم را بگیرد. اگر اول AP را روی کانال ۱ می‌ساختیم و مودم روی کانال ۶ بود، AP وسط کار به کانال ۶ می‌پرید و گوشی یک لحظه قطع می‌شد.</span></li>
+  <li data-lines="31-34"><b class="what">بعد نقطه دسترسی.</b> شبکه <code>ESP32-Lab</code> روی همان کانال ساخته می‌شود و IP آن چاپ می‌شود (همیشه <code>192.168.4.1</code>، مگر خودت عوضش کنی).
+    <span class="why">IP ایستگاه را مودم می‌دهد (مثلا ۱۹۲.۱۶۸.۱.x) و IP نقطه دسترسی را خود ESP32؛ این دو شبکه جدا هستند.</span></li>
+  <li data-lines="39-43"><b class="what">یک خط وضعیت.</b> هر ۵ ثانیه: ایستگاه وصل است یا نه و چند دستگاه به AP وصل‌اند.
+    <span class="why">با این خط می‌بینی وصل شدن گوشی به ESP32-Lab اتصال به مودم را قطع نمی‌کند.</span></li>
+</ol>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>

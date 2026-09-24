@@ -551,37 +551,612 @@ void handleRoot() {
 <div class="exercise"><div class="ct">Exercise 1: signal and uptime</div>
 <p>Add two more values to the JSON: <code>rssi</code> (signal strength) and <code>uptime</code> (how many seconds since the board powered up). Make a new card on the page to show them.</p>
 <details><summary>Hint</summary><p>Three places need to change: the <code>stateJson</code> function in C++, the HTML body (a card with two new <code>span</code> elements) and the <code>show</code> function in JavaScript. <code>millis() / 1000</code> gives you the seconds.</p></details>
-<details><summary>Answer</summary>
-<div class="code" data-file="SmartHome (changes)" id="codeEx2"><pre>
-// in stateJson, before the line json += "}";
+<details class="expect"><summary>What should you see?</summary>
+<p>Open the page: under the potentiometer card you see a new card, for example <code>RSSI: -54 dBm</code> and <code>Up: 37 s</code>. Also open <code>http://IP/api/state</code> directly in the browser; it should look something like this (the numbers are yours):</p>
+<div class="code" data-file="/api/state" data-lang="json"><pre>
+{"led":false,"relay":false,"pot":1873,"rssi":-54,"uptime":37}
+</pre></div>
+<ul>
+<li>The Up number goes up by one every second (the page refreshes every second).</li>
+<li>Press the board's EN button: once it has reconnected, Up starts again from near zero.</li>
+<li>RSSI moves up and down a little (for example −52 to −56); cup the end of the board in your fist and it gets weaker.</li>
+<li>If the page stays stuck on <code>?</code>, open <code>/api/state</code>: if the JSON is broken (a missing comma, or the new part after the <code>}</code>), the problem is in stateJson; if the JSON is fine, check the names in show and the ids in the HTML (press F12 and open the Console tab to see the error).</li>
+</ul>
+<p>Remember: with free Wokwi your browser can't reach the board's page (see the Wokwi box in the web server section). Use it only to check that the code compiles and connects, and look at the page on a real board.</p>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>The complete <code>SmartHome</code> program with three changes: a card in the HTML, two lines in <code>show</code> and two values in <code>stateJson</code>.</p>
+<div class="code" data-file="SmartHome_Status.ino" id="codeEx2"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;ESPmDNS.h&gt;
+
+const char* WIFI_SSID = "Wokwi-GUEST";      // your network name
+const char* WIFI_PASS = "";                 // your network password
+
+const int LED_PIN   = 4;                    // a regular LED
+const int RELAY_PIN = 26;                   // the relay module's IN input
+const int POT_PIN   = 34;                   // potentiometer (ADC1, works with Wi-Fi)
+const bool RELAY_ACTIVE_LOW = true;         // most relay modules turn on with LOW
+
+WebServer server(80);                       // server on port 80 (the standard HTTP port)
+bool ledOn = false;
+bool relayOn = false;
+
+// the complete web page, inside a raw string literal
+const char INDEX_HTML[] PROGMEM = R"rawliteral(
+&lt;!DOCTYPE html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+&lt;meta charset="utf-8"&gt;
+&lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;
+&lt;title&gt;ESP32 Home&lt;/title&gt;
+&lt;style&gt;
+  body { font-family: sans-serif; text-align: center; background: #f2f4f8; }
+  .card { background: #fff; max-width: 340px; margin: 14px auto; padding: 12px; border-radius: 12px; }
+  button { font-size: 20px; padding: 10px 24px; margin: 4px; border: 0; border-radius: 8px; color: #fff; }
+  .on  { background: #2e9d5b; }
+  .off { background: #c0392b; }
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;h1&gt;ESP32 Home Control&lt;/h1&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;LED: &lt;span id="led"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;button class="on"  onclick="send('led', 1)"&gt;ON&lt;/button&gt;
+  &lt;button class="off" onclick="send('led', 0)"&gt;OFF&lt;/button&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;Relay: &lt;span id="relayState"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;button class="on"  onclick="send('relay', 1)"&gt;ON&lt;/button&gt;
+  &lt;button class="off" onclick="send('relay', 0)"&gt;OFF&lt;/button&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;Pot: &lt;span id="pot"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;progress id="bar" max="4095" value="0"&gt;&lt;/progress&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;RSSI: &lt;span id="rssi"&gt;?&lt;/span&gt; dBm&lt;/h2&gt;
+  &lt;p&gt;Up: &lt;span id="up"&gt;?&lt;/span&gt; s&lt;/p&gt;
+&lt;/div&gt;
+&lt;script&gt;
+function show(s) {
+  document.getElementById('led').textContent   = s.led   ? 'ON' : 'OFF';
+  document.getElementById('relayState').textContent = s.relay ? 'ON' : 'OFF';
+  document.getElementById('pot').textContent   = s.pot;
+  document.getElementById('bar').value         = s.pot;
+  document.getElementById('rssi').textContent = s.rssi;
+  document.getElementById('up').textContent   = s.uptime;
+}
+function refresh() {
+  fetch('/api/state')
+    .then(r =&gt; r.json())
+    .then(show)
+    .catch(e =&gt; console.log('ESP32 unreachable', e));
+}
+function send(dev, val) {
+  fetch('/api/' + dev + '?on=' + val, { method: 'POST' })
+    .then(r =&gt; r.json())
+    .then(show);
+}
+refresh();
+setInterval(refresh, 1000);
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+)rawliteral";
+
+void setRelay(bool on) {
+  relayOn = on;
+  if (RELAY_ACTIVE_LOW) digitalWrite(RELAY_PIN, on ? LOW : HIGH);
+  else                  digitalWrite(RELAY_PIN, on ? HIGH : LOW);
+}
+
+String stateJson() {
+  String json = "{\"led\":";
+  json += ledOn ? "true" : "false";
+  json += ",\"relay\":";
+  json += relayOn ? "true" : "false";
+  json += ",\"pot\":";
+  json += analogRead(POT_PIN);              // a number from 0 to 4095
   json += ",\"rssi\":";
   json += WiFi.RSSI();                      // e.g. -54
   json += ",\"uptime\":";
   json += millis() / 1000;                  // seconds since power-up
+  json += "}";
+  return json;                              // e.g. {"led":true,"relay":false,"pot":2048}
+}
 
-// a new card in the HTML page:
-//   &lt;div class="card"&gt;&lt;h2&gt;RSSI: &lt;span id="rssi"&gt;?&lt;/span&gt; dBm, up: &lt;span id="up"&gt;?&lt;/span&gt; s&lt;/h2&gt;&lt;/div&gt;
-// and in the show function:
-//   document.getElementById('rssi').textContent = s.rssi;
-//   document.getElementById('up').textContent   = s.uptime;
+void handleRoot()  { server.send(200, "text/html; charset=utf-8", INDEX_HTML); }
+void handleState() { server.send(200, "application/json", stateJson()); }
+
+void handleLed() {
+  if (!server.hasArg("on")) { server.send(400, "text/plain", "missing ?on=0/1"); return; }
+  ledOn = (server.arg("on") == "1");
+  digitalWrite(LED_PIN, ledOn ? HIGH : LOW);
+  handleState();                            // send back the new state
+}
+
+void handleRelay() {
+  if (!server.hasArg("on")) { server.send(400, "text/plain", "missing ?on=0/1"); return; }
+  setRelay(server.arg("on") == "1");
+  handleState();
+}
+
+void handleNotFound() { server.send(404, "text/plain", "404: Not Found"); }
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  setRelay(false);                          // first thing: relay off
+  digitalWrite(LED_PIN, LOW);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting");
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - start &lt; 20000) {
+    delay(500);
+    Serial.print(".");
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nWiFi failed -&gt; restart in 5 s");
+    delay(5000);
+    ESP.restart();
+  }
+  Serial.print("\nOpen http://");
+  Serial.println(WiFi.localIP());
+
+  if (MDNS.begin("esp32")) {                // the name esp32.local
+    MDNS.addService("http", "tcp", 80);
+    Serial.println("or   http://esp32.local");
+  }
+
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/api/state", HTTP_GET, handleState);
+  server.on("/api/led", HTTP_POST, handleLed);
+  server.on("/api/relay", HTTP_POST, handleRelay);
+  server.onNotFound(handleNotFound);
+  server.begin();
+  Serial.println("HTTP server started");
+}
+
+void loop() {
+  server.handleClient();                    // "is anyone knocking?"
+  delay(2);                                 // a little breathing room for the rest of the system
+}
 </pre></div>
 <ol class="walk" data-for="codeEx2">
-  <li data-lines="1-5"><b class="what">Two new "name:value" pairs in the JSON.</b> Each one starts with a comma, because they come after <code>"pot":...</code>. <code>WiFi.RSSI()</code> gives a negative number and <code>millis() / 1000</code> gives the seconds.
-    <span class="why">Where these lines go matters: they must come before the closing <code>"}"</code>, otherwise the JSON breaks and <code>r.json()</code> throws an error in the browser (the page stays stuck on <code>?</code>).</span></li>
-  <li data-lines="7-8"><b class="what">A new card in the HTML.</b> Two <code>span</code> elements with the ids <code>rssi</code> and <code>up</code>, which show <code>?</code> for now.
-    <span class="why">Put this line (without the leading <code>//</code>) inside the raw string, next to the other cards. The ids must match exactly the names used in the JavaScript.</span></li>
-  <li data-lines="9-11"><b class="what">Filling in the blanks in show.</b> <code>s.rssi</code> and <code>s.uptime</code> are the same names we used in the JSON.
-    <span class="why">Three parts of the code (C++, HTML, JS) have to agree with each other; a typo in any of them means <code>undefined</code> or <code>?</code> on the page.</span></li>
+  <li data-lines="50-51"><b class="what">A new card in the HTML.</b> Two <code>span</code> elements with the ids <code>rssi</code> and <code>up</code>, which show <code>?</code> at first, in a new card under the potentiometer card.
+    <span class="why">The ids must match exactly the names used in the JavaScript. It is a complete card with its own <code>&lt;div class="card"&gt;</code> so it looks like the others.</span></li>
+  <li data-lines="59-60"><b class="what">Filling in the blanks in show.</b> <code>s.rssi</code> and <code>s.uptime</code> are the same names we put in the JSON.
+    <span class="why">show is called every second by <code>refresh</code>, so the numbers update by themselves; nothing else is needed.</span></li>
+  <li data-lines="93-96"><b class="what">Two new "name:value" pairs in the JSON.</b> Each one starts with a comma, because they come after <code>"pot":...</code>. <code>WiFi.RSSI()</code> gives a negative number and <code>millis() / 1000</code> gives the seconds.
+    <span class="why">Where these lines go matters: they must come before the closing <code>"}"</code>, otherwise the JSON breaks and <code>r.json()</code> throws an error in the browser (the page stays stuck on <code>?</code>). Three parts of the code (C++, HTML, JS) have to agree with each other.</span></li>
 </ol>
 </details>
 </div>
 <div class="exercise"><div class="ct">Exercise 2: an "all off" button</div>
 <p>Create a new path <code>/api/alloff</code> (POST only) that switches off both the LED and the relay, and add a big red "All off" button for it on the page.</p>
 <details><summary>Hint</summary><p>The function <code>handleAllOff()</code>: <code>ledOn = false; digitalWrite(LED_PIN, LOW); setRelay(false); handleState();</code>. In setup: <code>server.on("/api/alloff", HTTP_POST, handleAllOff);</code>. In JavaScript: <code>fetch('/api/alloff', {method:'POST'}).then(r =&gt; r.json()).then(show);</code></p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>On the page you see a big red <code>ALL OFF</code> button under the potentiometer card. Switch the LED and the relay on, then press this button:</p>
+<ul>
+<li>The LED on the board goes off, the relay clicks, and both cards show <code>OFF</code> straight away.</li>
+<li>The Serial Monitor prints <code>All off</code>.</li>
+<li>Try it from a terminal (the numbers are yours):</li>
+</ul>
+<div class="code" data-file="Terminal" data-lang="text"><pre>
+curl -i -X POST http://192.168.1.37/api/alloff
+HTTP/1.1 200 OK
+Content-Type: application/json
+...
+{"led":false,"relay":false,"pot":1873}
+</pre></div>
+<ul>
+<li>Now open <code>http://IP/api/alloff</code> in the browser's address bar (that's a GET): you should see <code>404: Not Found</code> and nothing switches off. That proves the path only answers POST.</li>
+</ul>
+<p>Remember: with free Wokwi your browser can't reach the board's page (see the Wokwi box in the web server section). Use it only to check that the code compiles and connects, and look at the page on a real board.</p>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>The complete <code>SmartHome</code> program with five small changes (CSS, a card, a JavaScript function, a handler and the path registration):</p>
+<div class="code" data-file="SmartHome_AllOff.ino" id="ex2ans"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;ESPmDNS.h&gt;
+
+const char* WIFI_SSID = "Wokwi-GUEST";      // your network name
+const char* WIFI_PASS = "";                 // your network password
+
+const int LED_PIN   = 4;                    // a regular LED
+const int RELAY_PIN = 26;                   // the relay module's IN input
+const int POT_PIN   = 34;                   // potentiometer (ADC1, works with Wi-Fi)
+const bool RELAY_ACTIVE_LOW = true;         // most relay modules turn on with LOW
+
+WebServer server(80);                       // server on port 80 (the standard HTTP port)
+bool ledOn = false;
+bool relayOn = false;
+
+// the complete web page, inside a raw string literal
+const char INDEX_HTML[] PROGMEM = R"rawliteral(
+&lt;!DOCTYPE html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+&lt;meta charset="utf-8"&gt;
+&lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;
+&lt;title&gt;ESP32 Home&lt;/title&gt;
+&lt;style&gt;
+  body { font-family: sans-serif; text-align: center; background: #f2f4f8; }
+  .card { background: #fff; max-width: 340px; margin: 14px auto; padding: 12px; border-radius: 12px; }
+  button { font-size: 20px; padding: 10px 24px; margin: 4px; border: 0; border-radius: 8px; color: #fff; }
+  .on  { background: #2e9d5b; }
+  .off { background: #c0392b; }
+  .big { font-size: 28px; padding: 16px 40px; }
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;h1&gt;ESP32 Home Control&lt;/h1&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;LED: &lt;span id="led"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;button class="on"  onclick="send('led', 1)"&gt;ON&lt;/button&gt;
+  &lt;button class="off" onclick="send('led', 0)"&gt;OFF&lt;/button&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;Relay: &lt;span id="relayState"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;button class="on"  onclick="send('relay', 1)"&gt;ON&lt;/button&gt;
+  &lt;button class="off" onclick="send('relay', 0)"&gt;OFF&lt;/button&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;Pot: &lt;span id="pot"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;progress id="bar" max="4095" value="0"&gt;&lt;/progress&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;button class="off big" onclick="allOff()"&gt;ALL OFF&lt;/button&gt;
+&lt;/div&gt;
+&lt;script&gt;
+function show(s) {
+  document.getElementById('led').textContent   = s.led   ? 'ON' : 'OFF';
+  document.getElementById('relayState').textContent = s.relay ? 'ON' : 'OFF';
+  document.getElementById('pot').textContent   = s.pot;
+  document.getElementById('bar').value         = s.pot;
+}
+function refresh() {
+  fetch('/api/state')
+    .then(r =&gt; r.json())
+    .then(show)
+    .catch(e =&gt; console.log('ESP32 unreachable', e));
+}
+function send(dev, val) {
+  fetch('/api/' + dev + '?on=' + val, { method: 'POST' })
+    .then(r =&gt; r.json())
+    .then(show);
+}
+function allOff() {
+  fetch('/api/alloff', { method: 'POST' })
+    .then(r =&gt; r.json())
+    .then(show);
+}
+refresh();
+setInterval(refresh, 1000);
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+)rawliteral";
+
+void setRelay(bool on) {
+  relayOn = on;
+  if (RELAY_ACTIVE_LOW) digitalWrite(RELAY_PIN, on ? LOW : HIGH);
+  else                  digitalWrite(RELAY_PIN, on ? HIGH : LOW);
+}
+
+String stateJson() {
+  String json = "{\"led\":";
+  json += ledOn ? "true" : "false";
+  json += ",\"relay\":";
+  json += relayOn ? "true" : "false";
+  json += ",\"pot\":";
+  json += analogRead(POT_PIN);              // a number from 0 to 4095
+  json += "}";
+  return json;                              // e.g. {"led":true,"relay":false,"pot":2048}
+}
+
+void handleRoot()  { server.send(200, "text/html; charset=utf-8", INDEX_HTML); }
+void handleState() { server.send(200, "application/json", stateJson()); }
+
+void handleLed() {
+  if (!server.hasArg("on")) { server.send(400, "text/plain", "missing ?on=0/1"); return; }
+  ledOn = (server.arg("on") == "1");
+  digitalWrite(LED_PIN, ledOn ? HIGH : LOW);
+  handleState();                            // send back the new state
+}
+
+void handleRelay() {
+  if (!server.hasArg("on")) { server.send(400, "text/plain", "missing ?on=0/1"); return; }
+  setRelay(server.arg("on") == "1");
+  handleState();
+}
+
+void handleAllOff() {
+  ledOn = false;
+  digitalWrite(LED_PIN, LOW);
+  setRelay(false);                          // also updates relayOn
+  Serial.println("All off");
+  handleState();                            // send back the new state
+}
+void handleNotFound() { server.send(404, "text/plain", "404: Not Found"); }
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  setRelay(false);                          // first thing: relay off
+  digitalWrite(LED_PIN, LOW);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting");
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - start &lt; 20000) {
+    delay(500);
+    Serial.print(".");
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nWiFi failed -&gt; restart in 5 s");
+    delay(5000);
+    ESP.restart();
+  }
+  Serial.print("\nOpen http://");
+  Serial.println(WiFi.localIP());
+
+  if (MDNS.begin("esp32")) {                // the name esp32.local
+    MDNS.addService("http", "tcp", 80);
+    Serial.println("or   http://esp32.local");
+  }
+
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/api/state", HTTP_GET, handleState);
+  server.on("/api/led", HTTP_POST, handleLed);
+  server.on("/api/relay", HTTP_POST, handleRelay);
+  server.on("/api/alloff", HTTP_POST, handleAllOff);
+  server.onNotFound(handleNotFound);
+  server.begin();
+  Serial.println("HTTP server started");
+}
+
+void loop() {
+  server.handleClient();                    // "is anyone knocking?"
+  delay(2);                                 // a little breathing room for the rest of the system
+}
+</pre></div>
+<ol class="walk" data-for="ex2ans">
+  <li data-lines="31"><b class="what">A CSS class for the big button.</b> 28-pixel text and more padding.
+    <span class="why">The button has two classes at once: <code>off</code> (the red color we already had) and <code>big</code> (the size). No need to write the color again.</span></li>
+  <li data-lines="51"><b class="what">The button in a new card.</b> Clicking it runs the JavaScript function <code>allOff()</code>.
+    <span class="why">As with the other buttons, the page doesn't change; only a request goes out behind the scenes.</span></li>
+  <li data-lines="71-74"><b class="what">allOff in JavaScript.</b> A <code>POST</code> to <code>/api/alloff</code>, then the returned JSON is shown with the same <code>show</code>.
+    <span class="why">Because the server sends back the new state, both the LED and relay cards switch to OFF straight away; you don't wait for the next refresh.</span></li>
+  <li data-lines="116-121"><b class="what">handleAllOff in C++.</b> LED off, relay off with <code>setRelay(false)</code>, a line on Serial, and the state sent back.
+    <span class="why">Always use <code>setRelay</code> for the relay, not a direct <code>digitalWrite</code>: only setRelay knows the active-LOW logic and also updates <code>relayOn</code>, so the page shows the right state.</span></li>
+  <li data-lines="158"><b class="what">Register the path, POST only.</b> The same pattern as <code>/api/led</code> and <code>/api/relay</code>.
+    <span class="why">A command that changes something must be a POST; an accidental GET (a link preview in a chat app, for example) mustn't switch off the lights in your home.</span></li>
+</ol>
+</details>
 </div>
 <div class="exercise"><div class="ct">Exercise 3: a complete lock</div>
 <p>Add Basic Auth to <b>every</b> path (page, state, LED, relay). Then run two tests: (1) open the page in a private (incognito) browser window; the username and password box should appear. (2) In a terminal (<code>curl.exe</code> in Windows PowerShell), without a password, type <code>curl -i -X POST "http://IP/api/led?on=1"</code>; the first line of the response should be <code>401 Unauthorized</code> and the LED should not turn on. Then try again with <code>curl -i -u admin:yourpassword -X POST ...</code> and you should get <code>200 OK</code>.</p>
 <details><summary>Hint</summary><p>The first line of every handler: <code>if (!checkAuth()) return;</code>. You don't need to lock the 404 path. If you forget to lock handleState, someone without the password can see the state of your home; does that matter? Think about it.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<ul>
+<li><b>Test 1:</b> in a private window, the browser's username and password box appears as soon as you open <code>http://IP</code>. With "Cancel" you get a blank page or a 401 error; with <code>admin</code> and the right password the page works as before, buttons included (the browser sends the password with the fetch requests too).</li>
+<li><b>Test 2:</b> the terminal output (the IP and the pot number are yours):</li>
+</ul>
+<div class="code" data-file="Terminal" data-lang="text"><pre>
+curl -i -X POST "http://192.168.1.37/api/led?on=1"
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Basic realm="Login Required"
+...
+
+curl -i -u admin:Change-Me-2026 -X POST "http://192.168.1.37/api/led?on=1"
+HTTP/1.1 200 OK
+Content-Type: application/json
+...
+{"led":true,"relay":false,"pot":1873}
+</pre></div>
+<ul>
+<li>After the first request the LED must not come on; after the second it does.</li>
+<li><code>curl -i http://IP/api/state</code> without a password must also give 401. If it gives 200, you forgot to lock handleState.</li>
+<li>Remember that Basic Auth over plain HTTP only encodes the password with Base64 (it isn't encryption). That's enough for a home network, not for the internet.</li>
+</ul>
+<p>Remember: with free Wokwi your browser can't reach the board's page (see the Wokwi box in the web server section). Use it only to check that the code compiles and connects, and look at the page on a real board.</p>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>The complete <code>SmartHome</code> program with a lock on all four paths:</p>
+<div class="code" data-file="SmartHome_Locked.ino" id="ex3ans"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;ESPmDNS.h&gt;
+
+const char* WIFI_SSID = "Wokwi-GUEST";      // your network name
+const char* WIFI_PASS = "";                 // your network password
+
+const int LED_PIN   = 4;                    // a regular LED
+const int RELAY_PIN = 26;                   // the relay module's IN input
+const int POT_PIN   = 34;                   // potentiometer (ADC1, works with Wi-Fi)
+const bool RELAY_ACTIVE_LOW = true;         // most relay modules turn on with LOW
+
+WebServer server(80);                       // server on port 80 (the standard HTTP port)
+bool ledOn = false;
+bool relayOn = false;
+const char* WEB_USER = "admin";
+const char* WEB_PASS = "Change-Me-2026";    // be sure to change this
+
+// the complete web page, inside a raw string literal
+const char INDEX_HTML[] PROGMEM = R"rawliteral(
+&lt;!DOCTYPE html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+&lt;meta charset="utf-8"&gt;
+&lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;
+&lt;title&gt;ESP32 Home&lt;/title&gt;
+&lt;style&gt;
+  body { font-family: sans-serif; text-align: center; background: #f2f4f8; }
+  .card { background: #fff; max-width: 340px; margin: 14px auto; padding: 12px; border-radius: 12px; }
+  button { font-size: 20px; padding: 10px 24px; margin: 4px; border: 0; border-radius: 8px; color: #fff; }
+  .on  { background: #2e9d5b; }
+  .off { background: #c0392b; }
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;h1&gt;ESP32 Home Control&lt;/h1&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;LED: &lt;span id="led"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;button class="on"  onclick="send('led', 1)"&gt;ON&lt;/button&gt;
+  &lt;button class="off" onclick="send('led', 0)"&gt;OFF&lt;/button&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;Relay: &lt;span id="relayState"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;button class="on"  onclick="send('relay', 1)"&gt;ON&lt;/button&gt;
+  &lt;button class="off" onclick="send('relay', 0)"&gt;OFF&lt;/button&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;Pot: &lt;span id="pot"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;progress id="bar" max="4095" value="0"&gt;&lt;/progress&gt;
+&lt;/div&gt;
+&lt;script&gt;
+function show(s) {
+  document.getElementById('led').textContent   = s.led   ? 'ON' : 'OFF';
+  document.getElementById('relayState').textContent = s.relay ? 'ON' : 'OFF';
+  document.getElementById('pot').textContent   = s.pot;
+  document.getElementById('bar').value         = s.pot;
+}
+function refresh() {
+  fetch('/api/state')
+    .then(r =&gt; r.json())
+    .then(show)
+    .catch(e =&gt; console.log('ESP32 unreachable', e));
+}
+function send(dev, val) {
+  fetch('/api/' + dev + '?on=' + val, { method: 'POST' })
+    .then(r =&gt; r.json())
+    .then(show);
+}
+refresh();
+setInterval(refresh, 1000);
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+)rawliteral";
+
+void setRelay(bool on) {
+  relayOn = on;
+  if (RELAY_ACTIVE_LOW) digitalWrite(RELAY_PIN, on ? LOW : HIGH);
+  else                  digitalWrite(RELAY_PIN, on ? HIGH : LOW);
+}
+
+bool checkAuth() {
+  if (!server.authenticate(WEB_USER, WEB_PASS)) {
+    server.requestAuthentication();         // 401 + "please log in"
+    return false;
+  }
+  return true;
+}
+String stateJson() {
+  String json = "{\"led\":";
+  json += ledOn ? "true" : "false";
+  json += ",\"relay\":";
+  json += relayOn ? "true" : "false";
+  json += ",\"pot\":";
+  json += analogRead(POT_PIN);              // a number from 0 to 4095
+  json += "}";
+  return json;                              // e.g. {"led":true,"relay":false,"pot":2048}
+}
+
+void handleRoot() {
+  if (!checkAuth()) return;                 // the guard at the door
+  server.send(200, "text/html; charset=utf-8", INDEX_HTML);
+}
+
+void handleState() {
+  if (!checkAuth()) return;
+  server.send(200, "application/json", stateJson());
+}
+
+void handleLed() {
+  if (!checkAuth()) return;
+  if (!server.hasArg("on")) { server.send(400, "text/plain", "missing ?on=0/1"); return; }
+  ledOn = (server.arg("on") == "1");
+  digitalWrite(LED_PIN, ledOn ? HIGH : LOW);
+  handleState();                            // send back the new state
+}
+
+void handleRelay() {
+  if (!checkAuth()) return;
+  if (!server.hasArg("on")) { server.send(400, "text/plain", "missing ?on=0/1"); return; }
+  setRelay(server.arg("on") == "1");
+  handleState();
+}
+
+void handleNotFound() { server.send(404, "text/plain", "404: Not Found"); }
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  setRelay(false);                          // first thing: relay off
+  digitalWrite(LED_PIN, LOW);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting");
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - start &lt; 20000) {
+    delay(500);
+    Serial.print(".");
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nWiFi failed -&gt; restart in 5 s");
+    delay(5000);
+    ESP.restart();
+  }
+  Serial.print("\nOpen http://");
+  Serial.println(WiFi.localIP());
+
+  if (MDNS.begin("esp32")) {                // the name esp32.local
+    MDNS.addService("http", "tcp", 80);
+    Serial.println("or   http://esp32.local");
+  }
+
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/api/state", HTTP_GET, handleState);
+  server.on("/api/led", HTTP_POST, handleLed);
+  server.on("/api/relay", HTTP_POST, handleRelay);
+  server.onNotFound(handleNotFound);
+  server.begin();
+  Serial.println("HTTP server started");
+}
+
+void loop() {
+  server.handleClient();                    // "is anyone knocking?"
+  delay(2);                                 // a little breathing room for the rest of the system
+}
+</pre></div>
+<ol class="walk" data-for="ex3ans">
+  <li data-lines="16-17"><b class="what">The page username and password.</b> Separate from the Wi-Fi password.
+    <span class="why">Be sure to change the default password; anyone who has read this lesson knows it.</span></li>
+  <li data-lines="82-87"><b class="what">The lesson's checkAuth.</b> If the browser didn't send the right name and password, a <code>401</code> reply asking for a login goes back, and it returns false.
+    <span class="why">Keeping this logic in one function means each handler needs just one line, and if you change the login method later you change it in one place.</span></li>
+  <li data-lines="100-107"><b class="what">Page and state, locked.</b> handleRoot and handleState, which used to be one-liners, now call checkAuth first.
+    <span class="why">Without locking handleState, anyone on your network can use <code>/api/state</code> to see whether the relay and LED are on (a hint that someone is home, for example). Reading information is a privacy matter too.</span></li>
+  <li data-lines="110-111"><b class="what">LED, locked.</b> The first line of the handler.
+    <span class="why">This is the most important lock: without it anyone could switch things on.</span></li>
+  <li data-lines="118-119"><b class="what">Relay, locked.</b> The same line.
+    <span class="why">handleLed and handleRelay end by calling <code>handleState</code>, which checks the password again; that's fine, because the browser sends it with every request. The 404 path isn't locked because it reveals nothing.</span></li>
+</ol>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">The lesson in three lines</div>

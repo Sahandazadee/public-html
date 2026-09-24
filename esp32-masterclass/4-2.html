@@ -551,37 +551,612 @@ void handleRoot() {
 <div class="exercise"><div class="ct">تمرین ۱: سیگنال و زمان روشن بودن</div>
 <p>به JSON دو مقدار دیگر اضافه کن: <code>rssi</code> (قدرت سیگنال) و <code>uptime</code> (چند ثانیه از روشن شدن برد گذشته). در صفحه یک کارت جدید برای نمایش آن‌ها بساز.</p>
 <details><summary>راهنمایی</summary><p>سه جا باید عوض شود: تابع <code>stateJson</code> در C++، بدنه HTML (یک کارت با دو <code>span</code> جدید) و تابع <code>show</code> در جاوااسکریپت. <code>millis() / 1000</code> ثانیه‌ها را می‌دهد.</p></details>
-<details><summary>جواب</summary>
-<div class="code" data-file="SmartHome (تغییرات)" id="codeEx2"><pre>
-// در stateJson، قبل از خط json += "}";
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>صفحه را باز کن: زیر کارت پتانسیومتر یک کارت تازه می‌بینی، مثلا <code>RSSI: -54 dBm</code> و <code>Up: 37 s</code>. آدرس <code>http://IP/api/state</code> را هم مستقیم در مرورگر باز کن؛ باید چیزی شبیه این باشد (عددها مال توست):</p>
+<div class="code" data-file="/api/state" data-lang="json"><pre>
+{"led":false,"relay":false,"pot":1873,"rssi":-54,"uptime":37}
+</pre></div>
+<ul>
+<li>عدد Up هر ثانیه یکی بالا می‌رود (صفحه هر ثانیه به‌روز می‌شود).</li>
+<li>دکمه EN برد را بزن: بعد از وصل شدن دوباره، Up از نزدیک صفر شروع می‌شود.</li>
+<li>RSSI کمی بالا و پایین می‌رود (مثلا ‎-52 تا ‎-56)؛ اگر انتهای برد را در مشت بگیری، ضعیف‌تر می‌شود.</li>
+<li>اگر صفحه روی <code>?</code> ماند، <code>/api/state</code> را باز کن: اگر JSON آن ناقص است (مثلا کاما جا افتاده یا بعد از <code>}</code> آمده)، مشکل در stateJson است؛ اگر JSON سالم است، اسم‌ها در show یا id ها در HTML را چک کن (کلید F12 و زبانه Console خطا را نشان می‌دهد).</li>
+</ul>
+<p>یادت باشد: در ویکوی رایگان مرورگرت به صفحه برد نمی‌رسد (کادر ویکوی بخش وب سرور را ببین). آنجا فقط کامپایل و اتصال را چک کن و صفحه را روی برد واقعی ببین.</p>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>برنامه کامل <code>SmartHome</code> با سه تغییر: یک کارت در HTML، دو خط در <code>show</code> و دو مقدار در <code>stateJson</code>.</p>
+<div class="code" data-file="SmartHome_Status.ino" id="codeEx2"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;ESPmDNS.h&gt;
+
+const char* WIFI_SSID = "Wokwi-GUEST";      // نام شبکه خودت
+const char* WIFI_PASS = "";                 // رمز شبکه خودت
+
+const int LED_PIN   = 4;                    // LED معمولی
+const int RELAY_PIN = 26;                   // ورودی IN ماژول رله
+const int POT_PIN   = 34;                   // پتانسیومتر (ADC1، با Wi-Fi کار می‌کند)
+const bool RELAY_ACTIVE_LOW = true;         // بیشتر ماژول‌های رله با LOW روشن می‌شوند
+
+WebServer server(80);                       // سرور روی پورت ۸۰ (پورت استاندارد HTTP)
+bool ledOn = false;
+bool relayOn = false;
+
+// صفحه وب کامل، داخل یک رشته خام (raw string literal)
+const char INDEX_HTML[] PROGMEM = R"rawliteral(
+&lt;!DOCTYPE html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+&lt;meta charset="utf-8"&gt;
+&lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;
+&lt;title&gt;ESP32 Home&lt;/title&gt;
+&lt;style&gt;
+  body { font-family: sans-serif; text-align: center; background: #f2f4f8; }
+  .card { background: #fff; max-width: 340px; margin: 14px auto; padding: 12px; border-radius: 12px; }
+  button { font-size: 20px; padding: 10px 24px; margin: 4px; border: 0; border-radius: 8px; color: #fff; }
+  .on  { background: #2e9d5b; }
+  .off { background: #c0392b; }
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;h1&gt;ESP32 Home Control&lt;/h1&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;LED: &lt;span id="led"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;button class="on"  onclick="send('led', 1)"&gt;ON&lt;/button&gt;
+  &lt;button class="off" onclick="send('led', 0)"&gt;OFF&lt;/button&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;Relay: &lt;span id="relayState"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;button class="on"  onclick="send('relay', 1)"&gt;ON&lt;/button&gt;
+  &lt;button class="off" onclick="send('relay', 0)"&gt;OFF&lt;/button&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;Pot: &lt;span id="pot"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;progress id="bar" max="4095" value="0"&gt;&lt;/progress&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;RSSI: &lt;span id="rssi"&gt;?&lt;/span&gt; dBm&lt;/h2&gt;
+  &lt;p&gt;Up: &lt;span id="up"&gt;?&lt;/span&gt; s&lt;/p&gt;
+&lt;/div&gt;
+&lt;script&gt;
+function show(s) {
+  document.getElementById('led').textContent   = s.led   ? 'ON' : 'OFF';
+  document.getElementById('relayState').textContent = s.relay ? 'ON' : 'OFF';
+  document.getElementById('pot').textContent   = s.pot;
+  document.getElementById('bar').value         = s.pot;
+  document.getElementById('rssi').textContent = s.rssi;
+  document.getElementById('up').textContent   = s.uptime;
+}
+function refresh() {
+  fetch('/api/state')
+    .then(r =&gt; r.json())
+    .then(show)
+    .catch(e =&gt; console.log('ESP32 unreachable', e));
+}
+function send(dev, val) {
+  fetch('/api/' + dev + '?on=' + val, { method: 'POST' })
+    .then(r =&gt; r.json())
+    .then(show);
+}
+refresh();
+setInterval(refresh, 1000);
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+)rawliteral";
+
+void setRelay(bool on) {
+  relayOn = on;
+  if (RELAY_ACTIVE_LOW) digitalWrite(RELAY_PIN, on ? LOW : HIGH);
+  else                  digitalWrite(RELAY_PIN, on ? HIGH : LOW);
+}
+
+String stateJson() {
+  String json = "{\"led\":";
+  json += ledOn ? "true" : "false";
+  json += ",\"relay\":";
+  json += relayOn ? "true" : "false";
+  json += ",\"pot\":";
+  json += analogRead(POT_PIN);              // عدد ۰ تا ۴۰۹۵
   json += ",\"rssi\":";
-  json += WiFi.RSSI();                      // مثلا -54
+  json += WiFi.RSSI();                      // مثلا ‎-54
   json += ",\"uptime\":";
   json += millis() / 1000;                  // ثانیه از روشن شدن
+  json += "}";
+  return json;                              // مثلا {"led":true,"relay":false,"pot":2048}
+}
 
-// در صفحه HTML یک کارت جدید:
-//   &lt;div class="card"&gt;&lt;h2&gt;RSSI: &lt;span id="rssi"&gt;?&lt;/span&gt; dBm, up: &lt;span id="up"&gt;?&lt;/span&gt; s&lt;/h2&gt;&lt;/div&gt;
-// و در تابع show:
-//   document.getElementById('rssi').textContent = s.rssi;
-//   document.getElementById('up').textContent   = s.uptime;
+void handleRoot()  { server.send(200, "text/html; charset=utf-8", INDEX_HTML); }
+void handleState() { server.send(200, "application/json", stateJson()); }
+
+void handleLed() {
+  if (!server.hasArg("on")) { server.send(400, "text/plain", "missing ?on=0/1"); return; }
+  ledOn = (server.arg("on") == "1");
+  digitalWrite(LED_PIN, ledOn ? HIGH : LOW);
+  handleState();                            // وضعیت جدید را برگردان
+}
+
+void handleRelay() {
+  if (!server.hasArg("on")) { server.send(400, "text/plain", "missing ?on=0/1"); return; }
+  setRelay(server.arg("on") == "1");
+  handleState();
+}
+
+void handleNotFound() { server.send(404, "text/plain", "404: Not Found"); }
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  setRelay(false);                          // اولین کار: رله خاموش
+  digitalWrite(LED_PIN, LOW);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting");
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - start &lt; 20000) {
+    delay(500);
+    Serial.print(".");
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nWiFi failed -&gt; restart in 5 s");
+    delay(5000);
+    ESP.restart();
+  }
+  Serial.print("\nOpen http://");
+  Serial.println(WiFi.localIP());
+
+  if (MDNS.begin("esp32")) {                // اسم esp32.local
+    MDNS.addService("http", "tcp", 80);
+    Serial.println("or   http://esp32.local");
+  }
+
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/api/state", HTTP_GET, handleState);
+  server.on("/api/led", HTTP_POST, handleLed);
+  server.on("/api/relay", HTTP_POST, handleRelay);
+  server.onNotFound(handleNotFound);
+  server.begin();
+  Serial.println("HTTP server started");
+}
+
+void loop() {
+  server.handleClient();                    // «آیا کسی در زده؟»
+  delay(2);                                 // کمی نفس برای بقیه کارهای سیستم
+}
 </pre></div>
 <ol class="walk" data-for="codeEx2">
-  <li data-lines="1-5"><b class="what">دو جفت «اسم:مقدار» تازه در JSON.</b> هر کدام با یک کاما شروع می‌شود، چون پشت <code>"pot":...</code> می‌آیند. <code>WiFi.RSSI()</code> عدد منفی و <code>millis() / 1000</code> ثانیه‌ها را می‌دهد.
-    <span class="why">جای این خط‌ها مهم است: باید قبل از <code>"}"</code> پایانی باشند، وگرنه JSON خراب می‌شود و <code>r.json()</code> در مرورگر خطا می‌دهد (صفحه روی <code>?</code> می‌ماند).</span></li>
-  <li data-lines="7-8"><b class="what">کارت جدید در HTML.</b> دو <code>span</code> با id های <code>rssi</code> و <code>up</code> که فعلا <code>?</code> دارند.
-    <span class="why">این خط را (بدون <code>//</code> ابتدایش) داخل رشته خام، کنار بقیه کارت‌ها بگذار. id ها باید دقیقا با اسم‌هایی که در جاوااسکریپت می‌آیند یکی باشند.</span></li>
-  <li data-lines="9-11"><b class="what">پر کردن جای خالی در show.</b> <code>s.rssi</code> و <code>s.uptime</code> همان اسم‌هایی‌اند که در JSON گذاشتیم.
-    <span class="why">سه جای کد (C++، HTML، JS) باید با هم هماهنگ باشند؛ اشتباه تایپی در هر کدام یعنی <code>undefined</code> یا <code>?</code> روی صفحه.</span></li>
+  <li data-lines="50-51"><b class="what">کارت جدید در HTML.</b> دو <code>span</code> با id های <code>rssi</code> و <code>up</code> که اول <code>?</code> نشان می‌دهند، در یک کارت تازه زیر کارت پتانسیومتر.
+    <span class="why">id ها باید دقیقا با اسم‌هایی که در جاوااسکریپت می‌آیند یکی باشند؛ این یک کارت کامل با <code>&lt;div class="card"&gt;</code> خودش است تا ظاهرش مثل بقیه باشد.</span></li>
+  <li data-lines="59-60"><b class="what">پر کردن جای خالی در show.</b> <code>s.rssi</code> و <code>s.uptime</code> همان اسم‌هایی‌اند که در JSON می‌گذاریم.
+    <span class="why">show هر ثانیه با <code>refresh</code> صدا زده می‌شود، پس عددها خودشان به‌روز می‌شوند و کار دیگری لازم نیست.</span></li>
+  <li data-lines="93-96"><b class="what">دو جفت «اسم:مقدار» تازه در JSON.</b> هر کدام با یک کاما شروع می‌شود، چون پشت <code>"pot":...</code> می‌آیند. <code>WiFi.RSSI()</code> عدد منفی و <code>millis() / 1000</code> ثانیه‌ها را می‌دهد.
+    <span class="why">جای این خط‌ها مهم است: باید قبل از <code>"}"</code> پایانی باشند، وگرنه JSON خراب می‌شود و <code>r.json()</code> در مرورگر خطا می‌دهد (صفحه روی <code>?</code> می‌ماند). سه جای کد (C++، HTML، JS) باید با هم هماهنگ باشند.</span></li>
 </ol>
 </details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۲: دکمه «همه خاموش»</div>
 <p>یک مسیر جدید <code>/api/alloff</code> (فقط POST) بساز که هم LED و هم رله را خاموش کند، و در صفحه یک دکمه قرمز بزرگ «همه خاموش» برایش بگذار.</p>
 <details><summary>راهنمایی</summary><p>تابع <code>handleAllOff()</code>: <code>ledOn = false; digitalWrite(LED_PIN, LOW); setRelay(false); handleState();</code>. در setup: <code>server.on("/api/alloff", HTTP_POST, handleAllOff);</code>. در جاوااسکریپت: <code>fetch('/api/alloff', {method:'POST'}).then(r =&gt; r.json()).then(show);</code></p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>در صفحه، زیر کارت پتانسیومتر یک دکمه قرمز بزرگ <code>ALL OFF</code> می‌بینی. LED و رله را روشن کن و بعد این دکمه را بزن:</p>
+<ul>
+<li>LED روی برد خاموش می‌شود، رله «تق» می‌کند و هر دو کارت همان لحظه <code>OFF</code> نشان می‌دهند.</li>
+<li>در Serial Monitor خط <code>All off</code> چاپ می‌شود.</li>
+<li>از ترمینال امتحان کن (عددها مال توست):</li>
+</ul>
+<div class="code" data-file="Terminal" data-lang="text"><pre>
+curl -i -X POST http://192.168.1.37/api/alloff
+HTTP/1.1 200 OK
+Content-Type: application/json
+...
+{"led":false,"relay":false,"pot":1873}
+</pre></div>
+<ul>
+<li>حالا <code>http://IP/api/alloff</code> را در نوار آدرس مرورگر باز کن (که GET است): باید <code>404: Not Found</code> ببینی و هیچ چیز خاموش نشود. این ثابت می‌کند مسیر فقط به POST جواب می‌دهد.</li>
+</ul>
+<p>یادت باشد: در ویکوی رایگان مرورگرت به صفحه برد نمی‌رسد (کادر ویکوی بخش وب سرور را ببین). آنجا فقط کامپایل و اتصال را چک کن و صفحه را روی برد واقعی ببین.</p>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>برنامه کامل <code>SmartHome</code> با پنج تغییر کوچک (CSS، کارت، تابع جاوااسکریپت، handler و ثبت مسیر):</p>
+<div class="code" data-file="SmartHome_AllOff.ino" id="ex2ans"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;ESPmDNS.h&gt;
+
+const char* WIFI_SSID = "Wokwi-GUEST";      // نام شبکه خودت
+const char* WIFI_PASS = "";                 // رمز شبکه خودت
+
+const int LED_PIN   = 4;                    // LED معمولی
+const int RELAY_PIN = 26;                   // ورودی IN ماژول رله
+const int POT_PIN   = 34;                   // پتانسیومتر (ADC1، با Wi-Fi کار می‌کند)
+const bool RELAY_ACTIVE_LOW = true;         // بیشتر ماژول‌های رله با LOW روشن می‌شوند
+
+WebServer server(80);                       // سرور روی پورت ۸۰ (پورت استاندارد HTTP)
+bool ledOn = false;
+bool relayOn = false;
+
+// صفحه وب کامل، داخل یک رشته خام (raw string literal)
+const char INDEX_HTML[] PROGMEM = R"rawliteral(
+&lt;!DOCTYPE html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+&lt;meta charset="utf-8"&gt;
+&lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;
+&lt;title&gt;ESP32 Home&lt;/title&gt;
+&lt;style&gt;
+  body { font-family: sans-serif; text-align: center; background: #f2f4f8; }
+  .card { background: #fff; max-width: 340px; margin: 14px auto; padding: 12px; border-radius: 12px; }
+  button { font-size: 20px; padding: 10px 24px; margin: 4px; border: 0; border-radius: 8px; color: #fff; }
+  .on  { background: #2e9d5b; }
+  .off { background: #c0392b; }
+  .big { font-size: 28px; padding: 16px 40px; }
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;h1&gt;ESP32 Home Control&lt;/h1&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;LED: &lt;span id="led"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;button class="on"  onclick="send('led', 1)"&gt;ON&lt;/button&gt;
+  &lt;button class="off" onclick="send('led', 0)"&gt;OFF&lt;/button&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;Relay: &lt;span id="relayState"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;button class="on"  onclick="send('relay', 1)"&gt;ON&lt;/button&gt;
+  &lt;button class="off" onclick="send('relay', 0)"&gt;OFF&lt;/button&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;Pot: &lt;span id="pot"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;progress id="bar" max="4095" value="0"&gt;&lt;/progress&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;button class="off big" onclick="allOff()"&gt;ALL OFF&lt;/button&gt;
+&lt;/div&gt;
+&lt;script&gt;
+function show(s) {
+  document.getElementById('led').textContent   = s.led   ? 'ON' : 'OFF';
+  document.getElementById('relayState').textContent = s.relay ? 'ON' : 'OFF';
+  document.getElementById('pot').textContent   = s.pot;
+  document.getElementById('bar').value         = s.pot;
+}
+function refresh() {
+  fetch('/api/state')
+    .then(r =&gt; r.json())
+    .then(show)
+    .catch(e =&gt; console.log('ESP32 unreachable', e));
+}
+function send(dev, val) {
+  fetch('/api/' + dev + '?on=' + val, { method: 'POST' })
+    .then(r =&gt; r.json())
+    .then(show);
+}
+function allOff() {
+  fetch('/api/alloff', { method: 'POST' })
+    .then(r =&gt; r.json())
+    .then(show);
+}
+refresh();
+setInterval(refresh, 1000);
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+)rawliteral";
+
+void setRelay(bool on) {
+  relayOn = on;
+  if (RELAY_ACTIVE_LOW) digitalWrite(RELAY_PIN, on ? LOW : HIGH);
+  else                  digitalWrite(RELAY_PIN, on ? HIGH : LOW);
+}
+
+String stateJson() {
+  String json = "{\"led\":";
+  json += ledOn ? "true" : "false";
+  json += ",\"relay\":";
+  json += relayOn ? "true" : "false";
+  json += ",\"pot\":";
+  json += analogRead(POT_PIN);              // عدد ۰ تا ۴۰۹۵
+  json += "}";
+  return json;                              // مثلا {"led":true,"relay":false,"pot":2048}
+}
+
+void handleRoot()  { server.send(200, "text/html; charset=utf-8", INDEX_HTML); }
+void handleState() { server.send(200, "application/json", stateJson()); }
+
+void handleLed() {
+  if (!server.hasArg("on")) { server.send(400, "text/plain", "missing ?on=0/1"); return; }
+  ledOn = (server.arg("on") == "1");
+  digitalWrite(LED_PIN, ledOn ? HIGH : LOW);
+  handleState();                            // وضعیت جدید را برگردان
+}
+
+void handleRelay() {
+  if (!server.hasArg("on")) { server.send(400, "text/plain", "missing ?on=0/1"); return; }
+  setRelay(server.arg("on") == "1");
+  handleState();
+}
+
+void handleAllOff() {
+  ledOn = false;
+  digitalWrite(LED_PIN, LOW);
+  setRelay(false);                          // relayOn را هم به‌روز می‌کند
+  Serial.println("All off");
+  handleState();                            // وضعیت جدید را برگردان
+}
+void handleNotFound() { server.send(404, "text/plain", "404: Not Found"); }
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  setRelay(false);                          // اولین کار: رله خاموش
+  digitalWrite(LED_PIN, LOW);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting");
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - start &lt; 20000) {
+    delay(500);
+    Serial.print(".");
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nWiFi failed -&gt; restart in 5 s");
+    delay(5000);
+    ESP.restart();
+  }
+  Serial.print("\nOpen http://");
+  Serial.println(WiFi.localIP());
+
+  if (MDNS.begin("esp32")) {                // اسم esp32.local
+    MDNS.addService("http", "tcp", 80);
+    Serial.println("or   http://esp32.local");
+  }
+
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/api/state", HTTP_GET, handleState);
+  server.on("/api/led", HTTP_POST, handleLed);
+  server.on("/api/relay", HTTP_POST, handleRelay);
+  server.on("/api/alloff", HTTP_POST, handleAllOff);
+  server.onNotFound(handleNotFound);
+  server.begin();
+  Serial.println("HTTP server started");
+}
+
+void loop() {
+  server.handleClient();                    // «آیا کسی در زده؟»
+  delay(2);                                 // کمی نفس برای بقیه کارهای سیستم
+}
+</pre></div>
+<ol class="walk" data-for="ex2ans">
+  <li data-lines="31"><b class="what">یک کلاس CSS برای دکمه بزرگ.</b> حروف ۲۸ پیکسلی و فاصله داخلی بیشتر.
+    <span class="why">دکمه همزمان دو کلاس دارد: <code>off</code> (رنگ قرمز که از قبل بود) و <code>big</code> (اندازه). لازم نیست رنگ را دوباره بنویسی.</span></li>
+  <li data-lines="51"><b class="what">دکمه در یک کارت تازه.</b> با کلیک، تابع جاوااسکریپت <code>allOff()</code> اجرا می‌شود.
+    <span class="why">مثل دکمه‌های قبلی، صفحه عوض نمی‌شود؛ فقط یک درخواست پشت صحنه می‌رود.</span></li>
+  <li data-lines="71-74"><b class="what">allOff در جاوااسکریپت.</b> یک <code>POST</code> به <code>/api/alloff</code> و نشان دادن JSON برگشتی با همان <code>show</code>.
+    <span class="why">چون سرور وضعیت جدید را برمی‌گرداند، هر دو کارت LED و رله فورا OFF می‌شوند و لازم نیست منتظر refresh بعدی بمانی.</span></li>
+  <li data-lines="116-121"><b class="what">handleAllOff در ++C.</b> LED خاموش، رله خاموش با <code>setRelay(false)</code>، یک خط در Serial، و برگرداندن وضعیت.
+    <span class="why">برای رله حتما از <code>setRelay</code> استفاده کن نه <code>digitalWrite</code> مستقیم: فقط setRelay هم منطق active-LOW را می‌داند و هم <code>relayOn</code> را به‌روز می‌کند تا صفحه وضعیت درست را نشان دهد.</span></li>
+  <li data-lines="158"><b class="what">ثبت مسیر، فقط POST.</b> همان الگوی <code>/api/led</code> و <code>/api/relay</code>.
+    <span class="why">فرمانی که چیزی را عوض می‌کند باید POST باشد؛ یک GET تصادفی (مثلا پیش‌نمایش لینک در یک پیام‌رسان) نباید چراغ‌های خانه را خاموش کند.</span></li>
+</ol>
+</details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۳: قفل کامل</div>
 <p>Basic Auth را به <b>همه</b> مسیرها (صفحه، وضعیت، LED، رله) اضافه کن. بعد دو آزمایش کن: (۱) صفحه را در یک پنجره ناشناس (Incognito) مرورگر باز کن؛ باید پنجره نام کاربری و رمز ظاهر شود. (۲) در ترمینال (در Windows PowerShell با <code>curl.exe</code>)، بدون رمز بنویس <code>curl -i -X POST "http://IP/api/led?on=1"</code>؛ باید خط اول پاسخ <code>401 Unauthorized</code> باشد و LED روشن نشود. سپس با <code>curl -i -u admin:رمز -X POST ...</code> دوباره امتحان کن تا <code>200 OK</code> بگیری.</p>
 <details><summary>راهنمایی</summary><p>اولین خط هر handler: <code>if (!checkAuth()) return;</code>. مسیر 404 را لازم نیست قفل کنی. اگر فراموش کنی handleState را قفل کنی، کسی بدون رمز وضعیت خانه‌ات را می‌بیند؛ آیا این مهم است؟ درباره‌اش فکر کن.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<ul>
+<li><b>آزمایش ۱:</b> در پنجره ناشناس، به محض باز کردن <code>http://IP</code> پنجره نام کاربری و رمز مرورگر ظاهر می‌شود. با «Cancel» یک صفحه خالی یا خطای 401 می‌بینی؛ با <code>admin</code> و رمز درست، صفحه مثل قبل کار می‌کند و دکمه‌ها هم (مرورگر رمز را برای fetch ها هم می‌فرستد).</li>
+<li><b>آزمایش ۲:</b> خروجی ترمینال (IP و عدد pot مال توست):</li>
+</ul>
+<div class="code" data-file="Terminal" data-lang="text"><pre>
+curl -i -X POST "http://192.168.1.37/api/led?on=1"
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Basic realm="Login Required"
+...
+
+curl -i -u admin:Change-Me-2026 -X POST "http://192.168.1.37/api/led?on=1"
+HTTP/1.1 200 OK
+Content-Type: application/json
+...
+{"led":true,"relay":false,"pot":1873}
+</pre></div>
+<ul>
+<li>بعد از درخواست اول LED نباید روشن شود؛ بعد از دومی روشن می‌شود.</li>
+<li><code>curl -i http://IP/api/state</code> بدون رمز هم باید 401 بدهد؛ اگر 200 داد، قفل handleState را فراموش کرده‌ای.</li>
+<li>یادت باشد Basic Auth روی HTTP ساده رمز را فقط با Base64 می‌فرستد (نه رمزنگاری)؛ برای شبکه خانه کافی است، نه برای اینترنت.</li>
+</ul>
+<p>یادت باشد: در ویکوی رایگان مرورگرت به صفحه برد نمی‌رسد (کادر ویکوی بخش وب سرور را ببین). آنجا فقط کامپایل و اتصال را چک کن و صفحه را روی برد واقعی ببین.</p>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>برنامه کامل <code>SmartHome</code> با قفل روی هر چهار مسیر:</p>
+<div class="code" data-file="SmartHome_Locked.ino" id="ex3ans"><pre>
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;ESPmDNS.h&gt;
+
+const char* WIFI_SSID = "Wokwi-GUEST";      // نام شبکه خودت
+const char* WIFI_PASS = "";                 // رمز شبکه خودت
+
+const int LED_PIN   = 4;                    // LED معمولی
+const int RELAY_PIN = 26;                   // ورودی IN ماژول رله
+const int POT_PIN   = 34;                   // پتانسیومتر (ADC1، با Wi-Fi کار می‌کند)
+const bool RELAY_ACTIVE_LOW = true;         // بیشتر ماژول‌های رله با LOW روشن می‌شوند
+
+WebServer server(80);                       // سرور روی پورت ۸۰ (پورت استاندارد HTTP)
+bool ledOn = false;
+bool relayOn = false;
+const char* WEB_USER = "admin";
+const char* WEB_PASS = "Change-Me-2026";    // حتما عوضش کن
+
+// صفحه وب کامل، داخل یک رشته خام (raw string literal)
+const char INDEX_HTML[] PROGMEM = R"rawliteral(
+&lt;!DOCTYPE html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+&lt;meta charset="utf-8"&gt;
+&lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;
+&lt;title&gt;ESP32 Home&lt;/title&gt;
+&lt;style&gt;
+  body { font-family: sans-serif; text-align: center; background: #f2f4f8; }
+  .card { background: #fff; max-width: 340px; margin: 14px auto; padding: 12px; border-radius: 12px; }
+  button { font-size: 20px; padding: 10px 24px; margin: 4px; border: 0; border-radius: 8px; color: #fff; }
+  .on  { background: #2e9d5b; }
+  .off { background: #c0392b; }
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;h1&gt;ESP32 Home Control&lt;/h1&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;LED: &lt;span id="led"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;button class="on"  onclick="send('led', 1)"&gt;ON&lt;/button&gt;
+  &lt;button class="off" onclick="send('led', 0)"&gt;OFF&lt;/button&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;Relay: &lt;span id="relayState"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;button class="on"  onclick="send('relay', 1)"&gt;ON&lt;/button&gt;
+  &lt;button class="off" onclick="send('relay', 0)"&gt;OFF&lt;/button&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;Pot: &lt;span id="pot"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;progress id="bar" max="4095" value="0"&gt;&lt;/progress&gt;
+&lt;/div&gt;
+&lt;script&gt;
+function show(s) {
+  document.getElementById('led').textContent   = s.led   ? 'ON' : 'OFF';
+  document.getElementById('relayState').textContent = s.relay ? 'ON' : 'OFF';
+  document.getElementById('pot').textContent   = s.pot;
+  document.getElementById('bar').value         = s.pot;
+}
+function refresh() {
+  fetch('/api/state')
+    .then(r =&gt; r.json())
+    .then(show)
+    .catch(e =&gt; console.log('ESP32 unreachable', e));
+}
+function send(dev, val) {
+  fetch('/api/' + dev + '?on=' + val, { method: 'POST' })
+    .then(r =&gt; r.json())
+    .then(show);
+}
+refresh();
+setInterval(refresh, 1000);
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+)rawliteral";
+
+void setRelay(bool on) {
+  relayOn = on;
+  if (RELAY_ACTIVE_LOW) digitalWrite(RELAY_PIN, on ? LOW : HIGH);
+  else                  digitalWrite(RELAY_PIN, on ? HIGH : LOW);
+}
+
+bool checkAuth() {
+  if (!server.authenticate(WEB_USER, WEB_PASS)) {
+    server.requestAuthentication();         // ۴۰۱ + «لطفا وارد شو»
+    return false;
+  }
+  return true;
+}
+String stateJson() {
+  String json = "{\"led\":";
+  json += ledOn ? "true" : "false";
+  json += ",\"relay\":";
+  json += relayOn ? "true" : "false";
+  json += ",\"pot\":";
+  json += analogRead(POT_PIN);              // عدد ۰ تا ۴۰۹۵
+  json += "}";
+  return json;                              // مثلا {"led":true,"relay":false,"pot":2048}
+}
+
+void handleRoot() {
+  if (!checkAuth()) return;                 // نگهبان دم در
+  server.send(200, "text/html; charset=utf-8", INDEX_HTML);
+}
+
+void handleState() {
+  if (!checkAuth()) return;
+  server.send(200, "application/json", stateJson());
+}
+
+void handleLed() {
+  if (!checkAuth()) return;
+  if (!server.hasArg("on")) { server.send(400, "text/plain", "missing ?on=0/1"); return; }
+  ledOn = (server.arg("on") == "1");
+  digitalWrite(LED_PIN, ledOn ? HIGH : LOW);
+  handleState();                            // وضعیت جدید را برگردان
+}
+
+void handleRelay() {
+  if (!checkAuth()) return;
+  if (!server.hasArg("on")) { server.send(400, "text/plain", "missing ?on=0/1"); return; }
+  setRelay(server.arg("on") == "1");
+  handleState();
+}
+
+void handleNotFound() { server.send(404, "text/plain", "404: Not Found"); }
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  setRelay(false);                          // اولین کار: رله خاموش
+  digitalWrite(LED_PIN, LOW);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting");
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - start &lt; 20000) {
+    delay(500);
+    Serial.print(".");
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nWiFi failed -&gt; restart in 5 s");
+    delay(5000);
+    ESP.restart();
+  }
+  Serial.print("\nOpen http://");
+  Serial.println(WiFi.localIP());
+
+  if (MDNS.begin("esp32")) {                // اسم esp32.local
+    MDNS.addService("http", "tcp", 80);
+    Serial.println("or   http://esp32.local");
+  }
+
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/api/state", HTTP_GET, handleState);
+  server.on("/api/led", HTTP_POST, handleLed);
+  server.on("/api/relay", HTTP_POST, handleRelay);
+  server.onNotFound(handleNotFound);
+  server.begin();
+  Serial.println("HTTP server started");
+}
+
+void loop() {
+  server.handleClient();                    // «آیا کسی در زده؟»
+  delay(2);                                 // کمی نفس برای بقیه کارهای سیستم
+}
+</pre></div>
+<ol class="walk" data-for="ex3ans">
+  <li data-lines="16-17"><b class="what">نام کاربری و رمز صفحه.</b> جدا از رمز Wi-Fi.
+    <span class="why">رمز پیش‌فرض را حتما عوض کن؛ هر کس این درس را خوانده باشد آن را می‌داند.</span></li>
+  <li data-lines="82-87"><b class="what">همان checkAuth درس.</b> اگر مرورگر نام و رمز درست نفرستاده، پاسخ <code>401</code> با درخواست ورود برمی‌گردد و false.
+    <span class="why">نوشتن این منطق در یک تابع یعنی هر handler فقط یک خط لازم دارد و اگر بعدا روش ورود را عوض کردی، فقط یک جا تغییر می‌کند.</span></li>
+  <li data-lines="100-107"><b class="what">صفحه و وضعیت، قفل.</b> handleRoot و handleState که قبلا یک‌خطی بودند، حالا اول checkAuth را صدا می‌زنند.
+    <span class="why">بدون قفل handleState، هر کس روی شبکه‌ات با <code>/api/state</code> می‌فهمد رله و LED روشن‌اند یا نه (مثلا این که کسی خانه هست). خواندن اطلاعات هم حریم خصوصی است.</span></li>
+  <li data-lines="110-111"><b class="what">LED، قفل.</b> اولین خط handler.
+    <span class="why">این مهم‌ترین قفل است: بدون آن هر کس می‌تواند چیزی را روشن کند.</span></li>
+  <li data-lines="118-119"><b class="what">رله، قفل.</b> همان خط.
+    <span class="why">handleLed و handleRelay در آخر <code>handleState</code> را صدا می‌زنند که دوباره رمز را چک می‌کند؛ اشکالی ندارد چون مرورگر رمز را در هر درخواست می‌فرستد. مسیر 404 قفل نشده، چون چیزی لو نمی‌دهد.</span></li>
+</ol>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>

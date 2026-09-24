@@ -738,7 +738,73 @@ hello 3</div>
 }</script>
 </div>
 <div class="exercise"><div class="ct">Try it: break it on purpose</div>
-<p>1) Pull out the GPIO17 → GPIO16 wire while it runs: the messages stop, but the program doesn't crash. 2) Change the speed in <code>Serial2.begin</code> to 4800 and upload: it still works, because both ends are the same UART. 3) Now send with Serial2 and receive with Serial1: add <code>Serial1.begin(4800, SERIAL_8N1, 26, 14);</code>, move the wire so it goes from GPIO17 to GPIO26, and read <code>Serial1</code> instead of <code>Serial2</code>. With 9600 on one side and 4800 on the other you'll see garbled characters: the mismatched-baud problem from the troubleshooting table, seen with your own eyes. (GPIO26 and GPIO14 are free in this lesson; after the test, remove the wire.)</p>
+<p>1) Pull out the GPIO17 → GPIO16 wire while it runs: the messages stop, but the program doesn't crash. 2) Change the speed in <code>Serial2.begin</code> to 4800 and upload: it still works, because both ends are the same UART. 3) Now set the speed in <code>Serial2.begin</code> back to 9600, send with Serial2 and receive with Serial1: add <code>Serial1.begin(4800, SERIAL_8N1, 26, 14);</code>, move the wire so it goes from GPIO17 to GPIO26, and read <code>Serial1</code> instead of <code>Serial2</code>. With 9600 on one side and 4800 on the other you'll see garbled characters: the mismatched-baud problem from the troubleshooting table, seen with your own eyes. (GPIO26 and GPIO14 are free in this lesson; after the test, remove the wire.)</p>
+<details class="expect"><summary>What should you see?</summary>
+<ul>
+<li><b>Step 1:</b> when you pull the wire, the <code>hello</code> lines stop (you may see a stray symbol or two from the floating pin). Plug it back in and it carries on, but the number jumps, for example from <code>hello 7</code> to <code>hello 12</code>: the messages sent in between are lost, they aren't stored anywhere.</li>
+<li><b>Step 2:</b> at 4800 the output is exactly as before (<code>hello 1</code>, <code>hello 2</code>...), because the sender and receiver are one UART at one speed.</li>
+<li><b>Step 3:</b> instead of <code>hello N</code> you see a few garbled symbols every second, something like this (the symbols differ every time):</li>
+</ul>
+<pre class="serial">Mismatch test: 9600 -&gt; 4800
+�f��x
+��f�
+�x��f</pre>
+<ul>
+<li>To be sure, change 4800 to 9600 in the answer code and upload again: you should see clean <code>hello 1</code>, <code>hello 2</code>... again. That proves the problem was only the speed, not the wire.</li>
+<li>If nothing at all arrives in step 3, check the wire: it must go from GPIO17 to GPIO26, not to GPIO16.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>Steps 1 and 2 need no new code (it is still <code>UART_Loopback</code>). The complete code for step 3:</p>
+<div class="code" data-file="UART_Baud_Mismatch.ino" id="ex0ans"><pre>
+// Step 3: Serial2 sends at 9600, Serial1 listens at 4800 (wire: GPIO17 -&gt; GPIO26)
+unsigned long lastSend = 0;
+int counter = 0;
+
+void setup() {
+  Serial.begin(115200);
+  Serial2.begin(9600, SERIAL_8N1, 16, 17);   // sender: TX2 = GPIO17
+  Serial1.begin(4800, SERIAL_8N1, 26, 14);   // receiver: RX1 = GPIO26, wrong speed on purpose!
+  Serial.println("Mismatch test: 9600 -&gt; 4800");
+}
+
+void loop() {
+  if (millis() - lastSend &gt;= 1000) {         // send once a second, as before
+    lastSend = millis();
+    counter++;
+    Serial2.printf("hello %d\n", counter);
+  }
+  while (Serial1.available()) {              // read from Serial1 now, not Serial2
+    Serial.write(Serial1.read());
+  }
+}
+</pre></div>
+<ol class="walk" data-for="ex0ans">
+  <li data-lines="7-8"><b class="what">Two separate UARTs at two speeds.</b> Serial2 sends at 9600 from GPIO17; Serial1 listens at 4800 on GPIO26 (its TX, GPIO14, isn't used).
+    <span class="why">In steps 1 and 2 the sender and receiver were the <b>same</b> UART, so their speeds always matched. Only with two separate UARTs can you really see a speed mismatch.</span></li>
+  <li data-lines="13-16"><b class="what">Sending, as before.</b> The same <code>hello N</code> every second.
+    <span class="why">The sender hasn't changed, so any garbage you see is caused only by the receiving side.</span></li>
+  <li data-lines="18-19"><b class="what">Listening with Serial1.</b> Every byte Serial1 receives goes to the Serial Monitor unchanged.
+    <span class="why">The receiver assumes every bit lasts twice as long as it really does, so it mixes the bits up: fewer bytes, and meaningless ones.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="ex0ans">
+<p>This time the wire goes from the board's pin 17 to its own pin 26. After you've seen the garbled symbols, change 4800 to 9600 and run it again.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:17", "esp:26", "yellow", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 
 <h3 id="gps">The NEO-6M GPS module</h3>
@@ -984,11 +1050,173 @@ Lat=35.702058  Lon=51.409054  Sats=7  Alt=1190.2m</div>
 <div class="exercise"><div class="ct">Exercise 1: a temperature graph on the OLED</div>
 <p>Change the weather station project so it keeps the last 64 temperature readings in an array and draws a simple line graph in the right half of the screen (x from 64 to 127). 15 degrees should be the bottom of the graph and 35 degrees the top.</p>
 <details><summary>Hint</summary><p><code>float hist[64];</code> and shift the values along by one slot each time (or keep a circular index). For each point: <code>int y = map(t * 10, 150, 350, 63, 0);</code> (multiplied by 10 because map works with whole numbers) and <code>display.drawLine(x1, y1, x2, y2, SSD1306_WHITE)</code> between consecutive points. Keep y between 0 and 63 with <code>constrain</code>.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>On the OLED: temperature and humidity in big digits on the left; on the right, a separator line and the graph, which starts at x=64 and grows one pixel to the right every 2 seconds. After about 2 minutes 8 seconds (64 points) it reaches the right edge, and from then on it crawls to the left. In the Serial Monitor (with the DHT22 at 24.5 and then 30 degrees):</p>
+<pre class="serial">T=24.5 C  H=40.0 %  y=34  points=1
+T=24.5 C  H=40.0 %  y=34  points=2
+T=24.5 C  H=40.0 %  y=34  points=3
+...
+T=30.0 C  H=40.0 %  y=16  points=64
+T=30.0 C  H=40.0 %  y=16  points=64</pre>
+<p>y must match this table (maybe ±1, because a decimal temperature such as 24.3 is stored as slightly less in memory and map throws the fraction away):</p>
+<div class="table-wrap"><table>
+<tr><th>Temperature</th><th>y (from the top of the screen)</th></tr>
+<tr><td>15.0 or less</td><td>63 (bottom row)</td></tr>
+<tr><td>24.5</td><td>34</td></tr>
+<tr><td>30.0</td><td>16</td></tr>
+<tr><td>35.0 or more</td><td>0 (top row)</td></tr>
+</table></div>
+<ul>
+<li>Breathe on the sensor or warm it between your fingers: the graph line on the right climbs.</li>
+<li><code>points</code> counts up to 64 and then stays at 64. If it goes higher, you're writing past the end of the array.</li>
+<li>No digits spill onto the graph, and no line runs off the edge of the screen.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="Weather_Graph.ino" id="ex1ans"><pre>
+// Weather station + a graph of the last 64 temperatures
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+DHT dht(13, DHT22);
+
+const int HIST_LEN = 64;          // one point per pixel column, x = 64..127
+float hist[HIST_LEN];
+int histCount = 0;                // how many readings are stored so far
+unsigned long lastRead = 0;
+
+void addReading(float t) {
+  if (histCount &lt; HIST_LEN) {
+    hist[histCount] = t;          // still filling up
+    histCount++;
+  } else {
+    for (int i = 0; i &lt; HIST_LEN - 1; i++) hist[i] = hist[i + 1];   // shift left by one
+    hist[HIST_LEN - 1] = t;       // newest at the right edge
+  }
+}
+
+int tempToY(float t) {
+  int y = map(t * 10, 150, 350, 63, 0);   // 15.0 C -&gt; 63 (bottom), 35.0 C -&gt; 0 (top)
+  return constrain(y, 0, 63);
+}
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found!");
+    while (true) delay(1000);
+  }
+  display.setTextColor(SSD1306_WHITE);
+  dht.begin();
+}
+
+void loop() {
+  if (millis() - lastRead &lt; 2000) return;
+  lastRead = millis();
+
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) {
+    Serial.println("DHT22 read error");
+    return;
+  }
+  addReading(t);
+
+  display.clearDisplay();
+  // left half: the numbers (at most 64 pixels wide)
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("Temp C");
+  display.setTextSize(2);
+  display.setCursor(0, 12);
+  display.printf("%.1f", t);
+  display.setTextSize(1);
+  display.setCursor(0, 36);
+  display.println("Hum %");
+  display.setTextSize(2);
+  display.setCursor(0, 48);
+  display.printf("%.1f", h);
+
+  // right half: the graph
+  display.drawFastVLine(63, 0, 64, SSD1306_WHITE);   // a separator line
+  if (histCount == 1) display.drawPixel(64, tempToY(hist[0]), SSD1306_WHITE);
+  for (int i = 1; i &lt; histCount; i++) {
+    display.drawLine(64 + i - 1, tempToY(hist[i - 1]), 64 + i, tempToY(hist[i]), SSD1306_WHITE);
+  }
+  display.display();
+
+  Serial.printf("T=%.1f C  H=%.1f %%  y=%d  points=%d\n", t, h, tempToY(t), histCount);
+}
+</pre></div>
+<ol class="walk" data-for="ex1ans">
+  <li data-lines="10-13"><b class="what">The graph memory.</b> An array of 64 temperatures and <code>histCount</code>, which says how many of its slots are filled.
+    <span class="why">The right half of the screen has exactly 64 pixel columns; one reading per column. Until 64 readings have arrived we mustn't draw the empty (zero) slots, or a line would drop to the bottom of the screen.</span></li>
+  <li data-lines="15-21"><b class="what">Adding a reading.</b> Until the array is full, add at the end; after that, move everything one slot to the left and put the newest in the last slot.
+    <span class="why">This is the "shift the values along by one slot" from the hint: the oldest number drops off the left and the graph crawls left like a paper chart recorder.</span></li>
+  <li data-lines="25-27"><b class="what">Turning a temperature into a pixel height.</b> <code>t * 10</code> turns the temperature into tenths of a degree (24.5 → 245) and map turns that into 63 (bottom) to 0 (top).
+    <span class="why">On the OLED, y starts at the top, so a higher temperature needs a smaller y; that's why 63 and 0 are written the other way round. <code>constrain</code> pins temperatures outside 15 to 35 to the edge so we never draw off the screen.</span></li>
+  <li data-lines="42-51"><b class="what">One valid reading every 2 seconds.</b> The same millis guard as the weather station; only good readings are added to the graph.
+    <span class="why">One nan in the array would ruin the graph, so isnan comes first, then addReading. At 2 seconds per point, 64 points are about 2 minutes 8 seconds of history.</span></li>
+  <li data-lines="55-66"><b class="what">Left half: narrower numbers.</b> A size-1 title and a size-2 number, but no unit next to the number.
+    <span class="why">At size 2 each character is 12 pixels wide: <code>24.5</code> (four characters) is 48 pixels and fits in the left half, but <code>24.5 C</code> (six characters, 72 pixels) would spill onto the graph. So the unit moved into the title.</span></li>
+  <li data-lines="69-72"><b class="what">Right half: the graph.</b> A vertical line at x=63 as a separator, then a line between every two neighbouring points. Point i is in column <code>64 + i</code>.
+    <span class="why">The loop starts at i=1 because every line needs the previous point. With only one reading there is no line yet, so we draw a single pixel instead of leaving the area blank.</span></li>
+  <li data-lines="76"><b class="what">A report for you.</b> Temperature, humidity, the calculated y and the number of points.
+    <span class="why">Printing y lets you check the map maths with pencil and paper instead of counting pixels on a tiny screen.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="ex1ans">
+<p>The same circuit as the weather station. Add <code>Adafruit SSD1306</code> and <code>DHT sensor library</code> in Wokwi's Library Manager. Click the DHT22 and move the temperature between 15 and 35 to make the graph go up and down.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "board-ssd1306", "id": "oled1", "top": 60, "left": 200, "attrs": {"i2cAddress": "0x3c"}},
+    {"type": "wokwi-dht22", "id": "dht1", "top": -20, "left": -150, "attrs": {"temperature": "24.5", "humidity": "40"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 <div class="exercise"><div class="ct">Exercise 2: a temperature logger on the SD card</div>
 <p>Combine the DHT22 and the SD card: every 10 seconds, append a <code>millis,temp,humidity</code> line to <code>/weather.csv</code>. Don't write nan readings. Later, open the file in Excel and draw a chart.</p>
 <details><summary>Hint</summary><p>The DHT22 is on GPIO13 and doesn't clash with the SPI pins (5, 18, 19, 23). In loop, with millis, every 10000 ms: read, check with isnan, <code>SD.open(..., FILE_APPEND)</code>, <code>f.printf("%lu,%.1f,%.1f\n", millis(), t, h)</code> and close.</p></details>
-<details><summary>Answer</summary>
+<details class="expect"><summary>What should you see?</summary>
+<p>The first line arrives about 10 seconds after power-up, then one every 10 seconds (the numbers come from your room):</p>
+<pre class="serial">logged 24.5 C 40.0 %
+logged 24.5 C 40.0 %
+logged 24.6 C 40.1 %</pre>
+<p>Put the card in your computer and open <code>weather.csv</code> in a text editor. It should look like this (millis is a few milliseconds above a multiple of 10000 each time, because reading the DHT22 takes a moment):</p>
+<div class="code" data-file="weather.csv" data-lang="text"><pre>
+millis,temp,humidity
+10003,24.5,40.0
+20004,24.5,40.0
+30004,24.6,40.1
+</pre></div>
+<ul>
+<li>The <code>millis,temp,humidity</code> header appears only <b>once</b>, on the first line. Reset the board with EN: the header isn't written again, but millis starts again from about 10000 (that's why real loggers write the real clock time from NTP; lesson 4.1).</li>
+<li>Pull out the DHT22 data wire: you see <code>DHT error, skipped</code> and no broken (nan) line is added to the file.</li>
+<li>In Excel: <code>Data › From Text/CSV</code> (or just double-click the file), select the <code>temp</code> column and choose <code>Insert › Line Chart</code>. You should see a smooth line with small changes, never a drop to zero.</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
 <div class="code" data-file="Weather_Logger.ino" id="ex2ans"><pre>
 #include &lt;SPI.h&gt;
 #include &lt;SD.h&gt;
@@ -1032,11 +1260,124 @@ void loop() {
   <li data-lines="27-31"><b class="what">Safe writing.</b> nan readings are skipped, a file that won't open is skipped, and the file is closed after every line.
     <span class="why">A logger usually runs for hours unattended; it has to cope with any single error, and a sudden power cut should lose at most one line.</span></li>
 </ol>
+<div class="wokwi" data-board="esp32" data-code-from="ex2ans">
+<p>The DHT22 and a virtual microSD card side by side; they share no pins. Add <code>DHT sensor library</code>. In Wokwi you'll see the <code>logged</code> lines in the Serial Monitor; to open the file itself in Excel you need a real card.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-microsd-card", "id": "sd1", "top": 40, "left": 220, "attrs": {}},
+    {"type": "wokwi-dht22", "id": "dht1", "top": -20, "left": -150, "attrs": {"temperature": "24.5", "humidity": "40"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "sd1:GND", "esp:GND.2", "black", [] ],
+    [ "sd1:VCC", "esp:3V3", "red", [] ],
+    [ "sd1:DO", "esp:19", "blue", [] ],
+    [ "sd1:DI", "esp:23", "orange", [] ],
+    [ "sd1:SCK", "esp:18", "green", [] ],
+    [ "sd1:CS", "esp:5", "purple", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
 </details>
 </div>
 <div class="exercise"><div class="ct">Exercise 3: a GPS speedometer on the OLED</div>
 <p>Using TinyGPSPlus, show the speed (<code>gps.speed.kmph()</code>) in text size 3 and the number of satellites in size 1 on the OLED. Until there's a fix, show "Searching..." and the number of characters received. Try it with a power bank in a car or on a bike.</p>
 <details><summary>Hint</summary><p>The OLED on I2C (21, 22) and the GPS on UART2 (16, 17) share no pins. Keep the <code>gps.encode</code> loop free of delays and update the screen only every 500 ms with millis. Use <code>gps.speed.isValid()</code> too.</p></details>
+<details class="expect"><summary>What should you see?</summary>
+<p>Wokwi has no GPS module, so do this exercise with real hardware under open sky. On the OLED you first see three small lines: <code>Searching...</code>, <code>chars: ...</code> and <code>sats: ...</code>. After the fix (from 30 seconds to a few minutes outdoors) you see <code>Sats: 7</code> at the top and the speed in big digits in the middle, for example <code>14.8</code>, with <code>km/h</code> next to it. The Serial Monitor shows the same as text (the numbers are examples):</p>
+<pre class="serial">searching  chars=1893  sats=0
+searching  chars=2115  sats=0
+searching  chars=2342  sats=3
+fix  speed=0.4 km/h  sats=6
+fix  speed=0.2 km/h  sats=7
+fix  speed=14.8 km/h  sats=8</pre>
+<ul>
+<li>Before the fix, <code>chars</code> should go up by a roughly steady amount every half second (usually 100 to 250; the NMEA sentences are shorter before a fix).</li>
+<li>When you're standing still, the speed isn't exactly zero; it wobbles between 0 and about 1.5 km/h. That's normal GPS noise, not a bug in the code.</li>
+<li>Walking shows about 4 to 6 km/h and cycling about 15 to 25 km/h. Compare with a car's speedometer: they should agree to within about 1 km/h.</li>
+</ul>
+<p><b>If it doesn't work:</b></p>
+<ul>
+<li><code>chars</code> stays at zero: the module's TX must go to GPIO16 (RX2), not GPIO17; check that the speed is 9600.</li>
+<li><code>chars</code> rises but no fix arrives: indoors you usually won't get a fix; go to a window or outside and wait a few minutes. The module's LED starts blinking once it has a fix.</li>
+<li>The OLED is black but Serial works: look for <code>OLED not found!</code>; check the SDA/SCL wires and the 0x3C address (the I2C scanner section).</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="GPS_Speedometer.ino" id="ex3ans"><pre>
+// GPS speedometer on the OLED
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;TinyGPSPlus.h&gt;
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+TinyGPSPlus gps;
+unsigned long lastDraw = 0;
+
+void setup() {
+  Serial.begin(115200);
+  Serial2.begin(9600, SERIAL_8N1, 16, 17);   // GPS on UART2
+  Wire.begin(21, 22);                        // OLED on I2C
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found!");
+    while (true) delay(1000);
+  }
+  display.setTextColor(SSD1306_WHITE);
+}
+
+void loop() {
+  while (Serial2.available()) {              // feed the parser, never wait
+    gps.encode(Serial2.read());
+  }
+
+  if (millis() - lastDraw &lt; 500) return;     // redraw only twice a second
+  lastDraw = millis();
+  unsigned long sats = gps.satellites.value();
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  if (gps.location.isValid() &amp;&amp; gps.speed.isValid()) {
+    display.printf("Sats: %lu", sats);
+    display.setTextSize(3);                  // 18x24-pixel digits
+    display.setCursor(0, 20);
+    display.printf("%.1f", gps.speed.kmph());
+    display.setTextSize(1);
+    display.setCursor(98, 36);
+    display.print("km/h");
+    Serial.printf("fix  speed=%.1f km/h  sats=%lu\n", gps.speed.kmph(), sats);
+  } else {
+    display.println("Searching...");
+    display.printf("chars: %lu\n", (unsigned long)gps.charsProcessed());
+    display.printf("sats:  %lu", sats);
+    Serial.printf("searching  chars=%lu  sats=%lu\n", (unsigned long)gps.charsProcessed(), sats);
+  }
+  display.display();
+}
+</pre></div>
+<ol class="walk" data-for="ex3ans">
+  <li data-lines="7-9"><b class="what">Two objects and a clock.</b> The display, the GPS parser and the time of the last redraw.
+    <span class="why">The OLED on I2C (21, 22) and the GPS on UART2 (16, 17) share no pins; they only share 3V3 and GND.</span></li>
+  <li data-lines="23-24"><b class="what">Every character goes to the parser.</b> Each character that has arrived is handed to <code>gps.encode</code> right away.
+    <span class="why">The UART buffer holds only a few hundred bytes and the GPS sends up to about 500 characters per second; with a delay anywhere in loop, characters would get lost and the fix would never be complete.</span></li>
+  <li data-lines="27-29"><b class="what">A 500 ms guard.</b> The screen is refreshed twice a second. The satellite count is read once.
+    <span class="why">Drawing and sending the whole screen over I2C takes tens of milliseconds; doing it on every pass of loop would steal time from reading the GPS.</span></li>
+  <li data-lines="34-42"><b class="what">With a fix: big speed digits.</b> The satellite count at size 1 at the top, the speed at size 3, and a small km/h next to it.
+    <span class="why">At size 3 each character is 18 pixels wide, so even <code>123.4</code> (five characters, 90 pixels) fits, and km/h starts at x=98 so it doesn't overlap the number. Both <code>isValid</code> checks are needed so we never show a stale or meaningless zero.</span></li>
+  <li data-lines="44-47"><b class="what">No fix yet: the search status.</b> "Searching...", the number of characters received and the satellite count.
+    <span class="why">The <code>chars</code> number is your best troubleshooting tool: if it keeps rising, the wiring and baud rate are right and you only need open sky; if it stays at zero, the problem is the TX/RX wiring.</span></li>
+</ol>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">The lesson in three lines</div>

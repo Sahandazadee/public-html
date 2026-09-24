@@ -1357,8 +1357,22 @@ void loop() {
 <div class="exercise"><div class="ct">Exercise 1: a fan with adjustable speed</div>
 <p>Build a potentiometer (as in lesson 3.1, on GPIO34) together with this lesson's MOSFET circuit (GPIO26). Turning the potentiometer should change the speed of a 12 V fan or motor from off to maximum. Also solve the "hums but doesn't turn" problem at low duty: the bottom of the potentiometer's range is fully off, and right after that comes the minimum duty at which the motor actually turns.</p>
 <details><summary>Hint</summary><p>First, use the Serial Monitor and a few fixed duty values to find the duty at which your motor starts turning (say 70). Then use <code>map</code> to map the ADC range onto the range <code>MIN_DUTY</code> to 255, and send zero for very small ADC values. Remember that GPIO34 is on ADC1 and reads 0 to 4095.</p></details>
-<details><summary>Answer</summary>
-<div class="code" data-file="Fan_Pot.ino"><pre>
+<details class="expect"><summary>What should you see?</summary>
+<p>Turn the knob slowly from the bottom to the top. A sample output (the raw number at the bottom of the knob may be anywhere from 0 to a few dozen because of noise):</p>
+<pre class="serial">raw=0 duty=0
+raw=37 duty=0
+raw=101 duty=70
+raw=2048 duty=160
+raw=4095 duty=255</pre>
+<ul>
+<li>Knob at the bottom: <code>duty=0</code> and the motor is completely quiet; no hum, no heat.</li>
+<li>With the first small turn, the duty jumps straight from 0 to <code>MIN_DUTY</code> (70) and the motor starts at once; there is no position on the knob where the motor only hums.</li>
+<li>In the middle of the knob the duty should be about 160, and at the top exactly 255 (full speed).</li>
+<li>You can test it without a motor, too: an LED with a 220 Ω resistor on GPIO26 shows the same behaviour as brightness (like the Wokwi circuit below).</li>
+</ul>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="Fan_Pot.ino" id="ex1ans"><pre>
 const int POT_PIN  = 34;   // potentiometer (ADC1)
 const int GATE_PIN = 26;   // through 100 ohms to the MOSFET gate
 const int MIN_DUTY = 70;   // below this the motor only hums (find it by testing)
@@ -1380,14 +1394,69 @@ void loop() {
   delay(50);
 }
 </pre></div>
-<p>Tip: the "dead zone" below 100 stops ADC noise at the bottom of the potentiometer from switching the motor on and off.</p></details>
+<ol class="walk" data-for="ex1ans">
+  <li data-lines="3"><b class="what">The real minimum duty.</b> 70 is only an example. To find your motor's number: temporarily set <code>MIN_DUTY = 0</code>, turn the knob very slowly up from the bottom and watch in the Serial Monitor at which <code>duty</code> the motor starts turning (say 62). Write a little more than that (say 70) here.
+    <span class="why">Below this number current flows through the winding, so the motor warms up and hums, but its torque isn't enough to overcome friction. A small safety margin helps, because a cold motor or a dusty fan starts less easily.</span></li>
+  <li data-lines="7-8"><b class="what">The same MOSFET PWM.</b> 20 kHz and 8 bits, as in the <code>MOSFET_PWM</code> program, starting switched off.
+    <span class="why">20 kHz is above the range of human hearing, so the motor doesn't whine.</span></li>
+  <li data-lines="13-15"><b class="what">A dead zone, then a jump to the minimum.</b> Up to ADC 100 the duty is zero; from 101 upward, the range 100 to 4095 is mapped onto <code>MIN_DUTY</code> to 255. So no duty between 0 and 70 ever happens.
+    <span class="why">This is exactly the fix for "hums but doesn't turn": the output is either zero or enough to make the motor turn. The maths for the middle of the knob: <code>map(2048, 100, 4095, 70, 255)</code> = 160.</span></li>
+  <li data-lines="17-19"><b class="what">Write and report.</b> The duty goes to the gate and both numbers to the Serial Monitor, 20 times a second.
+    <span class="why">A delay is fine here because the program has nothing else to do; if you add a button later, swap it for the millis pattern.</span></li>
+</ol>
+<p>Tip: the "dead zone" below 100 stops ADC noise at the bottom of the potentiometer from switching the motor on and off.</p>
+<div class="wokwi" data-board="esp32" data-code-from="ex1ans">
+<p>Wokwi has no MOSFET and no 12 V motor, so we put an LED on GPIO26 instead; its brightness shows the same duty. Turn the knob: at the bottom the LED is off, and with the first turn it comes straight on at low brightness (duty 70).</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-potentiometer", "id": "pot1", "top": 20, "left": -170, "attrs": {}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": {"color": "green", "label": "Fan"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:26", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 
 <div class="exercise"><div class="ct">Exercise 2: a stepper that takes angle commands</div>
 <p>Write a program that reads an angle from the Serial Monitor (for example <code>90</code> or <code>-45</code>) and turns the 28BYJ-48 by exactly that much. Use AccelStepper and the exact figure of 4075.8 half steps per revolution. A question to think about: if you send the 90-degree command 24 times, how much error builds up with 4096 versus 4075.8?</p>
 <details><summary>Hint</summary><p>Half steps per degree: <code>4075.77 ÷ 360 ≈ 11.32</code>. For relative moves use <code>move()</code>, not <code>moveTo()</code>. <code>Serial.parseFloat()</code> reads a decimal number (see <a href="3-1.html#serial-input">lesson 3.1</a>). The error: with 4096, each turn goes about 20 half steps (1.8 degrees) too far; 24 commands of 90 degrees = 6 turns = about 11 degrees of error.</p></details>
-<details><summary>Answer</summary>
-<div class="code" data-file="Stepper_Angle.ino"><pre>
+<details class="expect"><summary>What should you see?</summary>
+<p>Stick a small piece of masking tape on the shaft so you can see it turn. Then send <code>90</code>, <code>-45</code> and <code>360</code>:</p>
+<pre class="serial">Type an angle (e.g. 90 or -45):
+Moving 90.0 deg = 1019 half-steps
+Moving -45.0 deg = -509 half-steps
+Moving 360.0 deg = 4076 half-steps</pre>
+<ul>
+<li>The half-step numbers must be exactly these (angle × 11.322, rounded).</li>
+<li><code>90</code> is exactly a quarter turn and takes about 3 seconds (it starts and stops gently). <code>360</code> takes about 7 seconds.</li>
+<li>Send <code>90</code> four times in a row (wait for it to stop each time): the tape comes back exactly to where it started.</li>
+<li>A negative number reverses the direction; <code>45</code> followed by <code>-45</code> brings the motor back to where it was.</li>
+</ul>
+<p><b>The answer to the thinking question:</b> 24 commands of 90 degrees = 2160 degrees = 6 turns.</p>
+<div class="table-wrap"><table>
+<tr><th>Assumed in the code</th><th>Half steps sent</th><th>Real rotation</th><th>Error</th></tr>
+<tr><td>4096 per turn</td><td>24 × 1024 = 24576</td><td>24576 ÷ 4075.77 ≈ 6.030 turns</td><td>about 0.03 turn ≈ <b>11 degrees</b> too far</td></tr>
+<tr><td>4075.8 per turn</td><td>24 × 1019 = 24456</td><td>24456 ÷ 4075.77 ≈ 6.0003 turns</td><td>about 1.4 half steps ≈ <b>0.1 degrees</b></td></tr>
+</table></div>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="Stepper_Angle.ino" id="ex2ans"><pre>
 #include &lt;AccelStepper.h&gt;
 
 const float HALF_STEPS_PER_DEG = 4075.77 / 360.0;   // about 11.32
@@ -1410,14 +1479,37 @@ void loop() {
   }
   motor.run();
 }
-</pre></div></details>
+</pre></div>
+<ol class="walk" data-for="ex2ans">
+  <li data-lines="3"><b class="what">Half steps per degree.</b> 4075.77 ÷ 360 ≈ 11.32.
+    <span class="why">Writing <code>360.0</code> (with a decimal point) makes sure the division keeps the fraction. Using the exact number instead of 4096 means the error doesn't pile up on every turn.</span></li>
+  <li data-lines="4"><b class="what">The same odd order.</b> Pins 26, 14, 32, 33 for IN1 to IN4, but handed to the library in the order IN1, IN3, IN2, IN4.
+    <span class="why">Exactly as in <code>Stepper_Accel</code>; with the order 1, 2, 3, 4 the motor only shakes back and forth.</span></li>
+  <li data-lines="14-16"><b class="what">Reading the angle.</b> The same <code>parseFloat</code> snippet as in lesson 3.1: it reads a decimal number and throws away the leftover Enter.
+    <span class="why">Set the Serial Monitor's line ending to "New Line". "No Line Ending" works too, but every command runs 1 second (the timeout) later.</span></li>
+  <li data-lines="17-18"><b class="what">Convert to half steps and move relative.</b> <code>lround</code> rounds to the nearest whole number (1018.94 → 1019) and <code>move</code> counts it from the current position.
+    <span class="why">Rounding (not chopping off the fraction) keeps each command's error under half a half step. <code>move</code> means "this much from here"; <code>moveTo</code> means "go to this absolute number". Note: if you send a new command in the middle of a move, <code>move</code> counts from where the motor is at that moment and the rest of the old move is forgotten, so wait for the motor to stop.</span></li>
+  <li data-lines="21"><b class="what">On every pass of loop.</b> <code>run</code> takes a single step if it's time, then returns.
+    <span class="why">There is no delay anywhere, so the motor turns smoothly and the Serial Monitor is always ready for the next command.</span></li>
+</ol>
+</details>
 </div>
 
 <div class="exercise"><div class="ct">Exercise 3: a stepper without a library</div>
 <p>To make sure you really understand what the library does, turn the 28BYJ-48 one full revolution <b>without any library</b>: only with an array holding the table from "the secret of the order" and <code>digitalWrite</code>. Then reverse the order of the table's rows and see what happens. Question: if instead of <code>{1,1,0,0}</code> ... you use <code>{1,0,0,0}, {0,1,0,0}, ...</code> (one coil at a time), what changes?</p>
 <details><summary>Hint</summary><p>Make a 4×4 array of zeros and ones. On each step, write row <code>s % 4</code> to the four pins and wait 3 milliseconds. The "one coil" mode (wave drive) has less current and less torque.</p></details>
-<details><summary>Answer</summary>
-<div class="code" data-file="Stepper_Raw.ino"><pre>
+<details class="expect"><summary>What should you see?</summary>
+<p>This program prints nothing. Stick masking tape on the shaft and watch:</p>
+<ul>
+<li>The shaft makes one full turn in about 6 seconds, stops for 1 second, then turns again in the same direction.</li>
+<li>While it turns, the four LEDs on the ULN2003 board all look dimly lit (the pair pattern moves too fast for your eye to follow), and during the one-second stop they're all off.</li>
+<li>The tape stops about 1.8 degrees further on each turn, because 2048 steps is slightly more than one real turn (about 2038 steps); the same error as in exercise 2.</li>
+<li>With the rows in reverse order (<code>{1,0,0,1}</code> first and <code>{1,1,0,0}</code> last), the shaft turns the other way.</li>
+</ul>
+<p><b>The answer to the question:</b> with the "one coil" table (wave drive) only one LED is lit at any moment, the current is roughly halved and the torque is lower: hold the shaft gently between two fingers and it stalls much more easily. The speed and the number of steps per turn don't change.</p>
+</details>
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="Stepper_Raw.ino" id="ex3ans"><pre>
 const int PINS[4] = {26, 14, 32, 33};          // IN1, IN2, IN3, IN4 in natural order
 const uint8_t SEQ[4][4] = {                   // full step, two neighboring coils
   {1, 1, 0, 0},
@@ -1439,7 +1531,18 @@ void loop() {
   delay(1000);
 }
 </pre></div>
-<p>Reversing the order of the rows reverses the direction of rotation. One-coil mode (wave drive) draws half the current but has less torque. Notice that here we wrote the pins in the natural order 1, 2, 3, 4, because we built the table's pattern ourselves and the library's assumption doesn't apply.</p></details>
+<ol class="walk" data-for="ex3ans">
+  <li data-lines="1"><b class="what">Pins in their natural order.</b> IN1 to IN4 on 26, 14, 32, 33 (the same stepper pins as in this lesson).
+    <span class="why">Here we write the table ourselves, so each column of the table is exactly one pin and the library's odd swap isn't needed.</span></li>
+  <li data-lines="2-6"><b class="what">The "secret of the order" table.</b> Each row says which two neighbouring coils are on; the next row moves one coil along.
+    <span class="why">Two coils at once (full step) gives the most torque. <code>uint8_t</code> is a small number from 0 to 255, plenty for zeros and ones.</span></li>
+  <li data-lines="14-16"><b class="what">One full turn.</b> 2048 steps; on each step, row <code>s % 4</code> is written to the four pins, then a 3 ms wait.
+    <span class="why"><code>s % 4</code> cycles through the rows 0, 1, 2, 3, 0, 1... 2048 × 3 ms ≈ 6.1 seconds per turn. Much shorter than about 2 ms and the motor misses steps and just shakes.</span></li>
+  <li data-lines="18-19"><b class="what">Coils off, a one-second rest.</b> After each turn all pins go LOW.
+    <span class="why">A coil left on while standing still only makes heat (the same idea as the library's <code>disableOutputs</code>).</span></li>
+</ol>
+<p>Reversing the order of the rows reverses the direction of rotation. One-coil mode (wave drive) draws half the current but has less torque. Notice that here we wrote the pins in the natural order 1, 2, 3, 4, because we built the table's pattern ourselves and the library's assumption doesn't apply.</p>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">The lesson in three lines</div>

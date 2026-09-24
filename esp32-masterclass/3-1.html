@@ -1110,11 +1110,120 @@ LDR=2150 mV  lamp=OFF</div>
 <div class="exercise"><div class="ct">تمرین ۱: شمارنده با دو دکمه</div>
 <p>دکمه دوم را بین GPIO33 و GND (با <code>INPUT_PULLUP</code>) وصل کن. دکمه اول (GPIO27) یک عدد را زیاد و دکمه دوم آن را کم کند. عدد را در Serial Monitor چاپ کن و نگذار زیر صفر برود. هر دو دکمه باید Debounce داشته باشند.</p>
 <details><summary>راهنمایی</summary><p>برای هر دکمه سه متغیر جدا لازم داری (<code>stableState</code>، <code>lastReading</code>، <code>lastChangeTime</code>). ساده‌ترین راه این است که آن‌ها را با اسم‌های تازه کپی کنی، مثلا <code>stableState1</code> و <code>stableState2</code>، و بلوک Debounce کد <code>Toggle_Debounce</code> را دو بار، یک بار برای هر دکمه، تکرار کنی. شرط «زیر صفر نرود»: <code>if (count &gt; 0) count--;</code></p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>بعد از آپلود، سه بار دکمه ۱ (GPIO27) و بعد چهار بار دکمه ۲ (GPIO33) را بزن. خروجی باید دقیقا این باشد:</p>
+<pre class="serial">Count: 0
+Count: 1
+Count: 2
+Count: 3
+Count: 2
+Count: 1
+Count: 0
+Count: 0</pre>
+<ul>
+<li>هر فشار دقیقا <b>یک</b> خط جدید؛ اگر با یک فشار دو یا سه خط آمد، Debounce درست کار نمی‌کند.</li>
+<li>دکمه را چند ثانیه نگه دار: فقط یک خط می‌آید، نه یک سیل عدد.</li>
+<li>وقتی عدد ۰ است، دکمه ۲ را بزن: باز <code>Count: 0</code> چاپ می‌شود و هرگز <code>-1</code> نمی‌بینی.</li>
+<li>دکمه ۱ را دو بار سریع پشت سر هم بزن: عدد دقیقا ۲ تا بالا می‌رود.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="Two_Button_Counter.ino" id="ex1ans"><pre>
+const int UP_PIN = 27;                  // دکمه ۱: شمردن رو به بالا
+const int DOWN_PIN = 33;                // دکمه ۲: شمردن رو به پایین
+const unsigned long DEBOUNCE_MS = 30;
+
+int count = 0;
+
+// حافظه دکمه ۱
+int stableState1 = HIGH, lastReading1 = HIGH;
+unsigned long lastChangeTime1 = 0;
+// حافظه دکمه ۲
+int stableState2 = HIGH, lastReading2 = HIGH;
+unsigned long lastChangeTime2 = 0;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(UP_PIN, INPUT_PULLUP);
+  pinMode(DOWN_PIN, INPUT_PULLUP);
+  Serial.println("Count: 0");
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  // دکمه ۱: بالا
+  int reading1 = digitalRead(UP_PIN);
+  if (reading1 != lastReading1) { lastChangeTime1 = now; lastReading1 = reading1; }
+  if (now - lastChangeTime1 &gt; DEBOUNCE_MS &amp;&amp; reading1 != stableState1) {
+    stableState1 = reading1;
+    if (stableState1 == LOW) {
+      count++;
+      Serial.printf("Count: %d\n", count);
+    }
+  }
+
+  // دکمه ۲: پایین، هرگز زیر صفر
+  int reading2 = digitalRead(DOWN_PIN);
+  if (reading2 != lastReading2) { lastChangeTime2 = now; lastReading2 = reading2; }
+  if (now - lastChangeTime2 &gt; DEBOUNCE_MS &amp;&amp; reading2 != stableState2) {
+    stableState2 = reading2;
+    if (stableState2 == LOW) {
+      if (count &gt; 0) count--;
+      Serial.printf("Count: %d\n", count);
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="ex1ans">
+  <li data-lines="1-3"><b class="what">دو دکمه، دو پین.</b> دکمه ۱ روی GPIO27 (مثل همه درس) و دکمه ۲ روی GPIO33، هر دو به GND.
+    <span class="why">طبق نقشه پین دوره، دکمه دوم همیشه GPIO33 است؛ پس مدار این تمرین روی بردبوردت می‌ماند و بعدا هم به کار می‌آید.</span></li>
+  <li data-lines="8-12"><b class="what">دو دسته متغیر جدا.</b> هر دکمه سه متغیر Debounce خودش را دارد؛ فقط عدد ۱ یا ۲ به آخر اسم‌ها اضافه شده.
+    <span class="why">اگر هر دو دکمه یک <code>lastChangeTime</code> مشترک داشتند، لرزش یک دکمه تایمر دکمه دیگر را صفر می‌کرد و فشارها گم می‌شد.</span></li>
+  <li data-lines="18"><b class="what">عدد شروع.</b> یک بار در setup مقدار اولیه چاپ می‌شود.
+    <span class="why">این‌طوری از همان اول می‌بینی برنامه اجرا شده و شمارش از ۰ شروع می‌شود.</span></li>
+  <li data-lines="25-31"><b class="what">دکمه ۱ با Debounce.</b> همان بلوک <code>Toggle_Debounce</code>، فقط به جای روشن و خاموش کردن LED، <code>count++</code> و چاپ.
+    <span class="why">فقط لحظه فشار (LOW) حساب می‌شود؛ نگه داشتن دکمه یا رها کردنش چیزی اضافه نمی‌کند.</span></li>
+  <li data-lines="36-41"><b class="what">دکمه ۲ و مرز صفر.</b> کپی همان بلوک با متغیرهای شماره ۲؛ کم کردن فقط وقتی عدد از صفر بزرگ‌تر است.
+    <span class="why">عدد را حتی وقتی کم نشده دوباره چاپ می‌کنیم تا ببینی فشار دیده شد ولی قانون «زیر صفر نرود» جلویش را گرفت.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="ex1ans">
+<p>دکمه سبز (GPIO27) عدد را زیاد و دکمه قرمز (GPIO33) آن را کم می‌کند. روی هر دکمه در شبیه‌ساز کلیک کن و Serial Monitor را ببین.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-pushbutton", "id": "btn1", "top": 110, "left": -170, "attrs": {"color": "green"}},
+    {"type": "wokwi-pushbutton", "id": "btn2", "top": 200, "left": -170, "attrs": {"color": "red"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:27", "btn1:1.r", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:33", "btn2:1.r", "purple", [] ],
+    [ "btn2:2.r", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۲: سرعت چشمک با پتانسیومتر</div>
 <p>با پتانسیومتر روی GPIO34، سرعت چشمک LED روی GPIO4 را از ۵۰ تا ۱۰۰۰ میلی‌ثانیه تنظیم کن. بدون delay (با millis) بنویس تا اگر بعدا دکمه اضافه کردی، کار کند.</p>
 <details><summary>راهنمایی</summary><p><code>unsigned long interval = map(analogRead(34), 0, 4095, 50, 1000);</code> را در هر دور loop حساب کن و در شرط millis به جای عدد ثابت از آن استفاده کن.</p></details>
-<details><summary>جواب</summary>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>این برنامه چیزی در Serial Monitor چاپ نمی‌کند؛ نتیجه را روی LED ببین:</p>
+<ul>
+<li>پیچ در یک انتها (عدد ADC ۰): فاصله ۵۰ms، یعنی ۱۰ چشمک در ثانیه؛ LED تقریبا لرزان به نظر می‌رسد.</li>
+<li>پیچ در انتهای دیگر (۴۰۹۵): فاصله ۱۰۰۰ms؛ یک ثانیه روشن، یک ثانیه خاموش. در ۱۰ ثانیه دقیقا ۵ بار روشن می‌شود.</li>
+<li>پیچ در وسط (حدود ۲۰۴۸): <code>map</code> عدد ۵۲۵ms می‌دهد، یعنی کمی بیشتر از نیم ثانیه.</li>
+<li>وسط یک چشمک آهسته پیچ را به سمت سریع بچرخان: تغییر فورا دیده می‌شود و منتظر تمام شدن چشمک قبلی نمی‌ماند.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
 <div class="code" data-file="Pot_Blink_Speed.ino" id="ex2ans"><pre>
 const int POT_PIN = 34;
 const int LED_PIN = 4;
@@ -1141,11 +1250,159 @@ void loop() {
   <li data-lines="12-17"><b class="what">همان الگوی millis.</b> فقط به جای ثابت INTERVAL، متغیر interval.
     <span class="why">الگوی millis را یک بار درست یاد بگیری، در همه جا فقط «چه چیزی» و «هر چند وقت» عوض می‌شود.</span></li>
 </ol>
+<div class="wokwi" data-board="esp32" data-code-from="ex2ans">
+<p>پیچ پتانسیومتر را در شبیه‌ساز بچرخان و سرعت چشمک LED را ببین.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-potentiometer", "id": "pot1", "top": 20, "left": -170, "attrs": {}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": {"color": "red"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
 </details>
 </div>
 <div class="exercise"><div class="ct">تمرین ۳: چراغ خواب با دکمه دستی</div>
 <p>به پروژه چراغ خواب یک دکمه (GPIO27) اضافه کن که سه حالت را به ترتیب عوض کند: «خودکار» ← «همیشه روشن» ← «همیشه خاموش» ← «خودکار». حالت فعلی را در Serial Monitor چاپ کن. delay نباید در برنامه باشد.</p>
 <details><summary>راهنمایی</summary><p>یک متغیر <code>int mode = 0;</code> بساز. با هر فشار (بعد از Debounce): <code>mode = (mode + 1) % 3;</code>. علامت <code>%</code> باقی‌مانده تقسیم است و باعث می‌شود بعد از ۲ دوباره ۰ شود. خواندن LDR را هر ۲۰۰ms با millis انجام بده.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>یک نمونه خروجی (عددهای میلی‌ولت به نور اتاق تو بستگی دارند): روی LDR دست گذاشتیم، سه بار دکمه را زدیم و بعد دست را برداشتیم.</p>
+<pre class="serial">Mode: AUTO
+Auto: dark (2710 mV) -&gt; lamp ON
+Mode: ALWAYS ON
+Mode: ALWAYS OFF
+Mode: AUTO
+Auto: light (2140 mV) -&gt; lamp OFF</pre>
+<ul>
+<li>هر فشار دکمه حالت را دقیقا یک قدم جلو می‌برد: AUTO ← ALWAYS ON ← ALWAYS OFF ← AUTO.</li>
+<li>در ALWAYS ON و ALWAYS OFF، پوشاندن LDR هیچ اثری روی LED ندارد و پیام «Auto» هم چاپ نمی‌شود.</li>
+<li>وقتی به AUTO برمی‌گردی، LED فورا با نور اتاق هماهنگ می‌شود (در تاریکی روشن، در روشنایی خاموش).</li>
+<li>دکمه همیشه فورا جواب می‌دهد، حتی با این که LDR فقط هر ۲۰۰ms خوانده می‌شود؛ یعنی هیچ delayی سر راه نیست.</li>
+</ul>
+</details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="Night_Light_Modes.ino" id="ex3ans"><pre>
+const int LDR_PIN = 35;                 // وسط تقسیم ولتاژ LDR
+const int LED_PIN = 4;
+const int BUTTON_PIN = 27;
+const uint32_t DARK_ON_MV   = 2600;     // بالاتر از این: تاریک
+const uint32_t LIGHT_OFF_MV = 2200;     // پایین‌تر از این: روشن
+const unsigned long DEBOUNCE_MS = 30;
+
+const char *MODE_NAMES[] = {"AUTO", "ALWAYS ON", "ALWAYS OFF"};
+int mode = 0;                           // ۰ = خودکار، ۱ = همیشه روشن، ۲ = همیشه خاموش
+bool lampOn = false;                    // تصمیم خودکار (Hysteresis)
+unsigned long lastLdrRead = 0;
+
+int stableState = HIGH, lastReading = HIGH;
+unsigned long lastChangeTime = 0;
+
+uint32_t readLdrMv() {
+  uint32_t sum = 0;
+  for (int i = 0; i &lt; 8; i++) sum += analogReadMilliVolts(LDR_PIN);
+  return sum / 8;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  Serial.println("Mode: AUTO");
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  // کار ۱: دکمه حالت را عوض می‌کند
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChangeTime = now; lastReading = reading; }
+  if (now - lastChangeTime &gt; DEBOUNCE_MS &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) {
+      mode = (mode + 1) % 3;
+      Serial.printf("Mode: %s\n", MODE_NAMES[mode]);
+    }
+  }
+
+  // کار ۲: خواندن LDR هر ۲۰۰ms (با Hysteresis، مثل Night_Light)
+  if (now - lastLdrRead &gt;= 200) {
+    lastLdrRead = now;
+    uint32_t mv = readLdrMv();
+    if (!lampOn &amp;&amp; mv &gt; DARK_ON_MV) {
+      lampOn = true;
+      if (mode == 0) Serial.printf("Auto: dark (%lu mV) -&gt; lamp ON\n", (unsigned long)mv);
+    } else if (lampOn &amp;&amp; mv &lt; LIGHT_OFF_MV) {
+      lampOn = false;
+      if (mode == 0) Serial.printf("Auto: light (%lu mV) -&gt; lamp OFF\n", (unsigned long)mv);
+    }
+  }
+
+  // کار ۳: حالت تعیین می‌کند LED چه کند
+  bool ledShouldBeOn;
+  if (mode == 0)      ledShouldBeOn = lampOn;
+  else if (mode == 1) ledShouldBeOn = true;
+  else                ledShouldBeOn = false;
+  digitalWrite(LED_PIN, ledShouldBeOn ? HIGH : LOW);
+}
+</pre></div>
+<ol class="walk" data-for="ex3ans">
+  <li data-lines="1-6"><b class="what">پین‌ها و آستانه‌ها.</b> همان اعداد برنامه <code>Night_Light</code> و همان دکمه GPIO27.
+    <span class="why">تمرین روی همان مدار چراغ خواب ساخته می‌شود؛ فقط دکمه اضافه شده، پس هیچ سیمی جابه‌جا نمی‌شود.</span></li>
+  <li data-lines="8-9"><b class="what">اسم حالت‌ها و خود حالت.</b> <code>MODE_NAMES</code> یک فهرست (آرایه) از سه متن است؛ <code>MODE_NAMES[0]</code> اولی («AUTO») و <code>MODE_NAMES[2]</code> سومی است. <code>mode</code> شماره حالت فعلی است.
+    <span class="why">با این فهرست، چاپ اسم حالت یک خط است و لازم نیست سه if برای سه متن بنویسی. شماره‌گذاری در ++C از ۰ شروع می‌شود.</span></li>
+  <li data-lines="10"><b class="what">تصمیم خودکار جدا از خروجی.</b> <code>lampOn</code> فقط می‌گوید «اگر خودکار بودیم، چراغ باید روشن باشد یا نه».
+    <span class="why">این متغیر در همه حالت‌ها به‌روز می‌شود؛ پس وقتی به AUTO برمی‌گردی، LED فورا با نور فعلی اتاق هماهنگ است.</span></li>
+  <li data-lines="33-39"><b class="what">کار ۱: دکمه.</b> Debounce مثل <code>Toggle_Debounce</code>؛ هر فشار <code>mode = (mode + 1) % 3</code> و چاپ اسم حالت.
+    <span class="why"><code>%</code> باعث می‌شود بعد از ۲ دوباره ۰ شود: ۰ ← ۱ ← ۲ ← ۰. <code>%s</code> در printf جای یک متن است.</span></li>
+  <li data-lines="44-52"><b class="what">کار ۲: LDR هر ۲۰۰ms.</b> به جای <code>delay(200)</code> برنامه اصلی، الگوی millis؛ داخلش همان Hysteresis چراغ خواب.
+    <span class="why">اگر <code>delay(200)</code> می‌ماند، فشارهای کوتاه دکمه ممکن بود گم شوند. پیام «Auto» فقط در حالت خودکار چاپ می‌شود تا Serial شلوغ نشود.</span></li>
+  <li data-lines="57-61"><b class="what">کار ۳: تصمیم نهایی.</b> در AUTO خروجی همان <code>lampOn</code> است، در دو حالت دیگر ثابت.
+    <span class="why">تصمیم در یک جا و نوشتن روی پین در یک جا: هیچ دو بخشی از برنامه سر LED با هم دعوا نمی‌کنند.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="ex3ans">
+<p>همان مدار چراغ خواب به اضافه دکمه روی GPIO27. روی ماژول نور کلیک کن و با اسلایدر، نور (lux) را کم و زیاد کن؛ با دکمه سبز حالت را عوض کن.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": -40, "left": -260, "attrs": {}},
+    {"type": "wokwi-pushbutton", "id": "btn1", "top": 110, "left": -170, "attrs": {"color": "green"}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": {"color": "red"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.1", "black", [] ],
+    [ "ldr1:AO", "esp:35", "blue", [] ],
+    [ "esp:27", "btn1:1.r", "green", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
 </div>
 
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
