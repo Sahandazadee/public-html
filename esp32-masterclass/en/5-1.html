@@ -1438,6 +1438,437 @@ void loop() {
 </details>
 </div>
 
+<h2 id="project">Practice project: a remote night-light over MQTT</h2>
+<div class="project">
+<p class="lede-ish">You're building a hallway night-light that you can check and control from anywhere. By itself it switches on when the hall gets dark, just like the night-light from lesson <a href="3-1.html">3.1</a>. But it also reports the light level to the internet every 30 seconds, and from your phone you can force it ON, force it OFF, or hand control back to the light sensor with AUTO. Anyone who opens the dashboard later sees the lamp's current state straight away, thanks to a retained message.</p>
+
+<h3 id="project-req">Requirements</h3>
+<ol>
+  <li>All topics start with <b>your own</b> prefix (<code>esp32course/yourname/nightlight</code>), and <code>.../status</code> shows <code>online</code>, or <code>offline</code> via the Last Will, exactly as in the lesson.</li>
+  <li>Every 30 seconds (and once right after connecting), the board publishes the light level on <code>.../light/level</code> as a whole number from <code>0</code> (dark) to <code>100</code> (bright).</li>
+  <li>The board listens on <code>.../led/set</code>: <code>ON</code> switches the LED on and keeps it on, <code>OFF</code> switches it off and keeps it off, <code>AUTO</code> gives control back to the light sensor. Anything else (even <code>on</code> in lowercase) prints <code>Unknown command</code> and changes nothing.</li>
+  <li>In AUTO mode the LDR is checked every 200 ms, with hysteresis: the LED goes on above 2600 mV (dark) and off below 2200 mV (light). This keeps working when Wi-Fi or the broker is down.</li>
+  <li>Whenever the mode or the LED changes, and after every (re)connection, the board publishes one <b>retained</b> JSON message on <code>.../led/state</code>, for example <code>{"mode":"AUTO","led":"ON"}</code>. It doesn't repeat it if nothing has changed.</li>
+  <li><code>loop()</code> never uses <code>delay()</code>; all timing is done with <code>millis()</code>.</li>
+</ol>
+
+<h3 id="project-parts">Parts</h3>
+<ul>
+  <li>ESP32 DevKitC, breadboard, jumper wires</li>
+  <li>LDR (GL5528) + 10 kΩ resistor, the divider from lesson 3.1</li>
+  <li>LED + 220 Ω resistor on GPIO4</li>
+  <li>For testing: the HiveMQ web client in a browser, or MQTTX / MQTT Explorer (from the lesson). The DHT22 from the lesson may stay on the breadboard; this project doesn't use it.</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"R1","name":"10 kΩ fixed resistor","img":"resistor.svg","pins":[["1","to 3V3"],["2","middle point"]]},
+    {"id":"LDR","name":"LDR light-dependent resistor","img":"ldr.svg","pins":[["1","middle point (no polarity)"],["2","to GND"]]},
+    {"id":"R2","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO4 side"],["2","LED side"]]},
+    {"id":"LED1","name":"LED (the night-light)","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−), short leg"]]}
+  ],
+  "wires":[["3V3","R1.1","red"],["GPIO35","R1.2","blue"],["R1.2","LDR.1","blue"],["LDR.2","GND","black"],["GPIO4","R2.1","orange"],["R2.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>The LDR divider from lesson 3.1 (3V3 → 10 kΩ → middle point → LDR → GND, with the middle point on GPIO35) and the usual LED on GPIO4. Dark means a high voltage on GPIO35, bright means a low one. GPIO35 is on ADC1, so it reads fine while Wi-Fi is on.</figcaption></div>
+
+<h3 id="project-start">Starter code</h3>
+<div class="code" data-file="NightLight_MQTT.ino (starter)" id="projStart"><pre>
+// Remote night-light (starter): fill in the TODOs
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+
+// ---- Wi-Fi (keep this in Wokwi; your router's name on a real board) ----
+const char* WIFI_SSID = "Wokwi-GUEST";
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const int   MQTT_PORT = 1883;
+
+// TODO 1: change ali1234 to your own name and number
+#define BASE "esp32course/ali1234/nightlight"
+const char* TOPIC_LEVEL  = BASE "/light/level";   // we publish: 0..100
+const char* TOPIC_SET    = BASE "/led/set";       // we listen: ON/OFF/AUTO
+const char* TOPIC_STATE  = BASE "/led/state";     // we publish (retained)
+const char* TOPIC_STATUS = BASE "/status";        // online/offline (Last Will)
+
+const int LED_PIN = 4;
+const int LDR_PIN = 35;                 // middle of the LDR divider
+const uint32_t DARK_ON_MV   = 2600;     // above this: dark, LED on
+const uint32_t LIGHT_OFF_MV = 2200;     // below this: light, LED off
+
+WiFiClient net;
+PubSubClient mqtt(net);
+char clientId[40];
+
+enum Mode { MODE_AUTO, MODE_ON, MODE_OFF };
+Mode mode = MODE_AUTO;
+bool ledOn = false;
+bool stateDirty = true;                 // true = state must be published
+unsigned long lastLevel = 0, lastCheck = 0, lastTry = 0;
+
+uint32_t readLdrMv() {                  // average of 8 readings
+  uint32_t sum = 0;
+  for (int i = 0; i &lt; 8; i++) sum += analogReadMilliVolts(LDR_PIN);
+  return sum / 8;
+}
+
+int lightPercent(uint32_t mv) {         // 0 = dark, 100 = bright
+  // TODO 2: turn 0..3300 mV into 100..0 percent (clamp above 3300)
+  return 0;
+}
+
+void setLed(bool on) {
+  // TODO 3: change the LED only if needed, and set stateDirty = true
+}
+
+void publishState() {
+  // TODO 5: publish {"mode":"AUTO","led":"OFF"} on TOPIC_STATE, retained,
+  //         and clear stateDirty only if the publish worked
+}
+
+void onMessage(char* topic, byte* payload, unsigned int length) {
+  char msg[16];
+  unsigned int n = (length &lt; sizeof(msg) - 1) ? length : sizeof(msg) - 1;
+  memcpy(msg, payload, n);
+  msg[n] = '\0';                        // payload has no '\0' of its own
+  Serial.printf("&lt;- [%s] %s\n", topic, msg);
+  // TODO 3: ON / OFF / AUTO change the mode; anything else prints an error
+}
+
+void connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.print(" connected, IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+bool connectMqtt() {
+  Serial.printf("MQTT: connecting as %s ... ", clientId);
+  if (mqtt.connect(clientId, TOPIC_STATUS, 1, true, "offline")) {
+    Serial.println("OK");
+    mqtt.publish(TOPIC_STATUS, "online", true);
+    mqtt.subscribe(TOPIC_SET, 1);
+    stateDirty = true;                  // report the state after every connect
+    return true;
+  }
+  Serial.printf("failed, state=%d\n", mqtt.state());
+  return false;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  connectWiFi();
+  String mac = WiFi.macAddress();
+  mac.replace(":", "");
+  snprintf(clientId, sizeof(clientId), "esp32-%s-%04X", mac.c_str(), (unsigned)(esp_random() &amp; 0xFFFF));
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  mqtt.setCallback(onMessage);
+}
+
+void loop() {
+  // TODO 4: in AUTO mode, every 200 ms read the LDR and switch the LED
+  //         with hysteresis (this must work even without a network)
+
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (!mqtt.connected()) {
+    if (lastTry == 0 || millis() - lastTry &gt; 5000) {
+      lastTry = millis();
+      connectMqtt();
+    }
+    return;
+  }
+  mqtt.loop();
+
+  // TODO 2: every 30 s publish lightPercent(readLdrMv()) on TOPIC_LEVEL
+  // TODO 5: if stateDirty, call publishState()
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="11-16"><b class="what">TODO 1: your topics.</b> Only the prefix needs changing; the four topics are built from it.
+    <span class="why">On a public broker, a prefix like <code>ali1234</code> is shared by every student who forgot to change it.</span></li>
+  <li data-lines="39-51"><b class="what">Three empty helpers.</b> <code>lightPercent</code>, <code>setLed</code> and <code>publishState</code> compile but do nothing yet (TODO 2, 3 and 5).
+    <span class="why">Filling in small helpers one by one lets you test each piece before the next.</span></li>
+  <li data-lines="53-60"><b class="what">onMessage, half done.</b> The payload is already copied and closed with <code>'\0'</code>, as in the lesson. You add the three commands (TODO 3).
+    <span class="why">The copying is the tricky, already-taught part; the decision is your job.</span></li>
+  <li data-lines="98-114"><b class="what">loop.</b> The non-blocking reconnection is given. TODO 4 (the automatic light) goes <b>above</b> the network checks; TODO 2 and 5 go after <code>mqtt.loop()</code>.
+    <span class="why">Where a line sits in loop decides whether it still runs when the network is down.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>Everything here runs in Wokwi: add the <code>PubSubClient</code> library in the Library Manager tab, paste the starter code and this diagram, and press ▶. Click the light sensor to move its lux slider (about 10 lux is dark, 1000 lux is bright). Test the commands with the HiveMQ web client, as in the lesson.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": 40, "left": -260, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 150, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 70, "left": 250, "attrs": { "color": "yellow" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.1", "black", [] ],
+    [ "ldr1:AO", "esp:35", "blue", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>Hint 1</summary>
+<p>Start without the network: do TODO 2 and TODO 4 first. For the percentage, 3300 mV is completely dark, so <code>100 - mv * 100 / 3300</code> gives 0 in the dark and close to 100 in bright light. For the automatic light, copy the hysteresis <code>if / else if</code> from the night-light in lesson 3.1 and wrap it in a <code>millis()</code> timer of 200 ms.</p></details>
+<details class="hint"><summary>Hint 2</summary>
+<p>In <code>onMessage</code>, compare with <code>strcmp(msg, "ON") == 0</code>. For <code>ON</code> and <code>OFF</code>, set the mode and the LED. For <code>AUTO</code>, only set the mode: the next 200 ms check will switch the LED to whatever the LDR says. For an unknown command, print the error and <code>return</code> before anything changes.</p></details>
+<details class="hint"><summary>Hint 3</summary>
+<p><code>stateDirty</code> is a "to-do note": set it to <code>true</code> wherever something changes (in <code>setLed</code>, in <code>onMessage</code>, after connecting), and in loop call <code>publishState()</code> only when it's true. Clear it only if <code>mqtt.publish(..., true)</code> returned <code>true</code>; if the publish failed, the note stays and loop tries again.</p></details>
+
+<details class="expect"><summary>What should you see?</summary>
+<p>In the Serial Monitor (your IP, client ID and light level will differ). The lines after <code>OK</code> appear when you publish <code>ON</code>, then <code>on</code>, then <code>AUTO</code> from the web client, in a bright room:</p>
+<pre class="serial">WiFi..... connected, IP: 10.10.0.2
+MQTT: connecting as esp32-240AC4000110-3A9C ... OK
+-&gt; level 76 %
+-&gt; state {"mode":"AUTO","led":"OFF"}
+&lt;- [esp32course/ali1234/nightlight/led/set] ON
+-&gt; state {"mode":"ON","led":"ON"}
+&lt;- [esp32course/ali1234/nightlight/led/set] on
+Unknown command (use ON, OFF or AUTO)
+&lt;- [esp32course/ali1234/nightlight/led/set] AUTO
+-&gt; state {"mode":"AUTO","led":"ON"}
+-&gt; state {"mode":"AUTO","led":"OFF"}
+-&gt; level 76 %</pre>
+<p>After <code>AUTO</code> there are two state lines: the first reports the new mode while the LED is still on from the <code>ON</code> command, and the second, a fraction of a second later, reports that the LDR saw a bright room and switched it off. That's correct.</p>
+<ul>
+  <li><b>Req. 1:</b> subscribe to <code>esp32course/yourname/nightlight/#</code> in the web client: <code>status</code> shows <code>online</code> immediately. Stop the simulation (or unplug the board): about 20 seconds later it shows <code>offline</code>.</li>
+  <li><b>Req. 2:</b> level messages arrive 30 seconds apart. Cover the LDR (in Wokwi: slide down to about 10 lux) and the next number is much lower.</li>
+  <li><b>Req. 3 and 4:</b> after <code>OFF</code>, covering the LDR does nothing. After <code>AUTO</code>, covering it switches the LED on within a fraction of a second; moving the light slowly back up never makes it flicker at the switching point.</li>
+  <li><b>Req. 4 (offline):</b> on a real board, switch off your router in AUTO mode: the night-light keeps reacting to your hand even though MQTT is gone.</li>
+  <li><b>Req. 5:</b> disconnect the web client and connect again: the latest <code>led/state</code> arrives at once, before any new change. In 5 minutes of nothing happening, no extra state lines appear.</li>
+</ul>
+</details>
+
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="NightLight_MQTT.ino" id="projAns"><pre>
+// Remote night-light: light level over MQTT, LED commands ON / OFF / AUTO
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+
+// ---- Wi-Fi (keep this in Wokwi; your router's name on a real board) ----
+const char* WIFI_SSID = "Wokwi-GUEST";
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const int   MQTT_PORT = 1883;
+
+// change ali1234 to your own name and number
+#define BASE "esp32course/ali1234/nightlight"
+const char* TOPIC_LEVEL  = BASE "/light/level";   // we publish: 0..100
+const char* TOPIC_SET    = BASE "/led/set";       // we listen: ON/OFF/AUTO
+const char* TOPIC_STATE  = BASE "/led/state";     // we publish (retained)
+const char* TOPIC_STATUS = BASE "/status";        // online/offline (Last Will)
+
+const int LED_PIN = 4;
+const int LDR_PIN = 35;                 // middle of the LDR divider
+const uint32_t DARK_ON_MV   = 2600;     // above this: dark, LED on
+const uint32_t LIGHT_OFF_MV = 2200;     // below this: light, LED off
+
+WiFiClient net;
+PubSubClient mqtt(net);
+char clientId[40];
+
+enum Mode { MODE_AUTO, MODE_ON, MODE_OFF };
+Mode mode = MODE_AUTO;
+bool ledOn = false;
+bool stateDirty = true;                 // true = state must be published
+unsigned long lastLevel = 0, lastCheck = 0, lastTry = 0;
+
+uint32_t readLdrMv() {                  // average of 8 readings
+  uint32_t sum = 0;
+  for (int i = 0; i &lt; 8; i++) sum += analogReadMilliVolts(LDR_PIN);
+  return sum / 8;
+}
+
+int lightPercent(uint32_t mv) {         // 0 = dark, 100 = bright
+  if (mv &gt; 3300) mv = 3300;
+  return 100 - (int)(mv * 100 / 3300);
+}
+
+void setLed(bool on) {
+  if (on == ledOn) return;              // no change: nothing to report
+  ledOn = on;
+  digitalWrite(LED_PIN, on ? HIGH : LOW);
+  stateDirty = true;
+}
+
+const char* modeName() {
+  if (mode == MODE_ON) return "ON";
+  if (mode == MODE_OFF) return "OFF";
+  return "AUTO";
+}
+
+void publishState() {
+  char buf[48];
+  snprintf(buf, sizeof(buf), "{\"mode\":\"%s\",\"led\":\"%s\"}",
+           modeName(), ledOn ? "ON" : "OFF");
+  if (mqtt.publish(TOPIC_STATE, buf, true)) {   // true = retained
+    stateDirty = false;
+    Serial.printf("-&gt; state %s\n", buf);
+  }
+}
+
+void onMessage(char* topic, byte* payload, unsigned int length) {
+  char msg[16];
+  unsigned int n = (length &lt; sizeof(msg) - 1) ? length : sizeof(msg) - 1;
+  memcpy(msg, payload, n);
+  msg[n] = '\0';                        // payload has no '\0' of its own
+  Serial.printf("&lt;- [%s] %s\n", topic, msg);
+  if (strcmp(topic, TOPIC_SET) != 0) return;
+  if (strcmp(msg, "ON") == 0) {
+    mode = MODE_ON;
+    setLed(true);
+  } else if (strcmp(msg, "OFF") == 0) {
+    mode = MODE_OFF;
+    setLed(false);
+  } else if (strcmp(msg, "AUTO") == 0) {
+    mode = MODE_AUTO;                   // the LDR decides from now on
+  } else {
+    Serial.println("Unknown command (use ON, OFF or AUTO)");
+    return;
+  }
+  stateDirty = true;                    // the mode changed, report it
+}
+
+void connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.print(" connected, IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+bool connectMqtt() {
+  Serial.printf("MQTT: connecting as %s ... ", clientId);
+  if (mqtt.connect(clientId, TOPIC_STATUS, 1, true, "offline")) {
+    Serial.println("OK");
+    mqtt.publish(TOPIC_STATUS, "online", true);
+    mqtt.subscribe(TOPIC_SET, 1);
+    stateDirty = true;                  // report the state after every connect
+    return true;
+  }
+  Serial.printf("failed, state=%d\n", mqtt.state());
+  return false;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  connectWiFi();
+  String mac = WiFi.macAddress();
+  mac.replace(":", "");
+  snprintf(clientId, sizeof(clientId), "esp32-%s-%04X", mac.c_str(), (unsigned)(esp_random() &amp; 0xFFFF));
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  mqtt.setCallback(onMessage);
+}
+
+void loop() {
+  // 1) the night-light works even when the network is down
+  if (mode == MODE_AUTO &amp;&amp; millis() - lastCheck &gt;= 200) {
+    lastCheck = millis();
+    uint32_t mv = readLdrMv();
+    if (mv &gt; DARK_ON_MV) setLed(true);
+    else if (mv &lt; LIGHT_OFF_MV) setLed(false);
+  }
+
+  // 2) network: reconnect without blocking, as in the lesson
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (!mqtt.connected()) {
+    if (lastTry == 0 || millis() - lastTry &gt; 5000) {
+      lastTry = millis();
+      connectMqtt();
+    }
+    return;
+  }
+  mqtt.loop();
+
+  // 3) light level every 30 seconds (and right after the first connect)
+  if (lastLevel == 0 || millis() - lastLevel &gt;= 30000) {
+    lastLevel = millis();
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%d", lightPercent(readLdrMv()));
+    mqtt.publish(TOPIC_LEVEL, buf);
+    Serial.printf("-&gt; level %s %%\n", buf);
+  }
+
+  // 4) any change of mode or LED is reported once, retained
+  if (stateDirty) publishState();
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="11-16"><b class="what">Four topics under one prefix.</b> The extra <code>/nightlight</code> level keeps this project apart from the lesson's topics. The command (<code>led/set</code>) and the report (<code>led/state</code>) are two different topics.
+    <span class="why">The board subscribes only to <code>set</code>. If the report went to the same topic, the board would receive its own report as a new command (exercise 2 of this lesson).</span></li>
+  <li data-lines="18-21"><b class="what">Pins and the two thresholds.</b> The same numbers as the lesson 3.1 night-light.
+    <span class="why">Two thresholds 400 mV apart are the hysteresis: at dusk the reading wobbles around one value, and one threshold would make the LED flicker.</span></li>
+  <li data-lines="27-31"><b class="what">The state of the device.</b> <code>enum Mode</code> gives the three modes readable names. <code>ledOn</code> remembers what the LED is doing, and <code>stateDirty</code> is the "report needed" note.
+    <span class="why">An <code>enum</code> can only hold one of its listed values, so a typo like <code>mode = 7</code> is caught by the compiler, unlike a plain <code>int</code>.</span></li>
+  <li data-lines="33-42"><b class="what">Reading the light.</b> <code>readLdrMv</code> averages 8 readings; <code>lightPercent</code> turns 0 to 3300 mV into 100 to 0.
+    <span class="why">Averaging smooths the ADC noise. Multiplying before dividing keeps whole-number maths accurate: <code>mv * 100 / 3300</code> is at most 100, while <code>mv / 3300 * 100</code> would almost always be 0.</span></li>
+  <li data-lines="44-49"><b class="what">setLed only acts on a change.</b> If the LED is already in the requested state, it returns at once.
+    <span class="why">The automatic check calls <code>setLed</code> five times a second. Without this early return, <code>stateDirty</code> would be set every time and the board would flood the broker with identical messages.</span></li>
+  <li data-lines="51-65"><b class="what">Publishing the state.</b> <code>snprintf</code> builds the small JSON by hand, and <code>publish(topic, text, true)</code> sends it retained. The note is cleared only if the publish succeeded.
+    <span class="why">For a tiny fixed message, <code>snprintf</code> is enough; ArduinoJson shines with bigger or nested data. Retained means the broker keeps this last message and hands it to every new subscriber, so a dashboard opened later knows the lamp's state without waiting for a change.</span></li>
+  <li data-lines="67-73"><b class="what">Receiving a message.</b> The same safe copy as in the lesson, then we ignore anything that isn't on the command topic.
+    <span class="why">The copy adds the missing <code>'\0'</code>, and the length check keeps a very long message from writing past the end of <code>msg</code>.</span></li>
+  <li data-lines="74-87"><b class="what">The three commands.</b> <code>ON</code> and <code>OFF</code> set the mode and the LED right away; <code>AUTO</code> only sets the mode. An unknown command returns before anything changes.
+    <span class="why">In AUTO, the LDR is the boss, so the next 200 ms check decides the LED. Setting <code>stateDirty</code> at the end covers the case where only the mode changed (for example, <code>ON</code> while the LED was already on because of the dark).</span></li>
+  <li data-lines="101-112"><b class="what">Connecting to the broker.</b> The lesson's function, plus <code>stateDirty = true</code>.
+    <span class="why">After a reconnection, the dashboard may have missed changes, so we report the current state once more. Subscribing here (not in setup) is still required, because the broker forgets subscriptions when the connection drops.</span></li>
+  <li data-lines="126-132"><b class="what">The automatic light comes first.</b> In AUTO mode, every 200 ms: read, compare with the two thresholds, switch.
+    <span class="why">It sits above the network checks, which <code>return</code> early when the network is down. A night-light that stops working when the Wi-Fi goes out would be a bad product.</span></li>
+  <li data-lines="134-143"><b class="what">The network part.</b> Exactly the lesson's non-blocking reconnection and <code>mqtt.loop()</code>.
+    <span class="why">One honest limit: while <code>mqtt.connect()</code> itself is trying, it can wait up to about 15 seconds if the broker doesn't answer, and during that time the LDR isn't checked. Lesson 5.4 shows how tasks remove even this pause.</span></li>
+  <li data-lines="145-152"><b class="what">The light level every 30 seconds.</b> <code>lastLevel == 0</code> makes the first report go out right after connecting. The level is <b>not</b> retained.
+    <span class="why">A measurement goes out of date; a retained 3-hour-old light level would mislead a new subscriber. The state, on the other hand, stays true until it changes, so it is retained. <code>%%</code> in <code>printf</code> prints a single <code>%</code> sign.</span></li>
+  <li data-lines="155"><b class="what">Reporting only when needed.</b> One line turns the "to-do note" into a message.
+    <span class="why">Every change, from any part of the program, ends up here, so the report logic lives in one place.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p>The finished project in Wokwi, with the same circuit. Remember to change <code>ali1234</code> first.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": 40, "left": -260, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 150, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 70, "left": 250, "attrs": { "color": "yellow" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.1", "black", [] ],
+    [ "ldr1:AO", "esp:35", "blue", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">The lesson in three lines</div>
 <p>In MQTT, every Client connects only to the Broker, and they Publish and Subscribe on Topics (with the <code>+</code> and <code>#</code> wildcards); QoS, retain and the Last Will were built for unreliable connections. With PubSubClient: terminate the payload with <code>'\0'</code> yourself, build a unique ID, subscribe again after every reconnect, and keep <code>mqtt.loop()</code> running without delays. For security, use TLS on 8883 with <code>setCACert</code>; Adafruit IO and a local Mosquitto are two quick routes to a dashboard and to independence.</p></div>
 

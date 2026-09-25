@@ -751,6 +751,428 @@ void loop() {
 </details>
 </div>
 
+<h2 id="project">پروژه تمرینی: تنظیماتی که بعد از ریست می‌مانند</h2>
+<div class="project">
+<p class="lede-ish">هر دستگاه واقعی تنظیماتی دارد: دمای هدف یک ترموستات، روشنایی یک چراغ، برنامه یک غذادهنده. کاربر انتظار دارد بعد از قطع برق هنوز سر جایشان باشند، و تو می‌خواهی برنامه را به‌روز کنی بدون اینکه آن‌ها از دست بروند. در این پروژه «تنظیم» عمدا ساده است، یعنی دوره چشمک زدن یک LED، تا بتوانی روی سازوکار تمرکز کنی: یک فایل JSON روی LittleFS که امن ذخیره می‌شود، از یک صفحه وب (یا Serial Monitor) عوض می‌شود، یک شمارنده بوت همراه با دلیل آخرین ریست، و آپدیت بی‌سیمی که به تنظیمات دست نمی‌زند.</p>
+
+<h3 id="project-req">نیازمندی‌ها</h3>
+<ol>
+  <li>موقع روشن شدن، برد فایل <code>/config.json</code> را از LittleFS می‌خواند. اگر فایل نباشد، خراب باشد، یا دوره‌ای بیرون از ۱۰۰ تا ۵۰۰۰ میلی‌ثانیه داشته باشد، از مقدار پیش‌فرض ۵۰۰ میلی‌ثانیه استفاده می‌کند و این را در Serial Monitor می‌گوید.</li>
+  <li>تنظیمات <b>امن</b> ذخیره می‌شوند: اول در <code>/config.tmp</code>، بعد فایل قدیمی پاک و اسم فایل موقت به <code>/config.json</code> عوض می‌شود.</li>
+  <li>همین فایل یک شمارنده بوت هم دارد. برد در هر بوت آن را یکی زیاد می‌کند، ذخیره می‌کند و <code>Boot #n, last reset: …, period … ms</code> را با دلیل خوانای ریست از <code>esp_reset_reason()</code> چاپ می‌کند.</li>
+  <li>یک صفحه وب در <code>/</code> دوره، شماره بوت و دلیل ریست را نشان می‌دهد، با فرمی که دوره تازه را با POST به <code>/set</code> می‌فرستد. مقدار معتبر (۱۰۰ تا ۵۰۰۰) فورا اعمال و ذخیره می‌شود و مرورگر به صفحه برمی‌گردد؛ هر چیز دیگر خطای 400 می‌گیرد.</li>
+  <li>نوشتن یک عدد و Enter در Serial Monitor همین کار را می‌کند (با همان بررسی‌ها)؛ نوشتن <code>r</code> برد را ریست می‌کند.</li>
+  <li>ArduinoOTA با اسم میزبان <code>esp32-blinker</code> و رمز داخل <code>secrets.h</code> کار می‌کند. بعد از یک آپدیت OTA، دوره و شمارنده بوت بدون تغییر می‌مانند و دلیل ریست «software» است.</li>
+  <li>LED روی GPIO4 در تمام مدت با دوره فعلی چشمک می‌زند (نصف روشن، نصف خاموش)، بدون <code>delay()</code> در <code>loop()</code>.</li>
+</ol>
+
+<h3 id="project-parts">قطعه‌ها</h3>
+<ul>
+  <li>ESP32 DevKitC و LED با ۲۲۰ اهم روی GPIO4</li>
+  <li>فایل <code>secrets.h</code> همین درس (<code>WIFI_SSID</code>، <code>WIFI_PASS</code>، <code>OTA_PASS</code>)</li>
+  <li>یک گوشی یا کامپیوتر روی همان Wi-Fi؛ یک شارژر USB برای تست OTA دور از کامپیوتر (اختیاری)</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"R1","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","طرف GPIO4"],["2","طرف LED"]]},
+    {"id":"LED1","name":"LED (چشمک‌زن)","img":"led.svg","pins":[["A","آند (+) پایه بلند"],["K","کاتد (−) پایه کوتاه"]]}
+  ],
+  "wires":[["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>فقط LED وضعیت همیشگی دوره روی GPIO4 با مقاومت ۲۲۰ اهمش.</figcaption></div>
+
+<h3 id="project-start">کد شروع</h3>
+<div class="code" data-file="PersistentBlink.ino (کد شروع)" id="projStart"><pre>
+// چشمک‌زن ماندگار (کد شروع): جاهای TODO را پر کن
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;ArduinoOTA.h&gt;
+#include &lt;LittleFS.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#if __has_include("secrets.h")
+#include "secrets.h"                  // برد واقعی: WIFI_SSID، WIFI_PASS، OTA_PASS
+#endif
+#ifndef WIFI_SSID                     // secrets.h نیست (Wokwi): شبکه Wokwi
+#define WIFI_SSID "Wokwi-GUEST"
+#define WIFI_PASS ""
+#endif
+#ifndef OTA_PASS
+#define OTA_PASS "change-me"
+#endif
+
+const int LED_PIN = 4;
+const char *CFG = "/config.json";
+WebServer server(80);
+
+uint32_t period = 500;                // یک دور روشن+خاموش، به میلی‌ثانیه
+uint32_t boots = 0;
+const char *resetText = "?";
+unsigned long lastToggle = 0;
+bool ledOn = false;
+
+const char *resetReasonText(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON:  return "power on / EN button";
+    case ESP_RST_SW:       return "software (restart or OTA)";
+    case ESP_RST_PANIC:    return "crash (panic)";
+    case ESP_RST_TASK_WDT: return "task watchdog";
+    case ESP_RST_BROWNOUT: return "brownout (weak power)";
+    default:               return "other";
+  }
+}
+
+void loadConfig() {
+  // TODO 1: CFG را برای خواندن باز کن؛ اگر نبود، یک یادداشت چاپ کن و برگرد.
+  //         با deserializeJson در یک JsonDocument بخوان؛ اگر خراب بود، چاپ کن و برگرد.
+  //         "period" را فقط اگر بین 100 و 5000 است بپذیر؛ "boots" را بخوان (پیش‌فرض 0)
+}
+
+bool saveConfig() {
+  // TODO 2: {"period":..,"boots":..} را در /config.tmp بنویس، ببندش،
+  //         بعد CFG را پاک کن و اسم فایل موقت را به CFG عوض کن
+  return false;
+}
+
+bool setPeriod(long p) {              // یک در ورودی برای وب و Serial
+  if (p &lt; 100 || p &gt; 5000) return false;
+  period = p;
+  bool ok = saveConfig();
+  Serial.printf("New period %lu ms %s\n", (unsigned long)period, ok ? "saved" : "(SAVE FAILED)");
+  return ok;
+}
+
+void handleRoot() {
+  char page[700];
+  snprintf(page, sizeof(page),
+    "&lt;!doctype html&gt;&lt;html&gt;&lt;head&gt;&lt;meta charset='utf-8'&gt;"
+    "&lt;meta name='viewport' content='width=device-width,initial-scale=1'&gt;"
+    "&lt;title&gt;Blinker&lt;/title&gt;&lt;/head&gt;&lt;body style='font-family:sans-serif'&gt;"
+    "&lt;h2&gt;Blinker settings&lt;/h2&gt;"
+    "&lt;p&gt;Period: &lt;b&gt;%lu ms&lt;/b&gt;&lt;br&gt;Boot #%lu, last reset: %s&lt;/p&gt;"
+    "&lt;form method='POST' action='/set'&gt;"
+    "&lt;input name='period' type='number' min='100' max='5000' value='%lu'&gt; ms "
+    "&lt;button&gt;Save&lt;/button&gt;&lt;/form&gt;&lt;/body&gt;&lt;/html&gt;",
+    (unsigned long)period, (unsigned long)boots, resetText, (unsigned long)period);
+  server.send(200, "text/html", page);
+}
+
+void handleSet() {
+  // TODO 4: setPeriod(server.arg("period").toInt())؛ اگر شکست خورد 400 را
+  //         با یک متن کوتاه بفرست، در صورت موفقیت با 303 به "/" برگرد
+}
+
+void handleSerial() {                 // بنویس 250 و Enter، یا r برای ریست
+  // TODO 5: یک خط بخوان (درس ۳.۱)، trim کن؛ "r" یعنی ESP.restart()؛
+  //         وگرنه setPeriod(line.toInt()) یا چاپ روش استفاده
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  pinMode(LED_PIN, OUTPUT);
+  if (!LittleFS.begin(true)) Serial.println("LittleFS mount failed");
+  // TODO 3: resetText = resetReasonText(esp_reset_reason()); loadConfig();
+  //         boots++; saveConfig(); و "Boot #.., last reset: .., period .." را چاپ کن
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - t0 &lt; 15000) delay(250);
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("Open http://%s/\n", WiFi.localIP().toString().c_str());
+  } else {
+    Serial.println("No Wi-Fi yet: the LED and Serial still work");
+  }
+
+  // TODO 6: ArduinoOTA با اسم میزبان "esp32-blinker" و OTA_PASS، بعد
+  //         begin()؛ و ArduinoOTA.handle() را در loop صدا بزن
+
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/set", HTTP_POST, handleSet);
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();
+  handleSerial();
+  if (millis() - lastToggle &gt;= period / 2) {   // نصف روشن، نصف خاموش
+    lastToggle = millis();
+    ledOn = !ledOn;
+    digitalWrite(LED_PIN, ledOn);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="7-16"><b class="what">رمزهایی که در Wokwi هم کار می‌کنند.</b> <code>__has_include("secrets.h")</code> از کامپایلر می‌پرسد «این فایل وجود دارد؟». اگر بله، اضافه می‌شود؛ اگر نه (در Wokwi)، بلوک‌های <code>#ifndef</code> شبکه باز Wokwi و یک رمز OTA موقت را جایگزین می‌کنند.
+    <span class="why">یک برنامه برای هر دو جا: روی برد تو رمزهای واقعی از <code>secrets.h</code> می‌آیند و هرگز در کد دیده نمی‌شوند؛ در Wokwi که اضافه کردن آن فایل راحت نیست، باز هم کامپایل و وصل می‌شود.</span></li>
+  <li data-lines="18-37"><b class="what">آماده: وضعیت و متن دلیل ریست.</b> <code>period</code>، <code>boots</code> و <code>resetText</code> سراسری‌اند؛ <code>resetReasonText</code> کد تراشه را به کلمه تبدیل می‌کند.
+    <span class="why"><code>esp_reset_reason()</code> در درس ۵.۶ کامل توضیح داده می‌شود؛ اینجا فقط لازم است یک بار در setup صدایش بزنی.</span></li>
+  <li data-lines="39-57"><b class="what">TODO 1 و 2: تابع‌های فایل، و setPeriod آماده.</b> <code>setPeriod</code> بازه را بررسی می‌کند، اعمال و ذخیره می‌کند؛ هم صفحه وب و هم Serial Monitor از آن می‌گذرند.
+    <span class="why">یک «در ورودی» برای همه راه‌های تغییر یک تنظیم یعنی بررسی‌ها یک بار نوشته می‌شوند و در هیچ مسیری فراموش نمی‌شوند.</span></li>
+  <li data-lines="59-82"><b class="what">صفحه آماده است؛ کنترل‌کننده‌هایش نه.</b> <code>handleRoot</code> صفحه را با <code>snprintf</code> می‌سازد؛ TODO 4 و 5 کنترل‌کننده فرم و فرمان‌های Serial هستند.
+    <span class="why">HTML ظاهر کار است؛ منطق پشت آن موضوع این درس است.</span></li>
+  <li data-lines="84-118"><b class="what">setup و loop.</b> Wi-Fi، وب سرور و چشمک زدن آماده‌اند؛ TODO 3 (شمارنده بوت) و TODO 6 (OTA) در setup می‌آیند.
+    <span class="why">چشمک در loop با <code>millis()</code> است، پس LED با یک نگاه نشان می‌دهد که دوره واقعا عوض شد یا نه.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>در Wokwi می‌توانی بخش فایل را از طریق Serial Monitor تست کنی: LittleFS روی فلش شبیه‌سازی‌شده کار می‌کند (با <code>LittleFS.begin(true)</code> خودکار فرمت می‌شود)، و <code>r</code> تراشه را ریست می‌کند در حالی که آن فلش را نگه می‌دارد. نسخه رایگان Wokwi نمی‌تواند صفحه وب را از مرورگر تو باز کند، و OTA فقط روی برد واقعی کار می‌کند. کتابخانه <code>ArduinoJson</code> را در زبانه Library Manager اضافه کن. متوقف کردن شبیه‌سازی با ■ فلش شبیه‌سازی‌شده را پاک می‌کند، پس ▶ بعدی دوباره از بوت شماره ۱ شروع می‌شود.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>راهنمایی ۱</summary>
+<p>برای <code>loadConfig</code>، فایل را مثل LittleFS_Basics با <code>"r"</code> باز کن، بعد با ArduinoJson (درس ۵.۱) مستقیم از فایل بخوان: <code>JsonDocument doc; DeserializationError err = deserializeJson(doc, f);</code> و فایل را ببند. دوره را اول در یک متغیر محلی بخوان (<code>uint32_t p = doc["period"] | 500;</code>) و فقط اگر در بازه بود در <code>period</code> بگذار: فایلی که دستی ویرایش شده یا نیمه‌خراب است هرگز نباید LED را ۰ میلی‌ثانیه یا ۶۰ ثانیه‌ای چشمک بزند.</p></details>
+<details class="hint"><summary>راهنمایی ۲</summary>
+<p>برای <code>saveConfig</code>: یک <code>JsonDocument</code> را با دو فیلد پر کن، <code>/config.tmp</code> را با <code>"w"</code> باز کن و با <code>serializeJson(doc, f)</code> بنویس. این تابع مستقیم در فایل باز می‌نویسد و تعداد بایت‌های نوشته‌شده را برمی‌گرداند؛ ۰ یعنی شکست. فایل را ببند، بعد <code>LittleFS.remove(CFG)</code> و <code>LittleFS.rename("/config.tmp", CFG)</code>.</p></details>
+<details class="hint"><summary>راهنمایی ۳</summary>
+<p><code>server.arg("period").toInt()</code> برای متن خالی یا غیرعددی ۰ برمی‌گرداند، و ۰ از بررسی بازه رد نمی‌شود؛ پس ورودی بد مجانی رد می‌شود. بعد از یک POST موفق، <code>sendHeader("Location", "/")</code> و <code>send(303)</code> را بفرست: کد 303 به مرورگر می‌گوید به صفحه برگردد.</p></details>
+
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>اولین اجرا (در Wokwi یا روی بردی که تازه پاک شده)، بعد نوشتن <code>250</code>، بعد <code>abc</code>، بعد <code>r</code>:</p>
+<pre class="serial">No config.json yet: using defaults
+Boot #1, last reset: power on / EN button, period 500 ms
+Open http://10.10.0.2/
+New period 250 ms saved
+Type 100 to 5000, or r to restart
+Restarting...
+Boot #2, last reset: software (restart or OTA), period 250 ms
+Open http://10.10.0.2/</pre>
+<ul>
+  <li><b>نیازمندی ۱ و ۷:</b> اول LED هر ۵۰۰ میلی‌ثانیه یک بار چشمک می‌زند (۲۵۰ روشن، ۲۵۰ خاموش). بعد از <code>250</code> فورا به وضوح دو برابر سریع‌تر است.</li>
+  <li><b>نیازمندی ۲ و ۳:</b> بعد از <code>r</code> (یا زدن EN روی برد واقعی) شماره بوت تازه یکی بیشتر است و دوره هنوز ۲۵۰ است. زدن EN به صورت <code>power on / EN button</code> گزارش می‌شود و <code>r</code> به صورت <code>software</code>.</li>
+  <li><b>نیازمندی ۴ (برد واقعی):</b> آدرس چاپ‌شده را روی گوشی باز کن: دوره، شماره بوت و دلیل را می‌بینی. <code>1000</code> را ذخیره کن: به صفحه‌ای برمی‌گردی که ۱۰۰۰ را نشان می‌دهد و LED کند می‌شود. در فیلد فرم <code>50</code> بنویس و (اگر مرورگر اجازه داد) بفرست: <code>period must be 100 to 5000 ms</code>.</li>
+  <li><b>نیازمندی ۶ (برد واقعی):</b> چیزی قابل دیدن در کد عوض کن (مثلا عنوان صفحه) و از طریق پورت شبکه <code>esp32-blinker</code> آپلود کن. بعد از آپدیت صفحه عنوان تازه، <b>همان</b> دوره، شماره بوتی یکی بیشتر و <code>software (restart or OTA)</code> را نشان می‌دهد.</li>
+</ul>
+</details>
+
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="PersistentBlink.ino" id="projAns"><pre>
+// چشمک‌زن ماندگار: دوره در /config.json، فرم وب، Serial، OTA
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;ArduinoOTA.h&gt;
+#include &lt;LittleFS.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#if __has_include("secrets.h")
+#include "secrets.h"                  // برد واقعی: WIFI_SSID، WIFI_PASS، OTA_PASS
+#endif
+#ifndef WIFI_SSID                     // secrets.h نیست (Wokwi): شبکه Wokwi
+#define WIFI_SSID "Wokwi-GUEST"
+#define WIFI_PASS ""
+#endif
+#ifndef OTA_PASS
+#define OTA_PASS "change-me"
+#endif
+
+const int LED_PIN = 4;
+const char *CFG = "/config.json";
+WebServer server(80);
+
+uint32_t period = 500;                // یک دور روشن+خاموش، به میلی‌ثانیه
+uint32_t boots = 0;
+const char *resetText = "?";
+unsigned long lastToggle = 0;
+bool ledOn = false;
+
+const char *resetReasonText(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON:  return "power on / EN button";
+    case ESP_RST_SW:       return "software (restart or OTA)";
+    case ESP_RST_PANIC:    return "crash (panic)";
+    case ESP_RST_TASK_WDT: return "task watchdog";
+    case ESP_RST_BROWNOUT: return "brownout (weak power)";
+    default:               return "other";
+  }
+}
+
+void loadConfig() {
+  File f = LittleFS.open(CFG, "r");
+  if (!f) {
+    Serial.println("No config.json yet: using defaults");
+    return;
+  }
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, f);
+  f.close();
+  if (err) {
+    Serial.printf("config.json is broken (%s): using defaults\n", err.c_str());
+    return;
+  }
+  uint32_t p = doc["period"] | 500;
+  if (p &gt;= 100 &amp;&amp; p &lt;= 5000) period = p;   // هرگز چشم‌بسته به فایل اعتماد نکن
+  boots = doc["boots"] | 0;
+}
+
+bool saveConfig() {
+  JsonDocument doc;
+  doc["period"] = period;
+  doc["boots"] = boots;
+  File f = LittleFS.open("/config.tmp", "w");   // اول فایل موقت
+  if (!f) return false;
+  bool ok = serializeJson(doc, f) &gt; 0;
+  f.close();
+  if (!ok) return false;
+  LittleFS.remove(CFG);
+  return LittleFS.rename("/config.tmp", CFG);   // بعد جایگزینش کن
+}
+
+bool setPeriod(long p) {              // یک در ورودی برای وب و Serial
+  if (p &lt; 100 || p &gt; 5000) return false;
+  period = p;
+  bool ok = saveConfig();
+  Serial.printf("New period %lu ms %s\n", (unsigned long)period, ok ? "saved" : "(SAVE FAILED)");
+  return ok;
+}
+
+void handleRoot() {
+  char page[700];
+  snprintf(page, sizeof(page),
+    "&lt;!doctype html&gt;&lt;html&gt;&lt;head&gt;&lt;meta charset='utf-8'&gt;"
+    "&lt;meta name='viewport' content='width=device-width,initial-scale=1'&gt;"
+    "&lt;title&gt;Blinker&lt;/title&gt;&lt;/head&gt;&lt;body style='font-family:sans-serif'&gt;"
+    "&lt;h2&gt;Blinker settings&lt;/h2&gt;"
+    "&lt;p&gt;Period: &lt;b&gt;%lu ms&lt;/b&gt;&lt;br&gt;Boot #%lu, last reset: %s&lt;/p&gt;"
+    "&lt;form method='POST' action='/set'&gt;"
+    "&lt;input name='period' type='number' min='100' max='5000' value='%lu'&gt; ms "
+    "&lt;button&gt;Save&lt;/button&gt;&lt;/form&gt;&lt;/body&gt;&lt;/html&gt;",
+    (unsigned long)period, (unsigned long)boots, resetText, (unsigned long)period);
+  server.send(200, "text/html", page);
+}
+
+void handleSet() {
+  if (!setPeriod(server.arg("period").toInt())) {
+    server.send(400, "text/plain", "period must be 100 to 5000 ms");
+    return;
+  }
+  server.sendHeader("Location", "/");
+  server.send(303);                   // برگشت به صفحه، بدون ارسال دوباره با Refresh
+}
+
+void handleSerial() {                 // بنویس 250 و Enter، یا r برای ریست
+  if (Serial.available() == 0) return;
+  String line = Serial.readStringUntil('\n');
+  line.trim();
+  if (line == "r") {
+    Serial.println("Restarting...");
+    delay(100);
+    ESP.restart();
+  }
+  if (!setPeriod(line.toInt())) Serial.println("Type 100 to 5000, or r to restart");
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  pinMode(LED_PIN, OUTPUT);
+  resetText = resetReasonText(esp_reset_reason());
+  if (!LittleFS.begin(true)) Serial.println("LittleFS mount failed");
+  loadConfig();
+  boots++;
+  saveConfig();                       // یک بار نوشتن در هر بوت: برای فلش مشکلی نیست
+  Serial.printf("Boot #%lu, last reset: %s, period %lu ms\n",
+                (unsigned long)boots, resetText, (unsigned long)period);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - t0 &lt; 15000) delay(250);
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("Open http://%s/\n", WiFi.localIP().toString().c_str());
+  } else {
+    Serial.println("No Wi-Fi yet: the LED and Serial still work");
+  }
+
+  ArduinoOTA.setHostname("esp32-blinker");
+  ArduinoOTA.setPassword(OTA_PASS);
+  ArduinoOTA.onStart([]() { Serial.println("OTA start"); });
+  ArduinoOTA.begin();
+
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/set", HTTP_POST, handleSet);
+  server.begin();
+}
+
+void loop() {
+  ArduinoOTA.handle();
+  server.handleClient();
+  handleSerial();
+  if (millis() - lastToggle &gt;= period / 2) {   // نصف روشن، نصف خاموش
+    lastToggle = millis();
+    ledOn = !ledOn;
+    digitalWrite(LED_PIN, ledOn);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="1-16"><b class="what">کتابخانه‌ها و رمزها.</b> Wi-Fi، وب سرور، OTA، LittleFS و ArduinoJson؛ <code>secrets.h</code> اگر باشد، و جایگزین‌های امن اگر نباشد.
+    <span class="why"><code>__has_include</code> یک امکان استاندارد C++17 است که کامپایلر ESP32 پشتیبانی می‌کند. جایگزین <code>#ifndef OTA_PASS</code> همان محافظ BasicOTA درس است.</span></li>
+  <li data-lines="18-26"><b class="what">وضعیت.</b> اسم فایل، دوره با مقدار پیش‌فرضش، شمارنده بوت، متن ریست و زمان‌سنج چشمک.
+    <span class="why">این متغیرهای سراسری «حافظه دستگاه در زمان بیداری» هستند؛ فایل JSON حافظه آن در طول ریست‌هاست. موقع بوت یکی را در دیگری کپی می‌کنیم.</span></li>
+  <li data-lines="28-37"><b class="what">دلیل ریست به صورت متن.</b> یک <code>switch</code> مفیدترین کدها را به کلمه تبدیل می‌کند.
+    <span class="why">«چرا ریست شد؟» اولین سؤال وقتی دستگاه بدرفتاری می‌کند. نشان دادنش روی صفحه، بدون کابل جوابش را می‌دهد.</span></li>
+  <li data-lines="39-51"><b class="what">خواندن فایل، با احتیاط.</b> فایل نیست: پیش‌فرض‌ها. JSON خراب: پیش‌فرض‌ها، همراه با اسم خطا.
+    <span class="why">دستگاه باید همیشه روشن شود، حتی بدون تنظیمات یا با تنظیمات بد. <code>err.c_str()</code> دلیل را می‌گوید (مثلا <code>IncompleteInput</code> بعد از قطع برق وسط یک نوشتن به روش قدیمی).</span></li>
+  <li data-lines="52-54"><b class="what">بررسی مقدارها.</b> دوره فقط اگر در بازه باشد پذیرفته می‌شود؛ <code>| 500</code> و <code>| 0</code> برای فیلدهای جاافتاده مقدار پیش‌فرض می‌دهند.
+    <span class="why">یک فایل می‌تواند JSON معتبر باشد و باز هم مقدار بی‌معنی داشته باشد. هر چیزی را که از بیرون برنامه می‌آید اعتبارسنجی کن، حتی فایل خودت را.</span></li>
+  <li data-lines="57-68"><b class="what">ذخیره امن.</b> فایل موقت را بنویس، ببند، و فقط اگر موفق بود، فایل قدیمی را پاک و اسم را عوض کن.
+    <span class="why">اگر برق وسط نوشتن برود، <code>config.json</code> قدیمی هنوز سالم است. تغییر اسم در LittleFS تقریبا آنی است، پس لحظه پرخطر خیلی کوتاه است.</span></li>
+  <li data-lines="70-76"><b class="what">setPeriod: تنها در ورودی.</b> بررسی بازه، اعمال، ذخیره، گزارش.
+    <span class="why">LED فورا عوض می‌شود چون loop در هر دور <code>period</code> را می‌خواند؛ ذخیره، تغییر را دائمی می‌کند.</span></li>
+  <li data-lines="78-91"><b class="what">صفحه.</b> <code>snprintf</code> دوره، شماره بوت، متن ریست و مقدار فعلی فرم را در یک بافر ۷۰۰ بایتی می‌گذارد.
+    <span class="why">بافر ثابت از ساختن یک <code>String</code> بزرگ تکه‌تکه روی heap جلوگیری می‌کند، کاری که کم‌کم حافظه را تکه‌تکه می‌کند (بیشتر در درس ۵.۶). نقل‌قول تکی داخل HTML باعث می‌شود لازم نباشد همه نقل‌قول‌های دوتایی را escape کنیم.</span></li>
+  <li data-lines="93-100"><b class="what">کنترل‌کننده فرم.</b> ورودی نامعتبر یک 400 با توضیح کوتاه می‌گیرد؛ ورودی معتبر با 303 برمی‌گرداند.
+    <span class="why">303 («برو جای دیگر») باعث می‌شود مرورگر <code>/</code> را با GET بار کند، پس زدن Refresh فرم را دوباره نمی‌فرستد.</span></li>
+  <li data-lines="102-112"><b class="what">فرمان‌های Serial.</b> یک خط بخوان، trim کن، <code>r</code> ریست می‌کند، هر چیز دیگر از <code>setPeriod</code> می‌گذرد.
+    <span class="why">این الگوی درس ۳.۱ است. پروژه را در Wokwi قابل تست و روی میزت قبل از راه افتادن Wi-Fi قابل استفاده می‌کند. <code>delay(100)</code> کوتاه به پیام فرصت می‌دهد قبل از ریست از پورت سریال خارج شود.</span></li>
+  <li data-lines="118-124"><b class="what">حساب‌وکتاب بوت.</b> دلیل ریست را بخوان، LittleFS را mount کن، تنظیمات را بار کن، این بوت را بشمار، ذخیره کن، چاپ کن.
+    <span class="why">فقط یک بار در هر بوت می‌نویسیم، هرگز در loop، پس فلش فرسوده نمی‌شود. <code>LittleFS.begin(true)</code> فلش کاملا نو را بار اول فرمت می‌کند.</span></li>
+  <li data-lines="126-134"><b class="what">Wi-Fi با محدودیت زمانی.</b> حداکثر ۱۵ ثانیه، بعد در هر صورت ادامه می‌دهیم.
+    <span class="why">چشمک‌زن و فرمان‌های Serial به Wi-Fi نیاز ندارند، پس نبودن مودم نباید دستگاه را قفل کند. هسته در پس‌زمینه به تلاش برای اتصال ادامه می‌دهد.</span></li>
+  <li data-lines="136-143"><b class="what">OTA و مسیرهای وب.</b> اسم میزبان، رمز، پیامی هنگام شروع آپدیت، بعد دو مسیر.
+    <span class="why">OTA فقط پارتیشن برنامه را جایگزین می‌کند. LittleFS در پارتیشن خودش است، پس <code>config.json</code> از هر آپدیتی جان سالم به در می‌برد (تا وقتی Partition Scheme را عوض نکنی).</span></li>
+  <li data-lines="146-155"><b class="what">loop.</b> OTA، وب، Serial، و چشمک بدون مسدود کردن.
+    <span class="why">هر دور چند میکروثانیه است، پس OTA و صفحه وب همیشه سریع جواب می‌دهند.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p>پروژه کامل در Wokwi (فقط بخش فایل و فرمان‌های Serial، طبق توضیح بالا).</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
 <p>OTA دو پارتیشن برنامه (Default یا Minimal SPIFFS، هرگز Huge APP) و یک رمز می‌خواهد؛ اولین آپلود همیشه با USB است و هر برنامه جدید باید دوباره کد OTA را داشته باشد. با Rollback نسخه جدید فقط وقتی می‌ماند که ثابت کند به Wi-Fi وصل می‌شود. LittleFS یک درایو کوچک و مقاوم در برابر قطع برق داخل فلش است برای صفحه وب، تنظیمات JSON و لاگ کوتاه؛ با برنامه جدید پاک نمی‌شود، ولی با آپلود دوباره LittleFS پاک می‌شود.</p></div>
 

@@ -1438,6 +1438,437 @@ void loop() {
 </details>
 </div>
 
+<h2 id="project">پروژه تمرینی: چراغ خواب از راه دور با MQTT</h2>
+<div class="project">
+<p class="lede-ish">یک چراغ خواب برای راهرو می‌سازی که از هر جای دنیا می‌توانی وضعیتش را ببینی و کنترلش کنی. خودش مثل چراغ خواب درس <a href="3-1.html">۳.۱</a> وقتی راهرو تاریک شود روشن می‌شود. ولی هر ۳۰ ثانیه سطح نور را هم به اینترنت گزارش می‌دهد، و از گوشی‌ات می‌توانی آن را به زور روشن (ON) یا خاموش (OFF) کنی، یا با AUTO کنترل را دوباره به سنسور نور بدهی. هر کس بعدا داشبورد را باز کند، به لطف یک پیام ماندگار (Retained) فورا وضعیت فعلی چراغ را می‌بیند.</p>
+
+<h3 id="project-req">نیازمندی‌ها</h3>
+<ol>
+  <li>همه Topicها با پیشوند <b>خودت</b> شروع می‌شوند (<code>esp32course/yourname/nightlight</code>)، و <code>.../status</code> دقیقا مثل درس، <code>online</code> یا (با وصیت‌نامه) <code>offline</code> را نشان می‌دهد.</li>
+  <li>برد هر ۳۰ ثانیه (و یک بار بلافاصله بعد از اتصال) سطح نور را به صورت یک عدد صحیح از <code>0</code> (تاریک) تا <code>100</code> (روشن) روی <code>.../light/level</code> منتشر می‌کند.</li>
+  <li>برد به <code>.../led/set</code> گوش می‌دهد: <code>ON</code> چراغ را روشن می‌کند و روشن نگه می‌دارد، <code>OFF</code> خاموش می‌کند و خاموش نگه می‌دارد، <code>AUTO</code> کنترل را به سنسور نور برمی‌گرداند. هر چیز دیگر (حتی <code>on</code> با حروف کوچک) پیام <code>Unknown command</code> چاپ می‌کند و هیچ چیزی را عوض نمی‌کند.</li>
+  <li>در حالت AUTO، LDR هر ۲۰۰ میلی‌ثانیه با هیسترزیس بررسی می‌شود: بالای ۲۶۰۰ میلی‌ولت (تاریک) LED روشن و زیر ۲۲۰۰ میلی‌ولت (روشن) خاموش می‌شود. این کار وقتی Wi-Fi یا Broker قطع است هم ادامه دارد.</li>
+  <li>هر بار که حالت یا LED عوض شود، و بعد از هر اتصال (یا اتصال دوباره)، برد یک پیام JSON <b>ماندگار</b> روی <code>.../led/state</code> منتشر می‌کند؛ مثلا <code>{"mode":"AUTO","led":"ON"}</code>. اگر چیزی عوض نشده باشد، آن را تکرار نمی‌کند.</li>
+  <li><code>loop()</code> هیچ‌جا از <code>delay()</code> استفاده نمی‌کند؛ همه زمان‌بندی‌ها با <code>millis()</code> است.</li>
+</ol>
+
+<h3 id="project-parts">قطعه‌ها</h3>
+<ul>
+  <li>ESP32 DevKitC، برد بورد و سیم جامپر</li>
+  <li>LDR (مدل GL5528) + مقاومت ۱۰ کیلواهم؛ همان تقسیم‌کننده ولتاژ درس ۳.۱</li>
+  <li>LED + مقاومت ۲۲۰ اهم روی GPIO4</li>
+  <li>برای تست: HiveMQ WebSocket Client در مرورگر، یا MQTTX / MQTT Explorer (از همین درس). سنسور DHT22 درس می‌تواند روی برد بورد بماند؛ این پروژه از آن استفاده نمی‌کند.</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"R1","name":"مقاومت ثابت ۱۰ کیلواهم","img":"resistor.svg","pins":[["1","به 3V3"],["2","نقطه وسط"]]},
+    {"id":"LDR","name":"مقاومت نوری LDR","img":"ldr.svg","pins":[["1","نقطه وسط (قطب ندارد)"],["2","به GND"]]},
+    {"id":"R2","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","طرف GPIO4"],["2","طرف LED"]]},
+    {"id":"LED1","name":"LED (چراغ خواب)","img":"led.svg","pins":[["A","آند (+) پایه بلند"],["K","کاتد (−) پایه کوتاه"]]}
+  ],
+  "wires":[["3V3","R1.1","red"],["GPIO35","R1.2","blue"],["R1.2","LDR.1","blue"],["LDR.2","GND","black"],["GPIO4","R2.1","orange"],["R2.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>تقسیم‌کننده LDR درس ۳.۱ (3V3 ← ۱۰ کیلواهم ← نقطه وسط ← LDR ← GND، نقطه وسط به GPIO35) و LED همیشگی روی GPIO4. تاریکی یعنی ولتاژ بالا روی GPIO35 و روشنایی یعنی ولتاژ پایین. GPIO35 جزو ADC1 است، پس با روشن بودن Wi-Fi هم درست می‌خواند.</figcaption></div>
+
+<h3 id="project-start">کد شروع</h3>
+<div class="code" data-file="NightLight_MQTT.ino (کد شروع)" id="projStart"><pre>
+// چراغ خواب از راه دور (کد شروع): جاهای TODO را پر کن
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+
+// ---- Wi-Fi (در Wokwi همین را نگه دار؛ روی برد واقعی اسم مودم خودت) ----
+const char* WIFI_SSID = "Wokwi-GUEST";
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const int   MQTT_PORT = 1883;
+
+// TODO 1: ali1234 را با اسم و عدد خودت عوض کن
+#define BASE "esp32course/ali1234/nightlight"
+const char* TOPIC_LEVEL  = BASE "/light/level";   // ما منتشر می‌کنیم: 0 تا 100
+const char* TOPIC_SET    = BASE "/led/set";       // ما گوش می‌دهیم: ON/OFF/AUTO
+const char* TOPIC_STATE  = BASE "/led/state";     // ما منتشر می‌کنیم (ماندگار)
+const char* TOPIC_STATUS = BASE "/status";        // online/offline (وصیت‌نامه)
+
+const int LED_PIN = 4;
+const int LDR_PIN = 35;                 // وسط تقسیم‌کننده LDR
+const uint32_t DARK_ON_MV   = 2600;     // بالاتر از این: تاریک، LED روشن
+const uint32_t LIGHT_OFF_MV = 2200;     // پایین‌تر از این: روشن، LED خاموش
+
+WiFiClient net;
+PubSubClient mqtt(net);
+char clientId[40];
+
+enum Mode { MODE_AUTO, MODE_ON, MODE_OFF };
+Mode mode = MODE_AUTO;
+bool ledOn = false;
+bool stateDirty = true;                 // true یعنی وضعیت باید منتشر شود
+unsigned long lastLevel = 0, lastCheck = 0, lastTry = 0;
+
+uint32_t readLdrMv() {                  // میانگین ۸ بار خواندن
+  uint32_t sum = 0;
+  for (int i = 0; i &lt; 8; i++) sum += analogReadMilliVolts(LDR_PIN);
+  return sum / 8;
+}
+
+int lightPercent(uint32_t mv) {         // 0 یعنی تاریک، 100 یعنی روشن
+  // TODO 2: ولتاژ 0 تا 3300 میلی‌ولت را به 100 تا 0 درصد تبدیل کن (بالای 3300 را محدود کن)
+  return 0;
+}
+
+void setLed(bool on) {
+  // TODO 3: فقط اگر لازم است LED را عوض کن و stateDirty = true بگذار
+}
+
+void publishState() {
+  // TODO 5: متنی مثل {"mode":"AUTO","led":"OFF"} را ماندگار روی TOPIC_STATE منتشر کن،
+  //         و stateDirty را فقط وقتی انتشار موفق بود false کن
+}
+
+void onMessage(char* topic, byte* payload, unsigned int length) {
+  char msg[16];
+  unsigned int n = (length &lt; sizeof(msg) - 1) ? length : sizeof(msg) - 1;
+  memcpy(msg, payload, n);
+  msg[n] = '\0';                        // payload خودش '\0' ندارد
+  Serial.printf("&lt;- [%s] %s\n", topic, msg);
+  // TODO 3: ON / OFF / AUTO حالت را عوض می‌کنند؛ هر چیز دیگر پیام خطا چاپ می‌کند
+}
+
+void connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.print(" connected, IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+bool connectMqtt() {
+  Serial.printf("MQTT: connecting as %s ... ", clientId);
+  if (mqtt.connect(clientId, TOPIC_STATUS, 1, true, "offline")) {
+    Serial.println("OK");
+    mqtt.publish(TOPIC_STATUS, "online", true);
+    mqtt.subscribe(TOPIC_SET, 1);
+    stateDirty = true;                  // بعد از هر اتصال، وضعیت را گزارش کن
+    return true;
+  }
+  Serial.printf("failed, state=%d\n", mqtt.state());
+  return false;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  connectWiFi();
+  String mac = WiFi.macAddress();
+  mac.replace(":", "");
+  snprintf(clientId, sizeof(clientId), "esp32-%s-%04X", mac.c_str(), (unsigned)(esp_random() &amp; 0xFFFF));
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  mqtt.setCallback(onMessage);
+}
+
+void loop() {
+  // TODO 4: در حالت AUTO هر ۲۰۰ میلی‌ثانیه LDR را بخوان و LED را
+  //         با هیسترزیس روشن/خاموش کن (این باید بدون شبکه هم کار کند)
+
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (!mqtt.connected()) {
+    if (lastTry == 0 || millis() - lastTry &gt; 5000) {
+      lastTry = millis();
+      connectMqtt();
+    }
+    return;
+  }
+  mqtt.loop();
+
+  // TODO 2: هر ۳۰ ثانیه lightPercent(readLdrMv()) را روی TOPIC_LEVEL منتشر کن
+  // TODO 5: اگر stateDirty بود، publishState() را صدا بزن
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="11-16"><b class="what">TODO 1: Topicهای خودت.</b> فقط پیشوند باید عوض شود؛ چهار Topic از روی آن ساخته می‌شوند.
+    <span class="why">روی Broker عمومی، پیشوندی مثل <code>ali1234</code> بین همه دانشجوهایی که یادشان رفته عوضش کنند مشترک است.</span></li>
+  <li data-lines="39-51"><b class="what">سه تابع کمکی خالی.</b> <code>lightPercent</code>، <code>setLed</code> و <code>publishState</code> کامپایل می‌شوند ولی هنوز کاری نمی‌کنند (TODO 2، 3 و 5).
+    <span class="why">وقتی تابع‌های کوچک را یکی‌یکی پر کنی، می‌توانی هر تکه را قبل از تکه بعدی تست کنی.</span></li>
+  <li data-lines="53-60"><b class="what">onMessage، نیمه‌کاره.</b> payload از قبل کپی شده و مثل درس با <code>'\0'</code> بسته شده. تو سه فرمان را اضافه می‌کنی (TODO 3).
+    <span class="why">کپی کردن بخش حساس و قبلا آموزش‌داده‌شده است؛ تصمیم‌گیری کار توست.</span></li>
+  <li data-lines="98-114"><b class="what">loop.</b> اتصال دوباره بدون گیر انداختن برنامه آماده است. TODO 4 (چراغ خودکار) <b>بالای</b> بررسی‌های شبکه می‌آید؛ TODO 2 و 5 بعد از <code>mqtt.loop()</code>.
+    <span class="why">جای یک خط در loop تعیین می‌کند که وقتی شبکه قطع است، آن خط باز هم اجرا می‌شود یا نه.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>همه این پروژه در Wokwi اجرا می‌شود: کتابخانه <code>PubSubClient</code> را در زبانه Library Manager اضافه کن، کد شروع و این diagram را بچسبان و ▶ را بزن. روی سنسور نور کلیک کن تا اسلایدر lux آن را جابه‌جا کنی (حدود ۱۰ لوکس تاریک و ۱۰۰۰ لوکس روشن است). فرمان‌ها را مثل درس با HiveMQ WebSocket Client تست کن.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": 40, "left": -260, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 150, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 70, "left": 250, "attrs": { "color": "yellow" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.1", "black", [] ],
+    [ "ldr1:AO", "esp:35", "blue", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>راهنمایی ۱</summary>
+<p>اول بدون شبکه شروع کن: TODO 2 و TODO 4 را انجام بده. برای درصد، ۳۳۰۰ میلی‌ولت یعنی کاملا تاریک، پس <code>100 - mv * 100 / 3300</code> در تاریکی ۰ و در نور زیاد نزدیک ۱۰۰ می‌دهد. برای چراغ خودکار، همان <code>if / else if</code> هیسترزیس چراغ خواب درس ۳.۱ را کپی کن و داخل یک زمان‌سنج <code>millis()</code> با ۲۰۰ میلی‌ثانیه بگذار.</p></details>
+<details class="hint"><summary>راهنمایی ۲</summary>
+<p>در <code>onMessage</code> با <code>strcmp(msg, "ON") == 0</code> مقایسه کن. برای <code>ON</code> و <code>OFF</code> هم حالت و هم LED را تنظیم کن. برای <code>AUTO</code> فقط حالت را عوض کن: بررسی ۲۰۰ میلی‌ثانیه‌ای بعدی LED را به هر چه LDR بگوید می‌برد. برای فرمان ناشناخته، خطا را چاپ کن و قبل از هر تغییری <code>return</code> کن.</p></details>
+<details class="hint"><summary>راهنمایی ۳</summary>
+<p><code>stateDirty</code> یک «یادداشت کار» است: هر جا چیزی عوض شد (در <code>setLed</code>، در <code>onMessage</code>، بعد از اتصال) آن را <code>true</code> کن، و در loop فقط وقتی <code>true</code> است <code>publishState()</code> را صدا بزن. فقط وقتی <code>mqtt.publish(..., true)</code> مقدار <code>true</code> برگرداند آن را پاک کن؛ اگر انتشار شکست خورد، یادداشت می‌ماند و loop دوباره تلاش می‌کند.</p></details>
+
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>در Serial Monitor (IP، شناسه Client و سطح نور تو فرق دارد). خط‌های بعد از <code>OK</code> وقتی ظاهر می‌شوند که در یک اتاق روشن، از وب‌کلاینت به ترتیب <code>ON</code>، بعد <code>on</code> و بعد <code>AUTO</code> را منتشر کنی:</p>
+<pre class="serial">WiFi..... connected, IP: 10.10.0.2
+MQTT: connecting as esp32-240AC4000110-3A9C ... OK
+-&gt; level 76 %
+-&gt; state {"mode":"AUTO","led":"OFF"}
+&lt;- [esp32course/ali1234/nightlight/led/set] ON
+-&gt; state {"mode":"ON","led":"ON"}
+&lt;- [esp32course/ali1234/nightlight/led/set] on
+Unknown command (use ON, OFF or AUTO)
+&lt;- [esp32course/ali1234/nightlight/led/set] AUTO
+-&gt; state {"mode":"AUTO","led":"ON"}
+-&gt; state {"mode":"AUTO","led":"OFF"}
+-&gt; level 76 %</pre>
+<p>بعد از <code>AUTO</code> دو خط state می‌آید: اولی حالت جدید را گزارش می‌دهد در حالی که LED هنوز از فرمان <code>ON</code> روشن است، و دومی کسری از ثانیه بعد می‌گوید LDR اتاق را روشن دید و LED را خاموش کرد. این درست است.</p>
+<ul>
+  <li><b>نیازمندی ۱:</b> در وب‌کلاینت روی <code>esp32course/yourname/nightlight/#</code> مشترک شو: <code>status</code> فورا <code>online</code> را نشان می‌دهد. شبیه‌سازی را متوقف کن (یا برد را از برق بکش): حدود ۲۰ ثانیه بعد <code>offline</code> می‌آید.</li>
+  <li><b>نیازمندی ۲:</b> پیام‌های level با فاصله ۳۰ ثانیه می‌رسند. روی LDR را بپوشان (در Wokwi: اسلایدر را تا حدود ۱۰ لوکس پایین بکش) و عدد بعدی خیلی کمتر می‌شود.</li>
+  <li><b>نیازمندی ۳ و ۴:</b> بعد از <code>OFF</code>، پوشاندن LDR هیچ اثری ندارد. بعد از <code>AUTO</code>، پوشاندنش در کسری از ثانیه LED را روشن می‌کند؛ اگر نور را آرام بالا ببری، LED در نقطه تغییر هرگز چشمک نمی‌زند.</li>
+  <li><b>نیازمندی ۴ (بدون شبکه):</b> روی برد واقعی، در حالت AUTO مودم را خاموش کن: چراغ خواب با اینکه MQTT قطع است، باز هم به دست تو واکنش نشان می‌دهد.</li>
+  <li><b>نیازمندی ۵:</b> وب‌کلاینت را قطع و دوباره وصل کن: آخرین <code>led/state</code> قبل از هر تغییر تازه‌ای فورا می‌رسد. در ۵ دقیقه‌ای که هیچ اتفاقی نیفتد، هیچ خط state اضافه‌ای نمی‌آید.</li>
+</ul>
+</details>
+
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="NightLight_MQTT.ino" id="projAns"><pre>
+// چراغ خواب از راه دور: سطح نور روی MQTT، فرمان‌های LED: ON / OFF / AUTO
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+
+// ---- Wi-Fi (در Wokwi همین را نگه دار؛ روی برد واقعی اسم مودم خودت) ----
+const char* WIFI_SSID = "Wokwi-GUEST";
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const int   MQTT_PORT = 1883;
+
+// ali1234 را با اسم و عدد خودت عوض کن
+#define BASE "esp32course/ali1234/nightlight"
+const char* TOPIC_LEVEL  = BASE "/light/level";   // ما منتشر می‌کنیم: 0 تا 100
+const char* TOPIC_SET    = BASE "/led/set";       // ما گوش می‌دهیم: ON/OFF/AUTO
+const char* TOPIC_STATE  = BASE "/led/state";     // ما منتشر می‌کنیم (ماندگار)
+const char* TOPIC_STATUS = BASE "/status";        // online/offline (وصیت‌نامه)
+
+const int LED_PIN = 4;
+const int LDR_PIN = 35;                 // وسط تقسیم‌کننده LDR
+const uint32_t DARK_ON_MV   = 2600;     // بالاتر از این: تاریک، LED روشن
+const uint32_t LIGHT_OFF_MV = 2200;     // پایین‌تر از این: روشن، LED خاموش
+
+WiFiClient net;
+PubSubClient mqtt(net);
+char clientId[40];
+
+enum Mode { MODE_AUTO, MODE_ON, MODE_OFF };
+Mode mode = MODE_AUTO;
+bool ledOn = false;
+bool stateDirty = true;                 // true یعنی وضعیت باید منتشر شود
+unsigned long lastLevel = 0, lastCheck = 0, lastTry = 0;
+
+uint32_t readLdrMv() {                  // میانگین ۸ بار خواندن
+  uint32_t sum = 0;
+  for (int i = 0; i &lt; 8; i++) sum += analogReadMilliVolts(LDR_PIN);
+  return sum / 8;
+}
+
+int lightPercent(uint32_t mv) {         // 0 یعنی تاریک، 100 یعنی روشن
+  if (mv &gt; 3300) mv = 3300;
+  return 100 - (int)(mv * 100 / 3300);
+}
+
+void setLed(bool on) {
+  if (on == ledOn) return;              // تغییری نیست: چیزی برای گزارش نیست
+  ledOn = on;
+  digitalWrite(LED_PIN, on ? HIGH : LOW);
+  stateDirty = true;
+}
+
+const char* modeName() {
+  if (mode == MODE_ON) return "ON";
+  if (mode == MODE_OFF) return "OFF";
+  return "AUTO";
+}
+
+void publishState() {
+  char buf[48];
+  snprintf(buf, sizeof(buf), "{\"mode\":\"%s\",\"led\":\"%s\"}",
+           modeName(), ledOn ? "ON" : "OFF");
+  if (mqtt.publish(TOPIC_STATE, buf, true)) {   // true یعنی ماندگار (retained)
+    stateDirty = false;
+    Serial.printf("-&gt; state %s\n", buf);
+  }
+}
+
+void onMessage(char* topic, byte* payload, unsigned int length) {
+  char msg[16];
+  unsigned int n = (length &lt; sizeof(msg) - 1) ? length : sizeof(msg) - 1;
+  memcpy(msg, payload, n);
+  msg[n] = '\0';                        // payload خودش '\0' ندارد
+  Serial.printf("&lt;- [%s] %s\n", topic, msg);
+  if (strcmp(topic, TOPIC_SET) != 0) return;
+  if (strcmp(msg, "ON") == 0) {
+    mode = MODE_ON;
+    setLed(true);
+  } else if (strcmp(msg, "OFF") == 0) {
+    mode = MODE_OFF;
+    setLed(false);
+  } else if (strcmp(msg, "AUTO") == 0) {
+    mode = MODE_AUTO;                   // از این به بعد LDR تصمیم می‌گیرد
+  } else {
+    Serial.println("Unknown command (use ON, OFF or AUTO)");
+    return;
+  }
+  stateDirty = true;                    // حالت عوض شد، گزارشش کن
+}
+
+void connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.print(" connected, IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+bool connectMqtt() {
+  Serial.printf("MQTT: connecting as %s ... ", clientId);
+  if (mqtt.connect(clientId, TOPIC_STATUS, 1, true, "offline")) {
+    Serial.println("OK");
+    mqtt.publish(TOPIC_STATUS, "online", true);
+    mqtt.subscribe(TOPIC_SET, 1);
+    stateDirty = true;                  // بعد از هر اتصال، وضعیت را گزارش کن
+    return true;
+  }
+  Serial.printf("failed, state=%d\n", mqtt.state());
+  return false;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  connectWiFi();
+  String mac = WiFi.macAddress();
+  mac.replace(":", "");
+  snprintf(clientId, sizeof(clientId), "esp32-%s-%04X", mac.c_str(), (unsigned)(esp_random() &amp; 0xFFFF));
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  mqtt.setCallback(onMessage);
+}
+
+void loop() {
+  // ۱) چراغ خواب حتی وقتی شبکه قطع است کار می‌کند
+  if (mode == MODE_AUTO &amp;&amp; millis() - lastCheck &gt;= 200) {
+    lastCheck = millis();
+    uint32_t mv = readLdrMv();
+    if (mv &gt; DARK_ON_MV) setLed(true);
+    else if (mv &lt; LIGHT_OFF_MV) setLed(false);
+  }
+
+  // ۲) شبکه: اتصال دوباره بدون گیر انداختن برنامه، مثل درس
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (!mqtt.connected()) {
+    if (lastTry == 0 || millis() - lastTry &gt; 5000) {
+      lastTry = millis();
+      connectMqtt();
+    }
+    return;
+  }
+  mqtt.loop();
+
+  // ۳) سطح نور هر ۳۰ ثانیه (و بلافاصله بعد از اولین اتصال)
+  if (lastLevel == 0 || millis() - lastLevel &gt;= 30000) {
+    lastLevel = millis();
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%d", lightPercent(readLdrMv()));
+    mqtt.publish(TOPIC_LEVEL, buf);
+    Serial.printf("-&gt; level %s %%\n", buf);
+  }
+
+  // ۴) هر تغییر حالت یا LED یک بار و ماندگار گزارش می‌شود
+  if (stateDirty) publishState();
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="11-16"><b class="what">چهار Topic زیر یک پیشوند.</b> سطح اضافه <code>/nightlight</code> این پروژه را از Topicهای درس جدا می‌کند. فرمان (<code>led/set</code>) و گزارش (<code>led/state</code>) دو Topic جدا هستند.
+    <span class="why">برد فقط در <code>set</code> مشترک است. اگر گزارش روی همان Topic می‌رفت، برد گزارش خودش را به عنوان فرمان تازه دریافت می‌کرد (تمرین ۲ همین درس).</span></li>
+  <li data-lines="18-21"><b class="what">پایه‌ها و دو آستانه.</b> همان عددهای چراغ خواب درس ۳.۱.
+    <span class="why">دو آستانه با ۴۰۰ میلی‌ولت فاصله همان هیسترزیس است: هنگام غروب، عدد دور یک مقدار نوسان می‌کند و با یک آستانه تنها، LED چشمک می‌زد.</span></li>
+  <li data-lines="27-31"><b class="what">وضعیت دستگاه.</b> <code>enum Mode</code> به سه حالت اسم خوانا می‌دهد. <code>ledOn</code> یادش می‌ماند LED چه می‌کند و <code>stateDirty</code> یادداشت «گزارش لازم است» است.
+    <span class="why">یک <code>enum</code> فقط یکی از مقدارهای فهرست‌شده‌اش را می‌پذیرد، پس اشتباهی مثل <code>mode = 7</code> را کامپایلر می‌گیرد؛ برخلاف یک <code>int</code> ساده.</span></li>
+  <li data-lines="33-42"><b class="what">خواندن نور.</b> <code>readLdrMv</code> از ۸ بار خواندن میانگین می‌گیرد؛ <code>lightPercent</code> بازه ۰ تا ۳۳۰۰ میلی‌ولت را به ۱۰۰ تا ۰ تبدیل می‌کند.
+    <span class="why">میانگین‌گیری نویز ADC را صاف می‌کند. اول ضرب و بعد تقسیم، حساب با عدد صحیح را دقیق نگه می‌دارد: <code>mv * 100 / 3300</code> حداکثر ۱۰۰ است، ولی <code>mv / 3300 * 100</code> تقریبا همیشه صفر می‌شد.</span></li>
+  <li data-lines="44-49"><b class="what">setLed فقط روی تغییر کار می‌کند.</b> اگر LED از قبل در وضعیت خواسته‌شده باشد، فورا برمی‌گردد.
+    <span class="why">بررسی خودکار، <code>setLed</code> را پنج بار در ثانیه صدا می‌زند. بدون این برگشت زودهنگام، <code>stateDirty</code> هر بار روشن می‌شد و برد Broker را با پیام‌های یکسان پر می‌کرد.</span></li>
+  <li data-lines="51-65"><b class="what">انتشار وضعیت.</b> <code>snprintf</code> این JSON کوچک را دستی می‌سازد و <code>publish(topic, text, true)</code> آن را ماندگار می‌فرستد. یادداشت فقط وقتی پاک می‌شود که انتشار موفق باشد.
+    <span class="why">برای یک پیام کوچک و ثابت، <code>snprintf</code> کافی است؛ ArduinoJson برای داده‌های بزرگ‌تر یا تودرتو می‌درخشد. ماندگار یعنی Broker این آخرین پیام را نگه می‌دارد و به هر مشترک تازه می‌دهد، پس داشبوردی که بعدا باز شود بدون منتظر ماندن برای یک تغییر، وضعیت چراغ را می‌داند.</span></li>
+  <li data-lines="67-73"><b class="what">گرفتن پیام.</b> همان کپی امن درس، بعد هر چیزی که روی Topic فرمان نیست نادیده گرفته می‌شود.
+    <span class="why">کپی، <code>'\0'</code> جاافتاده را اضافه می‌کند و بررسی طول نمی‌گذارد یک پیام خیلی بلند بیرون از <code>msg</code> بنویسد.</span></li>
+  <li data-lines="74-87"><b class="what">سه فرمان.</b> <code>ON</code> و <code>OFF</code> حالت و LED را همان لحظه تنظیم می‌کنند؛ <code>AUTO</code> فقط حالت را عوض می‌کند. فرمان ناشناخته قبل از هر تغییری برمی‌گردد.
+    <span class="why">در AUTO رئیس LDR است، پس بررسی ۲۰۰ میلی‌ثانیه‌ای بعدی درباره LED تصمیم می‌گیرد. <code>stateDirty</code> در آخر حالتی را پوشش می‌دهد که فقط حالت عوض شده (مثلا <code>ON</code> در حالی که LED به خاطر تاریکی از قبل روشن بوده).</span></li>
+  <li data-lines="101-112"><b class="what">اتصال به Broker.</b> همان تابع درس، به اضافه <code>stateDirty = true</code>.
+    <span class="why">بعد از اتصال دوباره، ممکن است داشبورد تغییرهایی را از دست داده باشد، پس وضعیت فعلی را یک بار دیگر گزارش می‌دهیم. Subscribe کردن همین‌جا (نه در setup) هنوز لازم است، چون Broker بعد از قطع اتصال اشتراک‌ها را فراموش می‌کند.</span></li>
+  <li data-lines="126-132"><b class="what">چراغ خودکار اول می‌آید.</b> در حالت AUTO، هر ۲۰۰ میلی‌ثانیه: بخوان، با دو آستانه مقایسه کن، روشن/خاموش کن.
+    <span class="why">این بخش بالای بررسی‌های شبکه است که وقتی شبکه قطع است زود <code>return</code> می‌کنند. چراغ خوابی که با قطع شدن Wi-Fi از کار بیفتد محصول بدی است.</span></li>
+  <li data-lines="134-143"><b class="what">بخش شبکه.</b> دقیقا همان اتصال دوباره بدون گیر انداختن و <code>mqtt.loop()</code> درس.
+    <span class="why">یک محدودیت صادقانه: وقتی خود <code>mqtt.connect()</code> در حال تلاش است، اگر Broker جواب ندهد تا حدود ۱۵ ثانیه صبر می‌کند و در این مدت LDR بررسی نمی‌شود. درس ۵.۴ نشان می‌دهد Taskها چطور حتی این مکث را هم حذف می‌کنند.</span></li>
+  <li data-lines="145-152"><b class="what">سطح نور هر ۳۰ ثانیه.</b> <code>lastLevel == 0</code> باعث می‌شود اولین گزارش بلافاصله بعد از اتصال برود. سطح نور ماندگار <b>نیست</b>.
+    <span class="why">اندازه‌گیری کهنه می‌شود؛ یک سطح نور ماندگارِ سه ساعت پیش، مشترک تازه را گمراه می‌کند. در عوض وضعیت تا وقتی عوض نشود درست می‌ماند، پس ماندگار است. <code>%%</code> در <code>printf</code> یک علامت <code>%</code> چاپ می‌کند.</span></li>
+  <li data-lines="155"><b class="what">گزارش فقط وقتی لازم است.</b> یک خط، «یادداشت کار» را به یک پیام تبدیل می‌کند.
+    <span class="why">هر تغییری، از هر جای برنامه، به همین‌جا می‌رسد؛ پس منطق گزارش فقط یک جا زندگی می‌کند.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p>پروژه کامل در Wokwi با همان مدار. یادت نرود اول <code>ali1234</code> را عوض کنی.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": 40, "left": -260, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 150, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 70, "left": 250, "attrs": { "color": "yellow" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.1", "black", [] ],
+    [ "ldr1:AO", "esp:35", "blue", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
 <p>در MQTT همه Clientها فقط به Broker وصل‌اند و روی Topic (با Wildcardهای <code>+</code> و <code>#</code>) Publish و Subscribe می‌کنند؛ QoS، retain و Last Will برای اتصال‌های ناپایدار ساخته شده‌اند. در PubSubClient: payload را خودت با <code>'\0'</code> ببند، ID یکتا بساز، بعد از هر اتصال دوباره Subscribe کن و <code>mqtt.loop()</code> را بدون delay مدام اجرا کن. برای امنیت از TLS روی 8883 با <code>setCACert</code> استفاده کن، و Adafruit IO یا Mosquitto محلی دو راه سریع برای داشبورد و استقلال هستند.</p></div>
 

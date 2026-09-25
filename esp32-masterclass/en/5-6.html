@@ -35,7 +35,7 @@
 </div>
 
 <div class="callout info"><div class="ct">Lesson map</div>
-<p>The order: <a href="#api">calling an API</a> → <a href="#ca">certificates</a> → <a href="#alert">phone alerts</a> → <a href="#robust">reliability checklist</a> → <a href="#project">combined project</a>.</p></div>
+<p>The order: <a href="#api">calling an API</a> → <a href="#ca">certificates</a> → <a href="#alert">phone alerts</a> → <a href="#robust">reliability checklist</a> → <a href="#weather-station">combined project</a>.</p></div>
 
 <!-- ======================= API ======================= -->
 <h2 id="api">Calling internet APIs (HTTPS and JSON)</h2>
@@ -371,7 +371,7 @@ Boot #7, reason: TASK WATCHDOG, crashes so far: 1</div>
 <p>Suppose you're rewriting <code>config.json</code> and the power goes out right in the middle. Mode "w" had already emptied the old file; now you have neither the old settings nor the new ones. The right pattern (you'll see it in the project below): 1) write to <code>config.tmp</code>, 2) close it, 3) delete the old file and rename the <code>tmp</code> file to <code>config.json</code>. Renaming in LittleFS is almost instant. And in any case, when the settings file is missing or broken, the program must come up with <b>default values</b>, not crash. For small values, Preferences already has this safety built in.</p></div>
 
 <!-- ======================= Project ======================= -->
-<h2 id="project">Combined project: a wireless weather station</h2>
+<h2 id="weather-station">Combined project: a wireless weather station</h2>
 <p>Now let's put everything together. A device that:</p>
 <ul>
   <li>serves its settings page from <b>LittleFS</b> and stores the city's coordinates in a JSON file;</li>
@@ -1149,6 +1149,1234 @@ void loop() {
 &lt;/body&gt;
 &lt;/html&gt;
 </pre></div>
+</details>
+</div>
+
+<h2 id="project">Practice project: a morning briefing on your desk</h2>
+<div class="project">
+<p class="lede-ish">Before you leave the house, a glance at a little screen tells you today's temperature, the high, and the chance of rain. If rain or a heat wave is coming, your phone buzzes once with a reminder, but only once per day, not every half hour. The device refreshes itself, lets you force a refresh with a button, and quietly survives Wi-Fi drops. It's a small version of the "runs for months on its own" device from this lesson.</p>
+
+<h3 id="project-req">Requirements</h3>
+<ol>
+  <li>The board fetches, over HTTPS with the built-in certificate bundle and 5-second time limits, from Open-Meteo for <b>your</b> coordinates: the current temperature, today's highest temperature, today's highest chance of rain, and today's local date. It uses a JSON filter and keeps only those four values.</li>
+  <li>It fetches right after connecting, then every 30 minutes, and immediately when the button on GPIO27 is pressed. After a failed fetch it tries again after 1 minute instead of 30.</li>
+  <li>The OLED shows the date (or <code>Wi-Fi: reconnecting</code>), the current temperature in large text, the high, the rain chance, and how many minutes ago the data was fetched, with <code>OLD!</code> added from 90 minutes on. It redraws once a second.</li>
+  <li>If the rain chance is at least 60 % or the high is at least 30 °C, it sends <b>one</b> ntfy alert for that date. A failed send is retried on the next fetch; a date that was alerted successfully is never alerted again.</li>
+  <li><code>loop()</code> never waits for Wi-Fi. The Serial Monitor shows <code>Wi-Fi lost, reconnecting...</code> and <code>Wi-Fi connected</code> once per change, and fetching resumes by itself when the network returns.</li>
+</ol>
+
+<h3 id="project-parts">Parts</h3>
+<ul>
+  <li>ESP32 DevKitC, breadboard, jumper wires</li>
+  <li>0.96-inch SSD1306 OLED (I2C) on SDA 21 / SCL 22</li>
+  <li>Push button on GPIO27</li>
+  <li>The ntfy app on your phone, subscribed to your own topic name (from <code>secrets.h</code>)</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"OLED","name":"0.96 inch SSD1306 OLED (I2C)","img":"oled-photo2.jpg","pins":[["GND","ground"],["VCC","3.3 V power"],["SCL","I2C clock"],["SDA","I2C data"]]},
+    {"id":"BTN","name":"Push button (refresh)","img":"button.svg","pins":[["1","to GPIO27"],["4","to GND (diagonal leg)"]]}
+  ],
+  "wires":[["GND","OLED.GND","black"],["3V3","OLED.VCC","red"],["GPIO22","OLED.SCL","green"],["GPIO21","OLED.SDA","yellow"],["GPIO27","BTN.1","blue"],["BTN.4","GND","black"]]
+}</script><figcaption>The OLED as in lesson 3.3 (SDA 21, SCL 22, address 0x3C) and the refresh button between GPIO27 and GND with the internal pull-up.</figcaption></div>
+
+<h3 id="project-start">Starter code</h3>
+<div class="code" data-file="MorningBriefing.ino (starter)" id="projStart"><pre>
+// Morning briefing (starter): fill in the TODOs
+#include &lt;WiFi.h&gt;
+#include &lt;WiFiClientSecure.h&gt;
+#include &lt;HTTPClient.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#if __has_include("secrets.h")
+#include "secrets.h"                  // real board: WIFI_SSID, WIFI_PASS, NTFY_TOPIC
+#endif
+#ifndef WIFI_SSID                     // no secrets.h (Wokwi): Wokwi's network
+#define WIFI_SSID "Wokwi-GUEST"
+#define WIFI_PASS ""
+#endif
+#ifndef NTFY_TOPIC
+#define NTFY_TOPIC "briefing-change-me-4k7q"
+#endif
+
+const float LAT = 43.65, LON = -79.38;          // Toronto: use your own city
+const float HOT_C = 30.0;                       // alert if today's max &gt;= this
+const int RAIN_PCT = 60;                        // alert if rain chance &gt;= this
+const unsigned long REFRESH_MS = 30UL * 60 * 1000;   // every 30 minutes
+const unsigned long RETRY_MS = 60UL * 1000;          // after a failure: 1 minute
+const int BUTTON_PIN = 27;
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+
+struct Briefing {
+  float now;           // temperature right now
+  float maxT;          // today's highest temperature
+  int rain;            // today's highest chance of rain, in %
+  char date[11];       // "2026-09-24" (the city's local date)
+  unsigned long at;    // millis() when it was fetched
+};
+Briefing b = {NAN, NAN, -1, "", 0};
+bool haveData = false;
+char alertedDate[11] = "";                      // the day we already alerted
+unsigned long lastFetch = 0, waitMs = 0, lastDraw = 0;
+bool fetchNow = true;                           // fetch right after boot
+bool wasOnline = false;
+int lastReading = HIGH, stableState = HIGH;
+unsigned long lastChange = 0;
+
+bool fetchBriefing(Briefing &amp;out) {
+  char url[240];
+  snprintf(url, sizeof(url),
+           "https://api.open-meteo.com/v1/forecast?latitude=%.2f&amp;longitude=%.2f"
+           "&amp;current=temperature_2m", LAT, LON);
+  // TODO 1: add &amp;daily=temperature_2m_max,precipitation_probability_max
+  //         &amp;timezone=auto&amp;forecast_days=1 to the address (url is 240 bytes)
+  WiFiClientSecure client;
+  client.useBuiltinCACertBundle();
+  HTTPClient http;
+  http.setConnectTimeout(5000);
+  http.setTimeout(5000);
+  http.useHTTP10(true);
+  if (!http.begin(client, url)) return false;
+  int code = http.GET();
+  if (code != HTTP_CODE_OK) {
+    Serial.printf("HTTP error: %d %s\n", code, http.errorToString(code).c_str());
+    http.end();
+    return false;
+  }
+  JsonDocument filter;
+  filter["current"]["temperature_2m"] = true;
+  // TODO 1: also keep daily.time, daily.temperature_2m_max and
+  //         daily.precipitation_probability_max in the filter
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, http.getStream(),
+                               DeserializationOption::Filter(filter));
+  http.end();
+  if (err) {
+    Serial.printf("JSON error: %s\n", err.c_str());
+    return false;
+  }
+  out.now = doc["current"]["temperature_2m"] | NAN;
+  // TODO 1: daily values are arrays: take element [0] of each into
+  //         out.maxT (NAN if missing), out.rain (-1) and out.date (strlcpy)
+  out.at = millis();
+  return !isnan(out.now) &amp;&amp; out.date[0] != '\0';
+}
+
+bool sendAlert(const char *message) {           // same as the lesson's ntfy code
+  WiFiClientSecure client;
+  client.useBuiltinCACertBundle();
+  HTTPClient http;
+  http.setTimeout(5000);
+  if (!http.begin(client, "https://ntfy.sh/")) return false;
+  http.addHeader("Content-Type", "application/json");
+  JsonDocument msg;
+  msg["topic"] = NTFY_TOPIC;
+  msg["title"] = "Morning briefing";
+  msg["message"] = message;
+  msg["tags"].add("umbrella");
+  String body;
+  serializeJson(msg, body);
+  int code = http.POST(body);
+  http.end();
+  Serial.printf("ntfy -&gt; %d\n", code);
+  return code == 200;
+}
+
+void checkAlert() {
+  // TODO 4: return if b.date equals alertedDate; alert only if rain &gt;= RAIN_PCT
+  //         or maxT &gt;= HOT_C; build a short text with snprintf; copy b.date
+  //         into alertedDate ONLY if sendAlert() returned true
+}
+
+void drawScreen() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  if (WiFi.status() != WL_CONNECTED) display.println("Wi-Fi: reconnecting");
+  else display.println(haveData ? b.date : "Morning briefing");
+  if (haveData) {
+    display.setTextSize(2);
+    display.printf("%.1f C\n", b.now);
+    display.setTextSize(1);
+    display.printf("max %.1f C\n", b.maxT);
+    display.printf("rain %d %%\n", b.rain);
+    // TODO 3: print "N min ago", plus " OLD!" when N &gt;= 90
+  } else {
+    display.println("waiting for data...");
+  }
+  display.display();
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  Wire.begin(21, 22);
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.setTextColor(SSD1306_WHITE);
+  drawScreen();
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);                  // the core reconnects for us
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+}
+
+void loop() {
+  bool online = (WiFi.status() == WL_CONNECTED);
+  // TODO 5: print "Wi-Fi connected" / "Wi-Fi lost, reconnecting..." once per
+  //         change (use wasOnline); never wait for Wi-Fi inside loop
+
+  // TODO 2: debounce the button on GPIO27; a press sets fetchNow = true.
+  //         If online and (fetchNow or waitMs has passed since lastFetch):
+  //         fetch; on success copy into b, haveData = true, waitMs =
+  //         REFRESH_MS, print, checkAlert(); on failure waitMs = RETRY_MS
+
+  if (millis() - lastDraw &gt;= 1000) {            // redraw once a second
+    lastDraw = millis();
+    drawScreen();
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="9-18"><b class="what">Secrets that also work in Wokwi.</b> With <code>secrets.h</code> present (your board), its Wi-Fi and ntfy values are used; without it (Wokwi), the fallbacks fill in <code>Wokwi-GUEST</code> and a placeholder topic.
+    <span class="why"><code>__has_include</code> asks the compiler whether a file exists, so one sketch runs in both places. Change the placeholder topic to your own random name before testing alerts in Wokwi.</span></li>
+  <li data-lines="20-43"><b class="what">Settings and state, given.</b> Coordinates, thresholds, intervals, the <code>Briefing</code> struct, and the variables loop needs.
+    <span class="why">Grouping the four values and their fetch time in one struct lets you replace them all at once, only when a fetch fully succeeded.</span></li>
+  <li data-lines="45-82"><b class="what">fetchBriefing with gaps (TODO 1).</b> The HTTPS part is the lesson's; you extend the address, the filter and the reading of the <code>daily</code> arrays.
+    <span class="why">Open-Meteo returns daily values as arrays, one element per day. With <code>forecast_days=1</code> there is exactly one element, <code>[0]</code>.</span></li>
+  <li data-lines="84-127"><b class="what">sendAlert is given; checkAlert and part of drawScreen are yours (TODO 4, TODO 3).</b>
+    <span class="why"><code>sendAlert</code> is the lesson's ntfy POST with a fixed title; the "once per day" decision is the interesting part.</span></li>
+  <li data-lines="141-155"><b class="what">loop: only the redraw is given.</b> TODO 5 (Wi-Fi messages) and TODO 2 (button and schedule) go above it.
+    <span class="why">Everything in loop must return quickly; the only slow step allowed is the fetch itself, a few seconds every half hour.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>This project runs in Wokwi: its <code>Wokwi-GUEST</code> network reaches the real internet, so HTTPS to Open-Meteo and ntfy work. Add the libraries <code>ArduinoJson</code> and <code>Adafruit SSD1306</code> (it brings <code>Adafruit GFX Library</code>) in the Library Manager tab.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled1", "top": 60, "left": 200, "attrs": { "i2cAddress": "0x3c" } },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 150, "left": -150, "attrs": { "color": "blue", "label": "Refresh" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "esp:27", "btn1:1.r", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>Hint 1</summary>
+<p>Test the address in your browser first, as the lesson recommends: <code>https://api.open-meteo.com/v1/forecast?latitude=43.65&amp;longitude=-79.38&amp;current=temperature_2m&amp;daily=temperature_2m_max,precipitation_probability_max&amp;timezone=auto&amp;forecast_days=1</code>. You'll see <code>"daily": {"time": ["2026-09-24"], ...}</code>. In the filter, <code>filter["daily"]["time"] = true</code> keeps the whole array; read it with <code>doc["daily"]["time"][0]</code>.</p></details>
+<details class="hint"><summary>Hint 2</summary>
+<p>The schedule is one condition: <code>online &amp;&amp; (fetchNow || millis() - lastFetch &gt;= waitMs)</code>. <code>waitMs</code> starts at 0 and <code>fetchNow</code> at <code>true</code>, so the first fetch happens as soon as Wi-Fi is up. After each attempt, set <code>waitMs</code> to 30 minutes on success or 1 minute on failure.</p></details>
+<details class="hint"><summary>Hint 3</summary>
+<p>For "once per day", remember the date you alerted in <code>alertedDate</code> and compare with <code>strcmp(b.date, alertedDate) == 0</code>. Copy the date only when <code>sendAlert()</code> returned <code>true</code>. To test without waiting for real rain, set <code>RAIN_PCT</code> to 0 for a moment.</p></details>
+
+<details class="expect"><summary>What should you see?</summary>
+<p>With <code>RAIN_PCT</code> temporarily set to 0 (so an alert is due), then a button press a minute later (your weather will differ):</p>
+<pre class="serial">Wi-Fi connected
+Fetching the forecast...
+2026-09-24: now 17.8 C, max 21.4 C, rain 70 %
+ntfy -&gt; 200
+Fetching the forecast...
+2026-09-24: now 17.9 C, max 21.4 C, rain 70 %</pre>
+<p>On the OLED: the date on the first line, <code>17.9 C</code> in large text, then <code>max 21.4 C</code>, <code>rain 70 %</code> and <code>0 min ago</code>. Your phone shows one notification: <code>Today (2026-09-24): max 21.4 C, rain 70 %. Take an umbrella!</code></p>
+<ul>
+  <li><b>Req. 1:</b> compare the numbers with the same address opened in your browser: identical (the current value may move by a tenth between the two requests).</li>
+  <li><b>Req. 2 and 4:</b> press the button: a new fetch starts within a fraction of a second, and <b>no</b> second ntfy line appears, because the date was already alerted.</li>
+  <li><b>Req. 3:</b> watch the "min ago" counter go up by one every minute. Set <code>REFRESH_MS</code> to 100 minutes for a test: after 90 minutes <code>OLD!</code> appears.</li>
+  <li><b>Req. 5 (real board):</b> switch off your router: <code>Wi-Fi lost, reconnecting...</code> appears once, the OLED says <code>Wi-Fi: reconnecting</code> but still shows the last data with its age. Switch the router back on: <code>Wi-Fi connected</code>, and fetching continues on schedule.</li>
+</ul>
+<p><b>If it doesn't work:</b> <code>HTTP error: -1</code> means no connection at all (Wi-Fi, or a network that blocks the site). <code>JSON error: NoMemory</code> means the filter is missing. A date that stays empty means you forgot <code>timezone=auto</code> or the <code>time</code> line in the filter. <code>ntfy -&gt; 200</code> but no notification: the phone is subscribed to a different topic name.</p>
+</details>
+
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="MorningBriefing.ino" id="projAns"><pre>
+// Morning briefing: weather on the OLED + one phone alert per rainy/hot day
+#include &lt;WiFi.h&gt;
+#include &lt;WiFiClientSecure.h&gt;
+#include &lt;HTTPClient.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#if __has_include("secrets.h")
+#include "secrets.h"                  // real board: WIFI_SSID, WIFI_PASS, NTFY_TOPIC
+#endif
+#ifndef WIFI_SSID                     // no secrets.h (Wokwi): Wokwi's network
+#define WIFI_SSID "Wokwi-GUEST"
+#define WIFI_PASS ""
+#endif
+#ifndef NTFY_TOPIC
+#define NTFY_TOPIC "briefing-change-me-4k7q"
+#endif
+
+const float LAT = 43.65, LON = -79.38;          // Toronto: use your own city
+const float HOT_C = 30.0;                       // alert if today's max &gt;= this
+const int RAIN_PCT = 60;                        // alert if rain chance &gt;= this
+const unsigned long REFRESH_MS = 30UL * 60 * 1000;   // every 30 minutes
+const unsigned long RETRY_MS = 60UL * 1000;          // after a failure: 1 minute
+const int BUTTON_PIN = 27;
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+
+struct Briefing {
+  float now;           // temperature right now
+  float maxT;          // today's highest temperature
+  int rain;            // today's highest chance of rain, in %
+  char date[11];       // "2026-09-24" (the city's local date)
+  unsigned long at;    // millis() when it was fetched
+};
+Briefing b = {NAN, NAN, -1, "", 0};
+bool haveData = false;
+char alertedDate[11] = "";                      // the day we already alerted
+unsigned long lastFetch = 0, waitMs = 0, lastDraw = 0;
+bool fetchNow = true;                           // fetch right after boot
+bool wasOnline = false;
+int lastReading = HIGH, stableState = HIGH;
+unsigned long lastChange = 0;
+
+bool fetchBriefing(Briefing &amp;out) {
+  char url[240];
+  snprintf(url, sizeof(url),
+           "https://api.open-meteo.com/v1/forecast?latitude=%.2f&amp;longitude=%.2f"
+           "&amp;current=temperature_2m&amp;daily=temperature_2m_max,precipitation_probability_max"
+           "&amp;timezone=auto&amp;forecast_days=1", LAT, LON);
+  WiFiClientSecure client;
+  client.useBuiltinCACertBundle();
+  HTTPClient http;
+  http.setConnectTimeout(5000);
+  http.setTimeout(5000);
+  http.useHTTP10(true);
+  if (!http.begin(client, url)) return false;
+  int code = http.GET();
+  if (code != HTTP_CODE_OK) {
+    Serial.printf("HTTP error: %d %s\n", code, http.errorToString(code).c_str());
+    http.end();
+    return false;
+  }
+  JsonDocument filter;
+  filter["current"]["temperature_2m"] = true;
+  filter["daily"]["time"] = true;
+  filter["daily"]["temperature_2m_max"] = true;
+  filter["daily"]["precipitation_probability_max"] = true;
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, http.getStream(),
+                               DeserializationOption::Filter(filter));
+  http.end();
+  if (err) {
+    Serial.printf("JSON error: %s\n", err.c_str());
+    return false;
+  }
+  out.now = doc["current"]["temperature_2m"] | NAN;
+  out.maxT = doc["daily"]["temperature_2m_max"][0] | NAN;
+  out.rain = doc["daily"]["precipitation_probability_max"][0] | -1;
+  strlcpy(out.date, doc["daily"]["time"][0] | "", sizeof(out.date));
+  out.at = millis();
+  return !isnan(out.now) &amp;&amp; out.date[0] != '\0';
+}
+
+bool sendAlert(const char *message) {           // same as the lesson's ntfy code
+  WiFiClientSecure client;
+  client.useBuiltinCACertBundle();
+  HTTPClient http;
+  http.setTimeout(5000);
+  if (!http.begin(client, "https://ntfy.sh/")) return false;
+  http.addHeader("Content-Type", "application/json");
+  JsonDocument msg;
+  msg["topic"] = NTFY_TOPIC;
+  msg["title"] = "Morning briefing";
+  msg["message"] = message;
+  msg["tags"].add("umbrella");
+  String body;
+  serializeJson(msg, body);
+  int code = http.POST(body);
+  http.end();
+  Serial.printf("ntfy -&gt; %d\n", code);
+  return code == 200;
+}
+
+void checkAlert() {
+  if (strcmp(b.date, alertedDate) == 0) return; // already alerted today
+  bool rainy = b.rain &gt;= RAIN_PCT;
+  bool hot = b.maxT &gt;= HOT_C;
+  if (!rainy &amp;&amp; !hot) return;
+  char text[120];
+  snprintf(text, sizeof(text), "Today (%s): max %.1f C, rain %d %%.%s%s", b.date,
+           b.maxT, b.rain, rainy ? " Take an umbrella!" : "", hot ? " Drink water!" : "");
+  if (sendAlert(text)) strlcpy(alertedDate, b.date, sizeof(alertedDate));
+}
+
+void drawScreen() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  if (WiFi.status() != WL_CONNECTED) display.println("Wi-Fi: reconnecting");
+  else display.println(haveData ? b.date : "Morning briefing");
+  if (haveData) {
+    display.setTextSize(2);
+    display.printf("%.1f C\n", b.now);
+    display.setTextSize(1);
+    display.printf("max %.1f C\n", b.maxT);
+    display.printf("rain %d %%\n", b.rain);
+    unsigned long ageMin = (millis() - b.at) / 60000;
+    display.printf("%lu min ago%s", ageMin, ageMin &gt;= 90 ? " OLD!" : "");
+  } else {
+    display.println("waiting for data...");
+  }
+  display.display();
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  Wire.begin(21, 22);
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.setTextColor(SSD1306_WHITE);
+  drawScreen();
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);                  // the core reconnects for us
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+}
+
+void loop() {
+  // 1) report Wi-Fi changes once (never wait for Wi-Fi here)
+  bool online = (WiFi.status() == WL_CONNECTED);
+  if (online != wasOnline) {
+    wasOnline = online;
+    Serial.println(online ? "Wi-Fi connected" : "Wi-Fi lost, reconnecting...");
+  }
+
+  // 2) button: fetch again now (debounced)
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChange = millis(); lastReading = reading; }
+  if (millis() - lastChange &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) fetchNow = true;
+  }
+
+  // 3) fetch on schedule, on request, and only when online
+  if (online &amp;&amp; (fetchNow || millis() - lastFetch &gt;= waitMs)) {
+    fetchNow = false;
+    lastFetch = millis();
+    Serial.println("Fetching the forecast...");
+    Briefing nb;
+    if (fetchBriefing(nb)) {
+      b = nb;
+      haveData = true;
+      waitMs = REFRESH_MS;
+      Serial.printf("%s: now %.1f C, max %.1f C, rain %d %%\n", b.date, b.now, b.maxT, b.rain);
+      checkAlert();
+    } else {
+      waitMs = RETRY_MS;                        // try again sooner
+      Serial.println("Fetch failed: next try in 1 minute");
+    }
+  }
+
+  // 4) redraw once a second
+  if (millis() - lastDraw &gt;= 1000) {
+    lastDraw = millis();
+    drawScreen();
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="9-18"><b class="what">Secrets with fallbacks.</b> <code>secrets.h</code> if it exists, otherwise Wokwi's network and a placeholder topic.
+    <span class="why">On ntfy the topic name is the password, so on your board it belongs in <code>secrets.h</code> (lesson 5.5 already has the line).</span></li>
+  <li data-lines="20-25"><b class="what">Everything you might want to change, at the top.</b> Coordinates, the two alert thresholds, the two intervals and the button pin.
+    <span class="why"><code>30UL * 60 * 1000</code> uses <code>UL</code> so the multiplication happens in unsigned long and can't overflow.</span></li>
+  <li data-lines="29-43"><b class="what">One struct for one forecast.</b> Plus the state: whether we have data, the alerted date, the timers and the debounce variables.
+    <span class="why"><code>char date[11]</code> holds "YYYY-MM-DD" (10 characters) plus the closing <code>'\0'</code>. A fixed array instead of a <code>String</code> avoids heap fragmentation in a device that runs for months.</span></li>
+  <li data-lines="45-50"><b class="what">The address.</b> <code>snprintf</code> inserts the coordinates with two decimals; <code>daily=</code> asks for the two daily values, <code>timezone=auto</code> makes "today" the city's own day, and <code>forecast_days=1</code> limits the arrays to one element.
+    <span class="why">Without <code>timezone=auto</code>, days are counted in GMT, and in Toronto "today" would switch at 8 p.m.</span></li>
+  <li data-lines="51-63"><b class="what">The HTTPS request.</b> The certificate bundle, both time limits, HTTP 1.0 for a plain stream, and a clear message for any code other than 200.
+    <span class="why">This is the lesson's recipe. The time limits guarantee that one bad request can never block loop for more than a few seconds.</span></li>
+  <li data-lines="64-76"><b class="what">Filter and parse.</b> Four fields are kept; everything else in the answer is skipped while reading.
+    <span class="why">The full answer also contains units and metadata. The filter keeps the <code>JsonDocument</code> tiny, whatever Open-Meteo adds in the future.</span></li>
+  <li data-lines="77-82"><b class="what">Reading the arrays.</b> <code>[0]</code> takes the first (and only) day; <code>|</code> supplies defaults; <code>strlcpy</code> copies the date safely into the 11-byte array. Success needs a temperature and a date.
+    <span class="why"><code>strlcpy</code> never writes past the end and always closes the string, unlike <code>strcpy</code>. Requiring the date matters: the alert logic depends on it.</span></li>
+  <li data-lines="85-103"><b class="what">sendAlert.</b> The lesson's JSON POST to ntfy, with a fixed title and an umbrella tag.
+    <span class="why">It returns <code>true</code> only on HTTP 200, so the caller knows whether the alert really went out.</span></li>
+  <li data-lines="105-114"><b class="what">checkAlert: once per date.</b> Already alerted for this date: return. Neither rainy nor hot: return. Otherwise build a short message and, only if it was sent, remember the date.
+    <span class="why">Remembering the date only after a successful send means a temporary ntfy failure is retried at the next fetch. When the date changes at midnight, the comparison fails again and a new day can be alerted.</span></li>
+  <li data-lines="116-134"><b class="what">drawScreen.</b> The first line shows Wi-Fi trouble if there is any, otherwise the date; then the big temperature, the high, the rain chance and the age of the data.
+    <span class="why">Showing the age is honest: during an outage the screen still helps, and <code>OLD!</code> tells you not to trust it blindly. <code>%%</code> prints a percent sign.</span></li>
+  <li data-lines="136-146"><b class="what">setup doesn't wait for Wi-Fi.</b> Button, OLED, then <code>WiFi.begin</code> with automatic reconnection.
+    <span class="why">The screen appears at once ("waiting for data..."), and loop starts working even if the router is off.</span></li>
+  <li data-lines="149-154"><b class="what">Reporting Wi-Fi changes once.</b> <code>wasOnline</code> remembers the previous state; a line is printed only when it differs.
+    <span class="why">Printing "offline" hundreds of times per second would drown every other message.</span></li>
+  <li data-lines="156-162"><b class="what">The button only raises a flag.</b> The debounce from lesson 5.2; a press sets <code>fetchNow</code>.
+    <span class="why">The fetch itself happens in one place below, with the same checks (online or not) for every reason to fetch.</span></li>
+  <li data-lines="164-180"><b class="what">One fetch decision.</b> Online and (asked for, or the wait is over): fetch into a temporary struct. On success, copy it, schedule the next in 30 minutes, print and check the alert; on failure, keep the old data and retry in 1 minute.
+    <span class="why">Fetching into <code>nb</code> first means a failed or half-read answer never overwrites good data. A short retry after a failure brings the display back quickly after an outage without hammering the server.</span></li>
+  <li data-lines="182-186"><b class="what">Redraw once a second.</b>
+    <span class="why">The "min ago" counter and the Wi-Fi line stay current without redrawing thousands of times per second.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p>The finished briefing in Wokwi, with the same diagram and libraries.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled1", "top": 60, "left": 200, "attrs": { "i2cAddress": "0x3c" } },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 150, "left": -150, "attrs": { "color": "blue", "label": "Refresh" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "esp:27", "btn1:1.r", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
+<h2 id="capstone">Chapter 5 capstone: a two-room climate hub</h2>
+<div class="project">
+<p class="lede-ish">This project uses everything from chapter 5. A small <b>node</b> in the bedroom measures temperature and humidity and sends them over ESP-NOW, with no router involved. A <b>hub</b> in the living room receives them, adds its own room's reading, and does the "smart home" part: it runs its work in FreeRTOS tasks, publishes both rooms over MQTT, serves a live web page from LittleFS, warns you with an LED when the bedroom goes silent, and can be updated over the air.</p>
+
+<h3 id="capstone-req">Requirements</h3>
+<ol>
+  <li><b>Node:</b> every 10 seconds (and right after boot) it reads the DHT22 and sends a 16-byte <code>ClimateMsg</code> (type 1, room 2, a growing <code>seq</code>, temperature, humidity) to the hub's MAC, on the hub's router channel. It prints each reading with <code>delivered</code> or <code>NOT delivered</code>, and flashes its LED for 50 ms on delivery, without <code>delay()</code>.</li>
+  <li><b>Hub:</b> joins Wi-Fi (at most 20 seconds of waiting) and prints its MAC, channel and IP. Its ESP-NOW receive callback only checks length, type and room, and copies the message into a FreeRTOS queue without waiting.</li>
+  <li><b>Hub:</b> a <code>localTask</code> reads the potentiometer every 10 seconds as room 1's temperature (10 to 35 °C, humidity unknown) and puts it into the same queue.</li>
+  <li><b>Hub:</b> <code>loop()</code> empties the queue, stores the latest reading of each room under a mutex, logs it, and publishes <code>{"t":…,"h":…,"seq":…}</code> on <code>…/room1/climate</code> or <code>…/room2/climate</code> (null for unknown values). <code>…/hub/status</code> is <code>online</code>, or <code>offline</code> via the Last Will.</li>
+  <li><b>Hub:</b> a <code>watchTask</code> checks every 2 seconds whether room 2 has been silent for more than 35 seconds. When that changes, it switches the LED on GPIO4 on or off and logs <b>one</b> line.</li>
+  <li><b>Hub:</b> <code>/</code> serves <code>index.html</code> from LittleFS, and <code>/api/rooms</code> returns both rooms as JSON with temperature, humidity, age in seconds and count, read under the mutex.</li>
+  <li><b>Hub:</b> ArduinoOTA runs with the hostname <code>climate-hub</code>; <code>loop()</code> never blocks for longer than its <code>delay(2)</code>, and every Serial line goes through the mutex-protected <code>logf()</code>.</li>
+</ol>
+
+<h3 id="capstone-parts">Parts</h3>
+<ul>
+  <li>Two ESP32 DevKitC boards with two USB cables; a USB charger lets the node sit in another room (optional)</li>
+  <li>Node: DHT22 (+ 10 kΩ pull-up if it's the bare 4-pin sensor) and LED + 220 Ω</li>
+  <li>Hub: 10 kΩ potentiometer (stand-in for a second thermometer) and LED + 220 Ω</li>
+  <li>A 2.4 GHz Wi-Fi network; the HiveMQ web client or MQTTX to watch the messages</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"Node (room 2)",
+  "parts":[
+    {"id":"DHT1","name":"DHT22 sensor","img":"dht22.svg","pins":[["VCC","3.3 V"],["DATA","data"],["NC","not connected"],["GND","ground"]]},
+    {"id":"R2","name":"10 kΩ resistor (pull-up)","img":"resistor.svg","pins":[["1","to 3V3"],["2","to DATA"]]},
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO4 side"],["2","LED side"]]},
+    {"id":"LED1","name":"LED (sent OK)","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−), short leg"]]}
+  ],
+  "wires":[["3V3","DHT1.VCC","red"],["GPIO13","DHT1.DATA","blue"],["DHT1.GND","GND","black"],["R2.1","3V3","red"],["R2.2","DHT1.DATA","blue"],["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>The node: DHT22 on GPIO13 with its 10 kΩ pull-up (not needed with a 3-pin module), and the status LED on GPIO4. This is board B of lesson 5.2.</figcaption></div>
+<div class="wiring"><script type="application/json">{
+  "board":"Hub (room 1)",
+  "parts":[
+    {"id":"POT","name":"10 kΩ potentiometer (room 1 thermometer stand-in)","img":"pot.svg","pins":[["VCC","outer pin: 3.3 V"],["SIG","middle pin"],["GND","other outer pin: ground"]]},
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO4 side"],["2","LED side"]]},
+    {"id":"LED1","name":"LED (room 2 silent)","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−), short leg"]]}
+  ],
+  "wires":[["3V3","POT.VCC","red"],["GPIO34","POT.SIG","blue"],["POT.GND","GND","black"],["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>The hub: the potentiometer on GPIO34 (ADC1, fine with Wi-Fi on) pretends to be room 1's thermometer, and the LED on GPIO4 warns when room 2 goes silent. With a second DHT22 you could read a real temperature on GPIO13 instead.</figcaption></div>
+
+<h3 id="capstone-start">Starter code</h3>
+<p>Two sketches and one web file. Upload the hub first: it prints the MAC and the channel the node needs.</p>
+<div class="code" data-file="ClimateNode.ino (starter) — node" id="capStartNode"><pre>
+// Climate node (starter): fill in the TODOs
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+#include &lt;DHT.h&gt;
+
+uint8_t hubMac[] = {0x24, 0x6F, 0x28, 0x12, 0x34, 0x56};   // the hub prints it
+const uint8_t ROUTER_CHANNEL = 6;        // the hub prints this too
+const uint8_t ROOM = 2;
+const int LED_PIN = 4;
+const unsigned long SEND_MS = 10000;
+DHT dht(13, DHT22);
+
+typedef struct {
+  uint8_t type;        // 1 = climate reading
+  uint8_t room;        // 1 = the hub's room, 2 = this node's room
+  uint32_t seq;        // reading number
+  float tempC;         // NAN if the sensor failed
+  float hum;
+} ClimateMsg;          // 16 bytes: the SAME layout in the hub
+
+ClimateMsg msg = {1, ROOM, 0, NAN, NAN};
+volatile int sendResult = -1;            // -1 none, 1 delivered, 0 failed
+unsigned long lastSend = 0, ledOnAt = 0;
+bool ledOn = false;
+
+void onSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+  // TODO 1: store 1 (delivered) or 0 (failed) in sendResult
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  dht.begin();
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  // TODO 1: move the radio to ROUTER_CHANNEL (lesson 5.2)
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_send_cb(onSent);
+  esp_now_peer_info_t peer = {};
+  memcpy(peer.peer_addr, hubMac, 6);
+  peer.channel = 0;                      // = the channel we just set
+  peer.encrypt = false;
+  esp_now_add_peer(&amp;peer);
+  Serial.printf("Node for room %u on channel %u\n", ROOM, ROUTER_CHANNEL);
+}
+
+void loop() {
+  // TODO 1: every SEND_MS (and at once after boot): msg.seq++, read the
+  //         DHT22 into msg.tempC / msg.hum, esp_now_send to hubMac, print
+  // TODO 1: when sendResult &gt;= 0: print delivered / NOT delivered, flash
+  //         the LED for 50 ms on success (millis, no delay), set it to -1
+}
+</pre></div>
+<div class="code" data-file="ClimateHub.ino (starter) — hub" id="capStart"><pre>
+// Climate hub (starter): fill in the TODOs
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;ArduinoOTA.h&gt;
+#include &lt;LittleFS.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#if __has_include("secrets.h")
+#include "secrets.h"                  // real board: WIFI_SSID, WIFI_PASS, OTA_PASS
+#endif
+#ifndef WIFI_SSID                     // no secrets.h (Wokwi): Wokwi's network
+#define WIFI_SSID "Wokwi-GUEST"
+#define WIFI_PASS ""
+#endif
+#ifndef OTA_PASS
+#define OTA_PASS "change-me"
+#endif
+
+#define BASE "esp32course/ali1234/home"     // your own prefix, as in 5.1
+const char *MQTT_HOST = "broker.hivemq.com";
+const int MQTT_PORT = 1883;
+const char *TOPIC_STATUS = BASE "/hub/status";
+const int LED_PIN = 4;                // on = room 2 has gone silent
+const int POT_PIN = 34;               // stand-in for room 1's thermometer
+const unsigned long STALE_MS = 35000; // 3 missed readings = silent
+
+typedef struct {
+  uint8_t type;
+  uint8_t room;
+  uint32_t seq;
+  float tempC;
+  float hum;
+} ClimateMsg;                         // exact copy of the node's layout
+
+struct Room { float tempC; float hum; unsigned long at; uint32_t count; };
+
+QueueHandle_t readings;               // ESP-NOW + local task -&gt; loop
+SemaphoreHandle_t roomsMutex;         // protects rooms[]
+SemaphoreHandle_t logMutex;           // protects Serial
+Room rooms[3];                        // we use [1] and [2]
+WiFiClient net;
+PubSubClient mqtt(net);
+WebServer server(80);
+char clientId[40];
+unsigned long lastTry = 0;
+
+void logf(const char *fmt, ...) {
+  char buf[112];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  if (xSemaphoreTake(logMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    Serial.printf("[%6lu] %s\n", millis(), buf);
+    xSemaphoreGive(logMutex);
+  }
+}
+
+// runs in the Wi-Fi task: check, copy into the queue, never wait
+void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  // TODO 2: check len, copy into a ClimateMsg, accept only type 1 / room 2,
+  //         then xQueueSend(readings, &amp;m, 0)
+}
+
+// room 1: the potentiometer pretends to be a thermometer (10..35 C)
+void localTask(void *param) {
+  for (;;) {
+    // TODO 3: average 8 analogRead(POT_PIN), map 0..4095 to 10..35 C,
+    //         build ClimateMsg {1, 1, ++seq, temp, NAN}, send it to the queue
+    vTaskDelay(pdMS_TO_TICKS(10000));
+  }
+}
+
+// watches room 2: LED on (and one log line) when it goes silent
+void watchTask(void *param) {
+  for (;;) {
+    // TODO 5: read rooms[2].at under roomsMutex; silent = no data for more
+    //         than STALE_MS (count from boot if at == 0); on a change: LED
+    //         on/off and ONE log line
+    vTaskDelay(pdMS_TO_TICKS(2000));
+  }
+}
+
+void publishRoom(const ClimateMsg &amp;m) {
+  // TODO 4: JSON {"t":24.6,"h":41.0,"seq":12} (null for NAN) published on
+  //         BASE "/room&lt;N&gt;/climate"
+}
+
+bool connectMqtt() {
+  if (!mqtt.connect(clientId, TOPIC_STATUS, 1, true, "offline")) {
+    logf("MQTT failed, state=%d", mqtt.state());
+    return false;
+  }
+  mqtt.publish(TOPIC_STATUS, "online", true);
+  logf("MQTT connected");
+  return true;
+}
+
+void handleRooms() {
+  // TODO 6: {"room1":{"t":..,"h":..,"age":..,"count":..},"room2":{...}}
+  //         read rooms[] under roomsMutex; age = seconds since .at (null if 0)
+  server.send(200, "application/json", "{}");
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(300);
+  readings = xQueueCreate(10, sizeof(ClimateMsg));
+  roomsMutex = xSemaphoreCreateMutex();
+  logMutex = xSemaphoreCreateMutex();
+  for (int r = 0; r &lt; 3; r++) rooms[r] = {NAN, NAN, 0, 0};
+  pinMode(LED_PIN, OUTPUT);
+  if (!LittleFS.begin(true)) Serial.println("LittleFS mount failed");
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - t0 &lt; 20000) delay(250);
+  WiFi.setSleep(false);               // keep the radio awake for ESP-NOW
+  logf("Hub MAC %s, channel %d, IP %s", WiFi.macAddress().c_str(), WiFi.channel(),
+       WiFi.localIP().toString().c_str());
+
+  if (esp_now_init() == ESP_OK) esp_now_register_recv_cb(onRecv);
+  else logf("ESP-NOW init failed");
+
+  String mac = WiFi.macAddress();
+  mac.replace(":", "");
+  snprintf(clientId, sizeof(clientId), "hub-%s-%04X", mac.c_str(), (unsigned)(esp_random() &amp; 0xFFFF));
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+
+  // TODO 7: ArduinoOTA with hostname "climate-hub" and OTA_PASS, begin(),
+  //         and ArduinoOTA.handle() at the top of loop
+
+  server.serveStatic("/", LittleFS, "/index.html");
+  server.on("/api/rooms", HTTP_GET, handleRooms);
+  server.begin();
+
+  xTaskCreatePinnedToCore(localTask, "local", 3072, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(watchTask, "watch", 3072, NULL, 1, NULL, 1);
+}
+
+void loop() {
+  server.handleClient();
+
+  // TODO 4: while xQueueReceive(readings, &amp;m, 0) gives a reading: store it
+  //         in rooms[m.room] under roomsMutex (count++), log it, and
+  //         publishRoom(m) if MQTT is connected
+
+  if (WiFi.status() == WL_CONNECTED) {
+    if (mqtt.connected()) {
+      mqtt.loop();
+    } else if (lastTry == 0 || millis() - lastTry &gt; 5000) {
+      lastTry = millis();
+      connectMqtt();
+    }
+  }
+  delay(2);
+}
+</pre></div>
+<div class="code" data-file="data/index.html — hub" data-lang="text" id="capHtml"><pre>
+&lt;!doctype html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+  &lt;meta charset="utf-8"&gt;
+  &lt;meta name="viewport" content="width=device-width,initial-scale=1"&gt;
+  &lt;title&gt;Climate hub&lt;/title&gt;
+&lt;/head&gt;
+&lt;body style="font-family:sans-serif;max-width:420px;margin:2em auto"&gt;
+  &lt;h2&gt;Climate hub&lt;/h2&gt;
+  &lt;table border="1" cellpadding="6"&gt;
+    &lt;tr&gt;&lt;th&gt;Room&lt;/th&gt;&lt;th&gt;°C&lt;/th&gt;&lt;th&gt;%RH&lt;/th&gt;&lt;th&gt;Age (s)&lt;/th&gt;&lt;/tr&gt;
+    &lt;tr&gt;&lt;td&gt;1 (hub)&lt;/td&gt;&lt;td id="t1"&gt;...&lt;/td&gt;&lt;td id="h1"&gt;...&lt;/td&gt;&lt;td id="a1"&gt;...&lt;/td&gt;&lt;/tr&gt;
+    &lt;tr&gt;&lt;td&gt;2 (node)&lt;/td&gt;&lt;td id="t2"&gt;...&lt;/td&gt;&lt;td id="h2"&gt;...&lt;/td&gt;&lt;td id="a2"&gt;...&lt;/td&gt;&lt;/tr&gt;
+  &lt;/table&gt;
+  &lt;script&gt;
+    function show(v) { return v === null ? '-' : (typeof v === 'number' ? v.toFixed(1) : v); }
+    function update() {
+      fetch('/api/rooms').then(r =&gt; r.json()).then(d =&gt; {
+        for (const n of [1, 2]) {
+          const r = d['room' + n];
+          document.getElementById('t' + n).textContent = show(r.t);
+          document.getElementById('h' + n).textContent = show(r.h);
+          document.getElementById('a' + n).textContent = r.age === null ? 'never' : r.age;
+        }
+      });
+    }
+    update();
+    setInterval(update, 5000);
+  &lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</pre></div>
+<ol class="walk" data-for="capStart">
+  <li data-lines="20-46"><b class="what">Everything shared is declared for you.</b> Topics, pins, the message layout (identical to the node's), the <code>Room</code> record, one queue, two mutexes and the network objects.
+    <span class="why">Designing the shared data first is how real multi-task programs start: once you know who writes what, the tasks almost write themselves.</span></li>
+  <li data-lines="48-58"><b class="what">logf is given.</b> The same locked logger as in the lesson 5.4 project.
+    <span class="why">Three places print (loop, localTask, watchTask), so every line goes through one lock.</span></li>
+  <li data-lines="60-104"><b class="what">Five empty pieces (TODO 2 to 6).</b> The callback, the two tasks, publishing, and the JSON route. <code>connectMqtt</code> between them is given.
+    <span class="why">Each piece is small and can be tested alone: for example, TODO 3 and 4 already work in Wokwi without the node.</span></li>
+  <li data-lines="106-142"><b class="what">setup is complete except OTA (TODO 7).</b> Queue and mutexes first, Wi-Fi, ESP-NOW after Wi-Fi, MQTT, the web server, then the tasks.
+    <span class="why">The order is part of the solution: ESP-NOW must start after Wi-Fi has picked the router's channel, and the tasks must start after the queue exists.</span></li>
+  <li data-lines="144-160"><b class="what">loop.</b> The web server and the MQTT reconnection are given; TODO 4 empties the queue.
+    <span class="why">loop is the only owner of the MQTT connection, so only loop publishes.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="capStart">
+<p>The hub runs in Wokwi without the node: the tasks, the queue, the potentiometer readings, MQTT and the silence warning all work (room 2 never reports, so after 35 seconds the LED comes on). ESP-NOW between two boards, uploading <code>data/</code>, the web page and OTA need the real boards. Add <code>PubSubClient</code> and <code>ArduinoJson</code> in the Library Manager tab.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": -110, "left": 180, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 130, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 50, "left": 210, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>Hint 1: build it in stages</summary>
+<p>1) Hub alone: TODO 3 and 4, and watch <code>room1</code> lines in the Serial Monitor and in the MQTT client. 2) TODO 5: with no node, the LED comes on after 35 seconds. 3) Node: TODO 1, upload it with the hub's MAC and channel, then TODO 2 on the hub: <code>room2</code> lines appear and the LED goes off. 4) TODO 6 and the <code>data</code> folder (LittleFS plugin, lesson 5.5). 5) TODO 7, then one OTA update to prove it.</p></details>
+<details class="hint"><summary>Hint 2: the queue is the meeting point</summary>
+<p>Both the callback and <code>localTask</code> call <code>xQueueSend(readings, &amp;m, …)</code> with a <code>ClimateMsg</code>. In loop, <code>while (xQueueReceive(readings, &amp;m, 0) == pdPASS) { … }</code> takes every waiting message without blocking. The callback must use a wait of 0: it runs inside the Wi-Fi task.</p></details>
+<details class="hint"><summary>Hint 3: the channel</summary>
+<p>The node isn't connected to the router, so it must be told the router's channel: copy the number the hub prints into <code>ROUTER_CHANNEL</code> and call <code>WiFi.setChannel(ROUTER_CHANNEL)</code> before <code>esp_now_init()</code>, as in lesson 5.2. If the hub later prints a different channel (the router changed it), update the node.</p></details>
+
+<details class="expect"><summary>What should you see?</summary>
+<p><b>Hub</b> (potentiometer in the middle; the node started about 10 seconds after the hub; numbers vary):</p>
+<pre class="serial">[   905] Hub MAC 24:6F:28:12:34:56, channel 6, IP 192.168.1.57
+[   912] room1 #1: 22.5 C, nan %
+[  2140] MQTT connected
+[ 10912] room1 #2: 22.5 C, nan %
+[ 11480] room2 #1: 23.8 C, 45.2 %
+[ 20912] room1 #3: 22.5 C, nan %
+[ 21480] room2 #2: 23.8 C, 45.3 %</pre>
+<p><b>Node:</b></p>
+<pre class="serial">Node for room 2 on channel 6
+#1 23.8 C 45.2 % -&gt; delivered
+#2 23.8 C 45.3 % -&gt; delivered</pre>
+<p><b>MQTT</b> (subscribe to <code>esp32course/yourname/home/#</code>): <code>hub/status</code> = <code>online</code>, <code>room1/climate</code> = <code>{"t":22.5,"h":null,"seq":2}</code>, <code>room2/climate</code> = <code>{"t":23.8,"h":45.2,"seq":1}</code>. The very first room 1 reading isn't published because MQTT connects a moment later; the next one is, 10 seconds on.</p>
+<p><b>Browser</b> at the hub's IP: a table with both rooms, refreshing every 5 seconds. <code>/api/rooms</code> returns for example <code>{"room1":{"t":22.5,"h":null,"age":3,"count":5},"room2":{"t":23.8,"h":45.2,"age":8,"count":4}}</code>.</p>
+<ul>
+  <li><b>Req. 1 and 2:</b> a new <code>room2</code> line every 10 seconds; the node's LED blinks briefly with each <code>delivered</code>.</li>
+  <li><b>Req. 3:</b> turn the potentiometer fully one way and the other: the next <code>room1</code> readings are 10.0 and 35.0.</li>
+  <li><b>Req. 4:</b> the MQTT client shows a message on each room's topic every 10 seconds. Unplug the hub: about 20 seconds later <code>hub/status</code> becomes <code>offline</code>.</li>
+  <li><b>Req. 5:</b> unplug the node: 35 to 37 seconds after its last reading, the hub logs <code>!! room 2 silent for over 35 s</code> once and its LED comes on. Plug it back in: <code>room 2 is back</code> once, LED off.</li>
+  <li><b>Req. 6:</b> the page's "Age" for room 2 counts up to about 10 and drops back to 0 with every new reading.</li>
+  <li><b>Req. 7:</b> upload a change over the network port <code>climate-hub</code> while the node keeps sending: after the update, readings continue and the web page still loads (LittleFS survives OTA). No Serial line is ever cut in half.</li>
+</ul>
+<p><b>If it doesn't work:</b> <code>NOT delivered</code> on the node: wrong hub MAC or wrong channel (compare with the hub's first line). Node says <code>delivered</code> but no <code>room2</code> line: the two structs differ, or the room number isn't 2. Page is empty but <code>/api/rooms</code> works: the <code>data</code> folder wasn't uploaded, or with a different Partition Scheme. Some ESP-NOW messages lost only after Wi-Fi connects: make sure <code>WiFi.setSleep(false)</code> is there.</p>
+</details>
+
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="ClimateNode.ino — node" id="capAnsNode"><pre>
+// Climate node (room 2): DHT22 reading over ESP-NOW to the hub every 10 s
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+#include &lt;DHT.h&gt;
+
+uint8_t hubMac[] = {0x24, 0x6F, 0x28, 0x12, 0x34, 0x56};   // the hub prints it
+const uint8_t ROUTER_CHANNEL = 6;        // the hub prints this too
+const uint8_t ROOM = 2;
+const int LED_PIN = 4;
+const unsigned long SEND_MS = 10000;
+DHT dht(13, DHT22);
+
+typedef struct {
+  uint8_t type;        // 1 = climate reading
+  uint8_t room;        // 1 = the hub's room, 2 = this node's room
+  uint32_t seq;        // reading number
+  float tempC;         // NAN if the sensor failed
+  float hum;
+} ClimateMsg;          // 16 bytes: the SAME layout in the hub
+
+ClimateMsg msg = {1, ROOM, 0, NAN, NAN};
+volatile int sendResult = -1;            // -1 none, 1 delivered, 0 failed
+unsigned long lastSend = 0, ledOnAt = 0;
+bool ledOn = false;
+
+void onSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+  sendResult = (status == ESP_NOW_SEND_SUCCESS) ? 1 : 0;   // loop reports it
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  dht.begin();
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  WiFi.setChannel(ROUTER_CHANNEL);       // the hub's router channel (lesson 5.2)
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_send_cb(onSent);
+  esp_now_peer_info_t peer = {};
+  memcpy(peer.peer_addr, hubMac, 6);
+  peer.channel = 0;                      // = the channel we just set
+  peer.encrypt = false;
+  esp_now_add_peer(&amp;peer);
+  Serial.printf("Node for room %u on channel %u\n", ROOM, ROUTER_CHANNEL);
+}
+
+void loop() {
+  if (lastSend == 0 || millis() - lastSend &gt;= SEND_MS) {
+    lastSend = millis();
+    msg.seq++;
+    msg.tempC = dht.readTemperature();
+    msg.hum = dht.readHumidity();
+    esp_now_send(hubMac, (uint8_t *)&amp;msg, sizeof(msg));
+    Serial.printf("#%lu %.1f C %.1f %% -&gt; ", (unsigned long)msg.seq, msg.tempC, msg.hum);
+  }
+  if (sendResult &gt;= 0) {
+    Serial.println(sendResult == 1 ? "delivered" : "NOT delivered (hub off? channel?)");
+    if (sendResult == 1) {               // 50 ms flash = the hub's radio heard us
+      digitalWrite(LED_PIN, HIGH);
+      ledOn = true;
+      ledOnAt = millis();
+    }
+    sendResult = -1;
+  }
+  if (ledOn &amp;&amp; millis() - ledOnAt &gt;= 50) {
+    digitalWrite(LED_PIN, LOW);
+    ledOn = false;
+  }
+}
+</pre></div>
+<ol class="walk" data-for="capAnsNode">
+  <li data-lines="6-11"><b class="what">Where to send, and on which channel.</b> The hub's MAC and its router's channel, both copied from the hub's first log line; the room number and the interval.
+    <span class="why">The node never joins the router, so it can't discover the channel by itself (lesson 5.2). With a wrong channel, every send reports <code>NOT delivered</code>.</span></li>
+  <li data-lines="13-19"><b class="what">The message.</b> Type, room, number, temperature, humidity: 1 + 1 + 2 padding + 4 + 4 + 4 = 16 bytes.
+    <span class="why">The type and room bytes let the hub reject anything else on the channel, and <code>seq</code> shows you at a glance whether readings were lost.</span></li>
+  <li data-lines="21-28"><b class="what">The send callback only stores the result.</b> <code>volatile int</code> with −1 meaning "nothing new".
+    <span class="why">The callback runs in the Wi-Fi task; printing belongs in loop. <code>volatile</code> makes loop reread the value every time.</span></li>
+  <li data-lines="34-36"><b class="what">Radio on, then to the router's channel.</b>
+    <span class="why"><code>setChannel</code> only works once the radio is running and must happen before <code>esp_now_init</code>.</span></li>
+  <li data-lines="41-47"><b class="what">Callback and peer.</b> <code>peer.channel = 0</code> means "the current channel", which is now the router's.
+    <span class="why">Only unicast to a registered peer gets a MAC-level acknowledgment, which is what makes <code>delivered</code> meaningful.</span></li>
+  <li data-lines="50-58"><b class="what">Every 10 seconds: read and send.</b> The line is printed without a newline; the result finishes it.
+    <span class="why">A failed DHT22 read gives <code>NAN</code>, which is still sent: the hub then shows <code>null</code>, which is more honest than skipping the reading.</span></li>
+  <li data-lines="59-71"><b class="what">Report and flash.</b> When the callback has stored a result, print it; on delivery, switch the LED on and off again 50 ms later with <code>millis()</code>.
+    <span class="why">A brief flash every 10 seconds tells you, without a computer, that the node and hub are talking.</span></li>
+</ol>
+<div class="code" data-file="ClimateHub.ino — hub" id="capAns"><pre>
+// Climate hub: ESP-NOW in, FreeRTOS tasks, MQTT out, LittleFS page, OTA
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;ArduinoOTA.h&gt;
+#include &lt;LittleFS.h&gt;
+#include &lt;ArduinoJson.h&gt;
+#if __has_include("secrets.h")
+#include "secrets.h"                  // real board: WIFI_SSID, WIFI_PASS, OTA_PASS
+#endif
+#ifndef WIFI_SSID                     // no secrets.h (Wokwi): Wokwi's network
+#define WIFI_SSID "Wokwi-GUEST"
+#define WIFI_PASS ""
+#endif
+#ifndef OTA_PASS
+#define OTA_PASS "change-me"
+#endif
+
+#define BASE "esp32course/ali1234/home"     // your own prefix, as in 5.1
+const char *MQTT_HOST = "broker.hivemq.com";
+const int MQTT_PORT = 1883;
+const char *TOPIC_STATUS = BASE "/hub/status";
+const int LED_PIN = 4;                // on = room 2 has gone silent
+const int POT_PIN = 34;               // stand-in for room 1's thermometer
+const unsigned long STALE_MS = 35000; // 3 missed readings = silent
+
+typedef struct {
+  uint8_t type;
+  uint8_t room;
+  uint32_t seq;
+  float tempC;
+  float hum;
+} ClimateMsg;                         // exact copy of the node's layout
+
+struct Room { float tempC; float hum; unsigned long at; uint32_t count; };
+
+QueueHandle_t readings;               // ESP-NOW + local task -&gt; loop
+SemaphoreHandle_t roomsMutex;         // protects rooms[]
+SemaphoreHandle_t logMutex;           // protects Serial
+Room rooms[3];                        // we use [1] and [2]
+WiFiClient net;
+PubSubClient mqtt(net);
+WebServer server(80);
+char clientId[40];
+unsigned long lastTry = 0;
+
+void logf(const char *fmt, ...) {
+  char buf[112];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  if (xSemaphoreTake(logMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    Serial.printf("[%6lu] %s\n", millis(), buf);
+    xSemaphoreGive(logMutex);
+  }
+}
+
+// runs in the Wi-Fi task: check, copy into the queue, never wait
+void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len != sizeof(ClimateMsg)) return;
+  ClimateMsg m;
+  memcpy(&amp;m, data, sizeof(m));
+  if (m.type != 1 || m.room != 2) return;
+  xQueueSend(readings, &amp;m, 0);
+}
+
+// room 1: the potentiometer pretends to be a thermometer (10..35 C)
+void localTask(void *param) {
+  uint32_t seq = 0;
+  for (;;) {
+    uint32_t raw = 0;
+    for (int i = 0; i &lt; 8; i++) raw += analogRead(POT_PIN);
+    raw /= 8;
+    ClimateMsg m = {1, 1, ++seq, 10.0f + raw * 25.0f / 4095.0f, NAN};
+    xQueueSend(readings, &amp;m, pdMS_TO_TICKS(100));
+    vTaskDelay(pdMS_TO_TICKS(10000));
+  }
+}
+
+// watches room 2: LED on (and one log line) when it goes silent
+void watchTask(void *param) {
+  bool silent = false;
+  for (;;) {
+    xSemaphoreTake(roomsMutex, portMAX_DELAY);
+    unsigned long at = rooms[2].at;
+    xSemaphoreGive(roomsMutex);
+    unsigned long quietFor = (at == 0) ? millis() : millis() - at;
+    bool nowSilent = quietFor &gt; STALE_MS;
+    if (nowSilent != silent) {
+      silent = nowSilent;
+      digitalWrite(LED_PIN, silent ? HIGH : LOW);
+      logf(silent ? "!! room 2 silent for over 35 s" : "room 2 is back");
+    }
+    vTaskDelay(pdMS_TO_TICKS(2000));
+  }
+}
+
+void publishRoom(const ClimateMsg &amp;m) {
+  JsonDocument doc;
+  if (isnan(m.tempC)) doc["t"] = nullptr;    // JSON has no NaN: send null
+  else doc["t"] = serialized(String(m.tempC, 1));
+  if (isnan(m.hum)) doc["h"] = nullptr;
+  else doc["h"] = serialized(String(m.hum, 1));
+  doc["seq"] = m.seq;
+  char topic[64], buf[96];
+  snprintf(topic, sizeof(topic), BASE "/room%u/climate", m.room);
+  serializeJson(doc, buf, sizeof(buf));
+  mqtt.publish(topic, buf);
+}
+
+bool connectMqtt() {
+  if (!mqtt.connect(clientId, TOPIC_STATUS, 1, true, "offline")) {
+    logf("MQTT failed, state=%d", mqtt.state());
+    return false;
+  }
+  mqtt.publish(TOPIC_STATUS, "online", true);
+  logf("MQTT connected");
+  return true;
+}
+
+void handleRooms() {
+  JsonDocument doc;
+  xSemaphoreTake(roomsMutex, portMAX_DELAY);
+  for (int r = 1; r &lt;= 2; r++) {
+    JsonObject o = doc["room" + String(r)].to&lt;JsonObject&gt;();
+    o["t"] = round(rooms[r].tempC * 10.0) / 10.0;   // 1 decimal; NAN -&gt; null
+    o["h"] = round(rooms[r].hum * 10.0) / 10.0;
+    if (rooms[r].at == 0) o["age"] = nullptr;
+    else o["age"] = (millis() - rooms[r].at) / 1000;
+    o["count"] = rooms[r].count;
+  }
+  xSemaphoreGive(roomsMutex);
+  String out;
+  serializeJson(doc, out);
+  server.send(200, "application/json", out);
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(300);
+  readings = xQueueCreate(10, sizeof(ClimateMsg));
+  roomsMutex = xSemaphoreCreateMutex();
+  logMutex = xSemaphoreCreateMutex();
+  for (int r = 0; r &lt; 3; r++) rooms[r] = {NAN, NAN, 0, 0};
+  pinMode(LED_PIN, OUTPUT);
+  if (!LittleFS.begin(true)) Serial.println("LittleFS mount failed");
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - t0 &lt; 20000) delay(250);
+  WiFi.setSleep(false);               // keep the radio awake for ESP-NOW
+  logf("Hub MAC %s, channel %d, IP %s", WiFi.macAddress().c_str(), WiFi.channel(),
+       WiFi.localIP().toString().c_str());
+
+  if (esp_now_init() == ESP_OK) esp_now_register_recv_cb(onRecv);
+  else logf("ESP-NOW init failed");
+
+  String mac = WiFi.macAddress();
+  mac.replace(":", "");
+  snprintf(clientId, sizeof(clientId), "hub-%s-%04X", mac.c_str(), (unsigned)(esp_random() &amp; 0xFFFF));
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+
+  ArduinoOTA.setHostname("climate-hub");
+  ArduinoOTA.setPassword(OTA_PASS);
+  ArduinoOTA.begin();
+
+  server.serveStatic("/", LittleFS, "/index.html");
+  server.on("/api/rooms", HTTP_GET, handleRooms);
+  server.begin();
+
+  xTaskCreatePinnedToCore(localTask, "local", 3072, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(watchTask, "watch", 3072, NULL, 1, NULL, 1);
+}
+
+void loop() {
+  ArduinoOTA.handle();
+  server.handleClient();
+
+  ClimateMsg m;
+  while (xQueueReceive(readings, &amp;m, 0) == pdPASS) {    // empty the queue
+    xSemaphoreTake(roomsMutex, portMAX_DELAY);
+    rooms[m.room].tempC = m.tempC;
+    rooms[m.room].hum = m.hum;
+    rooms[m.room].at = millis();
+    rooms[m.room].count++;
+    xSemaphoreGive(roomsMutex);
+    logf("room%u #%lu: %.1f C, %.1f %%", m.room, (unsigned long)m.seq, m.tempC, m.hum);
+    if (mqtt.connected()) publishRoom(m);
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    if (mqtt.connected()) {
+      mqtt.loop();
+    } else if (lastTry == 0 || millis() - lastTry &gt; 5000) {
+      lastTry = millis();
+      connectMqtt();
+    }
+  }
+  delay(2);
+}
+</pre></div>
+<ol class="walk" data-for="capAns">
+  <li data-lines="9-18"><b class="what">Secrets with Wokwi fallbacks.</b> The same pattern as the 5.5 and 5.6 projects.
+    <span class="why">One sketch that compiles on your board with real passwords and in Wokwi without any.</span></li>
+  <li data-lines="20-26"><b class="what">Settings.</b> Your topic prefix, the broker, the status topic, the two pins and the silence limit.
+    <span class="why">35 seconds is three missed readings plus a margin, so one lost packet doesn't trigger a false alarm.</span></li>
+  <li data-lines="28-36"><b class="what">The message and the room record.</b> <code>ClimateMsg</code> is an exact copy of the node's; <code>Room</code> keeps the latest values, when they arrived and how many have arrived.
+    <span class="why">Storing <code>millis()</code> at arrival, not a time from the node, means the hub's clock alone decides what "silent" means.</span></li>
+  <li data-lines="38-46"><b class="what">Shared objects.</b> One queue into loop, a mutex for <code>rooms[]</code>, a mutex for Serial, and the network objects.
+    <span class="why"><code>rooms[3]</code> is indexed by room number, so <code>rooms[m.room]</code> needs no translation; index 0 is simply unused.</span></li>
+  <li data-lines="48-58"><b class="what">logf.</b> Format first, then print one whole line under the lock.
+    <span class="why">Three tasks print; without the lock their lines could interleave.</span></li>
+  <li data-lines="60-67"><b class="what">The ESP-NOW callback.</b> Check the length, copy, accept only type 1 from room 2, and <code>xQueueSend</code> with a wait of 0.
+    <span class="why">This runs inside the Wi-Fi task: it must never block. If the queue is ever full, the reading is dropped, which is better than stalling the radio.</span></li>
+  <li data-lines="69-80"><b class="what">localTask.</b> Average 8 potentiometer readings, map 0 to 4095 onto 10 to 35 °C, send a room 1 message with unknown humidity, sleep 10 seconds.
+    <span class="why">By sending the <b>same</b> message type into the <b>same</b> queue as the node, the rest of the hub doesn't care where a reading came from. Swap in a real sensor later and nothing else changes.</span></li>
+  <li data-lines="82-98"><b class="what">watchTask.</b> Copy room 2's arrival time under the lock, compute how long it has been quiet (since boot if it never reported), and act only when the silent/not-silent state changes.
+    <span class="why">Copy-then-release keeps the lock time tiny. Acting only on changes gives exactly one log line per event instead of one every 2 seconds. This task is the LED's only owner.</span></li>
+  <li data-lines="100-111"><b class="what">publishRoom.</b> Build <code>{"t":…,"h":…,"seq":…}</code> with one decimal (or <code>null</code>), put the room number into the topic, publish.
+    <span class="why">Standard JSON has no NaN, so unknown values must be <code>null</code>, or dashboards reject the message. <code>serialized(String(x, 1))</code> is the lesson 5.1 trick for exactly one decimal.</span></li>
+  <li data-lines="113-121"><b class="what">connectMqtt.</b> Connect with a Last Will, then publish <code>online</code> retained.
+    <span class="why">The hub doesn't subscribe to anything, so there's nothing to re-subscribe after reconnecting.</span></li>
+  <li data-lines="123-138"><b class="what">/api/rooms.</b> Build both room objects under the lock, rounding to one decimal, with <code>null</code> age for a room that never reported; release; send.
+    <span class="why">This runs in loop while watchTask may be reading the same data, hence the lock. Rounding in <code>double</code> keeps the JSON short (<code>23.8</code>, not <code>23.79999924</code>); a NAN stays NaN and becomes <code>null</code>.</span></li>
+  <li data-lines="143-148"><b class="what">Shared objects before anything that uses them.</b> Queue, mutexes, empty room records, the LED pin and LittleFS.
+    <span class="why">The ESP-NOW callback and the tasks start later in setup; by then everything they touch exists.</span></li>
+  <li data-lines="150-157"><b class="what">Wi-Fi first, then report the channel.</b> Up to 20 seconds; <code>setSleep(false)</code> keeps the radio listening for ESP-NOW between router beacons.
+    <span class="why">The router decides the channel, so it's only known after connecting. The log line gives you exactly what the node needs.</span></li>
+  <li data-lines="159-165"><b class="what">ESP-NOW and MQTT set up.</b> ESP-NOW starts on the router's channel; the MQTT client ID uses the MAC plus a random number.
+    <span class="why">The hub doesn't add the node as a peer: receiving unencrypted unicast needs no peer (lesson 5.2).</span></li>
+  <li data-lines="167-173"><b class="what">OTA and the web server.</b> The page comes from LittleFS; the data comes from <code>/api/rooms</code>.
+    <span class="why">Separating the page (a file) from the data (code) means you can restyle the page with a LittleFS upload, without touching the program.</span></li>
+  <li data-lines="175-176"><b class="what">Two small tasks on core 1.</b> 3072 bytes each, priority 1.
+    <span class="why">Neither does anything heavy (no HTTPS), so a small stack is enough; check it later with <code>uxTaskGetStackHighWaterMark</code> as in lesson 5.4.</span></li>
+  <li data-lines="179-193"><b class="what">loop: OTA, web, then empty the queue.</b> Each reading is stored under the lock, logged, and published if MQTT is up.
+    <span class="why">loop is the single owner of the MQTT connection; PubSubClient isn't made for being called from several tasks at once. <code>%%</code> prints a percent sign; a NAN humidity prints as <code>nan</code>.</span></li>
+  <li data-lines="195-203"><b class="what">Keep MQTT alive, and rest 2 ms.</b> The lesson 5.1 non-blocking reconnection.
+    <span class="why">One honest limit: while <code>connect()</code> itself is trying, it can take up to about 15 seconds. The readings then wait in the queue (10 slots, one every few seconds), and the web page answers a bit late, but nothing is lost.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="capAns">
+<p>The finished hub in Wokwi (without the node, as described above).</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": -110, "left": 180, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 130, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 50, "left": 210, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
 </details>
 </div>
 

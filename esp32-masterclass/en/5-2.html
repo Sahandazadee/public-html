@@ -1113,6 +1113,524 @@ void loop() {
 </details>
 </div>
 
+<h2 id="project">Practice project: a doorbell that knows it was heard</h2>
+<div class="project">
+<p class="lede-ish">A wireless doorbell has one job: when someone presses the button at the door, the chime inside must ring. Cheap doorbells just send and hope. Yours will be smarter: the chime answers "I heard you", the button retries if the answer doesn't come, and if the chime is really unreachable, the button blinks an error so the visitor knows to knock. Along the way you solve a classic wireless puzzle: how to retry without ringing twice.</p>
+
+<h3 id="project-req">Requirements</h3>
+<ol>
+  <li><b>Board A (button):</b> every debounced press sends a <code>RING</code> message with a new number (<code>seq</code>) to board B and prints it. Presses while A is still waiting for an answer are ignored (with a note).</li>
+  <li><b>Board B (chime):</b> every <code>RING</code> it receives is answered with an <code>ACK</code> carrying the same number, even if it has seen that number before.</li>
+  <li><b>Board B:</b> the chime (880 Hz for 300 ms, then 660 Hz for 400 ms, LED on while it sounds) plays only once per ring number. A repeat of the same number within 5 seconds is a retry: B prints a note and doesn't chime again.</li>
+  <li><b>Board A:</b> it waits 300 ms for the ACK. If none arrives, it resends the <b>same</b> number, up to 3 more times (4 sends in total). On an ACK it prints the try number and the total time and lights the LED solid for 1 second; after the fourth failed try it prints an error and blinks the LED 5 times quickly.</li>
+  <li>Both boards use only <code>millis()</code> for their timing: no <code>delay()</code> in either <code>loop()</code>.</li>
+</ol>
+
+<h3 id="project-parts">Parts</h3>
+<ul>
+  <li>Two ESP32 DevKitC boards with two USB cables (the pair from this lesson)</li>
+  <li>Board A: push button + LED with a 220 Ω resistor</li>
+  <li>Board B: passive buzzer; the LED + 220 Ω on GPIO4 is optional but makes testing easier</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"Board A (button)",
+  "parts":[
+    {"id":"BTN","name":"Push button","img":"button.svg","pins":[["1","one side of the button"],["2","the opposite side (diagonal)"]]},
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO side"],["2","LED side"]]},
+    {"id":"LED1","name":"LED (answer light)","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−), short leg"]]}
+  ],
+  "wires":[["GPIO27","BTN.1","blue"],["BTN.2","GND","black"],["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>Board A is exactly board A from this lesson: the button between GPIO27 and GND (internal pull-up) and the status LED on GPIO4.</figcaption></div>
+<div class="wiring"><script type="application/json">{
+  "board":"Board B (chime)",
+  "parts":[
+    {"id":"BZ","name":"Passive buzzer","img":"buzzer.svg","pins":[["1","+ leg (or the longer one)"],["2","− leg"]]},
+    {"id":"R1","name":"220 Ω resistor (optional)","img":"resistor.svg","pins":[["1","GPIO side"],["2","LED side"]]},
+    {"id":"LED1","name":"LED (optional)","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−), short leg"]]}
+  ],
+  "wires":[["GPIO25","BZ.1","orange"],["BZ.2","GND","black"],["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>Board B: the passive buzzer on GPIO25 (the course's buzzer pin, lesson 3.2) and the optional LED on GPIO4. The DHT22 from project 2 can stay connected; it isn't used.</figcaption></div>
+
+<h3 id="project-start">Starter code</h3>
+<div class="code" data-file="Doorbell_A.ino (starter) — board A" id="projStart"><pre>
+// Board A (starter): doorbell button that waits for an acknowledgment
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+
+uint8_t bellMac[] = {0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF};   // TODO 1: board B's MAC
+const int BUTTON_PIN = 27;
+const int LED_PIN = 4;
+const unsigned long ACK_TIMEOUT = 300;   // ms to wait after each send
+const int MAX_RETRIES = 3;               // resends after the first try
+
+enum : uint8_t { MSG_RING = 1, MSG_ACK = 2 };
+typedef struct {
+  uint8_t type;       // MSG_RING or MSG_ACK
+  uint32_t seq;       // ring number
+} BellMsg;            // 8 bytes, identical on both boards
+
+BellMsg ring = {MSG_RING, 0};
+volatile bool gotAck = false;
+volatile uint32_t ackSeq = 0;
+bool waiting = false;
+int tries = 0;
+unsigned long sentAt = 0, firstSentAt = 0;
+int lastReading = HIGH, stableState = HIGH;
+unsigned long lastChange = 0;
+bool ledSolid = false;                   // "delivered" light is on
+unsigned long ledOnAt = 0;
+int blinkSteps = 0;                      // error blinks left (on + off = 2)
+unsigned long lastBlink = 0;
+
+void onSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+  if (status != ESP_NOW_SEND_SUCCESS) Serial.println("   radio: not delivered");
+}
+
+void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len != sizeof(BellMsg)) return;
+  if (memcmp(info-&gt;src_addr, bellMac, 6) != 0) return;   // only from B
+  BellMsg m;
+  memcpy(&amp;m, data, sizeof(m));
+  if (m.type != MSG_ACK) return;
+  ackSeq = m.seq;
+  gotAck = true;                         // loop does the real work
+}
+
+void sendRing() {
+  esp_now_send(bellMac, (uint8_t *)&amp;ring, sizeof(ring));
+  tries++;
+  sentAt = millis();
+  Serial.printf("-&gt; RING #%lu (try %d)\n", (unsigned long)ring.seq, tries);
+}
+
+void startRing() {
+  // TODO 1: if we are still waiting, print a note and return
+  // TODO 1: new number (ring.seq++), tries = 0, waiting = true,
+  //         remember firstSentAt, switch the LED off, then sendRing()
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LED_PIN, OUTPUT);
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_send_cb(onSent);
+  esp_now_register_recv_cb(onRecv);
+  esp_now_peer_info_t peer = {};
+  memcpy(peer.peer_addr, bellMac, 6);
+  peer.channel = 0;
+  peer.encrypt = false;
+  esp_now_add_peer(&amp;peer);
+  Serial.println("Doorbell button ready");
+}
+
+void loop() {
+  // debounced button (same logic as the lesson)
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChange = millis(); lastReading = reading; }
+  if (millis() - lastChange &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) startRing();
+  }
+
+  // TODO 4: if gotAck and ackSeq == ring.seq: stop waiting, print tries
+  //         and milliseconds, LED solid for 1 s (ledSolid, ledOnAt)
+  // TODO 4: if waiting and ACK_TIMEOUT has passed: sendRing() again while
+  //         tries &lt;= MAX_RETRIES, otherwise print an error and blink
+  // TODO 5: switch the solid LED off after 1 s; do the blinkSteps blinks
+  //         every 100 ms (no delay!)
+}
+</pre></div>
+<div class="code" data-file="Doorbell_B.ino (starter) — board B" id="projStartB"><pre>
+// Board B (starter): the chime
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+
+const int BUZZER_PIN = 25;               // passive buzzer
+const int LED_PIN = 4;                   // lights up while it chimes
+
+enum : uint8_t { MSG_RING = 1, MSG_ACK = 2 };
+typedef struct {
+  uint8_t type;
+  uint32_t seq;
+} BellMsg;                               // exact copy of board A's layout
+
+BellMsg incoming;
+uint8_t senderMac[6];
+volatile bool gotRing = false;
+uint32_t lastSeq = 0;                    // number of the last ring we chimed for
+unsigned long lastRingAt = 0;
+int chimeStep = 0;                       // 0 = quiet, 1 = "ding", 2 = "dong"
+unsigned long chimeAt = 0;
+
+void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len != sizeof(BellMsg)) return;
+  BellMsg m;
+  memcpy(&amp;m, data, sizeof(m));
+  if (m.type != MSG_RING) return;
+  incoming = m;
+  memcpy(senderMac, info-&gt;src_addr, 6);  // reply to whoever rang
+  gotRing = true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  ledcAttach(BUZZER_PIN, 2000, 8);       // LEDC drives the buzzer (lesson 3.2)
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  Serial.print("Chime MAC: ");
+  Serial.println(WiFi.macAddress());
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_recv_cb(onRecv);
+}
+
+void loop() {
+  if (gotRing) {
+    gotRing = false;
+    if (!esp_now_is_peer_exist(senderMac)) {   // first time: add A as a peer
+      esp_now_peer_info_t peer = {};
+      memcpy(peer.peer_addr, senderMac, 6);
+      peer.channel = 0;
+      peer.encrypt = false;
+      esp_now_add_peer(&amp;peer);
+    }
+    // TODO 2: build a BellMsg {MSG_ACK, incoming.seq} and send it to senderMac
+    // TODO 3: chime only for a NEW number (or the same number after 5 s);
+    //         a repeat just prints a note. Start the chime: 880 Hz, LED on,
+    //         chimeStep = 1, chimeAt = millis()
+  }
+
+  // TODO 5: after 300 ms switch to 660 Hz (step 2); after 400 ms more,
+  //         silence (ledcWriteTone(BUZZER_PIN, 0)), LED off, step 0
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="11-15"><b class="what">One message layout for both directions.</b> A <code>type</code> byte says whether it's a <code>RING</code> or an <code>ACK</code>; <code>seq</code> is the ring number.
+    <span class="why">Both messages have the same size, so the length alone can't tell them apart. A type byte first is how bigger projects do it (as the lesson mentioned).</span></li>
+  <li data-lines="17-28"><b class="what">All the state A needs.</b> Whether we're waiting, how many sends so far, when we last sent, the debounce variables, and the LED feedback timers.
+    <span class="why">Everything that must survive between passes of loop is global. Read the names now; your TODOs will use them.</span></li>
+  <li data-lines="30-49"><b class="what">Given: the callbacks and sendRing.</b> <code>onRecv</code> only accepts an ACK from B and raises a flag; <code>sendRing</code> sends the current message and counts the try.
+    <span class="why">This is the lesson's "flag in the callback, work in loop" pattern. Retrying later is simply calling <code>sendRing()</code> again with the unchanged <code>ring</code>.</span></li>
+  <li data-lines="51-55"><b class="what">TODO 1: starting a new ring.</b> This is the only place where <code>ring.seq</code> grows.
+    <span class="why">If a retry got a new number, B couldn't recognize it as a retry.</span></li>
+  <li data-lines="86-91"><b class="what">TODO 4 and 5 in loop.</b> The debounce above them is given.
+    <span class="why">The ACK check, the timeout check and the LED timers run on every pass; none of them may wait.</span></li>
+</ol>
+<div class="callout info"><div class="ct">Build it on your boards</div>
+<p>Wokwi doesn't simulate ESP-NOW between two boards (see the lesson), so this project needs your two real ESP32s. Upload B first, copy the MAC it prints into <code>bellMac</code> on A, then upload A. Keep both Serial Monitors open side by side, one per board.</p></div>
+
+<details class="hint"><summary>Hint 1</summary>
+<p>A's timeout check is only a few lines: <code>if (waiting &amp;&amp; millis() - sentAt &gt;= ACK_TIMEOUT)</code>. Inside it, <code>tries &lt;= MAX_RETRIES</code> means "we may send again". Because <code>tries</code> is already 1 after the first send, this allows sends number 2, 3 and 4.</p></details>
+<details class="hint"><summary>Hint 2</summary>
+<p>On B, reply <b>before</b> deciding whether to chime, and reply every time. Think about why: if B's first ACK got lost, A sends the same number again. If B stayed silent for repeats, A would never get its answer.</p></details>
+<details class="hint"><summary>Hint 3</summary>
+<p>A retry is "the same <code>seq</code> as last time, and recent". Store <code>lastSeq</code> and <code>lastRingAt</code> when you chime. The 5-second window matters when board A is reset: it starts again at <code>seq</code> 1, and without the time check, B would silently swallow the first ring after A's reset if its old <code>lastSeq</code> happened to be 1.</p></details>
+
+<details class="expect"><summary>What should you see?</summary>
+<p><b>Normal ring</b> (the milliseconds differ on your boards):</p>
+<pre class="serial">[B] Chime MAC: 24:6F:28:AB:CD:EF
+[A] Doorbell button ready
+[A] -&gt; RING #1 (try 1)
+[B] RING #1: ding-dong, ACK sent
+[A] &lt;- ACK #1 on try 1, 6 ms in total</pre>
+<p><b>A lost ACK.</b> To test this on your desk, on B temporarily wrap the ACK send in <code>if (random(2) == 0) { ... }</code>, so about half the answers are "lost":</p>
+<pre class="serial">[A] -&gt; RING #2 (try 1)
+[B] RING #2: ding-dong, ACK sent
+[A] -&gt; RING #2 (try 2)
+[B] RING #2 again (a retry): ACK sent, no second chime
+[A] &lt;- ACK #2 on try 2, 307 ms in total</pre>
+<p><b>B unplugged:</b></p>
+<pre class="serial">[A] -&gt; RING #3 (try 1)
+[A]    radio: not delivered
+[A] -&gt; RING #3 (try 2)
+[A]    radio: not delivered
+[A] -&gt; RING #3 (try 3)
+[A]    radio: not delivered
+[A] -&gt; RING #3 (try 4)
+[A]    radio: not delivered
+[A] !! no ACK for #3 after 4 tries: bell unreachable</pre>
+<ul>
+  <li><b>Req. 1:</b> one press gives exactly one <code>RING #n (try 1)</code>. Pressing again during the error blinking starts a new number; pressing during the 1.2 seconds of retries prints <code>press ignored</code>.</li>
+  <li><b>Req. 2 and 3:</b> with the <code>random(2)</code> test, you hear exactly one ding-dong per press, never two, even when A needed two or three tries.</li>
+  <li><b>Req. 4:</b> in the unplugged test, the four tries are about 300 ms apart (1.2 seconds in total), then A's LED blinks 5 times in one second. With B on, the LED stays solid for 1 second after each ACK.</li>
+  <li><b>Req. 5:</b> hold A's button down for 3 seconds: nothing else is blocked, and releasing it sends nothing. Search both sketches: <code>delay(</code> appears only in <code>setup()</code>.</li>
+</ul>
+<p><b>If it doesn't work:</b> <code>radio: not delivered</code> every time means the MAC in <code>bellMac</code> is wrong (copy it again from B's Serial Monitor). B prints nothing: check that both structs are identical, including <code>uint8_t type</code> first. A never sees the ACK although B says "ACK sent": B must add A as a peer before sending (the given code does this).</p>
+</details>
+
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="Doorbell_A.ino — board A" id="projAns"><pre>
+// Board A: doorbell button that waits for an acknowledgment
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+
+uint8_t bellMac[] = {0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF};   // board B's MAC
+const int BUTTON_PIN = 27;
+const int LED_PIN = 4;
+const unsigned long ACK_TIMEOUT = 300;   // ms to wait after each send
+const int MAX_RETRIES = 3;               // resends after the first try
+
+enum : uint8_t { MSG_RING = 1, MSG_ACK = 2 };
+typedef struct {
+  uint8_t type;       // MSG_RING or MSG_ACK
+  uint32_t seq;       // ring number
+} BellMsg;            // 8 bytes, identical on both boards
+
+BellMsg ring = {MSG_RING, 0};
+volatile bool gotAck = false;
+volatile uint32_t ackSeq = 0;
+bool waiting = false;
+int tries = 0;
+unsigned long sentAt = 0, firstSentAt = 0;
+int lastReading = HIGH, stableState = HIGH;
+unsigned long lastChange = 0;
+bool ledSolid = false;                   // "delivered" light is on
+unsigned long ledOnAt = 0;
+int blinkSteps = 0;                      // error blinks left (on + off = 2)
+unsigned long lastBlink = 0;
+
+void onSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+  if (status != ESP_NOW_SEND_SUCCESS) Serial.println("   radio: not delivered");
+}
+
+void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len != sizeof(BellMsg)) return;
+  if (memcmp(info-&gt;src_addr, bellMac, 6) != 0) return;   // only from B
+  BellMsg m;
+  memcpy(&amp;m, data, sizeof(m));
+  if (m.type != MSG_ACK) return;
+  ackSeq = m.seq;
+  gotAck = true;                         // loop does the real work
+}
+
+void sendRing() {
+  esp_now_send(bellMac, (uint8_t *)&amp;ring, sizeof(ring));
+  tries++;
+  sentAt = millis();
+  Serial.printf("-&gt; RING #%lu (try %d)\n", (unsigned long)ring.seq, tries);
+}
+
+void startRing() {
+  if (waiting) {
+    Serial.println("   still waiting for the last ring, press ignored");
+    return;
+  }
+  ring.seq++;                            // a NEW ring gets a NEW number
+  tries = 0;
+  waiting = true;
+  firstSentAt = millis();
+  ledSolid = false;
+  blinkSteps = 0;
+  digitalWrite(LED_PIN, LOW);
+  sendRing();
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LED_PIN, OUTPUT);
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_send_cb(onSent);
+  esp_now_register_recv_cb(onRecv);
+  esp_now_peer_info_t peer = {};
+  memcpy(peer.peer_addr, bellMac, 6);
+  peer.channel = 0;
+  peer.encrypt = false;
+  esp_now_add_peer(&amp;peer);
+  Serial.println("Doorbell button ready");
+}
+
+void loop() {
+  // debounced button (same logic as the lesson)
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChange = millis(); lastReading = reading; }
+  if (millis() - lastChange &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) startRing();
+  }
+
+  // the acknowledgment arrived
+  if (gotAck) {
+    gotAck = false;
+    if (waiting &amp;&amp; ackSeq == ring.seq) {
+      waiting = false;
+      Serial.printf("&lt;- ACK #%lu on try %d, %lu ms in total\n", (unsigned long)ackSeq,
+                    tries, millis() - firstSentAt);
+      digitalWrite(LED_PIN, HIGH);       // solid for 1 s = "B heard it"
+      ledSolid = true;
+      ledOnAt = millis();
+    }
+  }
+
+  // no ACK in time: retry with the SAME number, or give up
+  if (waiting &amp;&amp; millis() - sentAt &gt;= ACK_TIMEOUT) {
+    if (tries &lt;= MAX_RETRIES) {
+      sendRing();
+    } else {
+      waiting = false;
+      Serial.printf("!! no ACK for #%lu after %d tries: bell unreachable\n",
+                    (unsigned long)ring.seq, tries);
+      blinkSteps = 10;                   // 5 quick blinks
+      lastBlink = millis();
+    }
+  }
+
+  // LED feedback without delay()
+  if (ledSolid &amp;&amp; millis() - ledOnAt &gt;= 1000) {
+    ledSolid = false;
+    digitalWrite(LED_PIN, LOW);
+  }
+  if (blinkSteps &gt; 0 &amp;&amp; millis() - lastBlink &gt;= 100) {
+    lastBlink = millis();
+    blinkSteps--;
+    digitalWrite(LED_PIN, (blinkSteps % 2 == 1) ? HIGH : LOW);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="5-9"><b class="what">B's address and the timing rules.</b> 300 ms per try and up to 3 retries.
+    <span class="why">A healthy ACK comes back in a few milliseconds, so 300 ms is generous. Four tries spread over 1.2 seconds ride out a short burst of interference but still give the visitor feedback quickly.</span></li>
+  <li data-lines="11-15"><b class="what">A typed message.</b> <code>enum : uint8_t</code> makes the two type values exactly one byte. With the 3 padding bytes, <code>BellMsg</code> is 8 bytes.
+    <span class="why">The same layout serves both directions, and the receiver checks <code>type</code> after the length. B must have an identical copy.</span></li>
+  <li data-lines="30-32"><b class="what">The radio's report.</b> Only failures are printed.
+    <span class="why">"Not delivered" tells you the radio got no MAC-level acknowledgment at all (B is off or out of range). Our real acknowledgment is B's ACK message.</span></li>
+  <li data-lines="34-42"><b class="what">Receiving the ACK.</b> Length, sender and type are checked; then the number is stored and the flag raised.
+    <span class="why">The callback runs in the Wi-Fi task, so it stays short and leaves the thinking to loop.</span></li>
+  <li data-lines="44-49"><b class="what">sendRing sends the current ring, unchanged.</b> It counts the try and restarts the 300 ms clock.
+    <span class="why">A retry must be byte-for-byte the same message, above all the same <code>seq</code>. That's what lets B recognize it.</span></li>
+  <li data-lines="51-64"><b class="what">startRing: a new ring, a new number.</b> If we're still waiting, the press is ignored. Otherwise the number goes up, the counters reset and the first send goes out.
+    <span class="why">Ignoring presses while waiting keeps one ring "in flight" at a time, so an ACK always matches exactly one ring. Switching the LED off here cancels any leftover feedback from the previous ring.</span></li>
+  <li data-lines="86-93"><b class="what">The debounced press.</b> Identical to the lesson.
+    <span class="why">Without it, one press could start a ring and a second "bounce" press would be ignored with a confusing message.</span></li>
+  <li data-lines="95-106"><b class="what">The ACK arrived.</b> Only an ACK for the ring we're waiting for counts. We print the try number and the total time, and light the LED for 1 second.
+    <span class="why">A late ACK for an older ring (for example, one that arrived just after we gave up) is simply ignored because <code>waiting</code> is false or the number is different.</span></li>
+  <li data-lines="108-119"><b class="what">Timeout: retry or give up.</b> While <code>tries</code> is at most 3, send again (tries 2, 3 and 4); after that, stop waiting, print the error and schedule 10 blink steps.
+    <span class="why">Resetting <code>sentAt</code> inside <code>sendRing</code> gives each try its own full 300 ms. The blinks aren't done here with <code>delay()</code>; we only set a counter, and the code below does them.</span></li>
+  <li data-lines="121-130"><b class="what">LED feedback with millis.</b> The solid light switches off after 1 second. The blink counter goes down every 100 ms; odd numbers mean on, even numbers mean off, so 10 steps are 5 blinks.
+    <span class="why">This is the lesson 3.1 "blink without delay" idea. Because loop never stops, the button and the radio keep working while the LED blinks.</span></li>
+</ol>
+<div class="code" data-file="Doorbell_B.ino — board B" id="projAnsB"><pre>
+// Board B: the chime. Buzzes once per ring and always replies with an ACK
+#include &lt;WiFi.h&gt;
+#include &lt;esp_now.h&gt;
+
+const int BUZZER_PIN = 25;               // passive buzzer
+const int LED_PIN = 4;                   // lights up while it chimes
+
+enum : uint8_t { MSG_RING = 1, MSG_ACK = 2 };
+typedef struct {
+  uint8_t type;
+  uint32_t seq;
+} BellMsg;                               // exact copy of board A's layout
+
+BellMsg incoming;
+uint8_t senderMac[6];
+volatile bool gotRing = false;
+uint32_t lastSeq = 0;                    // number of the last ring we chimed for
+unsigned long lastRingAt = 0;
+int chimeStep = 0;                       // 0 = quiet, 1 = "ding", 2 = "dong"
+unsigned long chimeAt = 0;
+
+void onRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len != sizeof(BellMsg)) return;
+  BellMsg m;
+  memcpy(&amp;m, data, sizeof(m));
+  if (m.type != MSG_RING) return;
+  incoming = m;
+  memcpy(senderMac, info-&gt;src_addr, 6);  // reply to whoever rang
+  gotRing = true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  ledcAttach(BUZZER_PIN, 2000, 8);       // LEDC drives the buzzer (lesson 3.2)
+  WiFi.mode(WIFI_STA);
+  while (!WiFi.STA.started()) delay(10);
+  Serial.print("Chime MAC: ");
+  Serial.println(WiFi.macAddress());
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  esp_now_register_recv_cb(onRecv);
+}
+
+void loop() {
+  if (gotRing) {
+    gotRing = false;
+    if (!esp_now_is_peer_exist(senderMac)) {   // first time: add A as a peer
+      esp_now_peer_info_t peer = {};
+      memcpy(peer.peer_addr, senderMac, 6);
+      peer.channel = 0;
+      peer.encrypt = false;
+      esp_now_add_peer(&amp;peer);
+    }
+    BellMsg ack = {MSG_ACK, incoming.seq};
+    esp_now_send(senderMac, (uint8_t *)&amp;ack, sizeof(ack));   // ALWAYS reply
+
+    bool repeat = (incoming.seq == lastSeq) &amp;&amp; (millis() - lastRingAt &lt; 5000);
+    if (repeat) {
+      Serial.printf("RING #%lu again (a retry): ACK sent, no second chime\n",
+                    (unsigned long)incoming.seq);
+    } else {
+      lastSeq = incoming.seq;
+      lastRingAt = millis();
+      Serial.printf("RING #%lu: ding-dong, ACK sent\n", (unsigned long)incoming.seq);
+      ledcWriteTone(BUZZER_PIN, 880);    // "ding"
+      digitalWrite(LED_PIN, HIGH);
+      chimeStep = 1;
+      chimeAt = millis();
+    }
+  }
+
+  // the two-note chime, without delay()
+  if (chimeStep == 1 &amp;&amp; millis() - chimeAt &gt;= 300) {
+    ledcWriteTone(BUZZER_PIN, 660);      // "dong"
+    chimeStep = 2;
+    chimeAt = millis();
+  } else if (chimeStep == 2 &amp;&amp; millis() - chimeAt &gt;= 400) {
+    ledcWriteTone(BUZZER_PIN, 0);        // silence
+    digitalWrite(LED_PIN, LOW);
+    chimeStep = 0;
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projAnsB">
+  <li data-lines="5-6"><b class="what">Buzzer and LED pins.</b> GPIO25 for the passive buzzer (lesson 3.2) and GPIO4 for the LED.
+    <span class="why">A passive buzzer can play two different notes, which makes the "ding-dong" possible; an active buzzer could only beep.</span></li>
+  <li data-lines="8-12"><b class="what">The same layout as A.</b> Same enum, same struct, same order.
+    <span class="why">If the two copies ever differ, the length or type check quietly throws every message away.</span></li>
+  <li data-lines="14-20"><b class="what">Memory for duplicates and for the chime.</b> <code>lastSeq</code> and <code>lastRingAt</code> remember the last ring we chimed for; <code>chimeStep</code> and <code>chimeAt</code> drive the two notes.
+    <span class="why">Remembering the last number is the whole trick for "retry without ringing twice".</span></li>
+  <li data-lines="22-30"><b class="what">Receiving a RING.</b> Checks, a copy of the message and of the sender's MAC, and a flag.
+    <span class="why">B doesn't need to know A's MAC in advance; it answers whoever rang.</span></li>
+  <li data-lines="35"><b class="what">ledcAttach for the buzzer.</b> The same PWM hardware as lesson 3.2.
+    <span class="why"><code>ledcWriteTone</code> does nothing on a pin that isn't attached.</span></li>
+  <li data-lines="50-58"><b class="what">Always answer.</b> Add A as a peer the first time, then send the ACK with the received number, before anything else.
+    <span class="why">If the previous ACK was lost, A is asking again precisely because it didn't hear us. Staying silent for a repeat would make A give up although the bell rang.</span></li>
+  <li data-lines="60-72"><b class="what">New ring or retry?</b> Same number within 5 seconds means retry: print a note. Otherwise remember the number and time and start the first note.
+    <span class="why">This makes the chime <i>idempotent</i>: doing the same request twice has the same effect as doing it once. The time window protects against A being reset and starting again at 1.</span></li>
+  <li data-lines="75-84"><b class="what">The two notes with millis.</b> After 300 ms switch to 660 Hz; after 400 ms more, silence and LED off.
+    <span class="why">If the chime used <code>delay(700)</code>, a retry arriving during the chime would wait, and A might time out and send yet another retry.</span></li>
+</ol>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">The lesson in three lines</div>
 <p>ESP-NOW moves short messages (up to 250 bytes in v1) between ESP32s by MAC address, with no router, in a few milliseconds; read the MAC after Wi-Fi is on, and add the peer before sending. The message layout is an identical <code>struct</code> on both sides, sent and read with <code>sizeof</code> and <code>memcpy</code>; keep callbacks short and use the core 3 signatures (<code>esp_now_recv_info_t</code>, and from 3.3 on <code>wifi_tx_info_t</code>). "Delivered" is only the radio's confirmation; for certainty, build a reply with a seq and a timeout, and if one side is connected to a router, put everyone on the router's channel.</p></div>
 

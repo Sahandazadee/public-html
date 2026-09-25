@@ -402,7 +402,7 @@ void loop() {
 Woken by the button (rings: 1)
 Woken by the button (rings: 1)
 10 s passed: routine report</div>
-<p>Notice that after a button wake-up, the 10-second count starts again from zero, because every <code>ulTaskNotifyTake</code> call starts a new wait. The weather-station project in lesson <a href="5-6.html#project">5.6</a> uses exactly this pattern: "fetch every 10 minutes, or right now if the settings change".</p>
+<p>Notice that after a button wake-up, the 10-second count starts again from zero, because every <code>ulTaskNotifyTake</code> call starts a new wait. The weather-station project in lesson <a href="5-6.html#weather-station">5.6</a> uses exactly this pattern: "fetch every 10 minutes, or right now if the settings change".</p>
 
 <div class="wokwi" data-board="esp32" data-code-from="rtosNotify">
 <p>Try it in Wokwi: wait 10 seconds for the routine report, then click the green button and watch the report arrive at once, with a short flash of the LED.</p>
@@ -935,10 +935,356 @@ void loop() {
 </details>
 </div>
 
+<h2 id="project">Practice project: a pedestrian crossing run by tasks</h2>
+<div class="project">
+<p class="lede-ish">You're programming the traffic light at a pedestrian crossing. Cars get green until someone presses the "walk" button; then the light warns the drivers, turns red, and gives people 6 seconds to cross. Real crossings have a rule you'll also follow: cars always keep green for a minimum time, so constant button-mashing can't block the road. Each job lives in its own FreeRTOS task, the button reaches its task through an interrupt and a queue, and every task writes to one shared logbook without ever scrambling a line.</p>
+
+<h3 id="project-req">Requirements</h3>
+<ol>
+  <li>All Serial output goes through one <code>logf()</code> function that is protected by a mutex and starts every line with the time in milliseconds, for example <code>[  2041] Button #1: request sent</code>. No two lines are ever mixed.</li>
+  <li>A <b>light task</b> owns both LEDs. By default cars have green: green LED (GPIO26) on, red LED (GPIO4) off, logged as <code>Cars: GREEN</code>.</li>
+  <li>The button on GPIO27 uses an interrupt that only puts the press time into a queue. A <b>button task</b> debounces it (as in lesson example ButtonISR) and counts real presses.</li>
+  <li>After a request, cars keep green for at least 5 seconds in total (counted from the moment green started); if the request comes earlier, the light waits the rest and logs how long.</li>
+  <li>The change: the green LED blinks 3 times (250 ms off, 250 ms on) as a warning, then red is on for 6 seconds ("WALK"), then back to green.</li>
+  <li>Presses while a crossing is already requested or running are logged as ignored and never cause a second crossing.</li>
+  <li>No task busy-waits: every wait is a queue, a notification or <code>vTaskDelay</code>. <code>loop()</code> logs the free stack of both tasks every 10 seconds, and the board runs for 5 minutes of button presses without a watchdog reset.</li>
+</ol>
+
+<h3 id="project-parts">Parts</h3>
+<ul>
+  <li>ESP32 DevKitC, breadboard, jumper wires</li>
+  <li>Red LED + 220 Ω on GPIO4, green LED + 220 Ω on GPIO26 (the two LEDs from this lesson)</li>
+  <li>Push button on GPIO27. The potentiometer on GPIO34 may stay; it isn't used.</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"BTN","name":"Push button (WALK)","img":"button.svg","pins":[["1","to GPIO27"],["4","to GND (diagonal leg)"]]},
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO4 side"],["2","LED side"]]},
+    {"id":"LED1","name":"Red LED (cars stop)","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−), short leg"]]},
+    {"id":"R2","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO26 side"],["2","LED side"]]},
+    {"id":"LED2","name":"Green LED (cars go)","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−), short leg"]]}
+  ],
+  "wires":[["GPIO27","BTN.1","blue"],["BTN.4","GND","black"],["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"],["GPIO26","R2.1","purple"],["R2.2","LED2.A","purple"],["LED2.K","GND","black"]]
+}</script><figcaption>The lesson's circuit: red LED on GPIO4, green LED on GPIO26, the button between GPIO27 and GND (internal pull-up).</figcaption></div>
+
+<h3 id="project-start">Starter code</h3>
+<div class="code" data-file="Crossing.ino (starter)" id="projStart"><pre>
+// Pedestrian crossing (starter): fill in the TODOs
+const int RED_LED = 4;            // cars stop, people walk
+const int GREEN_LED = 26;         // cars go
+const int BUTTON_PIN = 27;        // "walk" button between GPIO27 and GND
+const unsigned long MIN_GREEN_MS = 5000;   // cars always get at least 5 s
+const unsigned long WALK_MS = 6000;        // time for people to cross
+
+QueueHandle_t pressQueue;         // ISR -&gt; buttonTask (press times)
+SemaphoreHandle_t logMutex;       // one writer at a time on Serial
+TaskHandle_t lightHandle = NULL;
+TaskHandle_t buttonHandle = NULL;
+volatile bool busy = false;       // a crossing is waiting or running
+
+void logf(const char *fmt, ...) { // printf-style, safe from any task
+  char buf[96];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  // TODO 1: take logMutex (wait at most 100 ms), print "[millis] text",
+  //         give the mutex back
+}
+
+void IRAM_ATTR onPress() {        // the ISR: only records the time
+  uint32_t now = millis();
+  BaseType_t wokeHigher = pdFALSE;
+  xQueueSendFromISR(pressQueue, &amp;now, &amp;wokeHigher);
+  portYIELD_FROM_ISR(wokeHigher);
+}
+
+void buttonTask(void *param) {
+  uint32_t t;
+  int count = 0;
+  for (;;) {
+    xQueueReceive(pressQueue, &amp;t, portMAX_DELAY);  // sleep until an edge
+    // TODO 3: debounce (30 ms, reset the queue, check the pin is LOW),
+    //         count the press, then:
+    // TODO 6: if busy, log "ignored"; otherwise log "request sent" and
+    //         xTaskNotifyGive(lightHandle)
+  }
+}
+
+void lightTask(void *param) {
+  pinMode(RED_LED, OUTPUT);
+  pinMode(GREEN_LED, OUTPUT);
+  for (;;) {
+    // TODO 2: cars green (GREEN_LED on, RED_LED off), log it, remember
+    //         the time, then sleep in ulTaskNotifyTake until a request
+    // TODO 4: set busy = true; if green has lasted less than MIN_GREEN_MS,
+    //         log and vTaskDelay the rest
+    // TODO 5: blink green 3 times (250 ms off / 250 ms on), then red on
+    //         for WALK_MS; then forget extra rings and set busy = false
+    vTaskDelay(pdMS_TO_TICKS(1000));   // remove this line when you are done
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pressQueue = xQueueCreate(20, sizeof(uint32_t));
+  logMutex = xSemaphoreCreateMutex();
+  if (pressQueue == NULL || logMutex == NULL) {
+    Serial.println("Out of memory!");
+    while (true) delay(1000);
+  }
+  // TODO 7: create lightTask (priority 1) and buttonTask (priority 2),
+  //         3072 bytes each, on core 1, saving their handles
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), onPress, FALLING);
+}
+
+void loop() {                     // loop is only the "health report"
+  delay(10000);
+  logf("health: light stack free %u B, button stack free %u B",
+       (unsigned)uxTaskGetStackHighWaterMark(lightHandle),
+       (unsigned)uxTaskGetStackHighWaterMark(buttonHandle));
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="2-12"><b class="what">Pins, times and the shared objects.</b> One queue, one mutex, two task handles and the <code>busy</code> flag are declared for you.
+    <span class="why">Seeing all the shared things in one place makes it clear which task touches what.</span></li>
+  <li data-lines="14-22"><b class="what">logf, half done.</b> The text is already formatted into <code>buf</code>; TODO 1 is the locked print.
+    <span class="why">Do this first: until it's done you see no output at all.</span></li>
+  <li data-lines="24-29"><b class="what">The ISR, given.</b> Exactly the lesson's: record the time, put it in the queue.
+    <span class="why">An ISR must stay tiny; the thinking happens in the button task.</span></li>
+  <li data-lines="31-55"><b class="what">Two task shells.</b> Each already has its endless <code>for (;;)</code>; the light task has a temporary <code>vTaskDelay</code> so the skeleton never busy-waits.
+    <span class="why">A task function must never return, and an empty endless loop would starve the other tasks.</span></li>
+  <li data-lines="57-69"><b class="what">setup.</b> The queue, mutex and interrupt are created; TODO 7 creates the two tasks.
+    <span class="why">Queue and mutex must exist before any task or ISR uses them.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>FreeRTOS is fully simulated in Wokwi, so you can build and test the whole project there. No library is needed. Click the green WALK button; Wokwi's button bounces a little, like a real one, so your debounce gets a real test.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 150, "left": -150, "attrs": { "color": "green", "label": "WALK" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "red" } },
+    { "type": "wokwi-resistor", "id": "r2", "top": 190, "left": 250, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led2", "top": 110, "left": 280, "attrs": { "color": "green" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:27", "btn1:1.r", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ],
+    [ "esp:26", "r2:2", "purple", [] ],
+    [ "r2:1", "led2:A", "purple", [] ],
+    [ "led2:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>Hint 1</summary>
+<p>The light task is a straight story from top to bottom inside <code>for (;;)</code>: green, wait for a request, maybe wait for the minimum green, blink, red, wait, back to the top. Because it's a task, you can write it with <code>vTaskDelay</code> in a simple order, without any <code>millis()</code> bookkeeping.</p></details>
+<details class="hint"><summary>Hint 2</summary>
+<p>Save <code>millis()</code> in a local variable when green starts. After <code>ulTaskNotifyTake</code> returns, <code>millis() - greenSince</code> is how long green has lasted. If that's less than 5000, <code>vTaskDelay(pdMS_TO_TICKS(5000 - greenFor))</code>.</p></details>
+<details class="hint"><summary>Hint 3</summary>
+<p>Set <code>busy = true</code> right after the light task accepts a request, and back to <code>false</code> at the end of the walk time. Just before that, <code>ulTaskNotifyTake(pdTRUE, 0)</code> (wait 0 ticks) throws away any notification that arrived in the meantime, so an extra press can't start a second crossing.</p></details>
+
+<details class="expect"><summary>What should you see?</summary>
+<p>Press WALK about 2 seconds after starting, then once more during the red phase (your times and stack numbers will differ slightly):</p>
+<pre class="serial">[   312] Cars: GREEN
+[  2041] Button #1: request sent
+[  2041] Request: cars keep green 3271 ms more
+[  5312] Cars: green blinking (warning)
+[  6812] Cars: RED, people: WALK for 6 s
+[  8120] Button #2: crossing already on its way, ignored
+[ 10300] health: light stack free 1644 B, button stack free 1720 B
+[ 12812] Cars: GREEN</pre>
+<p>Check the arithmetic: green started at 312, the request came at 2041, so green had lasted 1729 ms and needs 5000 − 1729 = 3271 ms more. 2041 + 3271 = 5312 (blinking starts), + 1500 ms of blinking = 6812 (red), + 6000 = 12812 (green again).</p>
+<ul>
+  <li><b>Req. 1:</b> press rapidly many times: every line is complete and starts with <code>[</code>; no two messages are glued together.</li>
+  <li><b>Req. 2 to 5:</b> wait 10 seconds on green, then press: no "keep green" line; blinking starts at once. Count the blinks: exactly 3, then 6 seconds of red.</li>
+  <li><b>Req. 6:</b> press 5 times during the blinking and red: 5 "ignored" lines and exactly one crossing.</li>
+  <li><b>Req. 7:</b> the health line appears every 10 seconds and the free stack numbers stay roughly constant (hundreds of bytes or more, never close to 0). After 5 minutes, no <code>task_wdt</code> message and no reboot.</li>
+</ul>
+</details>
+
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="Crossing.ino" id="projAns"><pre>
+// Pedestrian crossing: light task + button task (ISR -&gt; queue) + safe logger
+const int RED_LED = 4;            // cars stop, people walk
+const int GREEN_LED = 26;         // cars go
+const int BUTTON_PIN = 27;        // "walk" button between GPIO27 and GND
+const unsigned long MIN_GREEN_MS = 5000;   // cars always get at least 5 s
+const unsigned long WALK_MS = 6000;        // time for people to cross
+
+QueueHandle_t pressQueue;         // ISR -&gt; buttonTask (press times)
+SemaphoreHandle_t logMutex;       // one writer at a time on Serial
+TaskHandle_t lightHandle = NULL;
+TaskHandle_t buttonHandle = NULL;
+volatile bool busy = false;       // a crossing is waiting or running
+
+void logf(const char *fmt, ...) { // printf-style, safe from any task
+  char buf[96];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  if (xSemaphoreTake(logMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    Serial.printf("[%6lu] %s\n", millis(), buf);
+    xSemaphoreGive(logMutex);
+  }
+}
+
+void IRAM_ATTR onPress() {        // the ISR: only records the time
+  uint32_t now = millis();
+  BaseType_t wokeHigher = pdFALSE;
+  xQueueSendFromISR(pressQueue, &amp;now, &amp;wokeHigher);
+  portYIELD_FROM_ISR(wokeHigher);
+}
+
+void buttonTask(void *param) {
+  uint32_t t;
+  int count = 0;
+  for (;;) {
+    xQueueReceive(pressQueue, &amp;t, portMAX_DELAY);  // sleep until an edge
+    vTaskDelay(pdMS_TO_TICKS(30));                 // let the bounce die down
+    xQueueReset(pressQueue);                       // drop the bounce edges
+    if (digitalRead(BUTTON_PIN) != LOW) continue;  // released: not a press
+    count++;
+    if (busy) {
+      logf("Button #%d: crossing already on its way, ignored", count);
+    } else {
+      logf("Button #%d: request sent", count);
+      xTaskNotifyGive(lightHandle);                // ring the light task's bell
+    }
+  }
+}
+
+void lightTask(void *param) {
+  pinMode(RED_LED, OUTPUT);
+  pinMode(GREEN_LED, OUTPUT);
+  for (;;) {
+    digitalWrite(RED_LED, LOW);
+    digitalWrite(GREEN_LED, HIGH);
+    unsigned long greenSince = millis();
+    logf("Cars: GREEN");
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);       // sleep until someone asks
+    busy = true;
+    unsigned long greenFor = millis() - greenSince;
+    if (greenFor &lt; MIN_GREEN_MS) {
+      logf("Request: cars keep green %lu ms more", MIN_GREEN_MS - greenFor);
+      vTaskDelay(pdMS_TO_TICKS(MIN_GREEN_MS - greenFor));
+    }
+    logf("Cars: green blinking (warning)");
+    for (int i = 0; i &lt; 3; i++) {
+      digitalWrite(GREEN_LED, LOW);
+      vTaskDelay(pdMS_TO_TICKS(250));
+      digitalWrite(GREEN_LED, HIGH);
+      vTaskDelay(pdMS_TO_TICKS(250));
+    }
+    digitalWrite(GREEN_LED, LOW);
+    digitalWrite(RED_LED, HIGH);
+    logf("Cars: RED, people: WALK for %lu s", WALK_MS / 1000);
+    vTaskDelay(pdMS_TO_TICKS(WALK_MS));
+    ulTaskNotifyTake(pdTRUE, 0);                   // forget extra rings
+    busy = false;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pressQueue = xQueueCreate(20, sizeof(uint32_t));
+  logMutex = xSemaphoreCreateMutex();
+  if (pressQueue == NULL || logMutex == NULL) {
+    Serial.println("Out of memory!");
+    while (true) delay(1000);
+  }
+  xTaskCreatePinnedToCore(lightTask, "light", 3072, NULL, 1, &amp;lightHandle, 1);
+  xTaskCreatePinnedToCore(buttonTask, "button", 3072, NULL, 2, &amp;buttonHandle, 1);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), onPress, FALLING);
+}
+
+void loop() {                     // loop is only the "health report"
+  delay(10000);
+  logf("health: light stack free %u B, button stack free %u B",
+       (unsigned)uxTaskGetStackHighWaterMark(lightHandle),
+       (unsigned)uxTaskGetStackHighWaterMark(buttonHandle));
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="2-6"><b class="what">Pins and times.</b> Red on GPIO4, green on GPIO26, the button on GPIO27; 5 seconds of minimum green and 6 seconds to cross.
+    <span class="why">Named constants make the rules of the crossing readable and easy to change in one place.</span></li>
+  <li data-lines="8-12"><b class="what">The shared objects.</b> The queue carries press times from the ISR, the mutex guards Serial, the handles let us notify a task and measure its stack, and <code>busy</code> tells the button task whether a crossing is on its way.
+    <span class="why"><code>busy</code> is <code>volatile</code> because one task writes it and another reads it. It's a single <code>bool</code>, so reading it is safe without a lock.</span></li>
+  <li data-lines="14-19"><b class="what">A printf of your own.</b> The <code>...</code> in the parameter list means "any number of extra arguments". <code>va_list</code>, <code>va_start</code> and <code>va_end</code> collect them, and <code>vsnprintf</code> formats them into <code>buf</code> just like <code>snprintf</code> would.
+    <span class="why">This is new C++, but you can use it as a recipe: it lets every task call <code>logf("x=%d", x)</code> exactly like <code>Serial.printf</code>. Formatting happens <b>before</b> taking the lock, so the lock is held only for the short print.</span></li>
+  <li data-lines="20-23"><b class="what">The locked print.</b> Take the mutex (waiting at most 100 ms), print one full line with the time, give the mutex back.
+    <span class="why">Without the lock, two tasks printing at the same moment can interleave their characters. With a time limit instead of <code>portMAX_DELAY</code>, a stuck task can never freeze the logger for everyone.</span></li>
+  <li data-lines="26-31"><b class="what">The ISR.</b> Unchanged from the lesson.
+    <span class="why">It only records the time and wakes the button task; no Serial, no delay.</span></li>
+  <li data-lines="37-41"><b class="what">Debouncing in the button task.</b> Sleep until an edge arrives, wait 30 ms, throw away the other bounce edges, and count the press only if the pin is still LOW.
+    <span class="why">This is the lesson's ButtonISR pattern: one real press becomes exactly one count, and a release (which also bounces) is ignored.</span></li>
+  <li data-lines="42-47"><b class="what">Request or ignore.</b> If a crossing is already on its way, log it as ignored; otherwise log and ring the light task's bell with <code>xTaskNotifyGive</code>.
+    <span class="why">A notification carries no data, only "wake up", which is exactly what a crossing request is. It's lighter than a second queue.</span></li>
+  <li data-lines="55-59"><b class="what">Green, then sleep.</b> Set the LEDs, remember when green started, log, and sleep in <code>ulTaskNotifyTake</code> with no time limit.
+    <span class="why">While sleeping, the task uses no CPU at all; the idle task runs and the watchdog stays happy.</span></li>
+  <li data-lines="60-65"><b class="what">Minimum green.</b> Mark the crossing as busy, then, if green has lasted less than 5 seconds, sleep for the rest.
+    <span class="why"><code>busy</code> is set before this wait, so presses during it are also ignored. <code>MIN_GREEN_MS - greenFor</code> can't go negative because we only subtract when <code>greenFor</code> is smaller.</span></li>
+  <li data-lines="66-72"><b class="what">The warning blink.</b> Three times off and on, 250 ms each.
+    <span class="why">In a task, a sequence in time is just lines in order with <code>vTaskDelay</code> between them. Compare how much bookkeeping this would need in a single <code>loop()</code> with <code>millis()</code>.</span></li>
+  <li data-lines="73-76"><b class="what">Red: people walk.</b> Green off, red on, 6 seconds.
+    <span class="why">Only this task ever touches the LEDs, so they never need a lock: "every piece of hardware has one owner".</span></li>
+  <li data-lines="77-78"><b class="what">Forget the extra rings, then free the crossing.</b> <code>ulTaskNotifyTake(pdTRUE, 0)</code> clears any notification without waiting; then <code>busy</code> goes back to false.
+    <span class="why">A press in the tiny moment between accepting a request and setting <code>busy</code> could still have rung the bell. Clearing it here guarantees one request, one crossing.</span></li>
+  <li data-lines="85-93"><b class="what">setup in the safe order.</b> Queue and mutex first (and a check that they exist), then the tasks, and the interrupt last.
+    <span class="why">If the interrupt were attached first, an early press would call <code>xQueueSendFromISR</code> on a queue that doesn't exist yet and crash. The button task gets priority 2 so it responds quickly; its work is very short.</span></li>
+  <li data-lines="96-101"><b class="what">loop as a health report.</b> Every 10 seconds it logs the smallest free stack each task has ever had.
+    <span class="why"><code>delay</code> in loop is fine: it is <code>vTaskDelay</code> in disguise and lets the other tasks run. If a free-stack number ever falls toward zero, raise that task's 3072 bytes before it overflows.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p>The finished crossing in Wokwi, with the same diagram.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 150, "left": -150, "attrs": { "color": "green", "label": "WALK" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "red" } },
+    { "type": "wokwi-resistor", "id": "r2", "top": 190, "left": 250, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led2", "top": 110, "left": 280, "attrs": { "color": "green" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:27", "btn1:1.r", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ],
+    [ "esp:26", "r2:2", "purple", [] ],
+    [ "r2:1", "led2:A", "purple", [] ],
+    [ "led2:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">The lesson in three lines</div>
 <p>FreeRTOS runs each job in its own task: give the stack size in bytes, choose priorities sensibly, and make every loop sleep or wait somewhere so the watchdog doesn't reset the board. Pass data with a queue, protect shared resources with a mutex, wake a task with a notification, and from an interrupt use only the <code>FromISR</code> functions. Bring in a task only when there's a reason: a slow, blocking job or completely different timing.</p></div>
 
-<p>In the next lesson (<a href="5-5.html">5.5</a>) your device learns to update itself over Wi-Fi (OTA) and to keep files in its own flash memory (LittleFS). The tasks, queue, mutex and notification you learned here all come back in lesson <a href="5-6.html#project">5.6</a>, where a weather station runs three tasks side by side.</p>
+<p>In the next lesson (<a href="5-5.html">5.5</a>) your device learns to update itself over Wi-Fi (OTA) and to keep files in its own flash memory (LittleFS). The tasks, queue, mutex and notification you learned here all come back in lesson <a href="5-6.html#weather-station">5.6</a>, where a weather station runs three tasks side by side.</p>
 
 </article>
 </body>

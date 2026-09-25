@@ -957,6 +957,369 @@ void loop() {}
 </details>
 </div>
 
+<h2 id="project">پروژه تمرینی: دوربین عکس با یک دکمه</h2>
+<div class="project">
+<p class="lede-ish">ESP32-CAM را به یک دوربین کوچک «بزن و بگیر» تبدیل کن: دکمه را فشار می‌دهی، فلاش روشن می‌شود و یک عکس شماره‌دار روی کارت SD ذخیره می‌شود. LED قرمز کوچک پشت برد به تو می‌گوید کار موفق بود یا نه، پس کامپیوتر لازم نیست کنارش باشد. وسیله‌ای عالی برای کنار دانخوری پرنده‌ها، یک سری عکس «قبل و بعد» برای نمایشگاه علمی، یا تله‌دوربینی که با دست فعالش می‌کنی.</p>
+
+<h3 id="project-req">نیازمندی‌ها</h3>
+<ol>
+  <li>یک دکمه فشاری بین <b>GPIO13</b> و GND از Pull-up داخلی استفاده می‌کند (بدون مقاومت): پایه وقتی دکمه رها است HIGH و وقتی فشار داده شده LOW می‌خواند.</li>
+  <li>هر فشار (با حذف لرزش) دقیقا یک عکس می‌گیرد. نگه داشتن دکمه عکس بیشتری نمی‌گیرد؛ فشارهای حین ذخیره نادیده گرفته می‌شوند.</li>
+  <li>فلاش سفید (GPIO4) ۲۰۰ میلی‌ثانیه قبل از گرفتن عکس روشن و بلافاصله بعد از آن خاموش می‌شود.</li>
+  <li>عکس‌ها به اسم <code>/snap_00001.jpg</code>، <code>/snap_00002.jpg</code> و... ذخیره می‌شوند و شماره‌گذاری بعد از ریست ادامه پیدا می‌کند (هیچ فایلی رونویسی نمی‌شود). Serial Monitor اسم فایل، اندازه‌اش و کل زمان عکس گرفتن را نشان می‌دهد.</li>
+  <li>LED قرمز روی GPIO33 (LOW یعنی روشن) بعد از ذخیره موفق یک بار (۲۰۰ میلی‌ثانیه) و بعد از هر شکست (کارت نیست، عکس گرفته نشد، نوشتن نشد) سه بار سریع (۱۰۰ میلی‌ثانیه) چشمک می‌زند. اگر خود دوربین راه نیفتد، تا ابد آرام چشمک می‌زند.</li>
+</ol>
+
+<h3 id="project-parts">قطعه‌ها</h3>
+<ul>
+  <li>ESP32-CAM (مدل AI-Thinker) با پایه پروگرامر ESP32-CAM-MB (یا یک مبدل USB به سریال)</li>
+  <li>کارت microSD با ظرفیت ۴ تا ۳۲ گیگابایت، فرمت FAT32</li>
+  <li>یک دکمه فشاری و دو سیم جامپر ماده‌به‌ماده (یا ماده‌به‌نر)</li>
+  <li>شارژر USB پنج ولت، ۲ آمپر برای استفاده دور از کامپیوتر</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32-CAM (AI-Thinker)",
+  "parts":[
+    {"id":"BTN","name":"دکمه فشاری","img":"button.svg","pins":[["1","یک طرف دکمه"],["2","طرف روبه‌رو (قطری)"]]}
+  ],
+  "wires":[["GPIO13","BTN.1","blue"],["BTN.2","GND","black"]]
+}</script><figcaption>فقط یک دکمه اضافه می‌شود: بین پین <b>IO13</b> و یکی از پین‌های <b>GND</b>. فلاش (GPIO4) و LED قرمز (GPIO33) از قبل روی برد هستند. GPIO13 آزاد است چون کارت SD را در حالت ۱ بیتی اجرا می‌کنیم (درس را ببین)؛ این دوربین پایه‌های ثابت خودش را دارد، پس نقشه پایه‌های همیشگی دوره اینجا صدق نمی‌کند. موقع وصل کردن برق، دکمه را نگه ندار.</figcaption></div>
+
+<h3 id="project-start">کد شروع</h3>
+<div class="code" data-file="SnapCam.ino (کد شروع)" id="projStart"><pre>
+// دوربین عکس با دکمه (کد شروع): جاهای TODO را پر کن
+#include "esp_camera.h"
+#include "FS.h"
+#include "SD_MMC.h"
+
+// پین‌های دوربین برد AI-Thinker ESP32-CAM
+#define PWDN_GPIO_NUM  32
+#define RESET_GPIO_NUM -1
+#define XCLK_GPIO_NUM   0
+#define SIOD_GPIO_NUM  26
+#define SIOC_GPIO_NUM  27
+#define Y9_GPIO_NUM    35
+#define Y8_GPIO_NUM    34
+#define Y7_GPIO_NUM    39
+#define Y6_GPIO_NUM    36
+#define Y5_GPIO_NUM    21
+#define Y4_GPIO_NUM    19
+#define Y3_GPIO_NUM    18
+#define Y2_GPIO_NUM     5
+#define VSYNC_GPIO_NUM 25
+#define HREF_GPIO_NUM  23
+#define PCLK_GPIO_NUM  22
+
+const int FLASH_LED = 4;       // فلاش سفید (در حالت ۱ بیتی SD آزاد است)
+const int RED_LED = 33;        // LED قرمز کوچک پشت برد: LOW یعنی روشن
+const int BUTTON_PIN = 13;     // دکمه به GND (در حالت ۱ بیتی SD آزاد است)
+
+uint32_t photoNum = 0;
+bool cardOk = false;
+int lastReading = HIGH, stableState = HIGH;
+unsigned long lastChange = 0;
+
+bool initCamera() {
+  camera_config_t config = {};
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = Y2_GPIO_NUM;
+  config.pin_d1 = Y3_GPIO_NUM;
+  config.pin_d2 = Y4_GPIO_NUM;
+  config.pin_d3 = Y5_GPIO_NUM;
+  config.pin_d4 = Y6_GPIO_NUM;
+  config.pin_d5 = Y7_GPIO_NUM;
+  config.pin_d6 = Y8_GPIO_NUM;
+  config.pin_d7 = Y9_GPIO_NUM;
+  config.pin_xclk = XCLK_GPIO_NUM;
+  config.pin_pclk = PCLK_GPIO_NUM;
+  config.pin_vsync = VSYNC_GPIO_NUM;
+  config.pin_href = HREF_GPIO_NUM;
+  config.pin_sccb_sda = SIOD_GPIO_NUM;
+  config.pin_sccb_scl = SIOC_GPIO_NUM;
+  config.pin_pwdn = PWDN_GPIO_NUM;
+  config.pin_reset = RESET_GPIO_NUM;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG;
+  config.frame_size = FRAMESIZE_UXGA;      // 1600x1200
+  config.jpeg_quality = 10;                // 0 تا 63؛ کمتر = بهتر
+  config.fb_count = 1;
+  config.fb_location = CAMERA_FB_IN_PSRAM;
+  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+  esp_err_t err = esp_camera_init(&amp;config);
+  if (err != ESP_OK) {
+    Serial.printf("Camera init failed: 0x%x\n", err);
+    return false;
+  }
+  return true;
+}
+
+uint32_t findNextNumber() {
+  char path[32];
+  uint32_t n = 1;
+  while (true) {
+    snprintf(path, sizeof(path), "/snap_%05lu.jpg", (unsigned long)n);
+    if (!SD_MMC.exists(path)) return n;
+    n++;
+  }
+}
+
+void blinkRed(int times, int ms) {         // کوتاه است، پس delay() اینجا اشکالی ندارد
+  // TODO 5: LED قرمز را times بار چشمک بزن (یادت باشد: LOW یعنی روشن)
+}
+
+bool takeSnapshot() {
+  // TODO 3: فلاش روشن، ۲۰۰ میلی‌ثانیه صبر، فریم کهنه را دور بریز، عکس بگیر،
+  //         فلاش خاموش؛ اگر fb برابر NULL بود "Capture failed" چاپ کن و false برگردان
+  // TODO 4: fb-&gt;buf (به طول fb-&gt;len بایت) را با photoNum به اسم /snap_%05lu.jpg ذخیره کن،
+  //         بررسی کن همه بایت‌ها نوشته شده، اندازه و زمان را چاپ کن،
+  //         photoNum++ فقط در صورت موفقیت، و همیشه esp_camera_fb_return(fb)
+  return false;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(FLASH_LED, OUTPUT);
+  digitalWrite(FLASH_LED, LOW);
+  pinMode(RED_LED, OUTPUT);
+  digitalWrite(RED_LED, HIGH);             // LED قرمز خاموش
+  // TODO 1: پایه دکمه ورودی با مقاومت Pull-up داخلی
+  if (!psramFound() || !initCamera()) {
+    Serial.println("No camera: check the board choice and PSRAM");
+    while (true) blinkRed(1, 500);         // چشمک آرام تا ابد = خراب
+  }
+  if (SD_MMC.begin("/sdcard", true)) {     // true = حالت ۱ بیتی
+    cardOk = true;
+    photoNum = findNextNumber();
+    Serial.printf("Ready. Next photo: #%lu. Press the button!\n", (unsigned long)photoNum);
+  } else {
+    Serial.println("SD card mount failed: insert a FAT32 card and press RST");
+  }
+}
+
+void loop() {
+  // TODO 2: لرزش دکمه را حذف کن (۳۰ میلی‌ثانیه، مثل درس ۵.۲) و با یک فشار
+  //         واقعی takeSnapshot() را صدا بزن (فقط اگر cardOk)، بعد چشمک بزن:
+  //         ۱ چشمک ۲۰۰ میلی‌ثانیه‌ای = ذخیره شد، ۳ چشمک ۱۰۰ میلی‌ثانیه‌ای = شکست
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="24-31"><b class="what">سه پایه و وضعیت.</b> فلاش، LED قرمز و دکمه، به اضافه شماره عکس بعدی، پرچم «کارت سالم است» و متغیرهای حذف لرزش.
+    <span class="why">هر سه پایه فقط به این دلیل آزادند که کارت در حالت ۱ بیتی کار می‌کند؛ برای همین <code>SD_MMC.begin("/sdcard", true)</code> در setup مهم است.</span></li>
+  <li data-lines="33-76"><b class="what">آماده: دوربین و شماره‌گذاری.</b> <code>initCamera</code> همان کد درس است؛ <code>findNextNumber</code> همان جست‌وجوی درس با اسم <code>snap_</code>.
+    <span class="why">این بخش‌ها در پروژه دوربین زمان‌گذر توضیح داده شدند؛ کار تو دکمه، فلاش و بازخورد است.</span></li>
+  <li data-lines="78-89"><b class="what">TODO 3، 4 و 5: دو تابعی که باید پر کنی.</b> <code>takeSnapshot</code> فقط وقتی <code>true</code> برمی‌گرداند که عکس واقعا روی کارت باشد.
+    <span class="why">یک جواب روشن «بله/نه» به loop اجازه می‌دهد بدون دانستن جزئیات، علامت درست LED را انتخاب کند.</span></li>
+  <li data-lines="91-115"><b class="what">setup تقریبا آماده است؛ loop خالی است.</b> TODO 1 پایه دکمه را تنظیم می‌کند و TODO 2 حذف لرزش و تصمیم‌گیری است.
+    <span class="why">بقیه setup (دوربین، کارت، شماره‌گذاری) همان درس است.</span></li>
+</ol>
+<div class="callout info"><div class="ct">این را روی برد خودت بساز</div>
+<p>Wokwi نه ESP32-CAM دارد نه دوربین، پس این پروژه به برد واقعی نیاز دارد. برد <b>AI Thinker ESP32-CAM</b> را انتخاب کن (با این کار PSRAM فعال می‌شود)، از طریق پایه MB آپلود کن، RST را بزن و Serial Monitor را با سرعت 115200 باز کن.</p></div>
+
+<details class="hint"><summary>راهنمایی ۱</summary>
+<p>حذف لرزش همان روش درس ۵.۲ است: به یاد بسپار عدد خام آخرین بار کی عوض شد، و وضعیت پایدار تازه را فقط بعد از ۳۰ میلی‌ثانیه آرامش بپذیر. فقط وقتی واکنش نشان بده که وضعیت پایدار <code>LOW</code> می‌شود.</p></details>
+<details class="hint"><summary>راهنمایی ۲</summary>
+<p>در <code>takeSnapshot</code> ترتیب مهم است: فلاش روشن ← <code>delay(200)</code> ← یک فریم بگیر و فورا پس بده (قبل از نور گرفته شده بود) ← فریم اصلی را بگیر ← فلاش خاموش. بعد فایل را بنویس، و فریم را با <code>esp_camera_fb_return(fb)</code> پس بده، چه نوشتن موفق بود چه نه.</p></details>
+<details class="hint"><summary>راهنمایی ۳</summary>
+<p><code>file.write(fb-&gt;buf, fb-&gt;len)</code> تعداد بایت‌هایی را که نوشته برمی‌گرداند. آن را با <code>fb-&gt;len</code> مقایسه کن: کارت پر بایت‌های کمتری می‌نویسد، و می‌خواهی این را شکست گزارش کنی نه موفقیت.</p></details>
+
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>بعد از یک ریست، با دو عکسی که از قبل روی کارت است، و بعد سه فشار (اندازه‌ها و زمان‌ها به صحنه بستگی دارد):</p>
+<pre class="serial">Ready. Next photo: #3. Press the button!
+Snap #3 saved: /snap_00003.jpg (163208 bytes, 742 ms)
+Snap #4 saved: /snap_00004.jpg (171544 bytes, 736 ms)
+Snap #5 saved: /snap_00005.jpg (158930 bytes, 751 ms)</pre>
+<p>بدون کارت: <code>SD card mount failed: insert a FAT32 card and press RST</code>، و هر فشار سه چشمک سریع قرمز می‌دهد.</p>
+<ul>
+  <li><b>نیازمندی ۱ و ۲:</b> ۵ بار با آهنگ یکنواخت فشار بده: دقیقا ۵ فایل تازه. دکمه را ۳ ثانیه نگه دار: فقط یک فایل.</li>
+  <li><b>نیازمندی ۳:</b> از یک گوشه تاریک اتاق عکس بگیر: تصویر با فلاش روشن شده، نه تاریک. فلاش خیلی کمتر از یک ثانیه روشن است.</li>
+  <li><b>نیازمندی ۴:</b> بین عکس‌ها RST را بزن، بعد کارت را در کامپیوتر بگذار: شماره‌ها بدون جاافتادگی و بدون فایل رونویسی‌شده ادامه دارند.</li>
+  <li><b>نیازمندی ۵:</b> هر فشار موفق یک چشمک قرمز می‌دهد؛ کارت را (با برد روشن) بیرون بکش و فشار بده: سه چشمک سریع.</li>
+</ul>
+<p><b>اگر کار نکرد:</b> <code>Camera init failed</code> یا چشمک آرام دائمی: برد اشتباه انتخاب شده یا منبع تغذیه ضعیف است (از شارژر ۲ آمپری استفاده کن). عکس‌ها ذخیره می‌شوند ولی فلاش حین نوشتن هم سوسو می‌زند: کارت بدون <code>true</code> (حالت ۴ بیتی) mount شده. با فشار هیچ اتفاقی نمی‌افتد: بررسی کن دکمه IO13 را به GND وصل کند و پایه‌هایی که استفاده کرده‌ای همان‌هایی باشند که با فشار به هم وصل می‌شوند.</p>
+</details>
+
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="SnapCam.ino" id="projAns"><pre>
+// دوربین عکس با دکمه: فشار = فلاش + یک JPEG شماره‌دار روی کارت SD
+#include "esp_camera.h"
+#include "FS.h"
+#include "SD_MMC.h"
+
+// پین‌های دوربین برد AI-Thinker ESP32-CAM
+#define PWDN_GPIO_NUM  32
+#define RESET_GPIO_NUM -1
+#define XCLK_GPIO_NUM   0
+#define SIOD_GPIO_NUM  26
+#define SIOC_GPIO_NUM  27
+#define Y9_GPIO_NUM    35
+#define Y8_GPIO_NUM    34
+#define Y7_GPIO_NUM    39
+#define Y6_GPIO_NUM    36
+#define Y5_GPIO_NUM    21
+#define Y4_GPIO_NUM    19
+#define Y3_GPIO_NUM    18
+#define Y2_GPIO_NUM     5
+#define VSYNC_GPIO_NUM 25
+#define HREF_GPIO_NUM  23
+#define PCLK_GPIO_NUM  22
+
+const int FLASH_LED = 4;       // فلاش سفید (در حالت ۱ بیتی SD آزاد است)
+const int RED_LED = 33;        // LED قرمز کوچک پشت برد: LOW یعنی روشن
+const int BUTTON_PIN = 13;     // دکمه به GND (در حالت ۱ بیتی SD آزاد است)
+
+uint32_t photoNum = 0;
+bool cardOk = false;
+int lastReading = HIGH, stableState = HIGH;
+unsigned long lastChange = 0;
+
+bool initCamera() {
+  camera_config_t config = {};
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = Y2_GPIO_NUM;
+  config.pin_d1 = Y3_GPIO_NUM;
+  config.pin_d2 = Y4_GPIO_NUM;
+  config.pin_d3 = Y5_GPIO_NUM;
+  config.pin_d4 = Y6_GPIO_NUM;
+  config.pin_d5 = Y7_GPIO_NUM;
+  config.pin_d6 = Y8_GPIO_NUM;
+  config.pin_d7 = Y9_GPIO_NUM;
+  config.pin_xclk = XCLK_GPIO_NUM;
+  config.pin_pclk = PCLK_GPIO_NUM;
+  config.pin_vsync = VSYNC_GPIO_NUM;
+  config.pin_href = HREF_GPIO_NUM;
+  config.pin_sccb_sda = SIOD_GPIO_NUM;
+  config.pin_sccb_scl = SIOC_GPIO_NUM;
+  config.pin_pwdn = PWDN_GPIO_NUM;
+  config.pin_reset = RESET_GPIO_NUM;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG;
+  config.frame_size = FRAMESIZE_UXGA;      // 1600x1200
+  config.jpeg_quality = 10;                // 0 تا 63؛ کمتر = بهتر
+  config.fb_count = 1;
+  config.fb_location = CAMERA_FB_IN_PSRAM;
+  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+  esp_err_t err = esp_camera_init(&amp;config);
+  if (err != ESP_OK) {
+    Serial.printf("Camera init failed: 0x%x\n", err);
+    return false;
+  }
+  return true;
+}
+
+uint32_t findNextNumber() {
+  char path[32];
+  uint32_t n = 1;
+  while (true) {
+    snprintf(path, sizeof(path), "/snap_%05lu.jpg", (unsigned long)n);
+    if (!SD_MMC.exists(path)) return n;
+    n++;
+  }
+}
+
+void blinkRed(int times, int ms) {         // کوتاه است، پس delay() اینجا اشکالی ندارد
+  for (int i = 0; i &lt; times; i++) {
+    digitalWrite(RED_LED, LOW);            // روشن (منطق برعکس)
+    delay(ms);
+    digitalWrite(RED_LED, HIGH);           // خاموش
+    delay(ms);
+  }
+}
+
+bool takeSnapshot() {
+  unsigned long t0 = millis();
+  digitalWrite(FLASH_LED, HIGH);           // اول فلاش روشن...
+  delay(200);                              // ...تا نوردهی خودکار نور را ببیند
+  camera_fb_t *old = esp_camera_fb_get();  // فریم کهنه، گرفته‌شده قبل از فلاش
+  if (old) esp_camera_fb_return(old);
+  camera_fb_t *fb = esp_camera_fb_get();   // عکس اصلی
+  digitalWrite(FLASH_LED, LOW);            // فلاش فورا خاموش
+  if (!fb) {
+    Serial.println("Capture failed");
+    return false;
+  }
+  char path[32];
+  snprintf(path, sizeof(path), "/snap_%05lu.jpg", (unsigned long)photoNum);
+  bool ok = false;
+  File file = SD_MMC.open(path, FILE_WRITE);
+  if (file) {
+    ok = file.write(fb-&gt;buf, fb-&gt;len) == fb-&gt;len;   // همه بایت‌ها نوشته شد؟
+    file.close();
+  }
+  if (ok) {
+    Serial.printf("Snap #%lu saved: %s (%u bytes, %lu ms)\n", (unsigned long)photoNum,
+                  path, (unsigned)fb-&gt;len, millis() - t0);
+    photoNum++;
+  } else {
+    Serial.printf("Could not write %s\n", path);
+  }
+  esp_camera_fb_return(fb);
+  return ok;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(FLASH_LED, OUTPUT);
+  digitalWrite(FLASH_LED, LOW);
+  pinMode(RED_LED, OUTPUT);
+  digitalWrite(RED_LED, HIGH);             // LED قرمز خاموش
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  if (!psramFound() || !initCamera()) {
+    Serial.println("No camera: check the board choice and PSRAM");
+    while (true) blinkRed(1, 500);         // چشمک آرام تا ابد = خراب
+  }
+  if (SD_MMC.begin("/sdcard", true)) {     // true = حالت ۱ بیتی
+    cardOk = true;
+    photoNum = findNextNumber();
+    Serial.printf("Ready. Next photo: #%lu. Press the button!\n", (unsigned long)photoNum);
+  } else {
+    Serial.println("SD card mount failed: insert a FAT32 card and press RST");
+  }
+}
+
+void loop() {
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChange = millis(); lastReading = reading; }
+  if (millis() - lastChange &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) {              // یک فشار واقعی
+      if (cardOk &amp;&amp; takeSnapshot()) {
+        blinkRed(1, 200);                  // یک چشمک = ذخیره شد
+      } else {
+        blinkRed(3, 100);                  // سه چشمک سریع = شکست
+      }
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="24-26"><b class="what">سه پایه.</b> فلاش روی GPIO4، LED قرمز روی GPIO33 (برعکس)، دکمه روی GPIO13.
+    <span class="why">روی این برد تقریبا همه پایه‌ها گرفته شده‌اند. در حالت ۱ بیتی SD، پایه‌های GPIO4، GPIO12 و GPIO13 آزاد می‌شوند؛ GPIO12 یک پایه Strapping پرخطر است، پس GPIO13 انتخاب امن برای ورودی است.</span></li>
+  <li data-lines="28-31"><b class="what">وضعیت.</b> شماره بعدی، اینکه کارت mount شد یا نه، و متغیرهای حذف لرزش.
+    <span class="why"><code>cardOk</code> باعث می‌شود برنامه بدون کارت هم اجرا بماند، تا دکمه بتواند «شکست» را نشان دهد، به جای اینکه برد بی‌صدا متوقف شود.</span></li>
+  <li data-lines="33-66"><b class="what">راه‌اندازی دوربین.</b> همان تنظیمات درس: JPEG، ۱۶۰۰×۱۲۰۰، کیفیت ۱۰، یک بافر در PSRAM.
+    <span class="why">عکس دستی کم گرفته می‌شود، پس کیفیت کامل به چند صد کیلوبایت برای هر عکس می‌ارزد.</span></li>
+  <li data-lines="68-76"><b class="what">اولین شماره آزاد.</b> <code>/snap_00001.jpg</code>، <code>/snap_00002.jpg</code> و... را امتحان کن تا به اسمی برسی که وجود ندارد.
+    <span class="why">خود کارت یادش می‌ماند تا کجا رسیده‌ایم، پس ریست هرگز عکسی را رونویسی نمی‌کند.</span></li>
+  <li data-lines="78-85"><b class="what">blinkRed.</b> LOW چراغ قرمز را روشن و HIGH خاموش می‌کند.
+    <span class="why">اینجا <code>delay()</code> قابل قبول است: طولانی‌ترین علامت ۶۰۰ میلی‌ثانیه است و برد در این مدت کار دیگری ندارد. فشار دادن حین چشمک فقط نادیده گرفته می‌شود، که همان چیزی است که می‌خواهیم.</span></li>
+  <li data-lines="87-98"><b class="what">اول فلاش، بعد عکس.</b> فلاش روشن، ۲۰۰ میلی‌ثانیه صبر، فریمی که در بافر منتظر بود دور ریخته می‌شود، فریم اصلی گرفته می‌شود، فلاش خاموش. فریم <code>NULL</code> یعنی شکست.
+    <span class="why">با یک بافر و <code>GRAB_WHEN_EMPTY</code>، فریم منتظر قبل از روشن شدن فلاش گرفته شده بود. این ۲۰۰ میلی‌ثانیه به نوردهی خودکار سنسور هم فرصت می‌دهد با نور تنظیم شود تا عکس سفید و سوخته نشود.</span></li>
+  <li data-lines="99-113"><b class="what">نوشتن فایل و بررسی آن.</b> مسیر از <code>photoNum</code> ساخته می‌شود؛ نوشتن فقط وقتی موفق حساب می‌شود که همه بایت‌ها نوشته شده باشند. در صورت موفقیت اسم، اندازه و کل زمان چاپ می‌شود و فقط آن وقت شماره بالا می‌رود.
+    <span class="why">اگر نوشتن شکست بخورد، دفعه بعد همان شماره دوباره استفاده می‌شود؛ پس نه جاافتادگی داریم، نه فایل نیمه‌کاره‌ای که شماره‌اش را نگه دارد.</span></li>
+  <li data-lines="114-115"><b class="what">بافر را همیشه پس بده.</b>
+    <span class="why">بدون <code>esp_camera_fb_return</code>، دوربین برای فشار بعدی بافر آزاد ندارد و همه عکس‌های بعدی شکست می‌خورند.</span></li>
+  <li data-lines="118-124"><b class="what">اول وضعیت امن پایه‌ها.</b> فلاش خاموش، LED قرمز خاموش (HIGH)، دکمه با Pull-up.
+    <span class="why">فلاش خیلی پرنور است؛ مطمئن شدن از خاموش بودنش قبل از اینکه هر چیز دیگری بتواند خراب شود، هم به چشم‌ها لطف است هم به منبع تغذیه.</span></li>
+  <li data-lines="125-135"><b class="what">دوربین و کارت.</b> دوربین نیست: چشمک آرام تا ابد. کارت نیست: یک پیام، ولی برنامه ادامه می‌دهد.
+    <span class="why">نبودن دوربین بدون ریست درست نمی‌شود، ولی فراموش کردن کارت اشتباه رایجی است و سه چشمک سریع در هر فشار آن را واضح می‌کند.</span></li>
+  <li data-lines="138-150"><b class="what">loop: حذف لرزش، عکس، علامت.</b> با یک فشار واقعی: اگر کارت سالم است و عکس موفق بود، یک چشمک؛ وگرنه سه تا.
+    <span class="why"><code>cardOk &amp;&amp; takeSnapshot()</code> زود متوقف می‌شود: وقتی کارت نیست، <code>takeSnapshot</code> اصلا صدا زده نمی‌شود، پس فلاش بی‌دلیل نمی‌زند.</span></li>
+</ol>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
 <p>ESP32-CAM (AI-Thinker) یک ESP32 با دوربین OV2640، PSRAM چهار مگابایتی و جای microSD است که پورت USB ندارد؛ با ESP32-CAM-MB یا مبدل USB-TTL (TX و RX ضربدری، GPIO0 به GND فقط هنگام آپلود) پروگرامش کن و برد «AI Thinker ESP32-CAM» را انتخاب کن. CameraWebServer با انتخاب <code>CAMERA_MODEL_AI_THINKER</code> و Wi-Fi پخش زنده می‌دهد، و <code>camera_config_t</code> اندازه، کیفیت و جای بافر (PSRAM) را تعیین می‌کند. برای ذخیره روی کارت از <code>SD_MMC.begin("/sdcard", true)</code> (حالت ۱ بیتی، آزاد شدن فلش) و برای شماره ماندگار از Preferences استفاده کن، و یادت باشد مشکل شماره یک این برد تغذیه است: ۵ ولت قوی، کابل کوتاه، Brownout را خاموش نکن.</p></div>
 

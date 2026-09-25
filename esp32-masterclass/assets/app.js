@@ -174,6 +174,16 @@
   main.id = main.id || "main"; main.setAttribute("tabindex", "-1");
   document.body.insertBefore(el("a", { "class": "skip-link", href: "#" + main.id }, t("skip")), document.body.firstChild);
   document.body.appendChild(el("div", { "class": "backdrop", "data-act": "nav" }));
+  /* منوی کناری: همیشه بسته شروع می‌شود و فقط با دکمه همبرگری باز و بسته می‌شود؛
+     با انتخاب یک لینک، کلیک بیرون از منو یا کلید Esc هم بسته می‌شود.
+     وقتی منو باز است صفحه پشتش قفل است تا فقط یک نوار اسکرول (مال منو) دیده شود. */
+  function setNav(open) {
+    document.body.classList.toggle("nav-open", open);
+    document.documentElement.classList.toggle("nav-lock", open);
+    var mb = document.querySelector(".menu-toggle"); if (mb) mb.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) { var cur = side.querySelector("a.active"); if (cur) cur.scrollIntoView({ block: "center" }); }
+  }
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && document.body.classList.contains("nav-open")) { setNav(false); var mb = document.querySelector(".menu-toggle"); if (mb) mb.focus(); } });
   /* نوار پیشرفت خواندن و دکمه بازگشت به بالا */
   var rb = el("div", { "class": "read-bar", "aria-hidden": "true" }, "<i></i>");
   var tt = el("button", { "class": "to-top", "type": "button", "aria-label": EN ? "Back to top" : "بازگشت به بالا" }, '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>');
@@ -325,7 +335,7 @@
     var t = e.target.closest("[data-act]");
     if (t) {
       var a = t.getAttribute("data-act");
-      if (a === "nav") document.body.classList.toggle("nav-open");
+      if (a === "nav") setNav(!document.body.classList.contains("nav-open"));
       if (a === "report") t.href = reportHref();
       if (a === "search") { openSearch(); return; }
       if (a === "lang") { e.preventDefault(); store("esp32mc-lang", EN ? "fa" : "en"); location.href = TWIN + location.hash; return; }
@@ -334,7 +344,7 @@
         document.documentElement.setAttribute("data-theme", nt); store("esp32mc-theme", nt); paintTheme();
       }
     }
-    if (e.target.closest(".sidebar a")) document.body.classList.remove("nav-open");
+    if (e.target.closest(".sidebar a")) setNav(false);
     var img = e.target.closest("figure .frame img, .gallery img");
     var svg = !img && e.target.closest(".wiring .frame svg, figure .frame > svg");
     if (img || svg) {

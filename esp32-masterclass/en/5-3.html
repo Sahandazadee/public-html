@@ -957,6 +957,369 @@ void loop() {}
 </details>
 </div>
 
+<h2 id="project">Practice project: a button snapshot camera</h2>
+<div class="project">
+<p class="lede-ish">Turn the ESP32-CAM into a tiny point-and-shoot camera: press a button, the flash lights up, and a numbered photo lands on the SD card. The small red LED on the back tells you whether it worked, so you don't need a computer nearby. It's the perfect gadget for a bird feeder, a science fair "before and after" series, or a camera trap you trigger by hand.</p>
+
+<h3 id="project-req">Requirements</h3>
+<ol>
+  <li>A push button between <b>GPIO13</b> and GND uses the internal pull-up (no resistor): the pin reads HIGH when released and LOW when pressed.</li>
+  <li>One debounced press takes exactly one photo. Holding the button down doesn't take more; presses during saving are ignored.</li>
+  <li>The white flash (GPIO4) switches on 200 ms before the photo is taken and off right after it.</li>
+  <li>Photos are saved as <code>/snap_00001.jpg</code>, <code>/snap_00002.jpg</code>, … and numbering continues after a reset (nothing is ever overwritten). The Serial Monitor shows the file name, its size and how long the whole snapshot took.</li>
+  <li>The red LED on GPIO33 (LOW = on) blinks once (200 ms) after a successful save and three times quickly (100 ms) after any failure (no card, capture failed, write failed). If the camera itself doesn't start, it blinks slowly forever.</li>
+</ol>
+
+<h3 id="project-parts">Parts</h3>
+<ul>
+  <li>ESP32-CAM (AI-Thinker) with the ESP32-CAM-MB programmer base (or a USB-to-serial adapter)</li>
+  <li>microSD card, 4 to 32 GB, formatted as FAT32</li>
+  <li>One push button and two female-to-female (or female-to-male) jumper wires</li>
+  <li>A 5 V, 2 A USB charger for using it away from the computer</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32-CAM (AI-Thinker)",
+  "parts":[
+    {"id":"BTN","name":"Push button","img":"button.svg","pins":[["1","one side of the button"],["2","the opposite side (diagonal)"]]}
+  ],
+  "wires":[["GPIO13","BTN.1","blue"],["BTN.2","GND","black"]]
+}</script><figcaption>Only one button to add: between the <b>IO13</b> header pin and any <b>GND</b> pin. The flash (GPIO4) and the red LED (GPIO33) are already on the board. GPIO13 is free because we run the SD card in 1-bit mode (see the lesson); this camera has its own fixed pins, so the course's usual pin plan doesn't apply. Don't hold the button while powering the board on.</figcaption></div>
+
+<h3 id="project-start">Starter code</h3>
+<div class="code" data-file="SnapCam.ino (starter)" id="projStart"><pre>
+// Button snapshot camera (starter): fill in the TODOs
+#include "esp_camera.h"
+#include "FS.h"
+#include "SD_MMC.h"
+
+// Camera pins for the AI-Thinker ESP32-CAM board
+#define PWDN_GPIO_NUM  32
+#define RESET_GPIO_NUM -1
+#define XCLK_GPIO_NUM   0
+#define SIOD_GPIO_NUM  26
+#define SIOC_GPIO_NUM  27
+#define Y9_GPIO_NUM    35
+#define Y8_GPIO_NUM    34
+#define Y7_GPIO_NUM    39
+#define Y6_GPIO_NUM    36
+#define Y5_GPIO_NUM    21
+#define Y4_GPIO_NUM    19
+#define Y3_GPIO_NUM    18
+#define Y2_GPIO_NUM     5
+#define VSYNC_GPIO_NUM 25
+#define HREF_GPIO_NUM  23
+#define PCLK_GPIO_NUM  22
+
+const int FLASH_LED = 4;       // white flash (free in 1-bit SD mode)
+const int RED_LED = 33;        // small red LED on the back: LOW = on
+const int BUTTON_PIN = 13;     // button to GND (free in 1-bit SD mode)
+
+uint32_t photoNum = 0;
+bool cardOk = false;
+int lastReading = HIGH, stableState = HIGH;
+unsigned long lastChange = 0;
+
+bool initCamera() {
+  camera_config_t config = {};
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = Y2_GPIO_NUM;
+  config.pin_d1 = Y3_GPIO_NUM;
+  config.pin_d2 = Y4_GPIO_NUM;
+  config.pin_d3 = Y5_GPIO_NUM;
+  config.pin_d4 = Y6_GPIO_NUM;
+  config.pin_d5 = Y7_GPIO_NUM;
+  config.pin_d6 = Y8_GPIO_NUM;
+  config.pin_d7 = Y9_GPIO_NUM;
+  config.pin_xclk = XCLK_GPIO_NUM;
+  config.pin_pclk = PCLK_GPIO_NUM;
+  config.pin_vsync = VSYNC_GPIO_NUM;
+  config.pin_href = HREF_GPIO_NUM;
+  config.pin_sccb_sda = SIOD_GPIO_NUM;
+  config.pin_sccb_scl = SIOC_GPIO_NUM;
+  config.pin_pwdn = PWDN_GPIO_NUM;
+  config.pin_reset = RESET_GPIO_NUM;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG;
+  config.frame_size = FRAMESIZE_UXGA;      // 1600x1200
+  config.jpeg_quality = 10;                // 0 to 63; lower = better
+  config.fb_count = 1;
+  config.fb_location = CAMERA_FB_IN_PSRAM;
+  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+  esp_err_t err = esp_camera_init(&amp;config);
+  if (err != ESP_OK) {
+    Serial.printf("Camera init failed: 0x%x\n", err);
+    return false;
+  }
+  return true;
+}
+
+uint32_t findNextNumber() {
+  char path[32];
+  uint32_t n = 1;
+  while (true) {
+    snprintf(path, sizeof(path), "/snap_%05lu.jpg", (unsigned long)n);
+    if (!SD_MMC.exists(path)) return n;
+    n++;
+  }
+}
+
+void blinkRed(int times, int ms) {         // short, so delay() is fine here
+  // TODO 5: blink the red LED "times" times (remember: LOW = on)
+}
+
+bool takeSnapshot() {
+  // TODO 3: flash on, wait 200 ms, throw away the old frame, take the photo,
+  //         flash off; if fb is NULL print "Capture failed" and return false
+  // TODO 4: save fb-&gt;buf (fb-&gt;len bytes) as /snap_%05lu.jpg with photoNum,
+  //         check that every byte was written, print size and time,
+  //         photoNum++ only on success, and ALWAYS esp_camera_fb_return(fb)
+  return false;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(FLASH_LED, OUTPUT);
+  digitalWrite(FLASH_LED, LOW);
+  pinMode(RED_LED, OUTPUT);
+  digitalWrite(RED_LED, HIGH);             // red LED off
+  // TODO 1: button pin as input with the internal pull-up
+  if (!psramFound() || !initCamera()) {
+    Serial.println("No camera: check the board choice and PSRAM");
+    while (true) blinkRed(1, 500);         // slow blink forever = broken
+  }
+  if (SD_MMC.begin("/sdcard", true)) {     // true = 1-bit mode
+    cardOk = true;
+    photoNum = findNextNumber();
+    Serial.printf("Ready. Next photo: #%lu. Press the button!\n", (unsigned long)photoNum);
+  } else {
+    Serial.println("SD card mount failed: insert a FAT32 card and press RST");
+  }
+}
+
+void loop() {
+  // TODO 2: debounce the button (30 ms, as in lesson 5.2) and, on a real
+  //         press, call takeSnapshot() (only if cardOk), then blink:
+  //         1 blink of 200 ms = saved, 3 blinks of 100 ms = failed
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="24-31"><b class="what">Three pins and the state.</b> Flash, red LED and button, plus the next photo number, a "card is OK" flag and the debounce variables.
+    <span class="why">All three pins are free only because the card runs in 1-bit mode; that's why <code>SD_MMC.begin("/sdcard", true)</code> in setup matters.</span></li>
+  <li data-lines="33-76"><b class="what">Given: the camera and the numbering.</b> <code>initCamera</code> is the lesson's code; <code>findNextNumber</code> is the lesson's search, with the <code>snap_</code> name.
+    <span class="why">These parts were already explained in the time-lapse project; your work is the button, the flash and the feedback.</span></li>
+  <li data-lines="78-89"><b class="what">TODO 3, 4 and 5: the two functions to fill in.</b> <code>takeSnapshot</code> returns <code>true</code> only when the photo is really on the card.
+    <span class="why">A clear yes/no result lets loop choose the right LED signal without knowing the details.</span></li>
+  <li data-lines="91-115"><b class="what">setup is almost done; loop is empty.</b> TODO 1 sets up the button pin, TODO 2 is the debounce and the decision.
+    <span class="why">Everything else in setup (camera, card, numbering) is the same as in the lesson.</span></li>
+</ol>
+<div class="callout info"><div class="ct">Build it on your board</div>
+<p>Wokwi has no ESP32-CAM and no camera, so this project needs the real board. Select <b>AI Thinker ESP32-CAM</b> as the board (PSRAM is then enabled), upload through the MB base, press RST, and open the Serial Monitor at 115200.</p></div>
+
+<details class="hint"><summary>Hint 1</summary>
+<p>The debounce is the one from lesson 5.2: remember when the raw reading last changed, and accept a new stable state only after 30 ms of quiet. React only when the stable state becomes <code>LOW</code>.</p></details>
+<details class="hint"><summary>Hint 2</summary>
+<p>Order matters in <code>takeSnapshot</code>: flash on → <code>delay(200)</code> → take one frame and give it straight back (it was captured before the light) → take the real frame → flash off. Then write the file, and give the frame back with <code>esp_camera_fb_return(fb)</code> whether or not the write worked.</p></details>
+<details class="hint"><summary>Hint 3</summary>
+<p><code>file.write(fb-&gt;buf, fb-&gt;len)</code> returns the number of bytes it wrote. Compare it with <code>fb-&gt;len</code>: a full card writes fewer bytes, and you want to report that as a failure, not a success.</p></details>
+
+<details class="expect"><summary>What should you see?</summary>
+<p>After a reset, with two photos already on the card from earlier, then three presses (sizes and times vary with the scene):</p>
+<pre class="serial">Ready. Next photo: #3. Press the button!
+Snap #3 saved: /snap_00003.jpg (163208 bytes, 742 ms)
+Snap #4 saved: /snap_00004.jpg (171544 bytes, 736 ms)
+Snap #5 saved: /snap_00005.jpg (158930 bytes, 751 ms)</pre>
+<p>Without a card: <code>SD card mount failed: insert a FAT32 card and press RST</code>, and every press gives three quick red blinks.</p>
+<ul>
+  <li><b>Req. 1 and 2:</b> press 5 times at a steady pace: exactly 5 new files. Hold the button for 3 seconds: one file only.</li>
+  <li><b>Req. 3:</b> photograph a dark corner of the room: the image is lit by the flash, not dark. The flash is on for well under a second.</li>
+  <li><b>Req. 4:</b> press RST between photos, then put the card in your computer: the numbers continue without gaps or overwritten files.</li>
+  <li><b>Req. 5:</b> each successful press gives one red blink; pull the card out (with the board on) and press: three quick blinks.</li>
+</ul>
+<p><b>If it doesn't work:</b> <code>Camera init failed</code> or constant slow blinking: wrong board selected, or a weak power supply (use the 2 A charger). Photos saved but the flash also flickers during writing: the card was mounted without <code>true</code> (4-bit mode). Nothing happens on presses: check that the button connects IO13 to GND and that the legs you used are the ones that close when pressed.</p>
+</details>
+
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="SnapCam.ino" id="projAns"><pre>
+// Button snapshot camera: press = flash + numbered JPEG on the SD card
+#include "esp_camera.h"
+#include "FS.h"
+#include "SD_MMC.h"
+
+// Camera pins for the AI-Thinker ESP32-CAM board
+#define PWDN_GPIO_NUM  32
+#define RESET_GPIO_NUM -1
+#define XCLK_GPIO_NUM   0
+#define SIOD_GPIO_NUM  26
+#define SIOC_GPIO_NUM  27
+#define Y9_GPIO_NUM    35
+#define Y8_GPIO_NUM    34
+#define Y7_GPIO_NUM    39
+#define Y6_GPIO_NUM    36
+#define Y5_GPIO_NUM    21
+#define Y4_GPIO_NUM    19
+#define Y3_GPIO_NUM    18
+#define Y2_GPIO_NUM     5
+#define VSYNC_GPIO_NUM 25
+#define HREF_GPIO_NUM  23
+#define PCLK_GPIO_NUM  22
+
+const int FLASH_LED = 4;       // white flash (free in 1-bit SD mode)
+const int RED_LED = 33;        // small red LED on the back: LOW = on
+const int BUTTON_PIN = 13;     // button to GND (free in 1-bit SD mode)
+
+uint32_t photoNum = 0;
+bool cardOk = false;
+int lastReading = HIGH, stableState = HIGH;
+unsigned long lastChange = 0;
+
+bool initCamera() {
+  camera_config_t config = {};
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = Y2_GPIO_NUM;
+  config.pin_d1 = Y3_GPIO_NUM;
+  config.pin_d2 = Y4_GPIO_NUM;
+  config.pin_d3 = Y5_GPIO_NUM;
+  config.pin_d4 = Y6_GPIO_NUM;
+  config.pin_d5 = Y7_GPIO_NUM;
+  config.pin_d6 = Y8_GPIO_NUM;
+  config.pin_d7 = Y9_GPIO_NUM;
+  config.pin_xclk = XCLK_GPIO_NUM;
+  config.pin_pclk = PCLK_GPIO_NUM;
+  config.pin_vsync = VSYNC_GPIO_NUM;
+  config.pin_href = HREF_GPIO_NUM;
+  config.pin_sccb_sda = SIOD_GPIO_NUM;
+  config.pin_sccb_scl = SIOC_GPIO_NUM;
+  config.pin_pwdn = PWDN_GPIO_NUM;
+  config.pin_reset = RESET_GPIO_NUM;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG;
+  config.frame_size = FRAMESIZE_UXGA;      // 1600x1200
+  config.jpeg_quality = 10;                // 0 to 63; lower = better
+  config.fb_count = 1;
+  config.fb_location = CAMERA_FB_IN_PSRAM;
+  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+  esp_err_t err = esp_camera_init(&amp;config);
+  if (err != ESP_OK) {
+    Serial.printf("Camera init failed: 0x%x\n", err);
+    return false;
+  }
+  return true;
+}
+
+uint32_t findNextNumber() {
+  char path[32];
+  uint32_t n = 1;
+  while (true) {
+    snprintf(path, sizeof(path), "/snap_%05lu.jpg", (unsigned long)n);
+    if (!SD_MMC.exists(path)) return n;
+    n++;
+  }
+}
+
+void blinkRed(int times, int ms) {         // short, so delay() is fine here
+  for (int i = 0; i &lt; times; i++) {
+    digitalWrite(RED_LED, LOW);            // on (inverted logic)
+    delay(ms);
+    digitalWrite(RED_LED, HIGH);           // off
+    delay(ms);
+  }
+}
+
+bool takeSnapshot() {
+  unsigned long t0 = millis();
+  digitalWrite(FLASH_LED, HIGH);           // flash on first...
+  delay(200);                              // ...so auto-exposure sees the light
+  camera_fb_t *old = esp_camera_fb_get();  // old frame, taken before the flash
+  if (old) esp_camera_fb_return(old);
+  camera_fb_t *fb = esp_camera_fb_get();   // the real photo
+  digitalWrite(FLASH_LED, LOW);            // flash off right away
+  if (!fb) {
+    Serial.println("Capture failed");
+    return false;
+  }
+  char path[32];
+  snprintf(path, sizeof(path), "/snap_%05lu.jpg", (unsigned long)photoNum);
+  bool ok = false;
+  File file = SD_MMC.open(path, FILE_WRITE);
+  if (file) {
+    ok = file.write(fb-&gt;buf, fb-&gt;len) == fb-&gt;len;   // all bytes written?
+    file.close();
+  }
+  if (ok) {
+    Serial.printf("Snap #%lu saved: %s (%u bytes, %lu ms)\n", (unsigned long)photoNum,
+                  path, (unsigned)fb-&gt;len, millis() - t0);
+    photoNum++;
+  } else {
+    Serial.printf("Could not write %s\n", path);
+  }
+  esp_camera_fb_return(fb);
+  return ok;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(FLASH_LED, OUTPUT);
+  digitalWrite(FLASH_LED, LOW);
+  pinMode(RED_LED, OUTPUT);
+  digitalWrite(RED_LED, HIGH);             // red LED off
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  if (!psramFound() || !initCamera()) {
+    Serial.println("No camera: check the board choice and PSRAM");
+    while (true) blinkRed(1, 500);         // slow blink forever = broken
+  }
+  if (SD_MMC.begin("/sdcard", true)) {     // true = 1-bit mode
+    cardOk = true;
+    photoNum = findNextNumber();
+    Serial.printf("Ready. Next photo: #%lu. Press the button!\n", (unsigned long)photoNum);
+  } else {
+    Serial.println("SD card mount failed: insert a FAT32 card and press RST");
+  }
+}
+
+void loop() {
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChange = millis(); lastReading = reading; }
+  if (millis() - lastChange &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) {              // a real press
+      if (cardOk &amp;&amp; takeSnapshot()) {
+        blinkRed(1, 200);                  // one blink = saved
+      } else {
+        blinkRed(3, 100);                  // three quick blinks = failed
+      }
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="24-26"><b class="what">The three pins.</b> Flash on GPIO4, the red LED on GPIO33 (inverted), the button on GPIO13.
+    <span class="why">On this board almost every pin is taken. In 1-bit SD mode, GPIO4, GPIO12 and GPIO13 are freed; GPIO12 is a risky strapping pin, so GPIO13 is the safe choice for an input.</span></li>
+  <li data-lines="28-31"><b class="what">State.</b> The next number, whether the card mounted, and the debounce variables.
+    <span class="why"><code>cardOk</code> lets the program keep running without a card, so the button can still signal "failed" instead of the board silently stopping.</span></li>
+  <li data-lines="33-66"><b class="what">Starting the camera.</b> The lesson's configuration: JPEG, 1600×1200, quality 10, one buffer in PSRAM.
+    <span class="why">A snapshot is taken rarely, so full quality is worth the few hundred kilobytes per photo.</span></li>
+  <li data-lines="68-76"><b class="what">The next free number.</b> Try <code>/snap_00001.jpg</code>, <code>/snap_00002.jpg</code>, … until one doesn't exist.
+    <span class="why">The card itself remembers how far we got, so a reset never overwrites a photo.</span></li>
+  <li data-lines="78-85"><b class="what">blinkRed.</b> LOW switches the red LED on, HIGH switches it off.
+    <span class="why">Here <code>delay()</code> is acceptable: the longest signal is 600 ms, and there is nothing else the board needs to do meanwhile. Pressing during the blink is simply ignored, which is what we want.</span></li>
+  <li data-lines="87-98"><b class="what">Flash, then the photo.</b> Flash on, wait 200 ms, throw away the frame that was already waiting in the buffer, take the real one, flash off. A <code>NULL</code> frame means failure.
+    <span class="why">With one buffer and <code>GRAB_WHEN_EMPTY</code>, the waiting frame was captured before the flash came on. The 200 ms also give the sensor's automatic exposure time to adjust to the light, so the photo isn't burnt white.</span></li>
+  <li data-lines="99-113"><b class="what">Writing the file and checking it.</b> The path is built from <code>photoNum</code>; the write counts as OK only if every byte was written. On success we print the name, size and total time, and only then increase the number.
+    <span class="why">If the write failed, the same number is reused next time, so there are no gaps and no half-written file keeps its number.</span></li>
+  <li data-lines="114-115"><b class="what">Give the buffer back, always.</b>
+    <span class="why">Without <code>esp_camera_fb_return</code>, the camera has no free buffer for the next press and every later capture fails.</span></li>
+  <li data-lines="118-124"><b class="what">Safe pin states first.</b> Flash off, red LED off (HIGH), button with the pull-up.
+    <span class="why">The flash is very bright; making sure it's off before anything else can fail is kind to eyes and to the power supply.</span></li>
+  <li data-lines="125-135"><b class="what">Camera and card.</b> No camera: slow blinking forever. No card: a message, but the program keeps running.
+    <span class="why">A missing camera can't be fixed without a reset, but a forgotten card is a common mistake, and three quick blinks on every press make it obvious.</span></li>
+  <li data-lines="138-150"><b class="what">loop: debounce, snapshot, signal.</b> On a real press: if the card is OK and the snapshot succeeded, one blink; otherwise three.
+    <span class="why"><code>cardOk &amp;&amp; takeSnapshot()</code> stops early: when there's no card, <code>takeSnapshot</code> isn't even called, so the flash doesn't fire for nothing.</span></li>
+</ol>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">The lesson in three lines</div>
 <p>The ESP32-CAM (AI-Thinker) is an ESP32 with an OV2640 camera, 4 MB of PSRAM and a microSD slot, but no USB port; program it with an ESP32-CAM-MB or a USB-TTL adapter (TX and RX crossed, GPIO0 to GND only while uploading) and select the "AI Thinker ESP32-CAM" board. CameraWebServer streams live video once you select <code>CAMERA_MODEL_AI_THINKER</code> and set up Wi-Fi, and <code>camera_config_t</code> decides the size, quality and buffer location (PSRAM). To save to the card use <code>SD_MMC.begin("/sdcard", true)</code> (1-bit mode, which frees the flash pin), use Preferences for a number that survives power cuts, and remember that this board's number-one problem is power: a strong 5 V, a short cable, and never switch off the brownout guard.</p></div>
 

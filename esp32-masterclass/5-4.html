@@ -402,7 +402,7 @@ void loop() {
 Woken by the button (rings: 1)
 Woken by the button (rings: 1)
 10 s passed: routine report</div>
-<p>دقت کن بعد از بیدار شدن با دکمه، شمارش ۱۰ ثانیه از صفر شروع می‌شود، چون هر فراخوانی <code>ulTaskNotifyTake</code> یک انتظار تازه است. پروژه ایستگاه هوا در درس <a href="5-6.html#project">۵.۶</a> دقیقا از همین الگو استفاده می‌کند: «هر ۱۰ دقیقه، یا همین الان اگر تنظیمات عوض شد».</p>
+<p>دقت کن بعد از بیدار شدن با دکمه، شمارش ۱۰ ثانیه از صفر شروع می‌شود، چون هر فراخوانی <code>ulTaskNotifyTake</code> یک انتظار تازه است. پروژه ایستگاه هوا در درس <a href="5-6.html#weather-station">۵.۶</a> دقیقا از همین الگو استفاده می‌کند: «هر ۱۰ دقیقه، یا همین الان اگر تنظیمات عوض شد».</p>
 
 <div class="wokwi" data-board="esp32" data-code-from="rtosNotify">
 <p>در Wokwi امتحان کن: ۱۰ ثانیه صبر کن تا گزارش معمولی بیاید، بعد روی دکمه سبز کلیک کن و ببین گزارش فورا می‌رسد و LED یک چشمک کوتاه می‌زند.</p>
@@ -935,10 +935,356 @@ void loop() {
 </details>
 </div>
 
+<h2 id="project">پروژه تمرینی: چراغ گذرگاه عابر پیاده با Taskها</h2>
+<div class="project">
+<p class="lede-ish">داری چراغ راهنمایی یک گذرگاه عابر پیاده را برنامه‌ریزی می‌کنی. ماشین‌ها سبز دارند تا وقتی کسی دکمه «عبور» را فشار دهد؛ بعد چراغ به راننده‌ها هشدار می‌دهد، قرمز می‌شود و ۶ ثانیه به عابرها وقت می‌دهد. گذرگاه‌های واقعی قانونی دارند که تو هم رعایتش می‌کنی: ماشین‌ها همیشه یک حداقل زمان سبز دارند، تا فشار دادن پشت‌سرهم دکمه نتواند خیابان را قفل کند. هر کار در Task خودش در FreeRTOS زندگی می‌کند، دکمه از طریق یک وقفه و یک صف به Task خودش می‌رسد، و همه Taskها در یک دفتر گزارش مشترک می‌نویسند بدون اینکه هیچ خطی قاطی شود.</p>
+
+<h3 id="project-req">نیازمندی‌ها</h3>
+<ol>
+  <li>همه خروجی Serial از یک تابع <code>logf()</code> می‌گذرد که با یک Mutex محافظت شده و هر خط را با زمان به میلی‌ثانیه شروع می‌کند؛ مثلا <code>[  2041] Button #1: request sent</code>. هیچ دو خطی هرگز قاطی نمی‌شوند.</li>
+  <li>یک <b>Task چراغ</b> صاحب هر دو LED است. به طور پیش‌فرض ماشین‌ها سبز دارند: LED سبز (GPIO26) روشن، LED قرمز (GPIO4) خاموش، با ثبت <code>Cars: GREEN</code>.</li>
+  <li>دکمه روی GPIO27 از وقفه‌ای استفاده می‌کند که فقط زمان فشار را در یک صف می‌گذارد. یک <b>Task دکمه</b> لرزش را حذف می‌کند (مثل مثال ButtonISR درس) و فشارهای واقعی را می‌شمارد.</li>
+  <li>بعد از یک درخواست، ماشین‌ها روی هم دست‌کم ۵ ثانیه سبز دارند (از لحظه شروع سبز)؛ اگر درخواست زودتر برسد، چراغ بقیه‌اش را صبر می‌کند و ثبت می‌کند چقدر.</li>
+  <li>تغییر: LED سبز به عنوان هشدار ۳ بار چشمک می‌زند (۲۵۰ میلی‌ثانیه خاموش، ۲۵۰ روشن)، بعد قرمز ۶ ثانیه روشن است («عبور»)، بعد دوباره سبز.</li>
+  <li>فشارهایی که وقتی یک عبور از قبل درخواست شده یا در حال اجراست بیایند، «نادیده گرفته شد» ثبت می‌شوند و هرگز باعث عبور دوم نمی‌شوند.</li>
+  <li>هیچ Taskی درجا منتظر نمی‌ماند (busy-wait): هر انتظاری یک صف، یک Notification یا <code>vTaskDelay</code> است. <code>loop()</code> هر ۱۰ ثانیه فضای آزاد Stack هر دو Task را ثبت می‌کند، و برد ۵ دقیقه فشار دادن دکمه را بدون ریست Watchdog تحمل می‌کند.</li>
+</ol>
+
+<h3 id="project-parts">قطعه‌ها</h3>
+<ul>
+  <li>ESP32 DevKitC، برد بورد، سیم جامپر</li>
+  <li>LED قرمز + ۲۲۰ اهم روی GPIO4، LED سبز + ۲۲۰ اهم روی GPIO26 (دو LED همین درس)</li>
+  <li>دکمه فشاری روی GPIO27. پتانسیومتر روی GPIO34 می‌تواند بماند؛ استفاده نمی‌شود.</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"BTN","name":"دکمه فشاری (عبور)","img":"button.svg","pins":[["1","به GPIO27"],["4","به GND (پایه قطری)"]]},
+    {"id":"R1","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","طرف GPIO4"],["2","طرف LED"]]},
+    {"id":"LED1","name":"LED قرمز (ماشین‌ها بایستند)","img":"led.svg","pins":[["A","آند (+) پایه بلند"],["K","کاتد (−) پایه کوتاه"]]},
+    {"id":"R2","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","طرف GPIO26"],["2","طرف LED"]]},
+    {"id":"LED2","name":"LED سبز (ماشین‌ها بروند)","img":"led.svg","pins":[["A","آند (+) پایه بلند"],["K","کاتد (−) پایه کوتاه"]]}
+  ],
+  "wires":[["GPIO27","BTN.1","blue"],["BTN.4","GND","black"],["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"],["GPIO26","R2.1","purple"],["R2.2","LED2.A","purple"],["LED2.K","GND","black"]]
+}</script><figcaption>مدار همین درس: LED قرمز روی GPIO4، LED سبز روی GPIO26، دکمه بین GPIO27 و GND (با Pull-up داخلی).</figcaption></div>
+
+<h3 id="project-start">کد شروع</h3>
+<div class="code" data-file="Crossing.ino (کد شروع)" id="projStart"><pre>
+// گذرگاه عابر پیاده (کد شروع): جاهای TODO را پر کن
+const int RED_LED = 4;            // ماشین‌ها بایستند، عابرها بروند
+const int GREEN_LED = 26;         // ماشین‌ها بروند
+const int BUTTON_PIN = 27;        // دکمه «عبور» بین GPIO27 و GND
+const unsigned long MIN_GREEN_MS = 5000;   // ماشین‌ها همیشه دست‌کم ۵ ثانیه سبز دارند
+const unsigned long WALK_MS = 6000;        // زمان عبور عابرها
+
+QueueHandle_t pressQueue;         // ISR به buttonTask (زمان فشارها)
+SemaphoreHandle_t logMutex;       // هر لحظه فقط یک نویسنده روی Serial
+TaskHandle_t lightHandle = NULL;
+TaskHandle_t buttonHandle = NULL;
+volatile bool busy = false;       // یک عبور در انتظار یا در حال اجراست
+
+void logf(const char *fmt, ...) { // به سبک printf، امن از هر Task
+  char buf[96];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  // TODO 1: logMutex را بگیر (حداکثر ۱۰۰ میلی‌ثانیه صبر)، "[millis] text" را چاپ کن،
+  //         Mutex را پس بده
+}
+
+void IRAM_ATTR onPress() {        // ISR: فقط زمان را ثبت می‌کند
+  uint32_t now = millis();
+  BaseType_t wokeHigher = pdFALSE;
+  xQueueSendFromISR(pressQueue, &amp;now, &amp;wokeHigher);
+  portYIELD_FROM_ISR(wokeHigher);
+}
+
+void buttonTask(void *param) {
+  uint32_t t;
+  int count = 0;
+  for (;;) {
+    xQueueReceive(pressQueue, &amp;t, portMAX_DELAY);  // بخواب تا یک لبه برسد
+    // TODO 3: حذف لرزش (۳۰ میلی‌ثانیه، خالی کردن صف، بررسی LOW بودن پایه)،
+    //         فشار را بشمار، بعد:
+    // TODO 6: اگر busy بود "ignored" ثبت کن؛ وگرنه "request sent" ثبت کن و
+    //         xTaskNotifyGive(lightHandle)
+  }
+}
+
+void lightTask(void *param) {
+  pinMode(RED_LED, OUTPUT);
+  pinMode(GREEN_LED, OUTPUT);
+  for (;;) {
+    // TODO 2: ماشین‌ها سبز (GREEN_LED روشن، RED_LED خاموش)، ثبتش کن، زمان را
+    //         به خاطر بسپار، بعد در ulTaskNotifyTake بخواب تا درخواستی برسد
+    // TODO 4: busy = true کن؛ اگر سبز کمتر از MIN_GREEN_MS طول کشیده،
+    //         ثبت کن و بقیه‌اش را با vTaskDelay صبر کن
+    // TODO 5: سبز را ۳ بار چشمک بزن (۲۵۰ خاموش / ۲۵۰ روشن)، بعد قرمز روشن
+    //         به مدت WALK_MS؛ بعد زنگ‌های اضافه را فراموش کن و busy = false کن
+    vTaskDelay(pdMS_TO_TICKS(1000));   // وقتی کارت تمام شد این خط را پاک کن
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pressQueue = xQueueCreate(20, sizeof(uint32_t));
+  logMutex = xSemaphoreCreateMutex();
+  if (pressQueue == NULL || logMutex == NULL) {
+    Serial.println("Out of memory!");
+    while (true) delay(1000);
+  }
+  // TODO 7: lightTask (اولویت ۱) و buttonTask (اولویت ۲) را بساز،
+  //         هر کدام ۳۰۷۲ بایت، روی هسته ۱، و handleهایشان را نگه دار
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), onPress, FALLING);
+}
+
+void loop() {                     // loop فقط «گزارش سلامت» است
+  delay(10000);
+  logf("health: light stack free %u B, button stack free %u B",
+       (unsigned)uxTaskGetStackHighWaterMark(lightHandle),
+       (unsigned)uxTaskGetStackHighWaterMark(buttonHandle));
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="2-12"><b class="what">پایه‌ها، زمان‌ها و اشیای مشترک.</b> یک صف، یک Mutex، دو handle برای Taskها و پرچم <code>busy</code> برایت تعریف شده‌اند.
+    <span class="why">دیدن همه چیزهای مشترک در یک جا روشن می‌کند که هر Task به چه چیزی دست می‌زند.</span></li>
+  <li data-lines="14-22"><b class="what">logf، نیمه‌کاره.</b> متن از قبل در <code>buf</code> قالب‌بندی شده؛ TODO 1 چاپ قفل‌دار است.
+    <span class="why">این را اول انجام بده: تا تمام نشود، هیچ خروجی‌ای نمی‌بینی.</span></li>
+  <li data-lines="24-29"><b class="what">ISR، آماده.</b> عینا مثل درس: زمان را ثبت کن و در صف بگذار.
+    <span class="why">ISR باید خیلی کوچک بماند؛ فکر کردن در Task دکمه انجام می‌شود.</span></li>
+  <li data-lines="31-55"><b class="what">دو پوسته Task.</b> هر کدام از قبل <code>for (;;)</code> بی‌پایانش را دارد؛ Task چراغ یک <code>vTaskDelay</code> موقت دارد تا اسکلت برنامه هرگز درجا منتظر نماند.
+    <span class="why">تابع Task هرگز نباید برگردد، و یک حلقه بی‌پایان خالی بقیه Taskها را گرسنه نگه می‌داشت.</span></li>
+  <li data-lines="57-69"><b class="what">setup.</b> صف، Mutex و وقفه ساخته شده‌اند؛ TODO 7 دو Task را می‌سازد.
+    <span class="why">صف و Mutex باید قبل از اینکه هر Task یا ISR از آن‌ها استفاده کند وجود داشته باشند.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>FreeRTOS در Wokwi کامل شبیه‌سازی می‌شود، پس می‌توانی کل پروژه را همان‌جا بسازی و تست کنی. هیچ کتابخانه‌ای لازم نیست. روی دکمه سبز WALK کلیک کن؛ دکمه Wokwi هم مثل دکمه واقعی کمی لرزش دارد، پس حذف لرزش تو یک تست واقعی می‌گیرد.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 150, "left": -150, "attrs": { "color": "green", "label": "WALK" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "red" } },
+    { "type": "wokwi-resistor", "id": "r2", "top": 190, "left": 250, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led2", "top": 110, "left": 280, "attrs": { "color": "green" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:27", "btn1:1.r", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ],
+    [ "esp:26", "r2:2", "purple", [] ],
+    [ "r2:1", "led2:A", "purple", [] ],
+    [ "led2:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>راهنمایی ۱</summary>
+<p>Task چراغ داخل <code>for (;;)</code> یک داستان سرراست از بالا به پایین است: سبز، صبر برای درخواست، شاید صبر برای حداقل سبز، چشمک، قرمز، صبر، برگشت به بالا. چون Task است، می‌توانی آن را با <code>vTaskDelay</code> به ترتیب ساده بنویسی، بدون هیچ حساب‌وکتاب <code>millis()</code>.</p></details>
+<details class="hint"><summary>راهنمایی ۲</summary>
+<p>وقتی سبز شروع می‌شود، <code>millis()</code> را در یک متغیر محلی ذخیره کن. بعد از برگشتن <code>ulTaskNotifyTake</code>، <code>millis() - greenSince</code> می‌گوید سبز چقدر طول کشیده. اگر کمتر از ۵۰۰۰ بود، <code>vTaskDelay(pdMS_TO_TICKS(5000 - greenFor))</code>.</p></details>
+<details class="hint"><summary>راهنمایی ۳</summary>
+<p>درست بعد از اینکه Task چراغ درخواستی را پذیرفت <code>busy = true</code> کن، و آخر زمان عبور دوباره <code>false</code>. درست قبل از آن، <code>ulTaskNotifyTake(pdTRUE, 0)</code> (با صفر تیک صبر) هر Notificationی را که در این فاصله رسیده دور می‌ریزد، تا یک فشار اضافه نتواند عبور دومی شروع کند.</p></details>
+
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>حدود ۲ ثانیه بعد از شروع WALK را بزن، و یک بار دیگر هم وسط فاز قرمز (زمان‌ها و عددهای Stack تو کمی فرق دارد):</p>
+<pre class="serial">[   312] Cars: GREEN
+[  2041] Button #1: request sent
+[  2041] Request: cars keep green 3271 ms more
+[  5312] Cars: green blinking (warning)
+[  6812] Cars: RED, people: WALK for 6 s
+[  8120] Button #2: crossing already on its way, ignored
+[ 10300] health: light stack free 1644 B, button stack free 1720 B
+[ 12812] Cars: GREEN</pre>
+<p>حساب را بررسی کن: سبز در ۳۱۲ شروع شد و درخواست در ۲۰۴۱ رسید، پس سبز ۱۷۲۹ میلی‌ثانیه طول کشیده و ۵۰۰۰ − ۱۷۲۹ = ۳۲۷۱ میلی‌ثانیه دیگر لازم دارد. ۲۰۴۱ + ۳۲۷۱ = ۵۳۱۲ (شروع چشمک)، + ۱۵۰۰ میلی‌ثانیه چشمک = ۶۸۱۲ (قرمز)، + ۶۰۰۰ = ۱۲۸۱۲ (دوباره سبز).</p>
+<ul>
+  <li><b>نیازمندی ۱:</b> چند بار سریع فشار بده: هر خط کامل است و با <code>[</code> شروع می‌شود؛ هیچ دو پیامی به هم نچسبیده‌اند.</li>
+  <li><b>نیازمندی ۲ تا ۵:</b> ۱۰ ثانیه روی سبز صبر کن، بعد فشار بده: هیچ خط «keep green»ی نمی‌آید و چشمک فورا شروع می‌شود. چشمک‌ها را بشمار: دقیقا ۳ تا، بعد ۶ ثانیه قرمز.</li>
+  <li><b>نیازمندی ۶:</b> وسط چشمک و قرمز ۵ بار فشار بده: ۵ خط «ignored» و دقیقا یک عبور.</li>
+  <li><b>نیازمندی ۷:</b> خط health هر ۱۰ ثانیه می‌آید و عددهای Stack آزاد تقریبا ثابت می‌مانند (چند صد بایت یا بیشتر، هرگز نزدیک ۰). بعد از ۵ دقیقه، هیچ پیام <code>task_wdt</code> و هیچ ریستی نیست.</li>
+</ul>
+</details>
+
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="Crossing.ino" id="projAns"><pre>
+// گذرگاه عابر پیاده: Task چراغ + Task دکمه (ISR به صف) + چاپگر امن
+const int RED_LED = 4;            // ماشین‌ها بایستند، عابرها بروند
+const int GREEN_LED = 26;         // ماشین‌ها بروند
+const int BUTTON_PIN = 27;        // دکمه «عبور» بین GPIO27 و GND
+const unsigned long MIN_GREEN_MS = 5000;   // ماشین‌ها همیشه دست‌کم ۵ ثانیه سبز دارند
+const unsigned long WALK_MS = 6000;        // زمان عبور عابرها
+
+QueueHandle_t pressQueue;         // ISR به buttonTask (زمان فشارها)
+SemaphoreHandle_t logMutex;       // هر لحظه فقط یک نویسنده روی Serial
+TaskHandle_t lightHandle = NULL;
+TaskHandle_t buttonHandle = NULL;
+volatile bool busy = false;       // یک عبور در انتظار یا در حال اجراست
+
+void logf(const char *fmt, ...) { // به سبک printf، امن از هر Task
+  char buf[96];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  if (xSemaphoreTake(logMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    Serial.printf("[%6lu] %s\n", millis(), buf);
+    xSemaphoreGive(logMutex);
+  }
+}
+
+void IRAM_ATTR onPress() {        // ISR: فقط زمان را ثبت می‌کند
+  uint32_t now = millis();
+  BaseType_t wokeHigher = pdFALSE;
+  xQueueSendFromISR(pressQueue, &amp;now, &amp;wokeHigher);
+  portYIELD_FROM_ISR(wokeHigher);
+}
+
+void buttonTask(void *param) {
+  uint32_t t;
+  int count = 0;
+  for (;;) {
+    xQueueReceive(pressQueue, &amp;t, portMAX_DELAY);  // بخواب تا یک لبه برسد
+    vTaskDelay(pdMS_TO_TICKS(30));                 // بگذار لرزش تمام شود
+    xQueueReset(pressQueue);                       // لبه‌های لرزش را دور بریز
+    if (digitalRead(BUTTON_PIN) != LOW) continue;  // رها شده: فشار نیست
+    count++;
+    if (busy) {
+      logf("Button #%d: crossing already on its way, ignored", count);
+    } else {
+      logf("Button #%d: request sent", count);
+      xTaskNotifyGive(lightHandle);                // زنگ Task چراغ را بزن
+    }
+  }
+}
+
+void lightTask(void *param) {
+  pinMode(RED_LED, OUTPUT);
+  pinMode(GREEN_LED, OUTPUT);
+  for (;;) {
+    digitalWrite(RED_LED, LOW);
+    digitalWrite(GREEN_LED, HIGH);
+    unsigned long greenSince = millis();
+    logf("Cars: GREEN");
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);       // بخواب تا کسی درخواست کند
+    busy = true;
+    unsigned long greenFor = millis() - greenSince;
+    if (greenFor &lt; MIN_GREEN_MS) {
+      logf("Request: cars keep green %lu ms more", MIN_GREEN_MS - greenFor);
+      vTaskDelay(pdMS_TO_TICKS(MIN_GREEN_MS - greenFor));
+    }
+    logf("Cars: green blinking (warning)");
+    for (int i = 0; i &lt; 3; i++) {
+      digitalWrite(GREEN_LED, LOW);
+      vTaskDelay(pdMS_TO_TICKS(250));
+      digitalWrite(GREEN_LED, HIGH);
+      vTaskDelay(pdMS_TO_TICKS(250));
+    }
+    digitalWrite(GREEN_LED, LOW);
+    digitalWrite(RED_LED, HIGH);
+    logf("Cars: RED, people: WALK for %lu s", WALK_MS / 1000);
+    vTaskDelay(pdMS_TO_TICKS(WALK_MS));
+    ulTaskNotifyTake(pdTRUE, 0);                   // زنگ‌های اضافه را فراموش کن
+    busy = false;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pressQueue = xQueueCreate(20, sizeof(uint32_t));
+  logMutex = xSemaphoreCreateMutex();
+  if (pressQueue == NULL || logMutex == NULL) {
+    Serial.println("Out of memory!");
+    while (true) delay(1000);
+  }
+  xTaskCreatePinnedToCore(lightTask, "light", 3072, NULL, 1, &amp;lightHandle, 1);
+  xTaskCreatePinnedToCore(buttonTask, "button", 3072, NULL, 2, &amp;buttonHandle, 1);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), onPress, FALLING);
+}
+
+void loop() {                     // loop فقط «گزارش سلامت» است
+  delay(10000);
+  logf("health: light stack free %u B, button stack free %u B",
+       (unsigned)uxTaskGetStackHighWaterMark(lightHandle),
+       (unsigned)uxTaskGetStackHighWaterMark(buttonHandle));
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="2-6"><b class="what">پایه‌ها و زمان‌ها.</b> قرمز روی GPIO4، سبز روی GPIO26، دکمه روی GPIO27؛ ۵ ثانیه حداقل سبز و ۶ ثانیه برای عبور.
+    <span class="why">ثابت‌های اسم‌دار قانون‌های گذرگاه را خوانا و قابل تغییر در یک جا می‌کنند.</span></li>
+  <li data-lines="8-12"><b class="what">اشیای مشترک.</b> صف، زمان فشارها را از ISR می‌آورد، Mutex از Serial محافظت می‌کند، handleها اجازه می‌دهند به یک Task خبر بدهیم و Stackش را اندازه بگیریم، و <code>busy</code> به Task دکمه می‌گوید عبوری در راه است یا نه.
+    <span class="why"><code>busy</code> برابر <code>volatile</code> است چون یک Task آن را می‌نویسد و دیگری می‌خواند. یک <code>bool</code> تکی است، پس خواندنش بدون قفل امن است.</span></li>
+  <li data-lines="14-19"><b class="what">یک printf مال خودت.</b> <code>...</code> در فهرست ورودی‌ها یعنی «هر تعداد ورودی اضافه». <code>va_list</code>، <code>va_start</code> و <code>va_end</code> آن‌ها را جمع می‌کنند و <code>vsnprintf</code> دقیقا مثل <code>snprintf</code> آن‌ها را در <code>buf</code> قالب‌بندی می‌کند.
+    <span class="why">این C++ تازه است، ولی می‌توانی مثل یک دستور پخت از آن استفاده کنی: به هر Task اجازه می‌دهد <code>logf("x=%d", x)</code> را دقیقا مثل <code>Serial.printf</code> صدا بزند. قالب‌بندی <b>قبل</b> از گرفتن قفل انجام می‌شود، پس قفل فقط برای چاپ کوتاه نگه داشته می‌شود.</span></li>
+  <li data-lines="20-23"><b class="what">چاپ قفل‌دار.</b> Mutex را بگیر (حداکثر ۱۰۰ میلی‌ثانیه صبر)، یک خط کامل با زمان چاپ کن، Mutex را پس بده.
+    <span class="why">بدون قفل، دو Task که هم‌زمان چاپ می‌کنند ممکن است حروفشان را در هم ببافند. با محدودیت زمانی به جای <code>portMAX_DELAY</code>، یک Task گیرکرده هرگز نمی‌تواند چاپگر را برای همه قفل کند.</span></li>
+  <li data-lines="26-31"><b class="what">ISR.</b> بدون تغییر نسبت به درس.
+    <span class="why">فقط زمان را ثبت می‌کند و Task دکمه را بیدار می‌کند؛ نه Serial، نه delay.</span></li>
+  <li data-lines="37-41"><b class="what">حذف لرزش در Task دکمه.</b> بخواب تا یک لبه برسد، ۳۰ میلی‌ثانیه صبر کن، بقیه لبه‌های لرزش را دور بریز، و فقط اگر پایه هنوز LOW است فشار را بشمار.
+    <span class="why">این همان الگوی ButtonISR درس است: هر فشار واقعی دقیقا یک شمارش می‌شود، و رها کردن (که آن هم لرزش دارد) نادیده گرفته می‌شود.</span></li>
+  <li data-lines="42-47"><b class="what">درخواست یا نادیده گرفتن.</b> اگر عبوری از قبل در راه است، «نادیده گرفته شد» ثبت کن؛ وگرنه ثبت کن و زنگ Task چراغ را با <code>xTaskNotifyGive</code> بزن.
+    <span class="why">Notification هیچ داده‌ای نمی‌برد، فقط «بیدار شو»، که دقیقا همان معنی درخواست عبور است. از یک صف دوم سبک‌تر است.</span></li>
+  <li data-lines="55-59"><b class="what">سبز، بعد خواب.</b> LEDها را تنظیم کن، زمان شروع سبز را به خاطر بسپار، ثبت کن، و بدون محدودیت زمانی در <code>ulTaskNotifyTake</code> بخواب.
+    <span class="why">در زمان خواب، Task هیچ پردازنده‌ای مصرف نمی‌کند؛ Task بیکاری (idle) اجرا می‌شود و Watchdog راضی می‌ماند.</span></li>
+  <li data-lines="60-65"><b class="what">حداقل سبز.</b> عبور را busy علامت بزن، بعد اگر سبز کمتر از ۵ ثانیه طول کشیده، بقیه‌اش را بخواب.
+    <span class="why"><code>busy</code> قبل از این انتظار تنظیم می‌شود، پس فشارهای وسط آن هم نادیده گرفته می‌شوند. <code>MIN_GREEN_MS - greenFor</code> منفی نمی‌شود، چون فقط وقتی تفریق می‌کنیم که <code>greenFor</code> کوچک‌تر است.</span></li>
+  <li data-lines="66-72"><b class="what">چشمک هشدار.</b> سه بار خاموش و روشن، هر کدام ۲۵۰ میلی‌ثانیه.
+    <span class="why">در یک Task، یک رشته اتفاق در زمان فقط چند خط پشت‌سرهم با <code>vTaskDelay</code> بینشان است. مقایسه کن که همین کار در یک <code>loop()</code> تنها با <code>millis()</code> چقدر حساب‌وکتاب لازم داشت.</span></li>
+  <li data-lines="73-76"><b class="what">قرمز: عابرها عبور می‌کنند.</b> سبز خاموش، قرمز روشن، ۶ ثانیه.
+    <span class="why">فقط همین Task به LEDها دست می‌زند، پس هرگز قفل لازم ندارند: «هر سخت‌افزار یک صاحب دارد».</span></li>
+  <li data-lines="77-78"><b class="what">زنگ‌های اضافه را فراموش کن، بعد گذرگاه را آزاد کن.</b> <code>ulTaskNotifyTake(pdTRUE, 0)</code> بدون صبر هر Notificationی را پاک می‌کند؛ بعد <code>busy</code> به false برمی‌گردد.
+    <span class="why">فشاری که در لحظه کوتاه بین پذیرفتن درخواست و تنظیم <code>busy</code> بیاید هنوز می‌توانست زنگ بزند. پاک کردنش اینجا تضمین می‌کند: یک درخواست، یک عبور.</span></li>
+  <li data-lines="85-93"><b class="what">setup به ترتیب امن.</b> اول صف و Mutex (و بررسی اینکه ساخته شده‌اند)، بعد Taskها، و وقفه در آخر.
+    <span class="why">اگر وقفه اول وصل می‌شد، یک فشار زودهنگام <code>xQueueSendFromISR</code> را روی صفی صدا می‌زد که هنوز وجود ندارد و برنامه کرش می‌کرد. Task دکمه اولویت ۲ می‌گیرد تا سریع واکنش نشان دهد؛ کارش خیلی کوتاه است.</span></li>
+  <li data-lines="96-101"><b class="what">loop به عنوان گزارش سلامت.</b> هر ۱۰ ثانیه کمترین فضای آزاد Stackی را که هر Task تا حالا داشته ثبت می‌کند.
+    <span class="why"><code>delay</code> در loop مشکلی ندارد: همان <code>vTaskDelay</code> در لباس مبدل است و به بقیه Taskها اجازه اجرا می‌دهد. اگر عدد Stack آزاد روزی به سمت صفر رفت، ۳۰۷۲ بایت آن Task را قبل از سرریز بیشتر کن.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p>گذرگاه کامل در Wokwi، با همان diagram.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 150, "left": -150, "attrs": { "color": "green", "label": "WALK" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "red" } },
+    { "type": "wokwi-resistor", "id": "r2", "top": 190, "left": 250, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led2", "top": 110, "left": 280, "attrs": { "color": "green" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:27", "btn1:1.r", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ],
+    [ "esp:26", "r2:2", "purple", [] ],
+    [ "r2:1", "led2:A", "purple", [] ],
+    [ "led2:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
 <p>FreeRTOS هر کار را در Task خودش اجرا می‌کند: اندازه Stack را به بایت بده، اولویت‌ها را منطقی انتخاب کن و هر حلقه را جایی بخوابان یا منتظر بگذار تا نگهبان برد را ریست نکند. داده را با صف جابه‌جا کن، از منابع مشترک با Mutex محافظت کن، Task را با اعلان بیدار کن و از داخل وقفه فقط توابع <code>FromISR</code> را صدا بزن. فقط وقتی دلیل داری Task بساز: یک کار کند و مسدودکننده، یا زمان‌بندی کاملا متفاوت.</p></div>
 
-<p>در درس بعد (<a href="5-5.html">۵.۵</a>) دستگاهت یاد می‌گیرد از طریق Wi-Fi خودش را به‌روز کند (OTA) و فایل‌ها را در حافظه فلش خودش نگه دارد (LittleFS). Task، صف، Mutex و اعلانی که این‌جا یاد گرفتی همه در درس <a href="5-6.html#project">۵.۶</a> برمی‌گردند، جایی که یک ایستگاه هوا سه Task را کنار هم اجرا می‌کند.</p>
+<p>در درس بعد (<a href="5-5.html">۵.۵</a>) دستگاهت یاد می‌گیرد از طریق Wi-Fi خودش را به‌روز کند (OTA) و فایل‌ها را در حافظه فلش خودش نگه دارد (LittleFS). Task، صف، Mutex و اعلانی که این‌جا یاد گرفتی همه در درس <a href="5-6.html#weather-station">۵.۶</a> برمی‌گردند، جایی که یک ایستگاه هوا سه Task را کنار هم اجرا می‌کند.</p>
 
 </article>
 </body>
