@@ -1712,6 +1712,388 @@ void loop() {}
 </details>
 </div>
 
+<h2 id="project">پروژه تمرینی: آستانه‌ای که از گوشی عوض می‌شود</h2>
+<div class="project">
+<p class="lede-ish">حد هشدار ایستگاهت، ۳۵ درجه، داخل کد نوشته شده است. یک دوست می‌خواهد همین ایستگاه را در یک گلخانه استفاده کند، جایی که ۳۰ درجه هم زیادی گرم است؛ و نمی‌تواند برد را دوباره برنامه‌ریزی کند. پس حد باید از راه شبکه بیاید: او یک عدد را روی یک topic در MQTT منتشر می‌کند، و ایستگاه آن را بررسی می‌کند، به کار می‌برد و دریافتش را تأیید می‌کند. به‌عنوان جایزه، ایستگاه روزی یک بار یک خلاصه کوچک هم برایش می‌فرستد: کمترین و بیشترین دمای آن روز.</p>
+
+<h3 id="project-req">نیازمندی‌ها</h3>
+<ol>
+  <li>بعد از <b>هر</b> اتصال (یا اتصال دوباره) به بروکر، ایستگاه به <code>&lt;BASE&gt;cfg/high</code> subscribe می‌کند. چون این پیام با retain فرستاده شده، آخرین مقدار کمی بعد از اتصال می‌رسد، حتی درست بعد از ریست.</li>
+  <li>فقط عددی از 20.0 تا 60.0 پذیرفته می‌شود. هر چیز دیگری (<code>abc</code>، <code>35x</code>، پیام خالی، <code>99</code>) با یک خط در Serial Monitor رد می‌شود و هیچ چیز را عوض نمی‌کند.</li>
+  <li>مقدار پذیرفته‌شده فورا حد هشدار می‌شود، حد «رفع هشدار» ۲ درجه پایین‌تر از آن قرار می‌گیرد، و ایستگاه حدی را که به کار می‌برد روی <code>&lt;BASE&gt;cfg/high/state</code> (با retain) تأیید می‌کند.</li>
+  <li>ایستگاه کمترین و بیشترین دمای معتبر را دنبال می‌کند. هر <code>DAY_MS</code> (۲۴ ساعت؛ برای تست ۶۰ ثانیه) پیام <code>{"min":..,"max":..}</code> را به <code>&lt;BASE&gt;daily</code> می‌فرستد و دوره تازه‌ای را شروع می‌کند.</li>
+  <li>بدون هیچ شبکه‌ای، LED هشدار محلی با آخرین حد پذیرفته‌شده به کارش ادامه می‌دهد (R8 در PRD).</li>
+  <li>Serial Monitor هر قدم را نشان می‌دهد: مقدار پذیرفته یا ردشده، روشن و خاموش شدن هشدار، و خلاصه روزانه.</li>
+</ol>
+
+<h3 id="project-parts">قطعه‌ها</h3>
+<ul>
+  <li>برد ESP32 DevKitC، سنسور DHT22 (به‌اضافه بالاکش ۱۰ کیلواهم برای سنسور خام چهارپایه)، LED هشدار با مقاومت ۲۲۰ اهم</li>
+  <li>یک شبکه Wi-Fi ۲٫۴ گیگاهرتز (در Wokwi: <code>Wokwi-GUEST</code>) و یک کلاینت MQTT که بتواند با retain منتشر کند، مثل کلاینت وب HiveMQ درس <a href="5-1.html">۵.۱</a></li>
+  <li>OLED، LDR، بازر و دکمه ایستگاه کامل روی برد بورد می‌مانند؛ این پروژه فقط از آن‌ها استفاده نمی‌کند</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"DHT","name":"سنسور DHT22","img":"dht22.svg","pins":[["VCC","تغذیه ۳٫۳ ولت"],["DATA","داده"],["GND","زمین"]]},
+    {"id":"R2","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","به GPIO4"],["2","به آند LED"]]},
+    {"id":"LED","name":"LED قرمز هشدار","img":"led.svg","pins":[["A","آند (+)، پایه بلند"],["K","کاتد (−)"]]}
+  ],
+  "wires":[["3V3","DHT.VCC","red"],["GPIO13","DHT.DATA","blue"],["DHT.GND","GND","black"],["GPIO4","R2.1","orange"],["R2.2","LED.A","orange"],["LED.K","GND","black"]]
+}</script><figcaption>فقط دو قطعه‌ای که این پروژه لازم دارد، روی همان پین‌های ایستگاه کامل: DHT22 روی GPIO13 و LED هشدار روی GPIO4. سنسور خام چهارپایه DHT22 یک مقاومت ۱۰ کیلواهم هم از DATA به 3V3 لازم دارد.</figcaption></div>
+
+<h3 id="project-start">کد شروع</h3>
+<p>برای این که بخش‌های تازه راحت دیده شوند، کد شروع یک ایستگاه «سبک» است: همان ساختار گام ۶ (تنظیمات، یک تابع برای هر کار، شبکه بدون مسدود کردن)، ولی فقط سنسور، LED هشدار و یک ارسال دما. وقتی کار کرد، همین اضافه‌ها بدون تغییر در <code>EnvStation</code> کامل هم جا می‌شوند.</p>
+<div class="code" data-file="StationRemote.ino" id="projStart"><pre>
+// ایستگاه سبک (۶.۳) + آستانه از راه دور + min/max روزانه: کد شروع
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;DHT.h&gt;
+
+const char* WIFI_SSID = "Wokwi-GUEST";         // برد واقعی: اسم Wi-Fi خودت
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const char* BASE      = "esp32course/station-42/"; // پیشوند یکتای خودت
+const uint32_t SENSOR_MS  = 2000;              // هر ۲ ثانیه بخوان
+const uint32_t PUBLISH_MS = 30000;             // هر ۳۰ ثانیه دما را بفرست
+const uint32_t DAY_MS     = 86400000UL;        // ۲۴ ساعت (برای تست 60000)
+
+const int PIN_DHT = 13;
+const int PIN_LED = 4;                         // LED هشدار
+
+DHT dht(PIN_DHT, DHT22);
+WiFiClient net;
+PubSubClient mqtt(net);
+
+float tempHigh = 35.0, tempClear = 33.0;       // حالا متغیرند: می‌توانند عوض شوند
+float tempC = NAN;
+bool alarmOn = false;
+uint32_t tSensor = 0, tPublish = 0, tWifi = 0, tMqtt = 0;
+// TODO 4: متغیرهای min/max این دوره و زمان شروعش
+// TODO 3: یک پرچم «آستانه تازه پذیرفته شد، تأییدش را بفرست»
+
+void onMessage(char* topic, byte* payload, unsigned int length) {
+  // TODO 2: payload را در یک آرایه char کپی کن ('\0' را اضافه کن)، چک کن «کل»
+  //         متن عددی از 20.0 تا 60.0 باشد؛ وگرنه "rejected" چاپ کن و برگرد
+  // TODO 3: پذیرفته شد: tempHigh = مقدار، tempClear = مقدار − ۲، پرچم را بگذار
+}
+
+void readSensor() {
+  float t = dht.readTemperature();
+  if (isnan(t)) { Serial.println("DHT22 read failed"); return; }
+  tempC = t;
+  // TODO 4: min/max را با این خواندن معتبر به‌روز کن
+}
+
+void updateAlarm() {
+  if (isnan(tempC)) return;
+  if (!alarmOn &amp;&amp; tempC &gt; tempHigh) { alarmOn = true; Serial.println("ALARM on"); }
+  else if (alarmOn &amp;&amp; tempC &lt; tempClear) { alarmOn = false; Serial.println("ALARM off"); }
+}
+
+void publishTemp() {
+  if (!mqtt.connected() || isnan(tempC)) return;
+  char topic[80], payload[16];
+  snprintf(topic, sizeof(topic), "%stemp", BASE);
+  snprintf(payload, sizeof(payload), "%.1f", tempC);
+  mqtt.publish(topic, payload);
+}
+
+void keepWiFi() {
+  if (WiFi.status() == WL_CONNECTED) return;
+  if (millis() - tWifi &lt; 15000) return;        // هر ۱۵ ثانیه یک تلاش
+  tWifi = millis();
+  WiFi.reconnect();
+}
+
+void keepMqtt() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (mqtt.connected()) { mqtt.loop(); return; }
+  if (millis() - tMqtt &lt; 5000) return;         // هر ۵ ثانیه یک تلاش
+  tMqtt = millis();
+  String id = "station-" + WiFi.macAddress() + "-" + String(esp_random() &amp; 0xFFFF, HEX);
+  if (mqtt.connect(id.c_str())) {
+    Serial.println("MQTT connected");
+    // TODO 1: subscribe به BASE + "cfg/high" (همین‌جا: بعد از «هر» اتصال)
+  } else {
+    Serial.printf("MQTT failed, state=%d\n", mqtt.state());
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(PIN_LED, OUTPUT);
+  dht.begin();
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  mqtt.setServer(MQTT_HOST, 1883);
+  mqtt.setCallback(onMessage);
+  net.setConnectionTimeout(1000);              // TCP: بعد از ۱ ثانیه بی‌خیال شو
+  mqtt.setSocketTimeout(2);                    // جواب بروکر: بعد از ۲ ثانیه بی‌خیال شو
+  tWifi = millis();
+}
+
+void loop() {
+  uint32_t now = millis();
+  if (now - tSensor &gt;= SENSOR_MS) { tSensor = now; readSensor(); updateAlarm(); }
+  if (now - tPublish &gt;= PUBLISH_MS) { tPublish = now; publishTemp(); }
+  // TODO 3: پرچم روشن است؟ آستانه فعلی را به BASE + "cfg/high/state" بفرست (retained)
+  // TODO 4: هر DAY_MS پیام {"min":..,"max":..} را به BASE + "daily" بفرست و دوره تازه را شروع کن
+  keepWiFi();
+  keepMqtt();
+  digitalWrite(PIN_LED, alarmOn &amp;&amp; (millis() / 250) % 2);   // محلی: به شبکه نیاز ندارد
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="6-12"><b class="what">تنظیمات.</b> مثل ایستگاه کامل، به‌اضافه <code>DAY_MS</code> برای خلاصه روزانه.
+    <span class="why">یک ثابت با اسم یعنی می‌توانی «یک روز» را در یک دقیقه آزمایش کنی و با یک تغییر برش گردانی.</span></li>
+  <li data-lines="21"><b class="what">حدها حالا متغیرند.</b> در <code>EnvStation</code> از نوع <code>const</code> بودند.
+    <span class="why">یک <code>const</code> وقتی برنامه اجرا می‌شود عوض نمی‌شود؛ حدی که از گوشی تنظیم می‌شود باید عوض شود.</span></li>
+  <li data-lines="28-32"><b class="what">callback، هنوز خالی.</b> <code>onMessage</code> از قبل با <code>setCallback</code> ثبت شده (خط ۸۳)؛ پس کتابخانه آن را برای هر پیامی روی topicهایی که subscribe کرده‌ای صدا می‌زند.
+    <span class="why">همان الگوی callback درس <a href="5-1.html">۵.۱</a>: تو تابع را می‌نویسی، کتابخانه تصمیم می‌گیرد کی صدایش بزند.</span></li>
+  <li data-lines="68-70"><b class="what">جای subscribe.</b> داخل شاخه اتصال موفق در <code>keepMqtt()</code>.
+    <span class="why">هر subscribe مال یک اتصال است. بعد از قطع Wi-Fi یا بروکر، <code>keepMqtt</code> دوباره وصل می‌شود؛ و بدون subscribe تازه، ایستگاه دیگر هرگز از آن topic چیزی نمی‌شنود.</span></li>
+  <li data-lines="89-98"><b class="what">loop، زمان‌بند، با دو TODO.</b>
+    <span class="why">خط LED در انتها در هر دور اجرا می‌شود و شبکه نمی‌خواهد: این همان نیازمندی ۵ است که از قبل ساخته شده.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>کتابخانه‌های <code>DHT sensor library</code> و <code>PubSubClient</code> را از زبانه Library Manager اضافه کن و <b><code>BASE</code> را</b> به پیشوندی مخصوص خودت <b>تغییر بده</b>. کد شروع همین حالا هم اجرا می‌شود: وصل می‌شود، هر ۳۰ ثانیه دما را می‌فرستد و بالای ۳۵ درجه LED را چشمک‌زن می‌کند (برای تغییر دما روی DHT22 کلیک کن).</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -110, "left": 170, "attrs": { "temperature": "24", "humidity": "45" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": -130, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 40, "left": -60, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "r1:1", "esp:4", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>راهنمایی ۱</summary><p>payload یک رشته C <b>نیست</b>: در انتهایش <code>'\0'</code> ندارد. اول آن را در یک آرایه کوچک <code>char</code> کپی کن، دقیقا مثل <code>onMessage</code> درس ۵.۱؛ و یادت باشد payloadی که از آرایه‌ات بلندتر است، خودش دلیلی برای رد کردن است.</p></details>
+<details class="hint"><summary>راهنمایی ۲</summary><p><code>String("35x").toFloat()</code> بی‌سروصدا ۳۵ برمی‌گرداند، و <code>toFloat()</code> برای <code>abc</code> صفر برمی‌گرداند: هیچ‌کدام نمی‌گویند متن خراب بوده. تابع استاندارد C یعنی <code>strtof(text, &amp;end)</code> عدد را تبدیل می‌کند <b>و</b> می‌گوید کجا متوقف شد (<code>end</code>). اگر <code>end</code> هنوز سر جای اول است، عددی نبوده؛ اگر <code>*end</code> همان <code>'\0'</code> انتها نیست، بعد از عدد چیز اضافه‌ای آمده.</p></details>
+<details class="hint"><summary>راهنمایی ۳</summary><p>از داخل callback چیزی منتشر نکن؛ یک پرچم بگذار (<code>cfgChanged = true</code>) و تأیید را از loop بفرست. برای خلاصه روزانه از همان الگوی بقیه کارها استفاده کن: <code>if (now - tDay &gt;= DAY_MS) { tDay = now; ... }</code>، و min/max را با <code>NAN</code> شروع کن.</p></details>
+
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>در Wokwi با <code>DAY_MS = 60000</code>. در کلاینت MQTT، عدد <code>30</code> را با تیک <b>Retain</b> به <code>&lt;BASE&gt;cfg/high</code> بفرست، DHT22 را روی ۳۱ درجه ببر، بعد <code>abc</code> و <code>99</code> را (بدون retain) بفرست:</p>
+<pre class="serial">MQTT connected
+cfg/high &lt;- "30" : accepted, alarm at 30.0 C, clear at 28.0 C
+ALARM on
+cfg/high &lt;- "abc" : rejected (need a number from 20 to 60)
+cfg/high &lt;- "99" : rejected (need a number from 20 to 60)
+Daily: min=24.0 max=31.0 (sent)</pre>
+<ul>
+  <li>نیازمندی ۱: شبیه‌سازی را متوقف کن و بدون منتشر کردن چیزی دوباره اجرا کن: درست بعد از <code>MQTT connected</code>، دوباره <code>cfg/high &lt;- "30" : accepted</code> می‌آید. این همان پیام retained است.</li>
+  <li>نیازمندی ۲ و ۳: بعد از هر مقدار ردشده، LED به چشمک زدن ادامه می‌دهد (حد هنوز ۳۰ است)؛ و <code>&lt;BASE&gt;cfg/high/state</code> در کلاینتت <code>30.0</code> نشان می‌دهد.</li>
+  <li>نیازمندی ۴: هر دقیقه یک خط <code>Daily</code>، و JSON ماندگار (retained) روی <code>&lt;BASE&gt;daily</code>؛ کمینه و بیشینه دوره بعد دوباره از دمای فعلی شروع می‌شوند.</li>
+  <li>نیازمندی ۵: روی برد واقعی، مودم را خاموش کن: LED باز هم بالای ۳۰ درجه چشمک می‌زند و زیر ۲۸ درجه می‌ایستد.</li>
+  <li>برای پاک کردن حد retained، یک پیام خالی با retain به <code>cfg/high</code> بفرست: ایستگاه برای <code>""</code> پیام <code>rejected</code> چاپ می‌کند و تا ریست بعدی حد فعلی‌اش را نگه می‌دارد (بعد از ریست دوباره ۳۵).</li>
+</ul>
+</details>
+
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="StationRemote.ino" id="projAns"><pre>
+// ایستگاه سبک (۶.۳) + آستانه از راه دور با MQTT + min/max روزانه
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;DHT.h&gt;
+
+const char* WIFI_SSID = "Wokwi-GUEST";         // برد واقعی: اسم Wi-Fi خودت
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const char* BASE      = "esp32course/station-42/"; // پیشوند یکتای خودت
+const uint32_t SENSOR_MS  = 2000;              // هر ۲ ثانیه بخوان
+const uint32_t PUBLISH_MS = 30000;             // هر ۳۰ ثانیه دما را بفرست
+const uint32_t DAY_MS     = 86400000UL;        // ۲۴ ساعت (برای تست 60000)
+
+const int PIN_DHT = 13;
+const int PIN_LED = 4;                         // LED هشدار
+
+DHT dht(PIN_DHT, DHT22);
+WiFiClient net;
+PubSubClient mqtt(net);
+
+float tempHigh = 35.0, tempClear = 33.0;       // حالا متغیرند: می‌توانند عوض شوند
+float tempC = NAN;
+bool alarmOn = false;
+uint32_t tSensor = 0, tPublish = 0, tWifi = 0, tMqtt = 0;
+float dayMin = NAN, dayMax = NAN;              // NAN یعنی هنوز خواندن معتبری نداریم
+uint32_t tDay = 0;
+bool cfgChanged = false;                       // در callback روشن می‌شود، در loop استفاده
+
+void onMessage(char* topic, byte* payload, unsigned int length) {
+  char buf[16];
+  unsigned int n = (length &lt; sizeof(buf) - 1) ? length : sizeof(buf) - 1;
+  memcpy(buf, payload, n);
+  buf[n] = '\0';                               // payload خودش '\0' ندارد
+  char* end;
+  float v = strtof(buf, &amp;end);                 // end = جایی که عدد تمام شد
+  while (*end == ' ' || *end == '\r' || *end == '\n') end++;   // فاصله و خط جدید در انتها مجاز
+  bool valid = (end != buf) &amp;&amp; (*end == '\0') &amp;&amp; (length &lt; sizeof(buf)) &amp;&amp; v &gt;= 20.0 &amp;&amp; v &lt;= 60.0;
+  if (!valid) {
+    Serial.printf("cfg/high &lt;- \"%s\" : rejected (need a number from 20 to 60)\n", buf);
+    return;                                    // آستانه قبلی می‌ماند
+  }
+  tempHigh = v;
+  tempClear = v - 2.0;
+  cfgChanged = true;
+  Serial.printf("cfg/high &lt;- \"%s\" : accepted, alarm at %.1f C, clear at %.1f C\n",
+                buf, tempHigh, tempClear);
+}
+
+void readSensor() {
+  float t = dht.readTemperature();
+  if (isnan(t)) { Serial.println("DHT22 read failed"); return; }
+  tempC = t;
+  if (isnan(dayMin) || t &lt; dayMin) dayMin = t;
+  if (isnan(dayMax) || t &gt; dayMax) dayMax = t;
+}
+
+void updateAlarm() {
+  if (isnan(tempC)) return;
+  if (!alarmOn &amp;&amp; tempC &gt; tempHigh) { alarmOn = true; Serial.println("ALARM on"); }
+  else if (alarmOn &amp;&amp; tempC &lt; tempClear) { alarmOn = false; Serial.println("ALARM off"); }
+}
+
+void publishTemp() {
+  if (!mqtt.connected() || isnan(tempC)) return;
+  char topic[80], payload[16];
+  snprintf(topic, sizeof(topic), "%stemp", BASE);
+  snprintf(payload, sizeof(payload), "%.1f", tempC);
+  mqtt.publish(topic, payload);
+}
+
+void publishDaily() {
+  if (isnan(dayMin)) return;                   // در این دوره خواندن معتبری نبود
+  char topic[80], payload[40];
+  snprintf(topic, sizeof(topic), "%sdaily", BASE);
+  snprintf(payload, sizeof(payload), "{\"min\":%.1f,\"max\":%.1f}", dayMin, dayMax);
+  bool sent = mqtt.connected() &amp;&amp; mqtt.publish(topic, payload, true);
+  Serial.printf("Daily: min=%.1f max=%.1f (%s)\n", dayMin, dayMax, sent ? "sent" : "offline, lost");
+  dayMin = NAN;                                // شروع دوره تازه
+  dayMax = NAN;
+}
+
+void confirmCfg() {
+  if (!mqtt.connected()) return;               // true می‌ماند: بعدا تأیید می‌کنیم
+  cfgChanged = false;
+  char topic[80], payload[16];
+  snprintf(topic, sizeof(topic), "%scfg/high/state", BASE);
+  snprintf(payload, sizeof(payload), "%.1f", tempHigh);
+  mqtt.publish(topic, payload, true);          // retained: داشبورد همیشه خبر دارد
+}
+
+void keepWiFi() {
+  if (WiFi.status() == WL_CONNECTED) return;
+  if (millis() - tWifi &lt; 15000) return;        // هر ۱۵ ثانیه یک تلاش
+  tWifi = millis();
+  WiFi.reconnect();
+}
+
+void keepMqtt() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (mqtt.connected()) { mqtt.loop(); return; }
+  if (millis() - tMqtt &lt; 5000) return;         // هر ۵ ثانیه یک تلاش
+  tMqtt = millis();
+  String id = "station-" + WiFi.macAddress() + "-" + String(esp_random() &amp; 0xFFFF, HEX);
+  if (mqtt.connect(id.c_str())) {
+    Serial.println("MQTT connected");
+    String cfg = String(BASE) + "cfg/high";
+    mqtt.subscribe(cfg.c_str());               // مقدار retained بلافاصله می‌رسد
+  } else {
+    Serial.printf("MQTT failed, state=%d\n", mqtt.state());
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(PIN_LED, OUTPUT);
+  dht.begin();
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  mqtt.setServer(MQTT_HOST, 1883);
+  mqtt.setCallback(onMessage);
+  net.setConnectionTimeout(1000);              // TCP: بعد از ۱ ثانیه بی‌خیال شو
+  mqtt.setSocketTimeout(2);                    // جواب بروکر: بعد از ۲ ثانیه بی‌خیال شو
+  tWifi = millis();
+}
+
+void loop() {
+  uint32_t now = millis();
+  if (now - tSensor &gt;= SENSOR_MS) { tSensor = now; readSensor(); updateAlarm(); }
+  if (now - tPublish &gt;= PUBLISH_MS) { tPublish = now; publishTemp(); }
+  if (cfgChanged) confirmCfg();
+  if (now - tDay &gt;= DAY_MS) { tDay = now; publishDaily(); }
+  keepWiFi();
+  keepMqtt();
+  digitalWrite(PIN_LED, alarmOn &amp;&amp; (millis() / 250) % 2);   // محلی: به شبکه نیاز ندارد
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="25-27"><b class="what">وضعیت تازه.</b> کمینه و بیشینه دوره فعلی (با شروع از <code>NAN</code>)، ساعت دوره، و پرچم «حد تازه را تأیید کن».
+    <span class="why"><code>NAN</code> یعنی «هنوز خواندنی نداریم»؛ پس دوره‌ای بدون خواندن معتبر قابل تشخیص است و چیز غلطی منتشر نمی‌شود.</span></li>
+  <li data-lines="30-33"><b class="what">payload به یک رشته C واقعی.</b> حداکثر ۱۵ بایت کپی کن و <code>'\0'</code> را اضافه کن.
+    <span class="why">کتابخانه بایت‌های خام و یک طول به تو می‌دهد. بدون پایان‌دهنده، <code>strtof</code> و <code>printf</code> از انتها رد می‌شوند و هر چه در حافظه هست را می‌خوانند.</span></li>
+  <li data-lines="34-37"><b class="what">«کل» متن را بررسی کن.</b> <code>strtof</code> تبدیل می‌کند و <code>end</code> را روی اولین نویسه‌ای می‌گذارد که استفاده نکرده؛ فاصله یا خط جدید انتهایی رد می‌شوند. معتبر یعنی: چند رقم خوانده شده، بعدش جز انتها چیزی نیست، پیام بریده نشده، و مقدار بین ۲۰ و ۶۰ است.
+    <span class="why">این ابزار تازه این پروژه است (از کتابخانه استاندارد C). روی بروکر عمومی هر کسی می‌تواند هر چیزی بفرستد؛ حد ۰ یا ۹۹۹ هشدار را بی‌فایده می‌کند، پس دستگاه از خودش محافظت می‌کند.</span></li>
+  <li data-lines="38-41"><b class="what">رد شد: بگو و هیچ چیز را عوض نکن.</b>
+    <span class="why">حد قبلی سر جایش می‌ماند؛ یک پیام بد هرگز ایستگاه را بدون هشدار سالم رها نمی‌کند.</span></li>
+  <li data-lines="42-46"><b class="what">پذیرفته شد: فورا اعمال کن، حد رفع ۲ درجه پایین‌تر، پرچم را بگذار.</b>
+    <span class="why">نگه داشتن فاصله ۲ درجه، هیسترزیس درس ۶.۳ را حفظ می‌کند (بدون چشمک‌زدن بی‌جا). <code>updateAlarm()</code> بعدی، حداکثر ۲ ثانیه بعد، از حد تازه استفاده می‌کند.</span></li>
+  <li data-lines="53-54"><b class="what">کمینه و بیشینه فقط از خواندن‌های معتبر.</b> بعد از بررسی NaN با <code>return</code>.
+    <span class="why">اولین خواندن معتبر یک دوره هر دو را تعیین می‌کند؛ خواندن ناموفق هرگز به این خط‌ها نمی‌رسد.</span></li>
+  <li data-lines="71-80"><b class="what">خلاصه روزانه.</b> یک پیام JSON با retain، یک خط Serial که می‌گوید رفت یا نه، و بعد دوره تازه.
+    <span class="why">retained است تا داشبوردی که فردا صبح باز می‌شود هنوز خلاصه دیروز را نشان بدهد. اگر شبکه در آن لحظه قطع باشد، این خلاصه از دست می‌رود؛ با «offline, lost» در Serial نوشته می‌شود تا بدانی (ماندگار کردنش همان ایده تمرین ۱ است).</span></li>
+  <li data-lines="82-89"><b class="what">تأیید حدی که به کار می‌رود.</b> فقط وقتی وصل هستیم؛ پرچم تا موفقیت روشن می‌ماند.
+    <span class="why">منتشر کردن از داخل callback در PubSubClient خطرناک است، چون هر دو از یک بافر مشترک استفاده می‌کنند. گذاشتن پرچم و منتشر کردن از loop الگوی امن است. topic وضعیت با retain همان راهی است که گوشی می‌فهمد ایستگاه واقعا از کدام حد استفاده می‌کند.</span></li>
+  <li data-lines="104-107"><b class="what">subscribe بعد از هر اتصال موفق.</b>
+    <span class="why">بروکر مقدار retained را درست بعد از subscribe می‌فرستد. اتصال دوباره آن را دوباره می‌رساند، و اعمال دوباره همان مقدار ضرری ندارد.</span></li>
+  <li data-lines="130-131"><b class="what">دو کار دیگر در زمان‌بند.</b> در صورت نیاز حد را تأیید کن؛ هر <code>DAY_MS</code> یک بار خلاصه را بفرست.
+    <span class="why">همان الگوی «برای هر کار یک ساعت» ایستگاه کامل؛ پس اضافه کردن قابلیت هیچ‌وقت انتظار اضافه نمی‌کند.</span></li>
+</ol>
+<div class="callout warn"><div class="ct">حدی که هر کسی می‌تواند عوضش کند</div>
+<p>روی بروکر عمومی، هر کسی که topic تو را حدس بزند می‌تواند حد تازه منتشر کند. بررسی ۲۰ تا ۶۰ آسیب را محدود می‌کند، ولی برای یک گلخانه واقعی از یک بروکر خصوصی با نام کاربری و رمز استفاده کن (HiveMQ Cloud یا Adafruit IO، درس <a href="5-1.html">۵.۱</a>).</p></div>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p>همان مدار کد شروع. <code>DAY_MS</code> را <code>60000</code> بگذار، <code>BASE</code> را عوض کن و قدم‌های آزمایش «چه باید ببینی؟» را دنبال کن.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -110, "left": 170, "attrs": { "temperature": "24", "humidity": "45" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": -130, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 40, "left": -60, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "r1:1", "esp:4", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
 <h2 id="certificate">🎓 تو حالا می‌توانی...</h2>
 <div class="callout info"><div class="ct">کارنامه تو تا اینجا</div>
 <p>اگر درس‌ها را خوانده و پروژه‌هایشان را خودت ساخته‌ای، حالا می‌توانی:</p>

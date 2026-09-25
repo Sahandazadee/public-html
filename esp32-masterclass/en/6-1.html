@@ -1058,6 +1058,302 @@ void loop() {}
 </details>
 </div>
 
+<h2 id="practice-project">Practice project: a door logger with a heartbeat</h2>
+<div class="project">
+<p class="lede-ish">You want to know when someone opens the garden shed, but there's no power outlet out there, so the sensor runs on a battery and sleeps. One problem: if no message arrives all week, is that because nobody opened the door, or because the battery died? Real battery sensors solve this with a <b>heartbeat</b>: a small "I'm still alive" message on a timer. You'll build both in one sketch: a door event on a button, and a heartbeat every hour.</p>
+
+<h3 id="project-req">Requirements</h3>
+<ol>
+  <li>Before every sleep, the board turns on <b>two</b> wake sources: EXT0 on the button on GPIO27 (pressed = LOW) and a timer of <code>HEARTBEAT_SEC</code> (3600 s; 20 s while testing).</li>
+  <li>Woken by the button: add one to a door-event counter that survives deep sleep, print <code>Event: open #N</code> and publish <code>open #N</code> to <code>&lt;BASE&gt;door</code>.</li>
+  <li>Woken by the timer: print <code>Heartbeat #K</code> and publish <code>{"hb":K,"opens":N,"fails":F}</code> to <code>&lt;BASE&gt;heartbeat</code>.</li>
+  <li>Power-on or reset: print <code>Power-on: armed</code> and go straight back to sleep, without turning Wi-Fi on.</li>
+  <li>Wi-Fi gets at most 8 seconds. A message that doesn't go out is counted in <code>fails</code> (kept in RTC memory) and shows up in the next heartbeat. Either way, the board goes back to sleep.</li>
+  <li>The status LED on GPIO4 is on while the board is awake. Before sleeping, the board waits until the button is released and prints <code>Awake &lt;ms&gt; ms</code>.</li>
+</ol>
+
+<h3 id="project-parts">Parts</h3>
+<ul>
+  <li>ESP32 DevKitC, a USB data cable, a breadboard and jumper wires</li>
+  <li>1 push button (the course button on GPIO27; it's already on your breadboard)</li>
+  <li>1 LED + 1 × 220 Ω resistor (the course status LED on GPIO4)</li>
+  <li>A 2.4 GHz Wi-Fi network (in Wokwi: the built-in <code>Wokwi-GUEST</code>)</li>
+  <li>Optional: the battery build and multimeter from this lesson, to see what the LED and the awake time cost</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"SW1","name":"Door button","img":"button.svg","pins":[["1","one side"],["2","other side (diagonal)"]]},
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","to GPIO4"],["2","to LED anode"]]},
+    {"id":"LED1","name":"Status LED","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−)"]]}
+  ],
+  "wires":[["GPIO27","SW1.1","blue"],["SW1.2","GND","black"],["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>The button between GPIO27 and GND (an RTC pin, so it can wake the board; the internal RTC pull-up keeps it HIGH), and the status LED on GPIO4 through 220 Ω. In a real shed, a magnetic reed switch on the door takes the button's place: same two wires.</figcaption></div>
+
+<h3 id="project-start">Starter code</h3>
+<p>The Wi-Fi and MQTT part is ready-made (it's the doorbell exercise from above); your job is the new idea: two wake sources, and telling them apart after waking.</p>
+<div class="code" data-file="ShedLogger.ino" id="projStart"><pre>
+// Door event + heartbeat logger: STARTER (fill in TODO 1 to 6)
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include "driver/rtc_io.h"
+
+const char* WIFI_SSID = "Wokwi-GUEST";              // at home: your Wi-Fi name
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const char* BASE      = "esp32course/yourname/shed/"; // make it unique
+const uint64_t HEARTBEAT_SEC = 3600;                // 1 hour (20 while testing)
+const int LED_PIN = 4;                              // status LED: on = awake
+const gpio_num_t BTN = GPIO_NUM_27;                 // door button (RTC pin)
+
+WiFiClient net;
+PubSubClient mqtt(net);
+RTC_DATA_ATTR uint32_t opens = 0;                   // door events so far
+RTC_DATA_ATTR uint32_t beats = 0;                   // heartbeats so far
+RTC_DATA_ATTR uint32_t fails = 0;                   // messages that didn't go out
+
+void sleepNow() {
+  // TODO 6: wait until the button is released; switch the LED off
+  WiFi.mode(WIFI_OFF);
+  // TODO 1: enable BOTH wake sources: EXT0 on BTN (LOW) + RTC pull-up, and the timer
+  // TODO 6: print "Awake &lt;ms&gt; ms"
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+// Ready-made (like the 6.1 doorbell): Wi-Fi at most 8 s, then one MQTT message
+bool publish(const char* sub, const char* msg) {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - t0 &lt; 8000) delay(20);
+  if (WiFi.status() != WL_CONNECTED) return false;  // never wait forever
+  char topic[80];
+  snprintf(topic, sizeof(topic), "%s%s", BASE, sub);
+  mqtt.setServer(MQTT_HOST, 1883);
+  String id = "shed-" + WiFi.macAddress() + "-" + String(esp_random() &amp; 0xFFFF, HEX);
+  if (!mqtt.connect(id.c_str())) return false;
+  bool ok = mqtt.publish(topic, msg);
+  mqtt.loop();
+  delay(50);                                        // let the packet leave
+  mqtt.disconnect();
+  return ok;
+}
+
+void setup() {
+  Serial.begin(115200);
+  // TODO 6: LED on while awake
+  char msg[64] = "";
+  bool ok = false;
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  if (cause == ESP_SLEEP_WAKEUP_EXT0) {
+    // TODO 2: count the event, print "Event: open #N", publish "open #N" to "door"
+  } else if (cause == ESP_SLEEP_WAKEUP_TIMER) {
+    // TODO 3: count the heartbeat, print "Heartbeat #K",
+    //         publish {"hb":K,"opens":N,"fails":F} to "heartbeat"
+  } else {
+    // TODO 4: power-on or reset: print "Power-on: armed", sleep without Wi-Fi
+  }
+  // TODO 5: sent? print "Sent: &lt;msg&gt;". Not sent? count it in fails
+  sleepNow();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="6-12"><b class="what">Settings.</b> The network, the broker, your topic prefix, the heartbeat period, the LED pin and the button pin as a <code>gpio_num_t</code>.
+    <span class="why">The sleep functions want <code>gpio_num_t</code>, not a plain number; declaring it once here saves casts later.</span></li>
+  <li data-lines="16-18"><b class="what">Three counters in RTC memory.</b>
+    <span class="why">After deep sleep the program starts again from <code>setup()</code>; only <code>RTC_DATA_ATTR</code> variables remember anything between wake-ups.</span></li>
+  <li data-lines="20-27"><b class="what">sleepNow() with the gaps you fill in.</b> Right now it sleeps with no wake source at all.
+    <span class="why">That's why the starter, as it is, sleeps forever after the first boot: restart the simulation (or press EN). It's a good reminder that sleeping without a wake source is a real bug.</span></li>
+  <li data-lines="29-46"><b class="what">publish(): ready-made.</b> Connects to Wi-Fi for at most 8 seconds, sends one message and disconnects; returns <code>true</code> only if the message really went out.
+    <span class="why">The "never wait forever" rule from this lesson is already in here, so you can concentrate on the wake logic.</span></li>
+  <li data-lines="51-63"><b class="what">setup() as a dispatcher.</b> One branch per wake cause, then one place that handles the result and goes to sleep.
+    <span class="why">Every wake-up passes through the same few lines at the end, so no path can forget to go back to sleep.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>In Wokwi: add <code>PubSubClient</code> in the Library Manager tab, set <code>HEARTBEAT_SEC</code> to <code>20</code> while testing, and press ▶. Press the green button after the board has gone to sleep. To watch the messages, subscribe to <code>&lt;BASE&gt;#</code> in the MQTT client you used in lesson <a href="5-1.html">5.1</a>.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": -40, "left": -170, "attrs": { "color": "green" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 150, "left": -130, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 90, "left": -60, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "btn1:1.r", "esp:27", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "r1:1", "esp:4", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>Hint 1</summary><p>You can turn on several wake sources before one <code>esp_deep_sleep_start()</code>: call <code>esp_sleep_enable_ext0_wakeup(...)</code> <b>and</b> <code>esp_sleep_enable_timer_wakeup(...)</code>. Whichever happens first wakes the board. Copy the EXT0 lines (including the two <code>rtc_gpio_...</code> pull-up lines) from the <a href="#ext0">EXT0 section</a>.</p></details>
+<details class="hint"><summary>Hint 2</summary><p>After waking, <code>esp_sleep_get_wakeup_cause()</code> says which source it was: <code>ESP_SLEEP_WAKEUP_EXT0</code> or <code>ESP_SLEEP_WAKEUP_TIMER</code>; anything else means power-on or reset. Build the message text with <code>snprintf(msg, sizeof(msg), ...)</code>; inside a C string a double quote is written <code>\"</code>.</p></details>
+<details class="hint"><summary>Hint 3</summary><p>The release wait is the same line as in the doorbell exercise: <code>pinMode(BTN, INPUT_PULLUP); while (digitalRead(BTN) == LOW) delay(10);</code>. Without it, holding the button for one second sends several <code>open</code> messages, because the board wakes again the moment it falls asleep.</p></details>
+
+<details class="expect"><summary>What should you see?</summary>
+<p>With <code>HEARTBEAT_SEC = 20</code> in Wokwi (the <code>Awake</code> times depend on the network and will differ):</p>
+<pre class="serial">Power-on: armed
+Awake 38 ms
+ets Jun  8 2016 00:22:57
+rst:0x5 (DEEPSLEEP_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+...
+Event: open #1
+Sent: open #1
+Awake 2410 ms
+...
+Heartbeat #1
+Sent: {"hb":1,"opens":1,"fails":0}
+Awake 1830 ms</pre>
+<ul>
+  <li>Requirements 1 and 3: without touching anything, a <code>Heartbeat</code> block appears about every 20 seconds, and <code>hb</code> goes up by one each time.</li>
+  <li>Requirement 2: each press gives exactly one <code>Event: open #N</code>, and the next heartbeat's <code>opens</code> equals the latest N.</li>
+  <li>Requirement 4: restart the simulation: only <code>Power-on: armed</code>, no message in your MQTT client.</li>
+  <li>Requirement 5: put a wrong name in <code>WIFI_SSID</code> and press the button: about 8 seconds later <code>Not sent (counted in fails)</code>; fix the name, and the next heartbeat shows <code>"fails":1</code> (or more).</li>
+  <li>Requirement 6: the LED is lit only while the board is awake (a short flash on power-on, about 2 seconds while sending). Hold the button for 3 seconds: still one <code>open</code>.</li>
+  <li>Note: a press restarts the heartbeat countdown, because the timer is set again before every sleep. That's fine here: any message proves the device is alive.</li>
+</ul>
+</details>
+
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="ShedLogger.ino" id="projAns"><pre>
+// Door event + heartbeat logger: EXT0 button on GPIO27 + hourly heartbeat
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include "driver/rtc_io.h"
+
+const char* WIFI_SSID = "Wokwi-GUEST";              // at home: your Wi-Fi name
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const char* BASE      = "esp32course/yourname/shed/"; // make it unique
+const uint64_t HEARTBEAT_SEC = 3600;                // 1 hour (20 while testing)
+const int LED_PIN = 4;                              // status LED: on = awake
+const gpio_num_t BTN = GPIO_NUM_27;                 // door button (RTC pin)
+
+WiFiClient net;
+PubSubClient mqtt(net);
+RTC_DATA_ATTR uint32_t opens = 0;                   // door events so far
+RTC_DATA_ATTR uint32_t beats = 0;                   // heartbeats so far
+RTC_DATA_ATTR uint32_t fails = 0;                   // messages that didn't go out
+
+void sleepNow() {
+  pinMode(BTN, INPUT_PULLUP);
+  while (digitalRead(BTN) == LOW) delay(10);        // wait until the button is released
+  digitalWrite(LED_PIN, LOW);
+  WiFi.mode(WIFI_OFF);
+  esp_sleep_enable_ext0_wakeup(BTN, 0);             // wake source 1: button (LOW)
+  rtc_gpio_pullup_en(BTN);
+  rtc_gpio_pulldown_dis(BTN);
+  esp_sleep_enable_timer_wakeup(HEARTBEAT_SEC * 1000000ULL);  // wake source 2: timer
+  Serial.printf("Awake %lu ms\n", millis());
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+// Ready-made (like the 6.1 doorbell): Wi-Fi at most 8 s, then one MQTT message
+bool publish(const char* sub, const char* msg) {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - t0 &lt; 8000) delay(20);
+  if (WiFi.status() != WL_CONNECTED) return false;  // never wait forever
+  char topic[80];
+  snprintf(topic, sizeof(topic), "%s%s", BASE, sub);
+  mqtt.setServer(MQTT_HOST, 1883);
+  String id = "shed-" + WiFi.macAddress() + "-" + String(esp_random() &amp; 0xFFFF, HEX);
+  if (!mqtt.connect(id.c_str())) return false;
+  bool ok = mqtt.publish(topic, msg);
+  mqtt.loop();
+  delay(50);                                        // let the packet leave
+  mqtt.disconnect();
+  return ok;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, HIGH);                      // LED on = awake
+  char msg[64] = "";
+  bool ok = false;
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  if (cause == ESP_SLEEP_WAKEUP_EXT0) {
+    opens++;
+    Serial.printf("Event: open #%lu\n", (unsigned long)opens);
+    snprintf(msg, sizeof(msg), "open #%lu", (unsigned long)opens);
+    ok = publish("door", msg);
+  } else if (cause == ESP_SLEEP_WAKEUP_TIMER) {
+    beats++;
+    Serial.printf("Heartbeat #%lu\n", (unsigned long)beats);
+    snprintf(msg, sizeof(msg), "{\"hb\":%lu,\"opens\":%lu,\"fails\":%lu}",
+             (unsigned long)beats, (unsigned long)opens, (unsigned long)fails);
+    ok = publish("heartbeat", msg);
+  } else {
+    Serial.println("Power-on: armed");
+    sleepNow();                                     // nothing to report yet
+  }
+  if (ok) Serial.printf("Sent: %s\n", msg);
+  else { fails++; Serial.println("Not sent (counted in fails)"); }
+  sleepNow();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="21-23"><b class="what">Wait for the button, then LED off.</b> The pin is made a readable input with pull-up; the loop waits while it's still pressed.
+    <span class="why">EXT0 wakes on a LOW <i>level</i>. If the button is still down when the board falls asleep, it wakes again at once and sends a second <code>open</code>. The LED goes off last, so it truly shows "awake".</span></li>
+  <li data-lines="25-28"><b class="what">Two wake sources.</b> EXT0 on GPIO27 at level 0 with the RTC pull-up on, <b>and</b> the timer for <code>HEARTBEAT_SEC</code> seconds.
+    <span class="why">Wake sources add up; the first one to fire wins. <code>1000000ULL</code> keeps the multiplication in 64 bits: 3600 s is 3.6 billion µs, which doesn't fit in 32 bits.</span></li>
+  <li data-lines="29-31"><b class="what">Report the awake time, flush, sleep.</b>
+    <span class="why"><code>millis()</code> right before sleeping is the number that decides battery life; the flush keeps the last line from being cut off.</span></li>
+  <li data-lines="55-58"><b class="what">LED on, and a message buffer that starts empty.</b>
+    <span class="why"><code>ok = false</code> means "nothing sent yet"; every branch that sends overwrites it with the real result.</span></li>
+  <li data-lines="59-64"><b class="what">The button branch.</b> Count, print, build <code>open #N</code>, publish to <code>door</code>.
+    <span class="why">The number makes lost messages visible: if your client shows #3 and then #5, message #4 never arrived.</span></li>
+  <li data-lines="65-70"><b class="what">The timer branch.</b> Count the heartbeat and send a small JSON with the three counters.
+    <span class="why">One heartbeat tells you three things at once: the device is alive (<code>hb</code>), how many events there were (<code>opens</code>), and how reliable the network is (<code>fails</code>). <code>(unsigned long)</code> matches the <code>%lu</code> in the format string.</span></li>
+  <li data-lines="71-74"><b class="what">Power-on or reset.</b> Print and sleep immediately, without Wi-Fi.
+    <span class="why">Putting in a fresh battery shouldn't send a false "door opened". <code>sleepNow()</code> never returns, so the lines below it don't run on this path.</span></li>
+  <li data-lines="75-77"><b class="what">One place for the result, then sleep.</b>
+    <span class="why">A failure is only counted, not retried: a battery device never stays awake to try again; the next wake-up tries again, and the count travels with the next heartbeat.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p>The same circuit as the starter. Set <code>HEARTBEAT_SEC</code> to <code>20</code>, add <code>PubSubClient</code>, press ▶, then press the button a few times between heartbeats.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": -40, "left": -170, "attrs": { "color": "green" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 150, "left": -130, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 90, "left": -60, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "btn1:1.r", "esp:27", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "r1:1", "esp:4", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">The lesson in three lines</div>
 <p>Battery life = capacity ÷ average current, and the average current is set by the sleep current and the awake time. Deep sleep (about 10 µA for the chip) restarts the program from setup and keeps only <code>RTC_DATA_ATTR</code>; light sleep (about 0.8 mA) carries on from the same line. A development board draws several milliamps asleep: always measure with a multimeter, and use lithium batteries only with a protected charger and a low-power regulator.</p></div>
 

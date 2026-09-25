@@ -723,7 +723,9 @@
     var H = Math.max(by + bh + 20, y + 10), W = px + pw + 20;
     var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + t("wiringAria") + '">';
     s += '<rect x="' + bx + '" y="' + by + '" width="' + bw + '" height="' + bh + '" rx="14" fill="#1b1f2a"/>';
-    s += '<rect x="' + (bx + 20) + '" y="' + (by + 16) + '" width="110" height="80" rx="6" fill="#c9ced8"/><text x="' + (bx + 75) + '" y="' + (by + 52) + '" text-anchor="middle" font-size="13" font-weight="800" fill="#333">ESP32</text><text x="' + (bx + 75) + '" y="' + (by + 70) + '" text-anchor="middle" font-size="10" fill="#555">WROOM-32</text>';
+    /* نام تراشه روی نقشه از نام برد می‌آید (مثلا ESP32-C3)؛ می‌شود با chip و module هم مشخصش کرد */
+    var bname = spec.board || "", chipName = spec.chip || (/C3/i.test(bname) ? "ESP32-C3" : /S3/i.test(bname) ? "ESP32-S3" : /C6/i.test(bname) ? "ESP32-C6" : "ESP32"), chipMod = spec.module != null ? spec.module : (chipName === "ESP32" ? "WROOM-32" : "");
+    s += '<rect x="' + (bx + 20) + '" y="' + (by + 16) + '" width="110" height="80" rx="6" fill="#c9ced8"/><text x="' + (bx + 75) + '" y="' + (by + 52) + '" text-anchor="middle" font-size="13" font-weight="800" fill="#333">' + esc(chipName) + '</text><text x="' + (bx + 75) + '" y="' + (by + 70) + '" text-anchor="middle" font-size="10" fill="#555">' + esc(chipMod) + '</text>';
     s += '<text x="' + (bx + 20) + '" y="' + (by + bh - 16) + '" font-size="13" font-weight="700" fill="#e8eef8" ' + LEFT_ALIGN + '>' + esc(spec.board || "ESP32 DevKitC") + '</text>';
     bpins.forEach(function (p) {
       var q = pos[p];

@@ -978,6 +978,430 @@ void loop() {
 </details>
 </div>
 
+<h2 id="project">Practice project: AI pair programming with a real review</h2>
+<div class="project">
+<p class="lede-ish">Your OLED weather station from lesson <a href="3-3.html">3.3</a> only shows "right now". A real weather station also shows <b>today's lowest and highest</b> temperature, and that's a feature you'll add with an AI assistant as your pair programmer. The AI writes the first draft; you are the reviewer who decides whether it's allowed onto your board. The code isn't the real deliverable here; the review is.</p>
+
+<h3 id="project-req">Requirements</h3>
+<ol>
+  <li>Your prompt follows the <a href="#template">template</a>: board, core 3.x, the complete current sketch, the wiring (DHT22 on 13, OLED on 21/22, button 1 on GPIO27 to GND), the request, and the constraints (no <code>delay()</code> in loop, change only what the feature needs).</li>
+  <li>The OLED shows the current temperature and humidity plus two new lines: <code>Min</code> and <code>Max</code> temperature since the "day" started.</li>
+  <li>Min and max start from the first valid reading (never from 0 or another made-up number), and a failed reading (NaN) never changes them.</li>
+  <li>Button 1 (GPIO27) resets min and max right away, even with a quick tap; they also reset by themselves every 24 hours (with <code>millis()</code>, safe across its rollover).</li>
+  <li>Every 2 seconds the Serial Monitor shows one line like <code>T=24.5 C  H=40.0 %  min=24.5  max=24.5</code>.</li>
+  <li>Your written review: all ten <a href="#checklist">checklist</a> steps with pass or fail <b>and a reason</b>, at least one bug described as symptom, cause and fix, and the fixed code tested again in Wokwi.</li>
+</ol>
+
+<h3 id="project-parts">Parts</h3>
+<ul>
+  <li>The lesson 3.3 station: ESP32 DevKitC, DHT22 (plus a 10 kΩ pull-up if it's the bare 4-pin sensor), 0.96-inch SSD1306 I2C OLED</li>
+  <li>1 push button (the course button on GPIO27)</li>
+  <li>Any AI assistant (the <a href="#tools">tools section</a> lists several); Wokwi if you want to test before touching the board</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"DHT","name":"DHT22 sensor","img":"dht22.svg","pins":[["VCC","3.3 V power"],["DATA","data"],["GND","ground"]]},
+    {"id":"OLED","name":"OLED SSD1306 I2C","img":"oled-photo2.jpg","pins":[["VCC","3.3 V"],["GND","ground"],["SDA","I2C data"],["SCL","I2C clock"]]},
+    {"id":"SW1","name":"Reset button (button 1)","img":"button.svg","pins":[["1","one side"],["2","other side (diagonal)"]]}
+  ],
+  "wires":[["3V3","DHT.VCC","red"],["GPIO13","DHT.DATA","blue"],["DHT.GND","GND","black"],["3V3","OLED.VCC","red"],["OLED.GND","GND","black"],["GPIO21","OLED.SDA","yellow"],["GPIO22","OLED.SCL","green"],["GPIO27","SW1.1","blue"],["SW1.2","GND","black"]]
+}</script><figcaption>The lesson 3.3 station plus the course button: DHT22 on GPIO13 (a 3-pin module already has its pull-up; a bare 4-pin sensor needs 10 kΩ from DATA to 3V3), the OLED on I2C 21/22, and the button between GPIO27 and GND, using the internal pull-up.</figcaption></div>
+
+<h3 id="project-start">Starter code</h3>
+<p>This is the lesson 3.3 station, unchanged, with <code>TODO</code> markers where the new feature belongs. Paste the <b>whole</b> sketch into your prompt: the markers tell the AI (and you) exactly where each requirement goes. If you'd rather write the feature yourself first and then ask the AI to review <b>your</b> code, that's a great exercise too; the checklist works in both directions.</p>
+<div class="code" data-file="Weather_MinMax.ino" id="projStart"><pre>
+// Mini weather station (3.3): STARTER for the AI review project
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+DHT dht(13, DHT22);
+
+unsigned long lastRead = 0;
+// TODO 3: variables for today's min and max temperature (and when the "day" started)
+
+void showMessage(const char *msg) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println(msg);
+  display.display();
+}
+
+void setup() {
+  Serial.begin(115200);
+  // TODO 4: button 1 on GPIO27 (to GND)
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found!");
+    while (true) delay(1000);
+  }
+  display.setTextColor(SSD1306_WHITE);
+  dht.begin();
+  showMessage("Waiting for DHT22...");
+}
+
+void loop() {
+  // TODO 4: reset min/max on a button press (even a quick tap) and every 24 hours
+  if (millis() - lastRead &lt; 2000) return;   // 2 seconds haven't passed yet
+  lastRead = millis();
+
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) {
+    showMessage("DHT22 read error!");
+    Serial.println("DHT22 read error");
+    return;
+  }
+  // TODO 3: update min/max from this valid reading
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("Temperature");
+  display.setTextSize(2);
+  display.setCursor(0, 12);
+  display.printf("%.1f C", t);
+  display.setTextSize(1);
+  display.setCursor(0, 36);
+  display.println("Humidity");
+  display.setTextSize(2);
+  display.setCursor(0, 48);
+  display.printf("%.1f %%", h);
+  display.display();
+  // TODO 2: make room for "Min" and "Max" lines on the display
+
+  Serial.printf("T=%.1f C  H=%.1f %%\n", t, h);   // TODO 5: add min= and max=
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="7-10"><b class="what">The display, the sensor and the 2-second timer.</b> Exactly as in lesson 3.3.
+    <span class="why">A review starts from code you already trust; then every difference in the AI's answer is either the feature you asked for or something to question.</span></li>
+  <li data-lines="11,23"><b class="what">Where the new state and the button setup go.</b>
+    <span class="why">Min, max and the start of the day must live <b>between</b> passes of loop, so they're global (or <code>static</code>) variables.</span></li>
+  <li data-lines="35-37"><b class="what">The TODO before the 2-second guard.</b> Notice where it sits: above the line that leaves loop early.
+    <span class="why">This is the same lesson as exercise 1 above: anything that must react quickly (a button tap) has to run on every pass, not once every 2 seconds.</span></li>
+  <li data-lines="46,62,64"><b class="what">Where min/max are updated, drawn and printed.</b> After the NaN check, so only valid readings reach them.
+    <span class="why">The NaN check with <code>return</code> is already a guard: code placed after it can never see a failed reading.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>First run the starter so you know the station works before any change. In Wokwi, add <code>Adafruit SSD1306</code> and <code>DHT sensor library</code> in the Library Manager tab. Later, paste the AI's code over it and test the same way: click the DHT22 and move the temperature slider up and down, then tap the button.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled1", "top": 60, "left": 200, "attrs": { "i2cAddress": "0x3c" } },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -20, "left": -150, "attrs": { "temperature": "24.5", "humidity": "40" } },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 140, "left": -170, "attrs": { "color": "green" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ],
+    [ "btn1:1.r", "esp:27", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>Hint 1</summary><p>Where to look first: the <b>starting values</b> of min and max, the <code>pinMode</code> of the button, and <b>where</b> in loop the button is read. Those are the three places where AI answers for this feature most often go wrong.</p></details>
+<details class="hint"><summary>Hint 2</summary><p>Test with numbers you can predict. In Wokwi the DHT22 starts at 24.5 °C. After the first reading, min and max must both be 24.5. Slide to 30: max 30, min still 24.5. Slide to 18: min 18. If the display shows <code>Min 0.0 C</code> at room temperature, you've found a bug.</p></details>
+<details class="hint"><summary>Hint 3</summary><p>For the reset button, tap it as quickly as you can, three times, at random moments. Each tap must print one reset. If some taps do nothing, the button is being read too rarely (think about the 2-second guard).</p></details>
+
+<details class="expect"><summary>What should you see?</summary>
+<p>This project has two results: your written review, and a program that really works. With the fixed code in Wokwi (the slider moved from 24.5 to 30, then to 18, then the button tapped):</p>
+<pre class="serial">T=24.5 C  H=40.0 %  min=24.5  max=24.5
+T=30.0 C  H=40.0 %  min=24.5  max=30.0
+T=18.0 C  H=40.0 %  min=18.0  max=30.0
+Min/max reset (button)
+T=18.0 C  H=40.0 %  min=18.0  max=18.0</pre>
+<ul>
+  <li>Requirements 2 and 5: the OLED shows <code>Min 24.5 C</code> and <code>Max 24.5 C</code> right after the first reading, and the Serial line appears every 2 seconds.</li>
+  <li>Requirement 3: never <code>0.0</code> or <code>nan</code> in min or max. Pull the DHT22's data wire (or disconnect it in Wokwi): "DHT22 read error!" appears and min/max keep their values.</li>
+  <li>Requirement 4: every quick tap prints exactly one <code>Min/max reset (button)</code>. For the 24-hour reset, set <code>DAY_MS</code> to <code>60000</code> while testing: <code>Min/max reset (24 h)</code> every minute.</li>
+  <li>Requirement 6: your review table has ten rows, each with a reason; at least one bug has a symptom you can reproduce (for example "Min 0.0 C at room temperature").</li>
+</ul>
+</details>
+
+<details class="answer"><summary>Full answer with explanation</summary>
+<p>Your AI's answer will be different every time, so here's a <b>model review</b> of one typical answer (written by us, like the other examples in this lesson). First, the prompt:</p>
+<div class="code" data-lang="text" data-file="prompt-minmax.txt" id="projPrompt"><pre>
+ROLE: You are an experienced embedded engineer helping a beginner.
+
+HARDWARE
+- Board: ESP32 DevKitC V4 (ESP32-WROOM-32E), Arduino-ESP32 core 3.x, Arduino IDE 2
+- DHT22: DATA -> GPIO13 (10k pull-up); OLED SSD1306 I2C 128x64: SDA 21, SCL 22, 0x3C
+- Push button: one side -> GPIO27, other side -> GND (no external resistor)
+
+CURRENT CODE (works): [the complete starter sketch pasted here]
+
+GOAL
+Show today's minimum and maximum temperature on the OLED and in the Serial line.
+Reset them when the button is pressed, and automatically every 24 hours.
+
+CONSTRAINTS
+- No delay() in loop(); a quick tap on the button must never be missed.
+- A failed reading (NaN) must not change min/max.
+- Change only what this feature needs; keep everything else as it is.
+
+OUTPUT I WANT
+1) The complete sketch, new lines marked // NEW.  2) What you assumed.
+</pre></div>
+<ol class="walk" data-for="projPrompt">
+  <li data-lines="3-6"><b class="what">Hardware, including how the button is wired.</b>
+    <span class="why">"Other side to GND, no external resistor" is the sentence that should lead the model to <code>INPUT_PULLUP</code>. Leave it out, and a correct answer is luck.</span></li>
+  <li data-lines="10-12"><b class="what">A goal you can test.</b> Where min/max appear, and both ways they reset.</li>
+  <li data-lines="14-17"><b class="what">The constraints are really requirements 3 and 4.</b>
+    <span class="why">You write the traps you know about into the prompt. The review then checks whether the model actually respected them; a constraint in the prompt is a request, not a guarantee.</span></li>
+</ol>
+<p>The answer (made up by us, but typical):</p>
+<div class="code" data-file="Weather_MinMax_AI.ino" id="projAI"><pre>
+// Made-up example: the AI's answer (Weather_OLED from 3.3 + daily min/max)
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+DHT dht(13, DHT22);
+
+unsigned long lastRead = 0;
+const int BUTTON_PIN = 27;                 // NEW
+const unsigned long DAY_MS = 86400000UL;   // NEW: 24 hours
+float minT = 0;                            // NEW
+float maxT = 0;                            // NEW
+unsigned long dayStart = 0;                // NEW
+
+void showMessage(const char *msg) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println(msg);
+  display.display();
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT);              // NEW
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found!");
+    while (true) delay(1000);
+  }
+  display.setTextColor(SSD1306_WHITE);
+  dht.begin();
+  showMessage("Waiting for DHT22...");
+}
+
+void loop() {
+  if (millis() - lastRead &lt; 2000) return;   // 2 seconds haven't passed yet
+  lastRead = millis();
+
+  // NEW: reset on the button or after 24 hours
+  if (digitalRead(BUTTON_PIN) == LOW || millis() - dayStart &gt;= DAY_MS) {
+    minT = 0;
+    maxT = 0;
+    dayStart = millis();
+  }
+
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) {
+    showMessage("DHT22 read error!");
+    Serial.println("DHT22 read error");
+    return;
+  }
+  if (t &lt; minT) minT = t;                  // NEW
+  if (t &gt; maxT) maxT = t;                  // NEW
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("Temperature");
+  display.setTextSize(2);
+  display.setCursor(0, 10);
+  display.printf("%.1f C", t);
+  display.setTextSize(1);
+  display.setCursor(0, 30);
+  display.printf("Humidity %.1f %%", h);
+  display.setCursor(0, 42);
+  display.printf("Min %.1f C", minT);      // NEW
+  display.setCursor(0, 54);
+  display.printf("Max %.1f C", maxT);      // NEW
+  display.display();
+
+  Serial.printf("T=%.1f C  H=%.1f %%  min=%.1f  max=%.1f\n", t, h, minT, maxT);
+}
+</pre></div>
+<p>It compiles without a single warning. Now the review:</p>
+<div class="table-wrap"><table><tr><th>#</th><th>Step</th><th>Result</th><th>Why</th></tr>
+<tr><td>1</td><td>I understand every line</td><td>❌ fail</td><td>Line by line: the reset (lines 42 to 47) sits <b>after</b> the 2-second guard on line 39, so the button is read only once every 2 seconds. A tap shorter than that is usually missed; the prompt said this must never happen.</td></tr>
+<tr><td>2</td><td>Pins</td><td>✅ pass</td><td>13, 21/22 and 27 are safe pins; nothing on 6 to 11, no output on 34 to 39.</td></tr>
+<tr><td>3</td><td>It matches my wiring</td><td>❌ fail</td><td>The button goes to GND with no resistor, but line 27 uses <code>INPUT</code> without a pull-up. The pin floats while the button is up: on a real board, noise can read as LOW and reset min/max at random moments. It needs <code>INPUT_PULLUP</code>.</td></tr>
+<tr><td>4</td><td>Voltage and current</td><td>✅ pass</td><td>Nothing new is powered from a pin.</td></tr>
+<tr><td>5</td><td>API version</td><td>✅ pass</td><td>Nothing from core 2.x.</td></tr>
+<tr><td>6</td><td>The libraries are real</td><td>✅ pass</td><td>The same three libraries as lesson 3.3.</td></tr>
+<tr><td>7</td><td>No endless waiting</td><td>✅ pass</td><td>No delay in loop. <code>millis() - dayStart &gt;= DAY_MS</code> is the rollover-safe form.</td></tr>
+<tr><td>8</td><td>Error handling</td><td>❌ fail</td><td>Min and max start at 0 (lines 13 and 14) and are set back to 0 on every reset. At any room temperature, <code>t &lt; minT</code> is never true, so the display shows <code>Min 0.0 C</code> forever; in a freezer, <code>Max</code> would be stuck at 0 instead. NaN is handled correctly (the <code>return</code> comes first).</td></tr>
+<tr><td>9</td><td>Security</td><td>✅ pass</td><td>No network, no passwords.</td></tr>
+<tr><td>10</td><td>Wokwi first, then the board</td><td>❌ fail (seen in the simulator)</td><td>At 24.5 °C the display shows <code>Min 0.0 C</code>. Quick taps on the button are mostly ignored.</td></tr></table></div>
+<p><b>One bug, written up properly.</b> <i>Symptom:</i> at room temperature the display shows <code>Min 0.0 C</code> and never changes. <i>Cause:</i> min and max start (and restart) at 0, a real temperature, instead of "no value yet". <i>Fix:</i> start them at <code>NAN</code> and let the first valid reading set both. <i>Retest:</i> after the first reading, min and max both show 24.5.</p>
+<p><b>The corrected code.</b> The reset logic moves into its own function that runs on <b>every</b> pass of loop, before the 2-second guard. Everything not mentioned in the walk is unchanged from lesson 3.3.</p>
+<div class="code" data-file="Weather_MinMax.ino" id="projAns"><pre>
+// Mini weather station (3.3) + today's min/max, reviewed and fixed
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+DHT dht(13, DHT22);
+
+unsigned long lastRead = 0;
+const int BUTTON_PIN = 27;
+const unsigned long DAY_MS = 86400000UL;   // 24 hours (60000 while testing)
+float minT = NAN;                          // NAN = "no reading yet"
+float maxT = NAN;
+unsigned long dayStart = 0;
+bool lastBtn = HIGH;                       // for edge detection
+unsigned long lastBtnChange = 0;           // for debouncing
+
+void showMessage(const char *msg) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println(msg);
+  display.display();
+}
+
+void resetMinMax(const char *why) {
+  minT = NAN;
+  maxT = NAN;
+  dayStart = millis();
+  Serial.printf("Min/max reset (%s)\n", why);
+}
+
+void checkReset() {
+  bool b = digitalRead(BUTTON_PIN);
+  if (b != lastBtn &amp;&amp; millis() - lastBtnChange &gt; 50) {   // a real change, not bounce
+    lastBtnChange = millis();
+    lastBtn = b;
+    if (b == LOW) resetMinMax("button");
+  }
+  if (millis() - dayStart &gt;= DAY_MS) resetMinMax("24 h");   // rollover-safe
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found!");
+    while (true) delay(1000);
+  }
+  display.setTextColor(SSD1306_WHITE);
+  dht.begin();
+  showMessage("Waiting for DHT22...");
+}
+
+void loop() {
+  checkReset();                             // on EVERY pass, before the guard below
+  if (millis() - lastRead &lt; 2000) return;   // 2 seconds haven't passed yet
+  lastRead = millis();
+
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) {
+    showMessage("DHT22 read error!");
+    Serial.println("DHT22 read error");
+    return;                                 // min/max stay untouched
+  }
+  if (isnan(minT) || t &lt; minT) minT = t;    // the first valid reading sets both
+  if (isnan(maxT) || t &gt; maxT) maxT = t;
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("Temperature");
+  display.setTextSize(2);
+  display.setCursor(0, 10);
+  display.printf("%.1f C", t);
+  display.setTextSize(1);
+  display.setCursor(0, 30);
+  display.printf("Humidity %.1f %%", h);
+  display.setCursor(0, 42);
+  display.printf("Min %.1f C", minT);
+  display.setCursor(0, 54);
+  display.printf("Max %.1f C", maxT);
+  display.display();
+
+  Serial.printf("T=%.1f C  H=%.1f %%  min=%.1f  max=%.1f\n", t, h, minT, maxT);
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="11-17"><b class="what">The new variables.</b> The button pin, the length of a "day", min and max starting as <code>NAN</code>, the start of the day, and two variables for reading the button cleanly.
+    <span class="why"><code>NAN</code> means "no value yet"; unlike 0, it can't be mistaken for a real temperature. <code>DAY_MS</code> is a named constant, so you can set it to one minute while testing.</span></li>
+  <li data-lines="27-32"><b class="what">resetMinMax(): one place that resets.</b> Back to <code>NAN</code>, a new day starts now, and a line in the Serial Monitor says why.
+    <span class="why">Both the button and the 24-hour timer use it, so they can't behave differently. The printed reason makes requirement 4 easy to test.</span></li>
+  <li data-lines="34-40"><b class="what">A button tap = a change to LOW that lasts.</b> A change only counts if 50 ms have passed since the last change; only the HIGH-to-LOW edge resets.
+    <span class="why">This is edge detection with debounce from lesson <a href="3-1.html">3.1</a>. Holding the button resets once, not continuously, and contact bounce doesn't count as extra taps.</span></li>
+  <li data-lines="41"><b class="what">The 24-hour reset, written the rollover-safe way.</b>
+    <span class="why"><code>millis() - dayStart &gt;= DAY_MS</code> stays correct when <code>millis()</code> wraps around after about 49 days; <code>millis() &gt; dayStart + DAY_MS</code> would not.</span></li>
+  <li data-lines="46"><b class="what">INPUT_PULLUP.</b>
+    <span class="why">The button connects the pin to GND and nothing holds it HIGH otherwise. The internal pull-up does, with no extra part (fixes step 3).</span></li>
+  <li data-lines="58-60"><b class="what">checkReset() on every pass, before the guard.</b>
+    <span class="why">loop runs thousands of times a second, so even a 100 ms tap is seen (fixes step 1). The rule from exercise 1 again: fast jobs before the guard at the door, slow jobs after it.</span></li>
+  <li data-lines="64-70"><b class="what">Only valid readings reach min and max.</b> If min is still <code>NAN</code>, the first reading becomes the minimum; the same for max.
+    <span class="why">This fixes step 8. The <code>return</code> on NaN comes first, so a failed reading can't touch them.</span></li>
+  <li data-lines="72-86"><b class="what">A new layout for five lines.</b> The temperature stays big; humidity, min and max use the small font.
+    <span class="why">The 64-pixel-high screen fits 16 pixels of big text plus four lines of small text (8 pixels each) with small gaps.</span></li>
+  <li data-lines="88"><b class="what">The Serial line with min and max.</b>
+    <span class="why">You can check requirement 5, and the whole test plan, without staring at the tiny display.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p>The same circuit as the starter. Set <code>DAY_MS</code> to <code>60000</code> to watch the daily reset every minute, move the DHT22 slider, and tap the button.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled1", "top": 60, "left": 200, "attrs": { "i2cAddress": "0x3c" } },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -20, "left": -150, "attrs": { "temperature": "24.5", "humidity": "40" } },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 140, "left": -170, "attrs": { "color": "green" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ],
+    [ "btn1:1.r", "esp:27", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">The lesson in three lines</div>
 <p>AI is an assistant, not a replacement, because it writes right and wrong code with the same full confidence (unsuitable pins, core 2.x APIs, 5 V signals). Get better answers with the prompt template (board, core version, wiring, libraries, goal, constraints, output), and for troubleshooting give the full error and the full code. Review every piece of code with the ten-step checklist, run it in Wokwi first, and never paste a real password or key into a conversation.</p></div>
 

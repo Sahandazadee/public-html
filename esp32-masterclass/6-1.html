@@ -1058,6 +1058,302 @@ void loop() {}
 </details>
 </div>
 
+<h2 id="practice-project">پروژه تمرینی: ثبت باز شدن در، با ضربان قلب</h2>
+<div class="project">
+<p class="lede-ish">می‌خواهی بدانی کی در انباری ته حیاط باز می‌شود، ولی آنجا پریز برق نیست؛ پس سنسور با باتری کار می‌کند و بیشتر وقت‌ها خواب است. یک مشکل: اگر یک هفته هیچ پیامی نیامد، یعنی کسی در را باز نکرده، یا باتری تمام شده؟ سنسورهای باتری‌خور واقعی این را با یک <b>ضربان قلب</b> (heartbeat) حل می‌کنند: یک پیام کوچک «هنوز زنده‌ام» که با تایمر فرستاده می‌شود. تو هر دو را در یک اسکچ می‌سازی: رویداد در با یک دکمه، و ضربان قلب هر یک ساعت.</p>
+
+<h3 id="project-req">نیازمندی‌ها</h3>
+<ol>
+  <li>برد قبل از هر خواب، <b>دو</b> منبع بیداری را روشن می‌کند: EXT0 روی دکمه GPIO27 (فشرده = LOW) و تایمری به اندازه <code>HEARTBEAT_SEC</code> (۳۶۰۰ ثانیه؛ برای تست ۲۰ ثانیه).</li>
+  <li>بیداری با دکمه: یکی به شمارنده رویدادهای در (که بعد از خواب عمیق می‌ماند) اضافه می‌شود، <code>Event: open #N</code> چاپ می‌شود و <code>open #N</code> به <code>&lt;BASE&gt;door</code> فرستاده می‌شود.</li>
+  <li>بیداری با تایمر: <code>Heartbeat #K</code> چاپ می‌شود و <code>{"hb":K,"opens":N,"fails":F}</code> به <code>&lt;BASE&gt;heartbeat</code> فرستاده می‌شود.</li>
+  <li>روشن شدن یا ریست: <code>Power-on: armed</code> چاپ می‌شود و برد بدون روشن کردن Wi-Fi مستقیم دوباره می‌خوابد.</li>
+  <li>Wi-Fi حداکثر ۸ ثانیه فرصت دارد. پیامی که نرود در <code>fails</code> (در حافظه RTC) شمرده می‌شود و در ضربان بعدی دیده می‌شود. در هر حال برد دوباره می‌خوابد.</li>
+  <li>LED وضعیت روی GPIO4 تا وقتی برد بیدار است روشن است. برد قبل از خواب صبر می‌کند تا دکمه رها شود و <code>Awake &lt;ms&gt; ms</code> را چاپ می‌کند.</li>
+</ol>
+
+<h3 id="project-parts">قطعه‌ها</h3>
+<ul>
+  <li>برد ESP32 DevKitC، کابل USB دیتا، برد بورد و سیم جامپر</li>
+  <li>۱ دکمه فشاری (دکمه همیشگی دوره روی GPIO27؛ از قبل روی برد بوردت هست)</li>
+  <li>۱ LED و ۱ مقاومت ۲۲۰ اهم (LED وضعیت همیشگی دوره روی GPIO4)</li>
+  <li>یک شبکه Wi-Fi با فرکانس ۲٫۴ گیگاهرتز (در Wokwi: همان <code>Wokwi-GUEST</code>)</li>
+  <li>اختیاری: مدار باتری و مولتی‌متر همین درس، تا ببینی LED و مدت بیداری چقدر خرج دارند</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"SW1","name":"دکمه در","img":"button.svg","pins":[["1","یک طرف"],["2","طرف دیگر (قطری)"]]},
+    {"id":"R1","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","به GPIO4"],["2","به آند LED"]]},
+    {"id":"LED1","name":"LED وضعیت","img":"led.svg","pins":[["A","آند (+)، پایه بلند"],["K","کاتد (−)"]]}
+  ],
+  "wires":[["GPIO27","SW1.1","blue"],["SW1.2","GND","black"],["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>دکمه بین GPIO27 و GND (پین RTC است، پس می‌تواند برد را بیدار کند؛ بالاکش داخلی RTC آن را HIGH نگه می‌دارد)، و LED وضعیت روی GPIO4 با مقاومت ۲۲۰ اهم. در انباری واقعی، یک کلید مغناطیسی (reed switch) روی در جای دکمه را می‌گیرد: همان دو سیم.</figcaption></div>
+
+<h3 id="project-start">کد شروع</h3>
+<p>بخش Wi-Fi و MQTT آماده است (همان تمرین زنگ در بالاتر)؛ کار تو ایده تازه است: دو منبع بیداری، و تشخیص این که بعد از بیداری کدام‌شان بوده.</p>
+<div class="code" data-file="ShedLogger.ino" id="projStart"><pre>
+// ثبت رویداد در + ضربان قلب: کد شروع (TODO 1 تا 6 را پر کن)
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include "driver/rtc_io.h"
+
+const char* WIFI_SSID = "Wokwi-GUEST";              // در خانه: اسم Wi-Fi خودت
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const char* BASE      = "esp32course/yourname/shed/"; // یکتایش کن
+const uint64_t HEARTBEAT_SEC = 3600;                // یک ساعت (برای تست ۲۰)
+const int LED_PIN = 4;                              // LED وضعیت: روشن = بیدار
+const gpio_num_t BTN = GPIO_NUM_27;                 // دکمه در (پین RTC)
+
+WiFiClient net;
+PubSubClient mqtt(net);
+RTC_DATA_ATTR uint32_t opens = 0;                   // تعداد رویدادهای در تا حالا
+RTC_DATA_ATTR uint32_t beats = 0;                   // تعداد ضربان‌ها تا حالا
+RTC_DATA_ATTR uint32_t fails = 0;                   // پیام‌هایی که نرفتند
+
+void sleepNow() {
+  // TODO 6: صبر کن تا دکمه رها شود؛ LED را خاموش کن
+  WiFi.mode(WIFI_OFF);
+  // TODO 1: هر دو منبع بیداری: EXT0 روی BTN (با LOW) + بالاکش RTC، و تایمر
+  // TODO 6: چاپ کن "Awake &lt;ms&gt; ms"
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+// آماده (مثل زنگ در ۶.۱): Wi-Fi حداکثر ۸ ثانیه، بعد یک پیام MQTT
+bool publish(const char* sub, const char* msg) {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - t0 &lt; 8000) delay(20);
+  if (WiFi.status() != WL_CONNECTED) return false;  // هرگز بی‌نهایت منتظر نمان
+  char topic[80];
+  snprintf(topic, sizeof(topic), "%s%s", BASE, sub);
+  mqtt.setServer(MQTT_HOST, 1883);
+  String id = "shed-" + WiFi.macAddress() + "-" + String(esp_random() &amp; 0xFFFF, HEX);
+  if (!mqtt.connect(id.c_str())) return false;
+  bool ok = mqtt.publish(topic, msg);
+  mqtt.loop();
+  delay(50);                                        // فرصت خروج بسته
+  mqtt.disconnect();
+  return ok;
+}
+
+void setup() {
+  Serial.begin(115200);
+  // TODO 6: LED تا وقتی بیداری روشن باشد
+  char msg[64] = "";
+  bool ok = false;
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  if (cause == ESP_SLEEP_WAKEUP_EXT0) {
+    // TODO 2: رویداد را بشمار، "Event: open #N" را چاپ کن، "open #N" را به "door" بفرست
+  } else if (cause == ESP_SLEEP_WAKEUP_TIMER) {
+    // TODO 3: ضربان را بشمار، "Heartbeat #K" را چاپ کن،
+    //         {"hb":K,"opens":N,"fails":F} را به "heartbeat" بفرست
+  } else {
+    // TODO 4: روشن شدن یا ریست: "Power-on: armed" را چاپ کن و بدون Wi-Fi بخواب
+  }
+  // TODO 5: رفت؟ "Sent: &lt;msg&gt;" را چاپ کن. نرفت؟ در fails بشمارش
+  sleepNow();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="6-12"><b class="what">تنظیمات.</b> شبکه، بروکر، پیشوند topic خودت، دوره ضربان، پین LED و پین دکمه با نوع <code>gpio_num_t</code>.
+    <span class="why">توابع خواب <code>gpio_num_t</code> می‌خواهند، نه یک عدد ساده؛ اگر یک بار این‌جا تعریفش کنی، بعدا به تبدیل نوع نیاز نداری.</span></li>
+  <li data-lines="16-18"><b class="what">سه شمارنده در حافظه RTC.</b>
+    <span class="why">بعد از خواب عمیق برنامه از <code>setup()</code> از نو شروع می‌شود؛ فقط متغیرهای <code>RTC_DATA_ATTR</code> چیزی را بین دو بیداری به یاد می‌آورند.</span></li>
+  <li data-lines="20-27"><b class="what">sleepNow() با جاهای خالی که تو پر می‌کنی.</b> فعلا بدون هیچ منبع بیداری می‌خوابد.
+    <span class="why">برای همین کد شروع، همین‌طور که هست، بعد از بوت اول برای همیشه می‌خوابد: شبیه‌سازی را از نو اجرا کن (یا EN را بزن). یادآوری خوبی است که خوابیدن بدون منبع بیداری یک باگ واقعی است.</span></li>
+  <li data-lines="29-46"><b class="what">publish(): آماده.</b> حداکثر ۸ ثانیه برای وصل شدن به Wi-Fi صبر می‌کند، یک پیام می‌فرستد و قطع می‌کند؛ فقط وقتی <code>true</code> برمی‌گرداند که پیام واقعا رفته باشد.
+    <span class="why">قانون «هرگز بی‌نهایت منتظر نمان» این درس از قبل در آن هست، تا تو روی منطق بیداری تمرکز کنی.</span></li>
+  <li data-lines="51-63"><b class="what">setup() مثل یک تقسیم‌کننده کار.</b> برای هر علت بیداری یک شاخه، و بعد یک جا که نتیجه را بررسی می‌کند و برد را می‌خواباند.
+    <span class="why">هر بیداری از همان چند خط آخر رد می‌شود؛ پس هیچ مسیری خوابیدن را فراموش نمی‌کند.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>در Wokwi: <code>PubSubClient</code> را از زبانه Library Manager اضافه کن، برای تست <code>HEARTBEAT_SEC</code> را <code>20</code> بگذار و ▶ را بزن. وقتی برد خوابید، دکمه سبز را فشار بده. برای دیدن پیام‌ها، در کلاینت MQTT درس <a href="5-1.html">۵.۱</a> به <code>&lt;BASE&gt;#</code> subscribe کن.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": -40, "left": -170, "attrs": { "color": "green" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 150, "left": -130, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 90, "left": -60, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "btn1:1.r", "esp:27", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "r1:1", "esp:4", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>راهنمایی ۱</summary><p>می‌شود قبل از یک <code>esp_deep_sleep_start()</code> چند منبع بیداری را روشن کرد: <code>esp_sleep_enable_ext0_wakeup(...)</code> <b>و</b> <code>esp_sleep_enable_timer_wakeup(...)</code>. هر کدام زودتر اتفاق بیفتد برد را بیدار می‌کند. خط‌های EXT0 (همراه دو خط بالاکش <code>rtc_gpio_...</code>) را از <a href="#ext0">بخش EXT0</a> بردار.</p></details>
+<details class="hint"><summary>راهنمایی ۲</summary><p>بعد از بیداری، <code>esp_sleep_get_wakeup_cause()</code> می‌گوید کدام منبع بوده: <code>ESP_SLEEP_WAKEUP_EXT0</code> یا <code>ESP_SLEEP_WAKEUP_TIMER</code>؛ هر چیز دیگری یعنی روشن شدن یا ریست. متن پیام را با <code>snprintf(msg, sizeof(msg), ...)</code> بساز؛ داخل یک رشته C، علامت نقل‌قول دوتایی را <code>\"</code> می‌نویسند.</p></details>
+<details class="hint"><summary>راهنمایی ۳</summary><p>صبر برای رها شدن، همان خط تمرین زنگ در است: <code>pinMode(BTN, INPUT_PULLUP); while (digitalRead(BTN) == LOW) delay(10);</code>. بدون آن، اگر دکمه را یک ثانیه نگه داری چند پیام <code>open</code> می‌رود، چون برد همان لحظه که می‌خوابد دوباره بیدار می‌شود.</p></details>
+
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>با <code>HEARTBEAT_SEC = 20</code> در Wokwi (زمان‌های <code>Awake</code> به شبکه بستگی دارند و فرق می‌کنند):</p>
+<pre class="serial">Power-on: armed
+Awake 38 ms
+ets Jun  8 2016 00:22:57
+rst:0x5 (DEEPSLEEP_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+...
+Event: open #1
+Sent: open #1
+Awake 2410 ms
+...
+Heartbeat #1
+Sent: {"hb":1,"opens":1,"fails":0}
+Awake 1830 ms</pre>
+<ul>
+  <li>نیازمندی ۱ و ۳: بدون دست زدن به چیزی، تقریبا هر ۲۰ ثانیه یک بلوک <code>Heartbeat</code> می‌آید و <code>hb</code> هر بار یکی بالا می‌رود.</li>
+  <li>نیازمندی ۲: هر فشار دقیقا یک <code>Event: open #N</code> می‌دهد، و <code>opens</code> در ضربان بعدی برابر آخرین N است.</li>
+  <li>نیازمندی ۴: شبیه‌سازی را از نو اجرا کن: فقط <code>Power-on: armed</code>، و هیچ پیامی در کلاینت MQTT نمی‌آید.</li>
+  <li>نیازمندی ۵: یک اسم غلط در <code>WIFI_SSID</code> بگذار و دکمه را بزن: حدود ۸ ثانیه بعد <code>Not sent (counted in fails)</code>؛ اسم را درست کن، و ضربان بعدی <code>"fails":1</code> (یا بیشتر) را نشان می‌دهد.</li>
+  <li>نیازمندی ۶: LED فقط وقتی برد بیدار است روشن است (یک چشمک کوتاه موقع روشن شدن، حدود ۲ ثانیه هنگام ارسال). دکمه را ۳ ثانیه نگه دار: باز فقط یک <code>open</code>.</li>
+  <li>نکته: هر فشار دکمه شمارش معکوس ضربان را از نو شروع می‌کند، چون تایمر قبل از هر خواب دوباره تنظیم می‌شود. این‌جا اشکالی ندارد: هر پیامی ثابت می‌کند دستگاه زنده است.</li>
+</ul>
+</details>
+
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="ShedLogger.ino" id="projAns"><pre>
+// ثبت رویداد در + ضربان قلب: دکمه EXT0 روی GPIO27 + ضربان ساعتی
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include "driver/rtc_io.h"
+
+const char* WIFI_SSID = "Wokwi-GUEST";              // در خانه: اسم Wi-Fi خودت
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const char* BASE      = "esp32course/yourname/shed/"; // یکتایش کن
+const uint64_t HEARTBEAT_SEC = 3600;                // یک ساعت (برای تست ۲۰)
+const int LED_PIN = 4;                              // LED وضعیت: روشن = بیدار
+const gpio_num_t BTN = GPIO_NUM_27;                 // دکمه در (پین RTC)
+
+WiFiClient net;
+PubSubClient mqtt(net);
+RTC_DATA_ATTR uint32_t opens = 0;                   // تعداد رویدادهای در تا حالا
+RTC_DATA_ATTR uint32_t beats = 0;                   // تعداد ضربان‌ها تا حالا
+RTC_DATA_ATTR uint32_t fails = 0;                   // پیام‌هایی که نرفتند
+
+void sleepNow() {
+  pinMode(BTN, INPUT_PULLUP);
+  while (digitalRead(BTN) == LOW) delay(10);        // صبر تا دکمه رها شود
+  digitalWrite(LED_PIN, LOW);
+  WiFi.mode(WIFI_OFF);
+  esp_sleep_enable_ext0_wakeup(BTN, 0);             // منبع بیداری ۱: دکمه (LOW)
+  rtc_gpio_pullup_en(BTN);
+  rtc_gpio_pulldown_dis(BTN);
+  esp_sleep_enable_timer_wakeup(HEARTBEAT_SEC * 1000000ULL);  // منبع بیداری ۲: تایمر
+  Serial.printf("Awake %lu ms\n", millis());
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+// آماده (مثل زنگ در ۶.۱): Wi-Fi حداکثر ۸ ثانیه، بعد یک پیام MQTT
+bool publish(const char* sub, const char* msg) {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - t0 &lt; 8000) delay(20);
+  if (WiFi.status() != WL_CONNECTED) return false;  // هرگز بی‌نهایت منتظر نمان
+  char topic[80];
+  snprintf(topic, sizeof(topic), "%s%s", BASE, sub);
+  mqtt.setServer(MQTT_HOST, 1883);
+  String id = "shed-" + WiFi.macAddress() + "-" + String(esp_random() &amp; 0xFFFF, HEX);
+  if (!mqtt.connect(id.c_str())) return false;
+  bool ok = mqtt.publish(topic, msg);
+  mqtt.loop();
+  delay(50);                                        // فرصت خروج بسته
+  mqtt.disconnect();
+  return ok;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, HIGH);                      // LED روشن = بیدار
+  char msg[64] = "";
+  bool ok = false;
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  if (cause == ESP_SLEEP_WAKEUP_EXT0) {
+    opens++;
+    Serial.printf("Event: open #%lu\n", (unsigned long)opens);
+    snprintf(msg, sizeof(msg), "open #%lu", (unsigned long)opens);
+    ok = publish("door", msg);
+  } else if (cause == ESP_SLEEP_WAKEUP_TIMER) {
+    beats++;
+    Serial.printf("Heartbeat #%lu\n", (unsigned long)beats);
+    snprintf(msg, sizeof(msg), "{\"hb\":%lu,\"opens\":%lu,\"fails\":%lu}",
+             (unsigned long)beats, (unsigned long)opens, (unsigned long)fails);
+    ok = publish("heartbeat", msg);
+  } else {
+    Serial.println("Power-on: armed");
+    sleepNow();                                     // هنوز چیزی برای گزارش نیست
+  }
+  if (ok) Serial.printf("Sent: %s\n", msg);
+  else { fails++; Serial.println("Not sent (counted in fails)"); }
+  sleepNow();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="21-23"><b class="what">صبر برای دکمه، بعد خاموش کردن LED.</b> پین به ورودی با بالاکش تبدیل می‌شود تا بشود خواندش؛ حلقه تا وقتی دکمه فشرده است صبر می‌کند.
+    <span class="why">EXT0 با <i>سطح</i> LOW بیدار می‌کند. اگر دکمه هنگام خوابیدن هنوز پایین باشد، برد بلافاصله دوباره بیدار می‌شود و یک <code>open</code> دوم می‌فرستد. LED آخر از همه خاموش می‌شود تا واقعا «بیدار بودن» را نشان بدهد.</span></li>
+  <li data-lines="25-28"><b class="what">دو منبع بیداری.</b> EXT0 روی GPIO27 با سطح 0 و بالاکش RTC روشن، <b>و</b> تایمر به مدت <code>HEARTBEAT_SEC</code> ثانیه.
+    <span class="why">منبع‌های بیداری با هم جمع می‌شوند؛ اولی که اتفاق بیفتد برنده است. <code>1000000ULL</code> ضرب را ۶۴ بیتی نگه می‌دارد: ۳۶۰۰ ثانیه یعنی ۳٫۶ میلیارد میکروثانیه، که در ۳۲ بیت جا نمی‌شود.</span></li>
+  <li data-lines="29-31"><b class="what">گزارش مدت بیداری، flush و خواب.</b>
+    <span class="why"><code>millis()</code> درست قبل از خواب همان عددی است که عمر باتری را تعیین می‌کند؛ flush نمی‌گذارد خط آخر نصفه بماند.</span></li>
+  <li data-lines="55-58"><b class="what">روشن کردن LED، و آرایه پیامی که خالی شروع می‌شود.</b>
+    <span class="why"><code>ok = false</code> یعنی «هنوز چیزی نرفته»؛ هر شاخه‌ای که می‌فرستد، نتیجه واقعی را جایش می‌نویسد.</span></li>
+  <li data-lines="59-64"><b class="what">شاخه دکمه.</b> شمردن، چاپ، ساختن <code>open #N</code> و فرستادن به <code>door</code>.
+    <span class="why">شماره، پیام‌های گم‌شده را آشکار می‌کند: اگر کلاینتت #3 و بعد #5 را نشان داد، پیام #4 هرگز نرسیده.</span></li>
+  <li data-lines="65-70"><b class="what">شاخه تایمر.</b> ضربان را بشمار و یک JSON کوچک با سه شمارنده بفرست.
+    <span class="why">یک ضربان سه چیز را با هم می‌گوید: دستگاه زنده است (<code>hb</code>)، چند رویداد بوده (<code>opens</code>)، و شبکه چقدر قابل اعتماد است (<code>fails</code>). <code>(unsigned long)</code> با <code>%lu</code> رشته قالب جور است.</span></li>
+  <li data-lines="71-74"><b class="what">روشن شدن یا ریست.</b> چاپ و خواب فوری، بدون Wi-Fi.
+    <span class="why">گذاشتن باتری تازه نباید یک «در باز شد» دروغین بفرستد. <code>sleepNow()</code> هرگز برنمی‌گردد، پس خط‌های بعدی در این مسیر اجرا نمی‌شوند.</span></li>
+  <li data-lines="75-77"><b class="what">یک جا برای نتیجه، بعد خواب.</b>
+    <span class="why">شکست فقط شمرده می‌شود، دوباره امتحان نمی‌شود: دستگاه باتری‌خور برای تلاش دوباره بیدار نمی‌ماند؛ بیداری بعدی دوباره امتحان می‌کند و این شمارش با ضربان بعدی می‌رود.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p>همان مدار کد شروع. <code>HEARTBEAT_SEC</code> را <code>20</code> بگذار، <code>PubSubClient</code> را اضافه کن، ▶ را بزن و بین ضربان‌ها چند بار دکمه را فشار بده.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": -40, "left": -170, "attrs": { "color": "green" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 150, "left": -130, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 90, "left": -60, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "btn1:1.r", "esp:27", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "r1:1", "esp:4", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
 <p>عمر باتری = ظرفیت ÷ جریان میانگین؛ و جریان میانگین را جریان خواب و مدت بیداری تعیین می‌کنند. خواب عمیق (حدود ۱۰ µA برای تراشه) برنامه را از setup شروع می‌کند و فقط <code>RTC_DATA_ATTR</code> را نگه می‌دارد؛ خواب سبک (حدود ۰٫۸ mA) از همان خط ادامه می‌دهد. برد توسعه در خواب چند میلی‌آمپر می‌کشد: همیشه با مولتی‌متر اندازه بگیر و باتری لیتیومی را فقط با شارژر محافظ‌دار و رگولاتور کم‌مصرف استفاده کن.</p></div>
 

@@ -1163,6 +1163,909 @@ Rebooting...
 </details>
 </div>
 
+<h2 id="project">Practice project: port the station to the ESP32-C3</h2>
+<div class="project">
+<p class="lede-ish">Your station from lesson 6.3 works on the ESP32. Now someone wants a smaller, cheaper version on an ESP32-C3. Copying the sketch and editing pin numbers by hand would leave you with two programs to maintain forever. Instead you'll turn it into <b>one</b> sketch that compiles for both chips, choosing pins per chip and features per capability, exactly like <code>PortableDemo</code> in the porting workshop.</p>
+
+<h3 id="project-req">Requirements</h3>
+<ol>
+  <li>One source file. The pin numbers live only in one <code>#if CONFIG_IDF_TARGET_ESP32</code> / <code>#elif CONFIG_IDF_TARGET_ESP32C3</code> block; any other chip stops the build with <code>#error</code>.</li>
+  <li>The C3 pins follow the C3's rules: the LDR on an ADC1 pin (GPIO0 to 4), nothing on the strapping pins (2, 8, 9), the flash pins (12 to 17) or the USB pins (18, 19), and the I2C pins passed to <code>Wire.begin(SDA, SCL)</code> explicitly.</li>
+  <li><code>setup()</code> waits at most 3 seconds for the Serial port (native USB), then prints a short report: chip model, number of cores, the pins in use, and "Chip temperature sensor: yes/no" decided by a <code>SOC_</code> macro.</li>
+  <li>A feature only one chip has: the C3's built-in temperature sensor is read and shown on the OLED's bottom line and in the Serial line, but only where <code>SOC_TEMP_SENSOR_SUPPORTED</code> is true; on the ESP32 those lines aren't compiled at all.</li>
+  <li>It compiles for both <code>esp32:esp32:esp32</code> and <code>esp32:esp32:esp32c3</code> (Verify with each board selected) and behaves the same on both in Wokwi: the alarm above 35 °C, all clear below 33 °C, the mute button, the OLED.</li>
+</ol>
+
+<h3 id="project-parts">Parts</h3>
+<ul>
+  <li>The lesson 6.3 station parts: DHT22, LDR module (or LDR + 10 kΩ), SSD1306 OLED, alarm LED + 220 Ω, passive buzzer, push button</li>
+  <li>Wokwi (the default path, as in the workshop). Optional: an ESP32-C3 dev board to move the parts onto</li>
+</ul>
+<p>The ESP32 wiring is the one from lesson 6.3. This is the C3 version: the same parts, new pin numbers.</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32-C3-DevKitM-1",
+  "parts":[
+    {"id":"DHT","name":"DHT22 sensor","img":"dht22.svg","pins":[["VCC","3.3 V power"],["DATA","data"],["GND","ground"]]},
+    {"id":"LDR","name":"LDR module","img":"ldr.svg","pins":[["VCC","3.3 V"],["GND","ground"],["AO","analog output"]]},
+    {"id":"OLED","name":"OLED SSD1306 I2C","img":"oled-photo2.jpg","pins":[["VCC","3.3 V"],["GND","ground"],["SDA","I2C data"],["SCL","I2C clock"]]},
+    {"id":"R2","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","to GPIO10"],["2","to LED anode"]]},
+    {"id":"LED","name":"Red alarm LED","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−)"]]},
+    {"id":"BZ","name":"Passive piezo buzzer","img":"buzzer.svg","pins":[["+","positive pin"],["-","negative pin"]]},
+    {"id":"SW","name":"Mute button","img":"button.svg","pins":[["1","to GPIO5"],["2","to GND"]]}
+  ],
+  "wires":[["3V3","DHT.VCC","red"],["GPIO1","DHT.DATA","blue"],["DHT.GND","GND","black"],["3V3","LDR.VCC","red"],["LDR.GND","GND","black"],["GPIO3","LDR.AO","blue"],["3V3","OLED.VCC","red"],["OLED.GND","GND","black"],["GPIO6","OLED.SDA","yellow"],["GPIO7","OLED.SCL","green"],["GPIO10","R2.1","orange"],["R2.2","LED.A","orange"],["LED.K","GND","black"],["GPIO4","BZ.+","orange"],["BZ.-","GND","black"],["GPIO5","SW.1","blue"],["SW.2","GND","black"]]
+}</script><figcaption>The station on an ESP32-C3-DevKitM-1: DHT22 on GPIO1, LDR on GPIO3 (ADC1), OLED on GPIO6/GPIO7, the alarm LED with its 220 Ω resistor on GPIO10, the buzzer on GPIO4 and the mute button on GPIO5. The chip drawing is generic; read the pin labels on your own board.</figcaption></div>
+
+<h3 id="project-start">Starter code</h3>
+<p>This is the local part of the lesson 6.3 station (sensors, hysteresis alarm, buzzer, mute button, OLED) with the ESP32 pins written in directly. The Wi-Fi and MQTT parts are left out on purpose: <code>WiFi.h</code> and <code>PubSubClient</code> work unchanged on the C3, so they aren't where porting breaks. Once the local part is portable, paste them back in as they are.</p>
+<div class="code" data-file="StationPortable.ino" id="projStart"><pre>
+// Station, local part (6.3): ESP32 ONLY. STARTER: make it portable (TODO 1 to 4)
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+// TODO 1: include "soc/soc_caps.h"
+
+// TODO 1: move these pins into an #if CONFIG_IDF_TARGET_... block
+//         (ESP32 and ESP32-C3, #error for any other chip), plus PIN_SDA/PIN_SCL
+const int PIN_DHT = 13;
+const int PIN_LDR = 35;                        // ADC1
+const int PIN_LED = 4;
+const int PIN_BUZ = 25;
+const int PIN_BTN = 27;                        // mute button
+
+const float TEMP_HIGH = 35.0, TEMP_CLEAR = 33.0;
+DHT dht(PIN_DHT, DHT22);
+Adafruit_SSD1306 oled(128, 64, &amp;Wire, -1);
+float tempC = NAN, hum = NAN;
+int lightPct = 0;
+bool alarmOn = false, muted = false, oledOk = false;
+uint32_t tSensor = 0;
+
+void readSensors() {
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (!isnan(t) &amp;&amp; !isnan(h)) { tempC = t; hum = h; }
+  lightPct = map(analogRead(PIN_LDR), 4095, 0, 0, 100);   // more light = lower voltage
+}
+
+void updateAlarm() {
+  if (isnan(tempC)) return;
+  if (!alarmOn &amp;&amp; tempC &gt; TEMP_HIGH) { alarmOn = true; muted = false; }
+  else if (alarmOn &amp;&amp; tempC &lt; TEMP_CLEAR) alarmOn = false;
+}
+
+void driveOutputs() {
+  if (alarmOn &amp;&amp; digitalRead(PIN_BTN) == LOW) muted = true;
+  bool blink = (millis() / 250) % 2;
+  digitalWrite(PIN_LED, alarmOn &amp;&amp; blink);
+  static bool buzzing = false;
+  bool wantBuzz = alarmOn &amp;&amp; !muted &amp;&amp; blink;
+  if (wantBuzz != buzzing) {
+    ledcWriteTone(PIN_BUZ, wantBuzz ? 2000 : 0);
+    buzzing = wantBuzz;
+  }
+}
+
+void drawDisplay() {
+  if (!oledOk) return;
+  oled.clearDisplay();
+  oled.setTextSize(2);
+  oled.setCursor(0, 0);
+  if (isnan(tempC)) oled.print("T: ERR");
+  else { oled.print(tempC, 1); oled.print(" C"); }
+  oled.setCursor(0, 20);
+  if (isnan(hum)) oled.print("H: ERR");
+  else { oled.print(hum, 0); oled.print(" %"); }
+  oled.setTextSize(1);
+  oled.setCursor(0, 44);
+  oled.printf("Light %d%%  %s", lightPct, alarmOn ? (muted ? "ALARM(m)" : "ALARM!") : "normal");
+  // TODO 4: chip temperature on the bottom line (y = 56), only if the chip has a sensor
+  oled.display();
+}
+
+void setup() {
+  Serial.begin(115200);
+  // TODO 3: wait at most 3 s for Serial, then print a capability report
+  pinMode(PIN_LED, OUTPUT);
+  pinMode(PIN_BTN, INPUT_PULLUP);
+  ledcAttach(PIN_BUZ, 2000, 8);                // core 3.x API
+  analogReadResolution(12);
+  dht.begin();
+  Wire.begin();                                // TODO 2: give the SDA and SCL pins
+  oledOk = oled.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  if (oledOk) oled.setTextColor(SSD1306_WHITE);
+  else Serial.println("OLED not found, continuing without display");
+}
+
+void loop() {
+  if (millis() - tSensor &gt;= 2000) {
+    tSensor = millis();
+    readSensors();
+    updateAlarm();
+    drawDisplay();
+    Serial.printf("T=%.1f C  H=%.0f %%  light=%d %%  %s\n",
+                  tempC, hum, lightPct, alarmOn ? "ALARM" : "normal");
+    // TODO 4: where supported, also print the chip temperature
+  }
+  driveOutputs();
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="8-14"><b class="what">The pins, written in directly.</b> The exact numbers from the 6.3 pin table.
+    <span class="why">Here's the trap: this starter <b>also compiles for the C3</b>. We checked: the compiler doesn't know your wiring. The C3 has no GPIO13, 25, 27 or 35 at all, so on a C3 the program runs and simply does the wrong thing. Porting is a design job, not a compile error.</span></li>
+  <li data-lines="24-64"><b class="what">The station logic.</b> Reading, hysteresis, outputs and display, as in <code>EnvStation</code>.
+    <span class="why">None of these lines mention a chip, and none of them will need an <code>#if</code>. The goal is to keep it that way: fence off only the differences.</span></li>
+  <li data-lines="67-68"><b class="what">No wait for Serial yet.</b>
+    <span class="why">On a C3 with native USB, the first lines are often printed before the computer has opened the port, and they're lost (breakage 5).</span></li>
+  <li data-lines="74"><b class="what"><code>Wire.begin()</code> without pins.</b>
+    <span class="why">It then uses the board's default I2C pins. On the ESP32 those are 21/22, which is why it works now. On the "ESP32C3 Dev Module" they're GPIO8 and GPIO9: both strapping pins.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>First, the starter on the plain ESP32 so you know the behavior you're porting. Add <code>DHT sensor library</code> and <code>Adafruit SSD1306</code> in the Library Manager tab. Click the DHT22 and push the temperature above 35.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -110, "left": 170, "attrs": { "temperature": "28", "humidity": "45" } },
+    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": 250, "left": 170, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled1", "top": 60, "left": 260, "attrs": { "i2cAddress": "0x3c" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": -130, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 40, "left": -60, "attrs": { "color": "red" } },
+    { "type": "wokwi-buzzer", "id": "bz1", "top": 170, "left": -160, "attrs": { "volume": "0.2" } },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 280, "left": -170, "attrs": { "color": "yellow", "label": "Mute" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:AO", "esp:35", "blue", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "r1:1", "esp:4", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ],
+    [ "bz1:2", "esp:25", "orange", [] ],
+    [ "bz1:1", "esp:GND.1", "black", [] ],
+    [ "btn1:1.l", "esp:27", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>Hint 1</summary><p>Start from the C3 rows of the <a href="#porting">strapping table</a> and the ADC1 list in breakage 3. Write the C3 pin table on paper first, one reason per pin, exactly like step 5 of the method. Only then type the <code>#elif</code> branch.</p></details>
+<details class="hint"><summary>Hint 2</summary><p>A <code>SOC_</code> macro that isn't defined counts as 0 in <code>#if</code>, with no warning. That's why <code>#include "soc/soc_caps.h"</code> comes first. To see which macros a chip has, open that chip's <code>soc_caps.h</code> (in the core's installed files) and search for <code>TEMP_SENSOR</code>.</p></details>
+<details class="hint"><summary>Hint 3</summary><p>Checking the port without a C3 board: in the Arduino IDE, choose <code>Tools › Board › ESP32C3 Dev Module</code> and press only Verify (✓). Then open a new ESP32-C3 project in Wokwi, paste the same sketch and the C3 <code>diagram.json</code> from the answer, and press ▶.</p></details>
+
+<details class="expect"><summary>What should you see?</summary>
+<p>Compiling (requirement 5): "Done compiling" for <b>ESP32 Dev Module</b> and for <b>ESP32C3 Dev Module</b>; with any other chip (try ESP32S3 Dev Module), the build stops with your <code>#error</code> text. On the ESP32 in Wokwi (the model name and the light value will differ):</p>
+<pre class="serial">Chip: ESP32-D0WD-V3, 2 core(s)
+Pins: DHT 13, LDR 35, LED 4, buzzer 25, button 27, I2C 21/22
+Chip temperature sensor: no
+T=28.0 C  H=45 %  light=57 %  normal</pre>
+<p>On the ESP32-C3 (the chip temperature is whatever the sensor reports; in Wokwi it may stay constant):</p>
+<pre class="serial">Chip: ESP32-C3, 1 core(s)
+Pins: DHT 1, LDR 3, LED 10, buzzer 4, button 5, I2C 6/7
+Chip temperature sensor: yes
+T=28.0 C  H=45 %  light=57 %  normal  chip=31.5 C</pre>
+<ul>
+  <li>Requirements 1 and 2: the <code>Pins:</code> line lists different numbers on each chip, and none of the C3 numbers is 2, 8, 9 or 12 to 19.</li>
+  <li>Requirement 3: the report is complete on both chips (with native USB, the first line isn't missing).</li>
+  <li>Requirement 4: <code>Chip ... C</code> on the OLED's bottom line and <code>chip=</code> in the Serial line only on the C3.</li>
+  <li>Requirement 5: DHT22 to 36: <code>ALARM</code>, the LED blinks, the buzzer beeps; the button mutes the buzzer; down to 32: <code>normal</code>. The same on both chips.</li>
+</ul>
+</details>
+
+<details class="answer"><summary>Full answer with explanation</summary>
+<p><b>The C3 pin table first</b> (the reasons are the design; the code only copies them):</p>
+<div class="table-wrap"><table><tr><th>Part</th><th>ESP32</th><th>ESP32-C3</th><th>Why this C3 pin</th></tr>
+<tr><td>LDR (analog)</td><td>35</td><td>3</td><td>ADC1 (the C3's ADC1 is GPIO0 to 4); GPIO2 is a strapping pin, so 3</td></tr>
+<tr><td>DHT22</td><td>13</td><td>1</td><td>An ordinary GPIO, not strapping, not flash, not USB</td></tr>
+<tr><td>Buzzer (LEDC)</td><td>25</td><td>4</td><td>Any output can do LEDC PWM</td></tr>
+<tr><td>Mute button</td><td>27</td><td>5</td><td>Internal pull-up; one of GPIO0 to 5, which can also wake a C3 from deep sleep (handy for battery mode)</td></tr>
+<tr><td>OLED SDA / SCL</td><td>21 / 22</td><td>6 / 7</td><td>The default 8/9 are strapping pins (GPIO9 is the BOOT button); any GPIO can do I2C</td></tr>
+<tr><td>Alarm LED</td><td>4</td><td>10</td><td>A free, safe output; 20/21 are left for UART0</td></tr></table></div>
+<div class="code" data-file="StationPortable.ino" id="projAns"><pre>
+// Portable station, local part (6.3): one sketch for the ESP32 and the ESP32-C3
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+#include "soc/soc_caps.h"                      // SOC_... capability macros
+
+#if CONFIG_IDF_TARGET_ESP32
+  const int PIN_DHT = 13, PIN_LDR = 35, PIN_LED = 4, PIN_BUZ = 25, PIN_BTN = 27;
+  const int PIN_SDA = 21, PIN_SCL = 22;
+#elif CONFIG_IDF_TARGET_ESP32C3
+  const int PIN_DHT = 1, PIN_LDR = 3, PIN_LED = 10, PIN_BUZ = 4, PIN_BTN = 5;
+  const int PIN_SDA = 6, PIN_SCL = 7;          // NOT the default 8/9 (strapping)
+#else
+  #error "This station supports the ESP32 and the ESP32-C3 only"
+#endif
+
+const float TEMP_HIGH = 35.0, TEMP_CLEAR = 33.0;
+DHT dht(PIN_DHT, DHT22);
+Adafruit_SSD1306 oled(128, 64, &amp;Wire, -1);
+float tempC = NAN, hum = NAN, chipC = NAN;
+int lightPct = 0;
+bool alarmOn = false, muted = false, oledOk = false;
+uint32_t tSensor = 0;
+
+void readSensors() {
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (!isnan(t) &amp;&amp; !isnan(h)) { tempC = t; hum = h; }
+  lightPct = map(analogRead(PIN_LDR), 4095, 0, 0, 100);   // more light = lower voltage
+#if SOC_TEMP_SENSOR_SUPPORTED
+  chipC = temperatureRead();                   // the chip's own temperature sensor
+#endif
+}
+
+void updateAlarm() {
+  if (isnan(tempC)) return;
+  if (!alarmOn &amp;&amp; tempC &gt; TEMP_HIGH) { alarmOn = true; muted = false; }
+  else if (alarmOn &amp;&amp; tempC &lt; TEMP_CLEAR) alarmOn = false;
+}
+
+void driveOutputs() {
+  if (alarmOn &amp;&amp; digitalRead(PIN_BTN) == LOW) muted = true;
+  bool blink = (millis() / 250) % 2;
+  digitalWrite(PIN_LED, alarmOn &amp;&amp; blink);
+  static bool buzzing = false;
+  bool wantBuzz = alarmOn &amp;&amp; !muted &amp;&amp; blink;
+  if (wantBuzz != buzzing) {
+    ledcWriteTone(PIN_BUZ, wantBuzz ? 2000 : 0);
+    buzzing = wantBuzz;
+  }
+}
+
+void drawDisplay() {
+  if (!oledOk) return;
+  oled.clearDisplay();
+  oled.setTextSize(2);
+  oled.setCursor(0, 0);
+  if (isnan(tempC)) oled.print("T: ERR");
+  else { oled.print(tempC, 1); oled.print(" C"); }
+  oled.setCursor(0, 20);
+  if (isnan(hum)) oled.print("H: ERR");
+  else { oled.print(hum, 0); oled.print(" %"); }
+  oled.setTextSize(1);
+  oled.setCursor(0, 44);
+  oled.printf("Light %d%%  %s", lightPct, alarmOn ? (muted ? "ALARM(m)" : "ALARM!") : "normal");
+#if SOC_TEMP_SENSOR_SUPPORTED
+  oled.setCursor(0, 56);
+  oled.printf("Chip %.1f C", chipC);
+#endif
+  oled.display();
+}
+
+void printReport() {
+  Serial.printf("Chip: %s, %d core(s)\n", ESP.getChipModel(), ESP.getChipCores());
+  Serial.printf("Pins: DHT %d, LDR %d, LED %d, buzzer %d, button %d, I2C %d/%d\n",
+                PIN_DHT, PIN_LDR, PIN_LED, PIN_BUZ, PIN_BTN, PIN_SDA, PIN_SCL);
+#if SOC_TEMP_SENSOR_SUPPORTED
+  Serial.println("Chip temperature sensor: yes");
+#else
+  Serial.println("Chip temperature sensor: no");
+#endif
+}
+
+void setup() {
+  Serial.begin(115200);
+  unsigned long t0 = millis();
+  while (!Serial &amp;&amp; millis() - t0 &lt; 3000) delay(10);   // native USB: at most 3 s
+  printReport();
+  pinMode(PIN_LED, OUTPUT);
+  pinMode(PIN_BTN, INPUT_PULLUP);
+  ledcAttach(PIN_BUZ, 2000, 8);                // core 3.x API, same on both chips
+  analogReadResolution(12);
+  dht.begin();
+  Wire.begin(PIN_SDA, PIN_SCL);                // the pins from the table above
+  oledOk = oled.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  if (oledOk) oled.setTextColor(SSD1306_WHITE);
+  else Serial.println("OLED not found, continuing without display");
+}
+
+void loop() {
+  if (millis() - tSensor &gt;= 2000) {
+    tSensor = millis();
+    readSensors();
+    updateAlarm();
+    drawDisplay();
+    Serial.printf("T=%.1f C  H=%.0f %%  light=%d %%  %s",
+                  tempC, hum, lightPct, alarmOn ? "ALARM" : "normal");
+#if SOC_TEMP_SENSOR_SUPPORTED
+    Serial.printf("  chip=%.1f C", chipC);
+#endif
+    Serial.println();
+  }
+  driveOutputs();
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="6"><b class="what">Include soc_caps.h.</b>
+    <span class="why">Without it, <code>SOC_TEMP_SENSOR_SUPPORTED</code> is simply undefined, <code>#if</code> treats it as 0, and the C3 silently loses its feature.</span></li>
+  <li data-lines="8-16"><b class="what">One pin block per chip, and #error for the rest.</b> Each branch defines the same seven names.
+    <span class="why">Because the names are identical, not one line below needs to know which chip it's on. An S3 or C6 build fails loudly instead of running with meaningless pins.</span></li>
+  <li data-lines="21"><b class="what"><code>chipC</code>, the chip's own temperature.</b> Stays <code>NAN</code> where there's no sensor.
+    <span class="why">The variable exists on both chips, so shared code could use it; only the lines that fill and show it are fenced off.</span></li>
+  <li data-lines="31-33"><b class="what">Read the sensor only where the chip has one.</b>
+    <span class="why">The plain ESP32 core does have a <code>temperatureRead()</code>, but it uses an old, undocumented sensor that returns a meaningless fixed number on most boards, and Espressif's capability list says "no". Asking the capability, not the chip name, gets this right automatically for future chips.</span></li>
+  <li data-lines="67-70"><b class="what">The OLED's bottom line, C3 only.</b>
+    <span class="why">The same pattern as the DAC and touch lines in <code>PortableDemo</code>: feature code lives inside its feature's macro.</span></li>
+  <li data-lines="74-83"><b class="what">The capability report.</b> Chip model, cores, all pins, and the temperature sensor answer.
+    <span class="why">One glance at the Serial Monitor tells you which branch was compiled. If you ever see ESP32 pin numbers on a C3, you selected the wrong board in the IDE.</span></li>
+  <li data-lines="87-89"><b class="what">Wait up to 3 seconds for Serial, then report.</b>
+    <span class="why">On the C3 with CDC On Boot enabled, this keeps the report from being lost. On the ESP32 the condition is true at once, and on a battery with no computer the wait ends after 3 seconds.</span></li>
+  <li data-lines="92"><b class="what">LEDC for the buzzer, unchanged.</b>
+    <span class="why"><code>ledcAttach</code> and <code>ledcWriteTone</code> exist on both chips in core 3.x. That's why porting touches so few lines.</span></li>
+  <li data-lines="95"><b class="what"><code>Wire.begin(PIN_SDA, PIN_SCL)</code>.</b>
+    <span class="why">Explicit pins from the table, never the board's defaults: on the C3 the defaults are strapping pins.</span></li>
+  <li data-lines="107-112"><b class="what">The Serial line in three pieces.</b> The shared part, the C3-only chip temperature, then the line end.
+    <span class="why">Splitting the <code>printf</code> lets the optional part sit inside its <code>#if</code> without duplicating the whole line.</span></li>
+</ol>
+<p><b>Proof that it compiles for both</b>, with arduino-cli and core 3.3.12, exactly like <code>compile.sh</code> above: <code>esp32:esp32:esp32</code> OK, <code>esp32:esp32:esp32c3</code> OK, and <code>esp32:esp32:esp32s3</code> stops with <code>#error "This station supports the ESP32 and the ESP32-C3 only"</code>, as designed.</p>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p><b>On the ESP32:</b> the same circuit as the starter. Paste the answer and check that nothing changed in the behavior.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -110, "left": 170, "attrs": { "temperature": "28", "humidity": "45" } },
+    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": 250, "left": 170, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled1", "top": 60, "left": 260, "attrs": { "i2cAddress": "0x3c" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": -130, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 40, "left": -60, "attrs": { "color": "red" } },
+    { "type": "wokwi-buzzer", "id": "bz1", "top": 170, "left": -160, "attrs": { "volume": "0.2" } },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 280, "left": -170, "attrs": { "color": "yellow", "label": "Mute" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:AO", "esp:35", "blue", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "r1:1", "esp:4", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ],
+    [ "bz1:2", "esp:25", "orange", [] ],
+    [ "bz1:1", "esp:GND.1", "black", [] ],
+    [ "btn1:1.l", "esp:27", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+<div class="wokwi" data-board="esp32-c3" data-code-from="projAns">
+<p><b>On the ESP32-C3:</b> open a new ESP32-C3 project in Wokwi, paste the <b>unchanged</b> answer sketch, replace <code>diagram.json</code> with this one, add the same two libraries and press ▶. The wiring follows the C3 branch of the pin table.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-c3-devkitm-1", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -110, "left": 170, "attrs": { "temperature": "28", "humidity": "45" } },
+    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": 250, "left": 170, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled1", "top": 60, "left": 260, "attrs": { "i2cAddress": "0x3c" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": -130, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 40, "left": -60, "attrs": { "color": "red" } },
+    { "type": "wokwi-buzzer", "id": "bz1", "top": 170, "left": -160, "attrs": { "volume": "0.2" } },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 280, "left": -170, "attrs": { "color": "yellow", "label": "Mute" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3.1", "red", [] ],
+    [ "dht1:SDA", "esp:1", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:VCC", "esp:3V3.1", "red", [] ],
+    [ "ldr1:GND", "esp:GND.2", "black", [] ],
+    [ "ldr1:AO", "esp:3", "blue", [] ],
+    [ "oled1:VCC", "esp:3V3.2", "red", [] ],
+    [ "oled1:GND", "esp:GND.3", "black", [] ],
+    [ "oled1:SDA", "esp:6", "yellow", [] ],
+    [ "oled1:SCL", "esp:7", "green", [] ],
+    [ "r1:1", "esp:10", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ],
+    [ "bz1:2", "esp:4", "orange", [] ],
+    [ "bz1:1", "esp:GND.1", "black", [] ],
+    [ "btn1:1.l", "esp:5", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
+<h2 id="capstone">Chapter 6 capstone: a battery plant monitor, from PRD to box</h2>
+<div class="project">
+<p class="lede-ish">This is the last build of the course, and it uses the whole method from this lesson: a potted plant that tells your phone when it needs water, runs for months on one battery, and shows its status on a small screen when you press a button. You'll write the plan before the code, predict the battery life before you measure it, review your own code like an AI's, and make it portable to the ESP32-C3. A capacitive soil sensor would be the real part; a potentiometer stands in for it, so everything runs in Wokwi too.</p>
+
+<h3 id="capstone-req">Requirements</h3>
+<ol>
+  <li><b>Plan first, on paper:</b> a short PRD (goal, at least five requirements with a test each), a pin table with a reason per pin for the ESP32 <b>and</b> the ESP32-C3, and a power budget that predicts the battery life on a 1000 mAh cell.</li>
+  <li>Every wake-up starts with the cheap jobs: soil moisture as 0 to 100 % (the potentiometer on GPIO34, powered from GPIO26 <b>only</b> while it's read) and the battery voltage in mV (a 20 kΩ + 20 kΩ divider on GPIO32), both printed.</li>
+  <li>Woken by the timer (every 15 minutes) or at power-on: one JSON message <code>{"soil":..,"bat":..,"low":0/1,"n":..,"fails":..}</code> to your topic, with the Wi-Fi shortcut from the 6.1 logger and never more than 8 seconds of Wi-Fi. A failure is counted and the result is remembered for the display.</li>
+  <li>Woken by the button (GPIO27, EXT0): the OLED shows soil %, battery volts, <code>LOW BATTERY!</code> below 3.4 V, and whether the last send worked, for 3 seconds; then the display is switched off. No Wi-Fi on this path.</li>
+  <li>Before sleeping: the sensor power pin is held LOW, the button has been released, both wake sources are set, and <code>Awake &lt;ms&gt; ms</code> is printed.</li>
+  <li><b>Measure:</b> the awake time from the Serial Monitor and the sleep current with your multimeter (as in the <a href="6-1.html#measure">6.1 measuring section</a>), then recompute the battery life with your own numbers.</li>
+  <li><b>Review</b> your finished code with the ten-step checklist from lesson <a href="6-2.html#checklist">6.2</a>: pass or fail with a reason for each step.</li>
+  <li><b>Portable:</b> the same file compiles for the ESP32-C3, with its own pin branch, EXT0 only where <code>SOC_PM_SUPPORT_EXT0_WAKEUP</code> says the chip has it, and the C3's GPIO wake-up otherwise.</li>
+</ol>
+
+<h3 id="capstone-parts">Parts</h3>
+<ul>
+  <li>ESP32 DevKitC, breadboard, jumper wires, the 0.96-inch SSD1306 OLED, 1 push button (GPIO27)</li>
+  <li>1 × 10 kΩ potentiometer as the soil sensor stand-in (a capacitive soil sensor, if you own one, connects the same way: VCC, GND, analog out)</li>
+  <li>2 × 20 kΩ resistors for the battery divider (from the resistor kit)</li>
+  <li>The digital multimeter (for requirement 6)</li>
+  <li>Optional: the battery build from lesson 6.1 (protected LiPo + TP4056 + HT7833); without it, connect the top of the divider to the 5V pin (USB 5 V becomes about 2.5 V at GPIO32, still safe) and the monitor reads about 4800 mV. Optional: an ESP32-C3 board; Wokwi and a compile check are enough</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"POT","name":"Soil sensor stand-in (10 kΩ pot)","img":"pot.svg","pins":[["VCC","outer leg: power from GPIO26"],["SIG","middle leg: moisture"],["GND","other outer leg"]]},
+    {"id":"BAT","name":"Battery + (TP4056 OUT+); on USB only: 5V pin","pins":[["+","voltage to measure"]]},
+    {"id":"R1","name":"20 kΩ resistor (top)","img":"resistor.svg","pins":[["1","to battery +"],["2","to GPIO32"]]},
+    {"id":"R2","name":"20 kΩ resistor (bottom)","img":"resistor.svg","pins":[["1","to GPIO32"],["2","to GND"]]},
+    {"id":"SW","name":"Show button","img":"button.svg","pins":[["1","to GPIO27"],["2","to GND"]]},
+    {"id":"OLED","name":"OLED SSD1306 I2C","img":"oled-photo2.jpg","pins":[["VCC","3.3 V"],["GND","ground"],["SDA","I2C data"],["SCL","I2C clock"]]}
+  ],
+  "wires":[["GPIO26","POT.VCC","orange"],["POT.SIG","GPIO34","blue"],["POT.GND","GND","black"],["BAT.+","R1.1","red"],["R1.2","GPIO32","blue"],["GPIO32","R2.1","blue"],["R2.2","GND","black"],["GPIO27","SW.1","blue"],["SW.2","GND","black"],["3V3","OLED.VCC","red"],["OLED.GND","GND","black"],["GPIO21","OLED.SDA","yellow"],["GPIO22","OLED.SCL","green"]]
+}</script><figcaption>The soil stand-in gets its power from GPIO26 (the course's switching pin, free in this project), so it draws nothing while the board sleeps; its middle leg goes to GPIO34 (ADC1). The divider halves the battery voltage for GPIO32 (ADC1, free here because no servo is used): a full cell's 4.2 V becomes 2.1 V, safely below 3.3 V. Never connect the battery straight to a GPIO. The button on GPIO27 is an RTC pin, so it can wake the board.</figcaption></div>
+
+<h3 id="capstone-start">Starter code</h3>
+<p>The structure is given: settings, the ESP32 pins, the RTC memory, and the Wi-Fi shortcut copied from the 6.1 logger. Every function that makes this product what it is, is yours to write (TODO 2 to 5 and 8; TODO 1, 6 and 7 happen on paper and at the bench).</p>
+<div class="code" data-file="PlantMonitor.ino" id="capStart"><pre>
+// Battery plant monitor: chapter 6 capstone. STARTER (TODO 1 to 8)
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include "soc/soc_caps.h"
+#include "driver/rtc_io.h"                       // TODO 8: only where EXT0 exists
+
+// ---------- Settings ----------
+const char* WIFI_SSID = "Wokwi-GUEST";           // at home: your Wi-Fi name
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const char* TOPIC     = "esp32course/yourname/plant";  // make it unique
+const uint64_t SLEEP_MIN = 15;                   // 15 minutes (1 while testing)
+const uint32_t WIFI_TIMEOUT_MS = 8000;           // never wait longer
+const int SOIL_DRY = 3000, SOIL_WET = 1200;      // raw ADC: calibrate your sensor
+const int LOW_BAT_MV = 3400;                     // below this: "low battery"
+
+// ---------- Pins (TODO 8: add an ESP32-C3 branch and #error for other chips) ----------
+const int PIN_SOIL = 34, PIN_PWR = 26, PIN_BAT = 32, PIN_BTN = 27;
+const int PIN_SDA = 21, PIN_SCL = 22;
+
+Adafruit_SSD1306 oled(128, 64, &amp;Wire, -1);
+WiFiClient net;
+PubSubClient mqtt(net);
+
+// ---------- RTC memory: survives deep sleep ----------
+RTC_DATA_ATTR uint32_t bootCount = 0;
+RTC_DATA_ATTR uint32_t failCount = 0;
+RTC_DATA_ATTR bool lastSendOk = false;
+RTC_DATA_ATTR uint8_t savedChannel = 0;          // Wi-Fi shortcut (lesson 6.1)
+RTC_DATA_ATTR uint8_t savedBssid[6];
+
+int readSoilPct() {
+  // TODO 2: sensor power (PIN_PWR) on, wait 100 ms, read PIN_SOIL, power off,
+  //         turn SOIL_DRY..SOIL_WET into 0..100 %
+  return 0;
+}
+
+int readBatteryMv() {
+  // TODO 2: average 8 x analogReadMilliVolts(PIN_BAT), times 2 for the divider
+  return 0;
+}
+
+// Ready-made, copied from the 6.1 logger: channel + BSSID shortcut, 8 s limit
+bool connectWiFiFast() {
+  WiFi.mode(WIFI_STA);
+  WiFi.persistent(false);
+  if (savedChannel != 0) WiFi.begin(WIFI_SSID, WIFI_PASS, savedChannel, savedBssid);
+  else WiFi.begin(WIFI_SSID, WIFI_PASS);
+  uint32_t start = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    if (millis() - start &gt; WIFI_TIMEOUT_MS) { savedChannel = 0; return false; }
+    delay(20);
+  }
+  savedChannel = WiFi.channel();
+  memcpy(savedBssid, WiFi.BSSID(), 6);
+  return true;
+}
+
+bool publishReading(int soil, int batMv) {
+  // TODO 3: Wi-Fi, MQTT, ONE JSON message {"soil":..,"bat":..,"low":0/1,"n":..,"fails":..}
+  return false;
+}
+
+void showOnOled(int soil, int batMv) {
+  // TODO 4: Wire.begin(PIN_SDA, PIN_SCL), oled.begin, show soil %, battery V and
+  //         the last send status for 3 s, then switch the display OFF
+}
+
+void sleepNow() {
+  WiFi.mode(WIFI_OFF);
+  // TODO 5: keep PIN_PWR LOW in sleep, wait for the button release,
+  //         timer wake (SLEEP_MIN) + button wake (EXT0 on the ESP32; TODO 8: C3 way)
+  Serial.printf("Awake %lu ms. Sleep %llu min\n", millis(), SLEEP_MIN);
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+void setup() {
+  Serial.begin(115200);
+  bootCount++;
+  analogReadResolution(12);
+  // TODO 2: read soil and battery first (cheap jobs first) and print them
+  // TODO 3/4: button wake -&gt; showOnOled (no Wi-Fi); timer or power-on -&gt; publish,
+  //           remember lastSendOk, count failures
+  sleepNow();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="capStart">
+  <li data-lines="10-18"><b class="what">Settings.</b> Network, topic, the 15-minute period, the Wi-Fi limit, the soil calibration and the low-battery level.
+    <span class="why"><code>SOIL_DRY</code> and <code>SOIL_WET</code> are raw ADC readings you'll replace with your own sensor's numbers (in dry air and in a glass of water). With the potentiometer, the defaults give a nice 0 to 100 % range.</span></li>
+  <li data-lines="20-22"><b class="what">The ESP32 pins.</b> A C3 branch comes later (TODO 8).
+    <span class="why">Starting with one chip and making it portable at the end is exactly the order of the porting workshop.</span></li>
+  <li data-lines="28-33"><b class="what">RTC memory.</b> Wake counter, failure counter, the last send result (for the display) and the Wi-Fi shortcut.
+    <span class="why">The button path shows "last send OK/FAILED", but the send happened in an earlier wake-up; only RTC memory connects the two.</span></li>
+  <li data-lines="46-60"><b class="what">connectWiFiFast(): ready-made.</b> The channel and BSSID shortcut and the 8-second limit from lesson 6.1.
+    <span class="why">You already understand every line of it; there's no point writing it twice.</span></li>
+  <li data-lines="72-79"><b class="what">sleepNow() without wake sources.</b>
+    <span class="why">As it is, the starter sleeps forever after the first wake-up (restart the simulation). TODO 5 fixes that.</span></li>
+</ol>
+
+<div class="callout info"><div class="ct">What Wokwi can and can't do here</div>
+<p>Wokwi runs all the logic: deep sleep, the timer and EXT0 wake-ups, Wi-Fi and MQTT, the ADC and the OLED. It can't show current, so requirement 6 (and the battery itself) needs your real board and multimeter. In Wokwi, a second potentiometer stands in for the battery divider: turn it until <code>bat</code> reads about 3800 mV.</p></div>
+<div class="wokwi" data-board="esp32" data-code-from="capStart">
+<p>Add <code>PubSubClient</code>, <code>Adafruit SSD1306</code> and <code>Adafruit GFX Library</code> in the Library Manager tab, set <code>SLEEP_MIN</code> to <code>1</code> while testing, and change <code>TOPIC</code> to your own.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": -90, "left": -170, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot2", "top": 40, "left": -190, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 170, "left": -170, "attrs": { "color": "green" } },
+    { "type": "board-ssd1306", "id": "oled1", "top": 60, "left": 200, "attrs": { "i2cAddress": "0x3c" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:26", "orange", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "pot2:VCC", "esp:3V3", "red", [] ],
+    [ "pot2:SIG", "esp:32", "blue", [] ],
+    [ "pot2:GND", "esp:GND.1", "black", [] ],
+    [ "btn1:1.r", "esp:27", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>Hint 1</summary><p>The power budget uses the formula from <a href="6-1.html#duty">6.1</a>, over one 900-second cycle: <code>I_avg = (I_awake × t_awake + I_sleep × t_sleep) ÷ 900</code>. List every current that flows while asleep: the chip, the regulator's quiescent current, the divider (<code>V_bat ÷ 40 kΩ</code>) and the OLED switched off. One of them will surprise you.</p></details>
+<details class="hint"><summary>Hint 2</summary><p>Everything you need is already in this course: sensor power from a pin and <code>gpio_hold_en</code> (6.1 exercise 3), the EXT0 lines and the release wait (6.1 practice project), the OLED (3.3). New: <code>oled.ssd1306_command(SSD1306_DISPLAYOFF)</code> switches the panel off, and <code>analogReadMilliVolts()</code> (3.1) gives calibrated millivolts; times 2 for the divider.</p></details>
+<details class="hint"><summary>Hint 3</summary><p>The C3 has no EXT0. Its deep-sleep wake-up from a pin is <code>esp_deep_sleep_enable_gpio_wakeup(1ULL &lt;&lt; pin, ESP_GPIO_WAKEUP_GPIO_LOW)</code>, and only GPIO0 to 5 can do it. After waking that way, the cause is <code>ESP_SLEEP_WAKEUP_GPIO</code>, not <code>EXT0</code>. Put the two versions in <code>#if SOC_PM_SUPPORT_EXT0_WAKEUP</code> / <code>#else</code>.</p></details>
+
+<details class="expect"><summary>What should you see?</summary>
+<p>In Wokwi with <code>SLEEP_MIN = 1</code> (the soil and battery numbers follow your two knobs; the awake times depend on the network):</p>
+<pre class="serial">#1 soil=52 % bat=3794 mV
+Sent: {"soil":52,"bat":3794,"low":0,"n":1,"fails":0}
+Awake 3120 ms. Sleep 1 min
+ets Jun  8 2016 00:22:57
+rst:0x5 (DEEPSLEEP_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+...
+#2 soil=52 % bat=3794 mV
+Awake 3180 ms. Sleep 1 min
+...
+#3 soil=71 % bat=3794 mV
+Sent: {"soil":71,"bat":3794,"low":0,"n":3,"fails":0}
+Awake 1480 ms. Sleep 1 min</pre>
+<p>Line <code>#2</code> is a button press: no <code>Sent</code>, and about 3.2 seconds awake because the OLED stays on for 3 of them. Line <code>#3</code> is the next timer wake-up, faster thanks to the Wi-Fi shortcut.</p>
+<ul>
+  <li>Requirement 2: turn the soil knob to one end: <code>soil=0</code>; the other end: <code>soil=100</code>; never below 0 or above 100.</li>
+  <li>Requirement 3: one message per timer wake-up in your MQTT client, <code>n</code> going up by one (button wake-ups also count, so <code>n</code> can jump by two). Wrong <code>WIFI_SSID</code>: about 8 s later <code>Not sent, will retry next wake</code>, and <code>fails</code> goes up.</li>
+  <li>Requirement 4: the OLED lights up only on the button path and goes dark after 3 seconds. Turn the battery knob below about 1.7 V at the pin (3400 mV): <code>LOW BATTERY!</code> and <code>"low":1</code>.</li>
+  <li>Requirement 5: hold the button for 3 seconds: one display cycle, not a string of them.</li>
+  <li>Requirement 6, on a DevKitC: awake tens of milliamps, over 100 mA while Wi-Fi is on; asleep usually 1 to 15 mA depending on the board, far above the chip's 10 µA (the "hard truth" section).</li>
+  <li>Requirement 8: Verify with ESP32C3 Dev Module selected compiles without errors; with ESP32S3 Dev Module, your <code>#error</code> appears.</li>
+</ul>
+</details>
+
+<details class="answer"><summary>Full answer with explanation</summary>
+<p><b>1. The PRD</b> (short, testable, and it fits on one page):</p>
+<div class="code" data-lang="text" data-file="PRD-plant-monitor.txt" id="capPrd"><pre>
+PRODUCT: Battery plant monitor
+GOAL: Tell my phone when a potted plant needs water; run 2+ months on 1000 mAh.
+
+R1  Soil moisture 0-100 % every 15 min      TEST: a message every 15 min, n +1
+R2  Battery voltage in every message        TEST: USB 5V on the divider: 4600-5100 mV
+R3  "low":1 below 3.4 V                     TEST: lower the knob, see "low":1
+R4  Button shows soil, battery, last send   TEST: OLED on for 3 s, then dark
+R5  Never awake longer than about 10 s      TEST: Wi-Fi off, "Awake" under 10000 ms
+R6  Battery life 60+ days (low-power build) TEST: measured currents, budget below
+R7  Same sketch for ESP32 and ESP32-C3      TEST: Verify passes for both boards
+
+OUT OF SCOPE: watering pump, web page, OTA (version 2)
+</pre></div>
+<ol class="walk" data-for="capPrd">
+  <li data-lines="1-2"><b class="what">One-line goal with a number.</b>
+    <span class="why">"Runs for a long time" can't be tested; "2+ months on 1000 mAh" can, and it drives every design choice below.</span></li>
+  <li data-lines="4-10"><b class="what">Each requirement has its own test.</b>
+    <span class="why">This is what "done" means. R5 is the rule "never wait forever" written as a requirement.</span></li>
+  <li data-lines="12"><b class="what">What's out.</b>
+    <span class="why">Writing down what you won't build is how a project stays finishable.</span></li>
+</ol>
+<p><b>2. The pin table</b>:</p>
+<div class="table-wrap"><table><tr><th>Signal</th><th>ESP32</th><th>Why</th><th>ESP32-C3</th><th>Why</th></tr>
+<tr><td>Soil (analog)</td><td>34</td><td>ADC1 works with Wi-Fi; the course pot pin</td><td>3</td><td>ADC1 (GPIO0 to 4); 2 is strapping</td></tr>
+<tr><td>Sensor power</td><td>26</td><td>The course switching pin; RTC pin, so <code>gpio_hold_en</code> holds it in deep sleep</td><td>10</td><td>A free, safe output</td></tr>
+<tr><td>Battery divider</td><td>32</td><td>ADC1; free because this project has no servo</td><td>4</td><td>ADC1</td></tr>
+<tr><td>Button (wake)</td><td>27</td><td>RTC pin (EXT0), internal pull-up, the course button</td><td>5</td><td>Only GPIO0 to 5 can wake a C3 from deep sleep</td></tr>
+<tr><td>OLED SDA / SCL</td><td>21 / 22</td><td>Default I2C</td><td>6 / 7</td><td>Not the default 8/9 (strapping)</td></tr></table></div>
+<p><b>3. The power budget</b>, one cycle = 15 min = 900 s. Timer wake-up: about 2 s at an average 120 mA with Wi-Fi (6.1's number) = 240 mA·s. Button: say 4 presses a day × 3.2 s × 50 mA (CPU + OLED) = 640 mA·s a day ÷ 96 cycles ≈ 7 mA·s per cycle. Sleep on a low-power build (bare module + HT7833): chip 0.01 + regulator about 0.005 + <b>divider 3.7 V ÷ 40 kΩ = 0.093</b> + OLED off about 0.01 ≈ 0.12 mA × 898 s ≈ 108 mA·s.</p>
+<ul>
+  <li>I_avg = (240 + 7 + 108) ÷ 900 ≈ <b>0.39 mA</b> → 1000 ÷ 0.39 ≈ 2560 h ≈ 107 days; realistic (× 0.75) ≈ <b>80 days</b>. R6 passes.</li>
+  <li>The surprise: the divider is almost a quarter of the whole budget (83 of 355 mA·s). With 2 × 1 MΩ (plus 100 nF from GPIO32 to GND so the ADC reads correctly) it drops to 0.002 mA and the realistic life rises to about 100 days.</li>
+  <li>Without the power pin, a real capacitive soil sensor (about 5 mA) would run all the time: I_avg ≈ 5.4 mA, about 6 days. That one design decision is worth a factor of 14.</li>
+  <li>On a DevKitC (about 6 mA asleep): (240 + 7 + 6 × 898) ÷ 900 ≈ 6.3 mA → about 5 days realistic. The code is the same; the board isn't.</li>
+</ul>
+<p><b>4. The code.</b></p>
+<div class="code" data-file="PlantMonitor.ino" id="capAns"><pre>
+// Battery plant monitor: chapter 6 capstone (ESP32 and ESP32-C3)
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include "soc/soc_caps.h"
+#if SOC_PM_SUPPORT_EXT0_WAKEUP
+  #include "driver/rtc_io.h"
+#endif
+
+// ---------- Settings ----------
+const char* WIFI_SSID = "Wokwi-GUEST";           // at home: your Wi-Fi name
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const char* TOPIC     = "esp32course/yourname/plant";  // make it unique
+const uint64_t SLEEP_MIN = 15;                   // 15 minutes (1 while testing)
+const uint32_t WIFI_TIMEOUT_MS = 8000;           // never wait longer
+const int SOIL_DRY = 3000, SOIL_WET = 1200;      // raw ADC: calibrate your sensor
+const int LOW_BAT_MV = 3400;                     // below this: "low battery"
+
+// ---------- Pins: the only part that differs per chip ----------
+#if CONFIG_IDF_TARGET_ESP32
+  const int PIN_SOIL = 34, PIN_PWR = 26, PIN_BAT = 32, PIN_BTN = 27;
+  const int PIN_SDA = 21, PIN_SCL = 22;
+#elif CONFIG_IDF_TARGET_ESP32C3
+  const int PIN_SOIL = 3, PIN_PWR = 10, PIN_BAT = 4, PIN_BTN = 5;
+  const int PIN_SDA = 6, PIN_SCL = 7;
+#else
+  #error "This monitor supports the ESP32 and the ESP32-C3 only"
+#endif
+
+Adafruit_SSD1306 oled(128, 64, &amp;Wire, -1);
+WiFiClient net;
+PubSubClient mqtt(net);
+
+// ---------- RTC memory: survives deep sleep ----------
+RTC_DATA_ATTR uint32_t bootCount = 0;
+RTC_DATA_ATTR uint32_t failCount = 0;
+RTC_DATA_ATTR bool lastSendOk = false;
+RTC_DATA_ATTR uint8_t savedChannel = 0;          // Wi-Fi shortcut (lesson 6.1)
+RTC_DATA_ATTR uint8_t savedBssid[6];
+
+int readSoilPct() {
+  gpio_hold_dis((gpio_num_t)PIN_PWR);            // release last sleep's hold
+  pinMode(PIN_PWR, OUTPUT);
+  digitalWrite(PIN_PWR, HIGH);                   // sensor power ON only now
+  delay(100);                                    // let the sensor settle
+  int raw = analogRead(PIN_SOIL);                // 0..4095
+  digitalWrite(PIN_PWR, LOW);                    // and OFF again
+  return constrain(map(raw, SOIL_DRY, SOIL_WET, 0, 100), 0, 100);
+}
+
+int readBatteryMv() {
+  uint32_t sum = 0;
+  for (int i = 0; i &lt; 8; i++) sum += analogReadMilliVolts(PIN_BAT);  // average of 8
+  return (sum / 8) * 2;                          // the 20k/20k divider halves it
+}
+
+bool connectWiFiFast() {
+  WiFi.mode(WIFI_STA);
+  WiFi.persistent(false);
+  if (savedChannel != 0) WiFi.begin(WIFI_SSID, WIFI_PASS, savedChannel, savedBssid);
+  else WiFi.begin(WIFI_SSID, WIFI_PASS);
+  uint32_t start = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    if (millis() - start &gt; WIFI_TIMEOUT_MS) { savedChannel = 0; return false; }
+    delay(20);
+  }
+  savedChannel = WiFi.channel();
+  memcpy(savedBssid, WiFi.BSSID(), 6);
+  return true;
+}
+
+bool publishReading(int soil, int batMv) {
+  if (!connectWiFiFast()) return false;
+  mqtt.setServer(MQTT_HOST, 1883);
+  String id = "plant-" + WiFi.macAddress() + "-" + String(esp_random() &amp; 0xFFFF, HEX);
+  if (!mqtt.connect(id.c_str())) return false;
+  char msg[80];
+  snprintf(msg, sizeof(msg), "{\"soil\":%d,\"bat\":%d,\"low\":%d,\"n\":%lu,\"fails\":%lu}",
+           soil, batMv, batMv &lt; LOW_BAT_MV, (unsigned long)bootCount, (unsigned long)failCount);
+  bool ok = mqtt.publish(TOPIC, msg);
+  mqtt.loop();
+  delay(50);                                     // let the packet leave
+  mqtt.disconnect();
+  if (ok) Serial.printf("Sent: %s\n", msg);
+  return ok;
+}
+
+void showOnOled(int soil, int batMv) {
+  Wire.begin(PIN_SDA, PIN_SCL);
+  if (!oled.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { Serial.println("OLED not found"); return; }
+  oled.clearDisplay();
+  oled.setTextColor(SSD1306_WHITE);
+  oled.setTextSize(2);
+  oled.setCursor(0, 0);
+  oled.printf("Soil %d%%", soil);
+  oled.setCursor(0, 22);
+  oled.printf("%.2f V", batMv / 1000.0);
+  oled.setTextSize(1);
+  oled.setCursor(0, 48);
+  oled.print(batMv &lt; LOW_BAT_MV ? "LOW BATTERY! " : "");
+  oled.print(lastSendOk ? "last send OK" : "last send FAILED");
+  oled.display();
+  delay(3000);                                   // the only long wait: the user reads
+  oled.ssd1306_command(SSD1306_DISPLAYOFF);      // an OLED left on drains the battery
+}
+
+void sleepNow() {
+  WiFi.mode(WIFI_OFF);
+  gpio_hold_en((gpio_num_t)PIN_PWR);             // sensor power stays LOW in sleep
+  gpio_deep_sleep_hold_en();
+  pinMode(PIN_BTN, INPUT_PULLUP);
+  while (digitalRead(PIN_BTN) == LOW) delay(10); // wait until the button is released
+  esp_sleep_enable_timer_wakeup(SLEEP_MIN * 60ULL * 1000000ULL);
+#if SOC_PM_SUPPORT_EXT0_WAKEUP
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_BTN, 0);   // ESP32: EXT0, LOW
+  rtc_gpio_pullup_en((gpio_num_t)PIN_BTN);
+  rtc_gpio_pulldown_dis((gpio_num_t)PIN_BTN);
+#else
+  esp_deep_sleep_enable_gpio_wakeup(1ULL &lt;&lt; PIN_BTN, ESP_GPIO_WAKEUP_GPIO_LOW);  // C3
+#endif
+  Serial.printf("Awake %lu ms. Sleep %llu min\n", millis(), SLEEP_MIN);
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+void setup() {
+  Serial.begin(115200);
+  bootCount++;
+  analogReadResolution(12);
+  int soil = readSoilPct();                      // cheap jobs first
+  int batMv = readBatteryMv();
+  Serial.printf("#%lu soil=%d %% bat=%d mV\n", (unsigned long)bootCount, soil, batMv);
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  if (cause == ESP_SLEEP_WAKEUP_EXT0 || cause == ESP_SLEEP_WAKEUP_GPIO) {
+    showOnOled(soil, batMv);                     // button: show, no Wi-Fi
+  } else {                                       // timer or power-on: send
+    lastSendOk = publishReading(soil, batMv);
+    if (!lastSendOk) { failCount++; Serial.println("Not sent, will retry next wake"); }
+  }
+  sleepNow();
+}
+
+void loop() {}
+</pre></div>
+<ol class="walk" data-for="capAns">
+  <li data-lines="7-10"><b class="what">soc_caps.h, and rtc_io.h only where EXT0 exists.</b>
+    <span class="why">The capability decides, not the chip name: any future chip with EXT0 gets the EXT0 code automatically.</span></li>
+  <li data-lines="22-31"><b class="what">Pins per chip, #error for the rest.</b> The pin table, typed in.
+    <span class="why">The same names in both branches, so the rest of the file never asks which chip it's on.</span></li>
+  <li data-lines="44-52"><b class="what">Soil: power on, settle, read, power off, scale.</b> <code>map</code> turns the dry-to-wet range into 0 to 100, and <code>constrain</code> keeps readings outside the calibration inside that range.
+    <span class="why">The sensor is powered for about 100 ms per wake-up instead of all the time (the factor-14 decision). <code>gpio_hold_dis</code> first, because the pin was locked LOW during sleep.</span></li>
+  <li data-lines="54-58"><b class="what">Battery: 8 calibrated readings, averaged, times 2.</b>
+    <span class="why"><code>analogReadMilliVolts</code> corrects the ESP32's ADC curve; averaging smooths out noise; the divider halved the voltage, so we double it back.</span></li>
+  <li data-lines="75-89"><b class="what">One JSON message.</b> Soil, battery, the low flag, the wake counter and the failure counter, then the usual <code>loop</code>, 50 ms and disconnect.
+    <span class="why">One message = one network round trip = the shortest awake time. <code>fails</code> travels inside the next successful message, so you learn about the bad ones too.</span></li>
+  <li data-lines="91-108"><b class="what">The display path.</b> I2C and the OLED start only here; show for 3 seconds, then <code>SSD1306_DISPLAYOFF</code>.
+    <span class="why">On timer wake-ups the OLED is never touched and stays dark. An OLED left lit would draw several mA all night, more than everything else together.</span></li>
+  <li data-lines="112-115"><b class="what">Hold the sensor pin LOW and wait for the button.</b>
+    <span class="why">Without the hold the pin could float in sleep and half-power the sensor; without the release wait, a held button would wake the board again at once.</span></li>
+  <li data-lines="116-123"><b class="what">Two wake sources, per capability.</b> The timer always; EXT0 with the RTC pull-up where the chip has it, the C3's GPIO wake-up otherwise.
+    <span class="why">This is the only place the two chips really differ. On the C3, <code>pinMode(PIN_BTN, INPUT_PULLUP)</code> on line 114 provides the pull-up; if your C3 board wakes up by itself, add an external 10 kΩ from GPIO5 to 3V3.</span></li>
+  <li data-lines="133-135"><b class="what">Cheap jobs first.</b> Read and print before deciding anything.
+    <span class="why">Both paths need the numbers, and reading them costs about 100 ms, a tiny fraction of a Wi-Fi connection.</span></li>
+  <li data-lines="136-142"><b class="what">The dispatcher.</b> A button (EXT0 on the ESP32, GPIO on the C3) shows; anything else (timer, power-on) sends.
+    <span class="why">Power-on sends right away on purpose: when you put the battery in, you see the first message in your client within seconds, so you know the installation works.</span></li>
+</ol>
+<p><b>Compile check:</b> <code>esp32:esp32:esp32</code> OK and <code>esp32:esp32:esp32c3</code> OK with core 3.3.12 (R7).</p>
+<p><b>5. Measurements</b> (example numbers from a DevKitC on the bench; yours will differ): awake about 1.5 s on timer wake-ups after the first, 3.2 s on button wake-ups; sleep current 5.8 mA with the OLED off. Forgetting <code>SSD1306_DISPLAYOFF</code> added several mA more in a test. Recomputed: (120 × 1.5 + 7 + 5.8 × 898.5) ÷ 900 ≈ 6.0 mA → about 5 days realistic on the DevKitC; the low-power build is needed for R6.</p>
+<p><b>6. The review</b> of this code with the 6.2 checklist:</p>
+<div class="table-wrap"><table><tr><th>#</th><th>Step</th><th>Result</th><th>Why</th></tr>
+<tr><td>1</td><td>I understand every line</td><td>✅ pass</td><td>Every line is explained above; the only new calls are <code>SSD1306_DISPLAYOFF</code> and the C3 GPIO wake-up.</td></tr>
+<tr><td>2</td><td>Pins</td><td>✅ pass</td><td>ESP32: ADC1 only (34, 32), 27 is RTC, nothing on 6 to 11 or strapping pins. C3: avoids 2, 8, 9, 12 to 17, 18/19.</td></tr>
+<tr><td>3</td><td>It matches my wiring</td><td>✅ pass</td><td>Compared with the pin table wire by wire, both chips.</td></tr>
+<tr><td>4</td><td>Voltage and current</td><td>✅ pass</td><td>The divider keeps GPIO32 at 2.1 V or less. A pin powers only the sensor (the pot draws 0.33 mA; a capacitive sensor about 5 mA, well within a pin's limit).</td></tr>
+<tr><td>5</td><td>API version</td><td>✅ pass</td><td>Core 3.x only; no <code>ledcSetup</code>, no old callbacks.</td></tr>
+<tr><td>6</td><td>The libraries are real</td><td>✅ pass</td><td>PubSubClient, Adafruit SSD1306 and GFX, all used in earlier lessons.</td></tr>
+<tr><td>7</td><td>No endless waiting</td><td>✅ pass</td><td>Wi-Fi 8 s at most; the only other waits are 100 ms, 50 ms and the intended 3 s. The release wait could last as long as someone holds the button; acceptable for a hand-pressed button.</td></tr>
+<tr><td>8</td><td>Error handling</td><td>✅ pass</td><td>No Wi-Fi or MQTT: counted, sleep anyway. No OLED: a message, sleep anyway. One known gap, written down: a message lost while the broker is unreachable isn't sent again later.</td></tr>
+<tr><td>9</td><td>Security</td><td>✅ pass</td><td>No real password in the code; the device only publishes, and a plant's moisture isn't secret (use <code>secrets.h</code> for your real Wi-Fi password).</td></tr>
+<tr><td>10</td><td>Wokwi first, then the board</td><td>✅ pass</td><td>Tested in Wokwi with <code>SLEEP_MIN = 1</code> first; then on the board, sensor first, then the display, then the network.</td></tr></table></div>
+<p><b>7. The box.</b> Put the electronics in a small box above the soil with the sensor's cable going down; keep water away from the board and the battery (a drip loop in the cable helps), and leave the button reachable. When it's ready to be a product, move from the DevKitC to a module on your own board (the <a href="../kicad-9-tutorial/">KiCad tutorial</a>): that's where the 80 days come from.</p>
+<div class="wokwi" data-board="esp32" data-code-from="capAns">
+<p>The same circuit as the starter. Set <code>SLEEP_MIN</code> to <code>1</code> and your own <code>TOPIC</code>, turn the second knob until <code>bat</code> is about 3800 mV, and follow "What should you see?".</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": -90, "left": -170, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot2", "top": 40, "left": -190, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 170, "left": -170, "attrs": { "color": "green" } },
+    { "type": "board-ssd1306", "id": "oled1", "top": 60, "left": 200, "attrs": { "i2cAddress": "0x3c" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:26", "orange", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "pot2:VCC", "esp:3V3", "red", [] ],
+    [ "pot2:SIG", "esp:32", "blue", [] ],
+    [ "pot2:GND", "esp:GND.1", "black", [] ],
+    [ "btn1:1.r", "esp:27", "blue", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
 <h2 id="certificate">🎓 Course completion certificate</h2>
 <div class="callout info"><div class="ct">ESP32 Masterclass completion certificate: "Independent Maker"</div>
 <p>You've finished this course. From today you can:</p>

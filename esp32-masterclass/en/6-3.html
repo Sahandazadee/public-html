@@ -1712,6 +1712,388 @@ void loop() {}
 </details>
 </div>
 
+<h2 id="project">Practice project: a threshold you can change from your phone</h2>
+<div class="project">
+<p class="lede-ish">Your station's alarm limit, 35 °C, is baked into the code. A friend wants to use the same station in a greenhouse, where 30 °C is already too hot, and she can't re-flash a board. So the limit has to come over the network: she publishes a number to one MQTT topic, and the station checks it, uses it and confirms it. As a bonus, the station sends her a small summary once a day: that day's lowest and highest temperature.</p>
+
+<h3 id="project-req">Requirements</h3>
+<ol>
+  <li>After <b>every</b> (re)connection to the broker, the station subscribes to <code>&lt;BASE&gt;cfg/high</code>. Because that message is sent with retain, the latest value arrives a moment after connecting, even right after a reset.</li>
+  <li>Only a number from 20.0 to 60.0 is accepted. Anything else (<code>abc</code>, <code>35x</code>, an empty message, <code>99</code>) is rejected with a line in the Serial Monitor and changes nothing.</li>
+  <li>An accepted value becomes the alarm limit immediately, the "all clear" limit follows 2 °C below it, and the station confirms the limit it is using on <code>&lt;BASE&gt;cfg/high/state</code> (with retain).</li>
+  <li>The station tracks the lowest and highest valid temperature. Every <code>DAY_MS</code> (24 hours; 60 seconds while testing) it publishes <code>{"min":..,"max":..}</code> to <code>&lt;BASE&gt;daily</code> and starts a new period.</li>
+  <li>With no network at all, the local alarm LED keeps working with the last accepted limit (R8 from the PRD).</li>
+  <li>The Serial Monitor shows every step: an accepted or rejected value, the alarm switching on and off, and the daily summary.</li>
+</ol>
+
+<h3 id="project-parts">Parts</h3>
+<ul>
+  <li>ESP32 DevKitC, DHT22 (plus a 10 kΩ pull-up for the bare 4-pin sensor), the alarm LED with 220 Ω</li>
+  <li>A 2.4 GHz Wi-Fi network (in Wokwi: <code>Wokwi-GUEST</code>) and an MQTT client that can publish with retain, such as the HiveMQ web client from lesson <a href="5-1.html">5.1</a></li>
+  <li>The OLED, LDR, buzzer and button of the full station stay on your breadboard; this project simply doesn't use them</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"DHT","name":"DHT22 sensor","img":"dht22.svg","pins":[["VCC","3.3 V power"],["DATA","data"],["GND","ground"]]},
+    {"id":"R2","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","to GPIO4"],["2","to LED anode"]]},
+    {"id":"LED","name":"Red alarm LED","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−)"]]}
+  ],
+  "wires":[["3V3","DHT.VCC","red"],["GPIO13","DHT.DATA","blue"],["DHT.GND","GND","black"],["GPIO4","R2.1","orange"],["R2.2","LED.A","orange"],["LED.K","GND","black"]]
+}</script><figcaption>Only the two parts this project needs, on the same pins as the full station: DHT22 on GPIO13 and the alarm LED on GPIO4. A bare 4-pin DHT22 also needs 10 kΩ from DATA to 3V3.</figcaption></div>
+
+<h3 id="project-start">Starter code</h3>
+<p>To keep the new parts easy to see, the starter is a "lite" station: the same structure as step 6 (settings, one function per job, a non-blocking network), but only the sensor, the alarm LED and one temperature upload. Once it works, the same additions fit into the full <code>EnvStation</code> unchanged.</p>
+<div class="code" data-file="StationRemote.ino" id="projStart"><pre>
+// Station lite (6.3) + remote threshold + daily min/max: STARTER
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;DHT.h&gt;
+
+const char* WIFI_SSID = "Wokwi-GUEST";         // real board: your Wi-Fi name
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const char* BASE      = "esp32course/station-42/"; // your own unique prefix
+const uint32_t SENSOR_MS  = 2000;              // read every 2 seconds
+const uint32_t PUBLISH_MS = 30000;             // send the temperature every 30 s
+const uint32_t DAY_MS     = 86400000UL;        // 24 h (60000 while testing)
+
+const int PIN_DHT = 13;
+const int PIN_LED = 4;                         // alarm LED
+
+DHT dht(PIN_DHT, DHT22);
+WiFiClient net;
+PubSubClient mqtt(net);
+
+float tempHigh = 35.0, tempClear = 33.0;       // variables now: they can change
+float tempC = NAN;
+bool alarmOn = false;
+uint32_t tSensor = 0, tPublish = 0, tWifi = 0, tMqtt = 0;
+// TODO 4: variables for the min/max of this period and when it started
+// TODO 3: a flag "a new threshold was accepted, confirm it"
+
+void onMessage(char* topic, byte* payload, unsigned int length) {
+  // TODO 2: copy payload into a char buffer (add the '\0'), check that the WHOLE
+  //         text is a number from 20.0 to 60.0; otherwise print "rejected" and return
+  // TODO 3: accepted: tempHigh = value, tempClear = value - 2, set the flag
+}
+
+void readSensor() {
+  float t = dht.readTemperature();
+  if (isnan(t)) { Serial.println("DHT22 read failed"); return; }
+  tempC = t;
+  // TODO 4: update the min/max with this valid reading
+}
+
+void updateAlarm() {
+  if (isnan(tempC)) return;
+  if (!alarmOn &amp;&amp; tempC &gt; tempHigh) { alarmOn = true; Serial.println("ALARM on"); }
+  else if (alarmOn &amp;&amp; tempC &lt; tempClear) { alarmOn = false; Serial.println("ALARM off"); }
+}
+
+void publishTemp() {
+  if (!mqtt.connected() || isnan(tempC)) return;
+  char topic[80], payload[16];
+  snprintf(topic, sizeof(topic), "%stemp", BASE);
+  snprintf(payload, sizeof(payload), "%.1f", tempC);
+  mqtt.publish(topic, payload);
+}
+
+void keepWiFi() {
+  if (WiFi.status() == WL_CONNECTED) return;
+  if (millis() - tWifi &lt; 15000) return;        // one attempt every 15 seconds
+  tWifi = millis();
+  WiFi.reconnect();
+}
+
+void keepMqtt() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (mqtt.connected()) { mqtt.loop(); return; }
+  if (millis() - tMqtt &lt; 5000) return;         // one attempt every 5 seconds
+  tMqtt = millis();
+  String id = "station-" + WiFi.macAddress() + "-" + String(esp_random() &amp; 0xFFFF, HEX);
+  if (mqtt.connect(id.c_str())) {
+    Serial.println("MQTT connected");
+    // TODO 1: subscribe to BASE + "cfg/high" (here: after EVERY connect)
+  } else {
+    Serial.printf("MQTT failed, state=%d\n", mqtt.state());
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(PIN_LED, OUTPUT);
+  dht.begin();
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  mqtt.setServer(MQTT_HOST, 1883);
+  mqtt.setCallback(onMessage);
+  net.setConnectionTimeout(1000);              // TCP: give up after 1 s
+  mqtt.setSocketTimeout(2);                    // broker reply: give up after 2 s
+  tWifi = millis();
+}
+
+void loop() {
+  uint32_t now = millis();
+  if (now - tSensor &gt;= SENSOR_MS) { tSensor = now; readSensor(); updateAlarm(); }
+  if (now - tPublish &gt;= PUBLISH_MS) { tPublish = now; publishTemp(); }
+  // TODO 3: flag set? publish the threshold in use to BASE + "cfg/high/state" (retained)
+  // TODO 4: every DAY_MS publish {"min":..,"max":..} to BASE + "daily", start a new period
+  keepWiFi();
+  keepMqtt();
+  digitalWrite(PIN_LED, alarmOn &amp;&amp; (millis() / 250) % 2);   // local: needs no network
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="6-12"><b class="what">Settings.</b> As in the full station, plus <code>DAY_MS</code> for the daily summary.
+    <span class="why">A named constant means you can test "one day" in one minute and change it back with one edit.</span></li>
+  <li data-lines="21"><b class="what">The limits are variables now.</b> In <code>EnvStation</code> they were <code>const</code>.
+    <span class="why">A <code>const</code> can't change while the program runs; a limit set from the phone has to.</span></li>
+  <li data-lines="28-32"><b class="what">The callback, still empty.</b> <code>onMessage</code> is already registered with <code>setCallback</code> (line 83), so the library will call it for every message on a topic you subscribed to.
+    <span class="why">This is the same callback pattern as lesson <a href="5-1.html">5.1</a>: you write the function, the library decides when to call it.</span></li>
+  <li data-lines="68-70"><b class="what">Where to subscribe.</b> Inside the successful-connect branch of <code>keepMqtt()</code>.
+    <span class="why">A subscription belongs to one connection. After a Wi-Fi or broker drop, <code>keepMqtt</code> reconnects, and without a new subscribe the station would never hear from the topic again.</span></li>
+  <li data-lines="89-98"><b class="what">loop, the scheduler, with two TODOs.</b>
+    <span class="why">The LED line at the end runs on every pass and needs no network: that's requirement 5, already built in.</span></li>
+</ol>
+
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>Add <code>DHT sensor library</code> and <code>PubSubClient</code> in the Library Manager tab and <b>change <code>BASE</code></b> to a prefix of your own. The starter already runs: it connects, sends the temperature every 30 seconds and blinks the LED above 35 °C (click the DHT22 to change the temperature).</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -110, "left": 170, "attrs": { "temperature": "24", "humidity": "45" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": -130, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 40, "left": -60, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "r1:1", "esp:4", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>Hint 1</summary><p>The payload is <b>not</b> a C string: it has no <code>'\0'</code> at the end. Copy it into a small <code>char</code> array first, exactly like <code>onMessage</code> in lesson 5.1, and remember that a payload longer than your array is already a reason to reject it.</p></details>
+<details class="hint"><summary>Hint 2</summary><p><code>String("35x").toFloat()</code> quietly returns 35, and <code>toFloat()</code> of <code>abc</code> returns 0: neither tells you the text was bad. The standard C function <code>strtof(text, &amp;end)</code> converts the number <b>and</b> tells you where it stopped (<code>end</code>). If <code>end</code> is still at the start, there was no number; if <code>*end</code> isn't the <code>'\0'</code> at the end, there was junk after it.</p></details>
+<details class="hint"><summary>Hint 3</summary><p>Don't publish from inside the callback; set a flag (<code>cfgChanged = true</code>) and publish the confirmation from loop. For the daily summary, use the same pattern as the other jobs: <code>if (now - tDay &gt;= DAY_MS) { tDay = now; ... }</code>, and start min/max as <code>NAN</code>.</p></details>
+
+<details class="expect"><summary>What should you see?</summary>
+<p>In Wokwi with <code>DAY_MS = 60000</code>. In your MQTT client, publish <code>30</code> to <code>&lt;BASE&gt;cfg/high</code> with <b>Retain</b> ticked, move the DHT22 to 31 °C, then publish <code>abc</code> and <code>99</code> (without retain):</p>
+<pre class="serial">MQTT connected
+cfg/high &lt;- "30" : accepted, alarm at 30.0 C, clear at 28.0 C
+ALARM on
+cfg/high &lt;- "abc" : rejected (need a number from 20 to 60)
+cfg/high &lt;- "99" : rejected (need a number from 20 to 60)
+Daily: min=24.0 max=31.0 (sent)</pre>
+<ul>
+  <li>Requirement 1: stop and restart the simulation without publishing anything: right after <code>MQTT connected</code>, <code>cfg/high &lt;- "30" : accepted</code> appears again. That's the retained message.</li>
+  <li>Requirements 2 and 3: after each rejected value the LED keeps blinking (the limit is still 30); <code>&lt;BASE&gt;cfg/high/state</code> in your client shows <code>30.0</code>.</li>
+  <li>Requirement 4: once a minute a <code>Daily</code> line, and the retained JSON on <code>&lt;BASE&gt;daily</code>; the next period's min and max start from the current temperature again.</li>
+  <li>Requirement 5: on a real board, switch the router off: the LED still blinks above 30 °C and stops below 28 °C.</li>
+  <li>To delete the retained limit, publish an empty retained message to <code>cfg/high</code>: the station prints <code>rejected</code> for <code>""</code> and keeps its current limit until the next reset (then 35 again).</li>
+</ul>
+</details>
+
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="StationRemote.ino" id="projAns"><pre>
+// Station lite (6.3) + remote threshold over MQTT + daily min/max
+#include &lt;WiFi.h&gt;
+#include &lt;PubSubClient.h&gt;
+#include &lt;DHT.h&gt;
+
+const char* WIFI_SSID = "Wokwi-GUEST";         // real board: your Wi-Fi name
+const char* WIFI_PASS = "";
+const char* MQTT_HOST = "broker.hivemq.com";
+const char* BASE      = "esp32course/station-42/"; // your own unique prefix
+const uint32_t SENSOR_MS  = 2000;              // read every 2 seconds
+const uint32_t PUBLISH_MS = 30000;             // send the temperature every 30 s
+const uint32_t DAY_MS     = 86400000UL;        // 24 h (60000 while testing)
+
+const int PIN_DHT = 13;
+const int PIN_LED = 4;                         // alarm LED
+
+DHT dht(PIN_DHT, DHT22);
+WiFiClient net;
+PubSubClient mqtt(net);
+
+float tempHigh = 35.0, tempClear = 33.0;       // variables now: they can change
+float tempC = NAN;
+bool alarmOn = false;
+uint32_t tSensor = 0, tPublish = 0, tWifi = 0, tMqtt = 0;
+float dayMin = NAN, dayMax = NAN;              // NAN = no valid reading yet
+uint32_t tDay = 0;
+bool cfgChanged = false;                       // set in the callback, used in loop
+
+void onMessage(char* topic, byte* payload, unsigned int length) {
+  char buf[16];
+  unsigned int n = (length &lt; sizeof(buf) - 1) ? length : sizeof(buf) - 1;
+  memcpy(buf, payload, n);
+  buf[n] = '\0';                               // payload has no '\0' of its own
+  char* end;
+  float v = strtof(buf, &amp;end);                 // end = where the number stopped
+  while (*end == ' ' || *end == '\r' || *end == '\n') end++;   // allow trailing spaces
+  bool valid = (end != buf) &amp;&amp; (*end == '\0') &amp;&amp; (length &lt; sizeof(buf)) &amp;&amp; v &gt;= 20.0 &amp;&amp; v &lt;= 60.0;
+  if (!valid) {
+    Serial.printf("cfg/high &lt;- \"%s\" : rejected (need a number from 20 to 60)\n", buf);
+    return;                                    // keep the old threshold
+  }
+  tempHigh = v;
+  tempClear = v - 2.0;
+  cfgChanged = true;
+  Serial.printf("cfg/high &lt;- \"%s\" : accepted, alarm at %.1f C, clear at %.1f C\n",
+                buf, tempHigh, tempClear);
+}
+
+void readSensor() {
+  float t = dht.readTemperature();
+  if (isnan(t)) { Serial.println("DHT22 read failed"); return; }
+  tempC = t;
+  if (isnan(dayMin) || t &lt; dayMin) dayMin = t;
+  if (isnan(dayMax) || t &gt; dayMax) dayMax = t;
+}
+
+void updateAlarm() {
+  if (isnan(tempC)) return;
+  if (!alarmOn &amp;&amp; tempC &gt; tempHigh) { alarmOn = true; Serial.println("ALARM on"); }
+  else if (alarmOn &amp;&amp; tempC &lt; tempClear) { alarmOn = false; Serial.println("ALARM off"); }
+}
+
+void publishTemp() {
+  if (!mqtt.connected() || isnan(tempC)) return;
+  char topic[80], payload[16];
+  snprintf(topic, sizeof(topic), "%stemp", BASE);
+  snprintf(payload, sizeof(payload), "%.1f", tempC);
+  mqtt.publish(topic, payload);
+}
+
+void publishDaily() {
+  if (isnan(dayMin)) return;                   // no valid reading in this period
+  char topic[80], payload[40];
+  snprintf(topic, sizeof(topic), "%sdaily", BASE);
+  snprintf(payload, sizeof(payload), "{\"min\":%.1f,\"max\":%.1f}", dayMin, dayMax);
+  bool sent = mqtt.connected() &amp;&amp; mqtt.publish(topic, payload, true);
+  Serial.printf("Daily: min=%.1f max=%.1f (%s)\n", dayMin, dayMax, sent ? "sent" : "offline, lost");
+  dayMin = NAN;                                // start a new period
+  dayMax = NAN;
+}
+
+void confirmCfg() {
+  if (!mqtt.connected()) return;               // stays true: we'll confirm later
+  cfgChanged = false;
+  char topic[80], payload[16];
+  snprintf(topic, sizeof(topic), "%scfg/high/state", BASE);
+  snprintf(payload, sizeof(payload), "%.1f", tempHigh);
+  mqtt.publish(topic, payload, true);          // retained: the dashboard always knows
+}
+
+void keepWiFi() {
+  if (WiFi.status() == WL_CONNECTED) return;
+  if (millis() - tWifi &lt; 15000) return;        // one attempt every 15 seconds
+  tWifi = millis();
+  WiFi.reconnect();
+}
+
+void keepMqtt() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (mqtt.connected()) { mqtt.loop(); return; }
+  if (millis() - tMqtt &lt; 5000) return;         // one attempt every 5 seconds
+  tMqtt = millis();
+  String id = "station-" + WiFi.macAddress() + "-" + String(esp_random() &amp; 0xFFFF, HEX);
+  if (mqtt.connect(id.c_str())) {
+    Serial.println("MQTT connected");
+    String cfg = String(BASE) + "cfg/high";
+    mqtt.subscribe(cfg.c_str());               // the retained value arrives right away
+  } else {
+    Serial.printf("MQTT failed, state=%d\n", mqtt.state());
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(PIN_LED, OUTPUT);
+  dht.begin();
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  mqtt.setServer(MQTT_HOST, 1883);
+  mqtt.setCallback(onMessage);
+  net.setConnectionTimeout(1000);              // TCP: give up after 1 s
+  mqtt.setSocketTimeout(2);                    // broker reply: give up after 2 s
+  tWifi = millis();
+}
+
+void loop() {
+  uint32_t now = millis();
+  if (now - tSensor &gt;= SENSOR_MS) { tSensor = now; readSensor(); updateAlarm(); }
+  if (now - tPublish &gt;= PUBLISH_MS) { tPublish = now; publishTemp(); }
+  if (cfgChanged) confirmCfg();
+  if (now - tDay &gt;= DAY_MS) { tDay = now; publishDaily(); }
+  keepWiFi();
+  keepMqtt();
+  digitalWrite(PIN_LED, alarmOn &amp;&amp; (millis() / 250) % 2);   // local: needs no network
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="25-27"><b class="what">New state.</b> Min and max of the current period (starting as <code>NAN</code>), the period's clock, and a "confirm the new limit" flag.
+    <span class="why"><code>NAN</code> means "no reading yet", so a period without valid readings is recognizable and nothing wrong gets published.</span></li>
+  <li data-lines="30-33"><b class="what">Payload into a real C string.</b> Copy at most 15 bytes and add <code>'\0'</code>.
+    <span class="why">The library hands you raw bytes plus a length. Without the terminator, <code>strtof</code> and <code>printf</code> would read past the end into whatever lies in memory.</span></li>
+  <li data-lines="34-37"><b class="what">Validate the WHOLE text.</b> <code>strtof</code> converts and sets <code>end</code> to the first character it didn't use; trailing spaces or a newline are skipped. Valid means: some digits were read, nothing but the end follows, the message wasn't cut off, and the value is between 20 and 60.
+    <span class="why">This is the new tool in this project (from the standard C library). Anyone who can publish on a public broker can send you anything; a limit of 0 or 999 would make the alarm useless, so the device protects itself.</span></li>
+  <li data-lines="38-41"><b class="what">Rejected: say so and change nothing.</b>
+    <span class="why">The old limit stays in force; a bad message can never leave the station without a working alarm.</span></li>
+  <li data-lines="42-46"><b class="what">Accepted: apply at once, clear limit 2 °C lower, set the flag.</b>
+    <span class="why">Keeping the 2-degree gap keeps the hysteresis from lesson 6.3 (no flickering). The next <code>updateAlarm()</code>, at most 2 seconds later, already uses the new limit.</span></li>
+  <li data-lines="53-54"><b class="what">Min and max from valid readings only.</b> Placed after the NaN check with <code>return</code>.
+    <span class="why">The first valid reading of a period sets both; a failed reading never reaches these lines.</span></li>
+  <li data-lines="71-80"><b class="what">The daily summary.</b> One retained JSON message, a Serial line that says whether it went out, then a new period.
+    <span class="why">Retained, so a dashboard that opens tomorrow morning still shows yesterday's summary. If the network is down at that moment, this summary is lost; it's written to Serial as "offline, lost" so you know (making it survive is the same idea as exercise 1).</span></li>
+  <li data-lines="82-89"><b class="what">Confirm the limit in use.</b> Only when connected; the flag stays set until it succeeds.
+    <span class="why">Publishing from inside the callback is risky with PubSubClient, because both share one buffer. Setting a flag and publishing from loop is the safe pattern. The retained state topic is how the phone knows which limit the station really uses.</span></li>
+  <li data-lines="104-107"><b class="what">Subscribe after every successful connect.</b>
+    <span class="why">The broker sends the retained value right after the subscribe. A reconnect delivers it again, and applying the same value twice does no harm.</span></li>
+  <li data-lines="130-131"><b class="what">Two more jobs in the scheduler.</b> Confirm the limit when needed; publish the summary once per <code>DAY_MS</code>.
+    <span class="why">The same "one clock per job" pattern as the full station, so adding features never adds waiting.</span></li>
+</ol>
+<div class="callout warn"><div class="ct">A limit anyone can change</div>
+<p>On the public broker, anyone who guesses your topic can publish a new limit. The 20 to 60 check limits the damage, but for a real greenhouse use a private broker with a username and password (HiveMQ Cloud or Adafruit IO, lesson <a href="5-1.html">5.1</a>).</p></div>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p>The same circuit as the starter. Set <code>DAY_MS</code> to <code>60000</code>, change <code>BASE</code>, and follow the test steps in "What should you see?".</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -110, "left": 170, "attrs": { "temperature": "24", "humidity": "45" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": -130, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 40, "left": -60, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.2", "black", [] ],
+    [ "r1:1", "esp:4", "orange", [] ],
+    [ "r1:2", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
 <h2 id="certificate">🎓 You can now...</h2>
 <div class="callout info"><div class="ct">Your report card so far</div>
 <p>If you've read the lessons and built their projects yourself, you can now:</p>
