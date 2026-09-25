@@ -1144,6 +1144,425 @@ void loop() {
 </details>
 </div>
 
+<h2 id="project">Practice project: Web night-light</h2>
+<div class="project">
+<p class="lede-ish">Remember the automatic night-light from lesson 3.1? It worked, but changing its threshold meant editing the code and uploading again. Now it gets a web page: open it on your phone and you see how bright the room is, whether the lamp is on, and three buttons: <b>AUTO</b> (the light sensor decides), <b>ON</b> and <b>OFF</b>. A small form lets you set the darkness threshold from the sofa. This is how real smart-home devices are built: the logic runs on the device, and the page is just a remote control that talks to a small API.</p>
+
+<h3 id="project-req">Requirements</h3>
+<ol>
+  <li>The board connects to your Wi-Fi with a 20-second limit, prints its IP and answers at <code>http://nightlight.local</code>. (Done in the starter.)</li>
+  <li>Twice a second, the LDR on GPIO35 is read as the average of 8 <code>analogReadMilliVolts()</code> readings.</li>
+  <li>Mode <code>auto</code>: the lamp (LED on GPIO4) switches on when the reading goes above the threshold (default 2600 mV, darker = higher) and off only when it drops below threshold − 400 mV. Modes <code>on</code> and <code>off</code> force the lamp.</li>
+  <li>Every real change of the lamp prints one line, for example <code>Lamp ON (auto, 2710 mV)</code> or <code>Lamp OFF (manual, 2650 mV)</code>.</li>
+  <li><code>GET /api/state</code> returns JSON like <code>{"lamp":true,"mv":2710,"mode":"auto","onMv":2600}</code>; the page (given in the starter) shows it and refreshes every second.</li>
+  <li><code>POST /api/mode?m=auto|on|off</code> changes the mode and answers with the new state; any other value gets status 400.</li>
+  <li><code>POST /api/threshold?mv=N</code> accepts 500 to 3000 and answers with the new state; anything else gets 400 with the text <code>Threshold must be 500 to 3000 mV</code>, which the page shows under the form.</li>
+</ol>
+
+<h3 id="project-parts">Parts and wiring</h3>
+<ul>
+  <li>ESP32 board and the LED + 220 Ω on GPIO4 (the "lamp"): already on your breadboard</li>
+  <li>LDR + 10 kΩ resistor as a voltage divider on GPIO35, exactly as in <a href="3-1.html#ldr">lesson 3.1</a></li>
+  <li>A phone or laptop on the same 2.4 GHz network</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"R1","name":"10 kΩ fixed resistor","img":"resistor.svg","pins":[["1","to 3V3"],["2","middle point"]]},
+    {"id":"LDR","name":"LDR light-dependent resistor","img":"ldr.svg","pins":[["1","middle point (no polarity)"],["2","to GND"]]},
+    {"id":"R2","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO4 side"],["2","LED side"]]},
+    {"id":"LED1","name":"White or yellow LED (the lamp)","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−)"]]}
+  ],
+  "wires":[["3V3","R1.1","red"],["R1.2","LDR.1","blue"],["GPIO35","R1.2","blue","light"],["LDR.2","GND","black"],["GPIO4","R2.1","orange","lamp"],["R2.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>Web night-light: the LDR divider from lesson 3.1 on GPIO35 (ADC1, so it keeps working with Wi-Fi on) and the lamp LED on GPIO4. The darker it gets, the higher the voltage at the middle point.</figcaption></div>
+
+<h3 id="project-start">Starter code</h3>
+<p>The starter contains the whole web page, the Wi-Fi connection, mDNS, the routes and <code>stateJson()</code>. It compiles and serves the page, but the lamp never changes and the API ignores what you send. The TODO numbers match the requirements. Put your network's name and password into lines 6 and 7 first.</p>
+<div class="code" data-file="Web_NightLight.ino" id="projStart"><pre>
+// Web night-light: LDR + hysteresis, page with auto/on/off and a threshold form
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;ESPmDNS.h&gt;
+
+const char* WIFI_SSID = "Home";             // your network name
+const char* WIFI_PASS = "your-password";    // your network password
+
+const int LDR_PIN = 35;                     // middle of the LDR divider (ADC1)
+const int LED_PIN = 4;                      // the "lamp"
+const int GAP_MV = 400;                     // hysteresis: off 400 mV below "on"
+
+WebServer server(80);
+String mode = "auto";                       // "auto", "on" or "off"
+int onMv = 2600;                            // darker than this: lamp on (auto)
+uint32_t ldrMv = 0;                         // latest averaged reading
+bool lampOn = false;
+unsigned long lastRead = 0;
+
+const char INDEX_HTML[] PROGMEM = R"rawliteral(
+&lt;!DOCTYPE html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+&lt;meta charset="utf-8"&gt;
+&lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;
+&lt;title&gt;Night-light&lt;/title&gt;
+&lt;style&gt;
+  body { font-family: sans-serif; text-align: center; background: #f2f4f8; }
+  .card { background: #fff; max-width: 340px; margin: 14px auto; padding: 12px; border-radius: 12px; }
+  button { font-size: 18px; padding: 8px 18px; margin: 4px; border: 0; border-radius: 8px; }
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;h1&gt;Night-light&lt;/h1&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;Lamp: &lt;span id="lamp"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;p&gt;Light sensor: &lt;span id="mv"&gt;?&lt;/span&gt; mV&lt;/p&gt;
+  &lt;p&gt;Mode: &lt;b id="mode"&gt;?&lt;/b&gt;&lt;/p&gt;
+  &lt;button onclick="setMode('auto')"&gt;AUTO&lt;/button&gt;
+  &lt;button onclick="setMode('on')"&gt;ON&lt;/button&gt;
+  &lt;button onclick="setMode('off')"&gt;OFF&lt;/button&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;p&gt;Turn on above &lt;input id="th" type="number" min="500" max="3000" step="50"&gt; mV&lt;/p&gt;
+  &lt;button onclick="saveTh()"&gt;Save&lt;/button&gt;
+  &lt;p id="msg"&gt;&lt;/p&gt;
+&lt;/div&gt;
+&lt;script&gt;
+function show(s) {
+  document.getElementById('lamp').textContent = s.lamp ? 'ON' : 'OFF';
+  document.getElementById('mv').textContent = s.mv;
+  document.getElementById('mode').textContent = s.mode;
+  const th = document.getElementById('th');
+  if (document.activeElement !== th) th.value = s.onMv;
+}
+function refresh() {
+  fetch('/api/state').then(r =&gt; r.json()).then(show)
+    .catch(e =&gt; console.log('ESP32 unreachable', e));
+}
+function setMode(m) {
+  fetch('/api/mode?m=' + m, { method: 'POST' }).then(r =&gt; r.json()).then(show);
+}
+function saveTh() {
+  const v = document.getElementById('th').value;
+  fetch('/api/threshold?mv=' + v, { method: 'POST' })
+    .then(r =&gt; r.ok ? r.json().then(s =&gt; { show(s); return 'Saved'; }) : r.text())
+    .then(t =&gt; document.getElementById('msg').textContent = t);
+}
+refresh();
+setInterval(refresh, 1000);
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+)rawliteral";
+
+void setLamp(bool on, const char* why) {
+  // TODO 4: only on a real change: lampOn = on, write LED_PIN,
+  //         print "Lamp ON (auto, 2710 mV)"
+}
+
+void applyMode() {
+  // TODO 3: "on" and "off" force the lamp; "auto" = hysteresis:
+  //         on above onMv, off below onMv - GAP_MV
+}
+
+String stateJson() {
+  String json = "{\"lamp\":";
+  json += lampOn ? "true" : "false";
+  json += ",\"mv\":";
+  json += ldrMv;
+  json += ",\"mode\":\"" + mode + "\"";
+  json += ",\"onMv\":";
+  json += onMv;
+  json += "}";
+  return json;              // e.g. {"lamp":true,"mv":2710,"mode":"auto","onMv":2600}
+}
+
+void handleRoot()  { server.send(200, "text/html; charset=utf-8", INDEX_HTML); }
+void handleState() { server.send(200, "application/json", stateJson()); }
+
+void handleMode() {
+  // TODO 6: accept only m = auto, on or off (else 400), set mode,
+  //         applyMode(), answer with handleState()
+  handleState();
+}
+
+void handleThreshold() {
+  // TODO 7: accept mv from 500 to 3000 (else 400 "Threshold must be
+  //         500 to 3000 mV"), store it, print it, applyMode(), handleState()
+  handleState();
+}
+
+void handleNotFound() { server.send(404, "text/plain", "404: Not Found"); }
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting");
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - start &lt; 20000) {
+    delay(500);
+    Serial.print(".");
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nWiFi failed -&gt; restart in 5 s");
+    delay(5000);
+    ESP.restart();
+  }
+  Serial.print("\nOpen http://");
+  Serial.println(WiFi.localIP());
+  if (MDNS.begin("nightlight")) Serial.println("or   http://nightlight.local");
+
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/api/state", HTTP_GET, handleState);
+  server.on("/api/mode", HTTP_POST, handleMode);
+  server.on("/api/threshold", HTTP_POST, handleThreshold);
+  server.onNotFound(handleNotFound);
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();
+  // TODO 2: every 500 ms: ldrMv = average of 8 analogReadMilliVolts(LDR_PIN),
+  //         then applyMode()
+  delay(2);
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="14-18"><b class="what">The device's state.</b> The mode as text, the threshold, the latest reading and whether the lamp is on.
+    <span class="why">These five variables are the whole truth about the device. The page never "knows" anything by itself; it asks <code>/api/state</code> and shows these values. That's why the page and the Serial Monitor can never disagree.</span></li>
+  <li data-lines="20-74"><b class="what">The page, ready-made.</b> Three buttons call <code>setMode()</code>, the form calls <code>saveTh()</code>, and <code>refresh()</code> asks for the state every second. When the answer isn't OK (<code>r.ok</code> is false, e.g. status 400), the page shows the server's text under the form.
+    <span class="why">The line <code>if (document.activeElement !== th)</code> stops the refresh from overwriting the number while you're typing it. Small detail, big difference in how the page feels.</span></li>
+  <li data-lines="86-96"><b class="what">JSON, already written.</b> <code>stateJson()</code> builds the answer piece by piece, like in <code>SmartHome</code>. The mode is text, so it's wrapped in <code>\"</code> quotes.
+    <span class="why">In JSON, numbers and <code>true</code>/<code>false</code> stand without quotes, but text needs them. Forgetting those quotes around <code>auto</code> is the most common reason <code>r.json()</code> fails in the browser.</span></li>
+</ol>
+<div class="callout warn"><div class="ct">Build it on your board</div>
+<p>This project needs a real ESP32: Wokwi's free Wi-Fi only lets the simulated board connect <b>out</b> to the internet, so your browser can't open the page (see <a href="#code">the Wokwi note</a> in this lesson). You need the board, the LDR divider and the LED from the wiring above, and a phone or laptop on the same 2.4 GHz network. Everything except the page (reading, hysteresis, Serial lines) you can still check in the Serial Monitor.</p></div>
+
+<details class="hint"><summary>Hint 1</summary>
+<p>Start with TODO 2 and TODO 4 and watch the Serial Monitor: cover the LDR with your hand, then add TODO 3. The hysteresis looks like the night-light in 3.1, with the lamp's current state in each condition: <code>!lampOn &amp;&amp; ldrMv &gt; onMv</code> to switch on, <code>lampOn &amp;&amp; ldrMv &lt; onMv - GAP_MV</code> to switch off. Check <code>mode</code> first: in <code>on</code> or <code>off</code> the reading doesn't matter.</p></details>
+<details class="hint"><summary>Hint 2</summary>
+<p><code>ldrMv</code> is a <code>uint32_t</code> and <code>onMv</code> an <code>int</code>. Comparing them directly makes the compiler warn about mixing signed and unsigned numbers; write <code>(uint32_t)onMv</code> to make the comparison explicit. <code>setLamp()</code> should start with <code>if (on == lampOn) return;</code>, so it can be called twice a second without printing a line every time.</p></details>
+<details class="hint"><summary>Hint 3</summary>
+<p>For TODO 6 and 7, first check, then act: <code>String m = server.arg("m");</code> and if it's none of the three words, <code>server.send(400, …)</code> and <code>return</code>. For the threshold, <code>server.arg("mv").toInt()</code> turns a missing or non-number value into 0, which your 500 to 3000 check rejects automatically. After a valid change, call <code>applyMode()</code> so the lamp reacts immediately, not half a second later.</p></details>
+
+<details class="expect"><summary>What should you see?</summary>
+<p>Serial Monitor (your IP and millivolts will differ). Cover the LDR, uncover it, press <b>ON</b> on the page, then save the threshold 2000:</p>
+<pre class="serial">Connecting.....
+Open http://192.168.1.37
+or   http://nightlight.local
+Lamp ON (auto, 2712 mV)
+Lamp OFF (auto, 1845 mV)
+Lamp ON (manual, 1850 mV)
+New threshold: 2000 mV</pre>
+<p>The page shows <b>Lamp: ON</b>, the light reading in mV (changing every second when you move your hand), <b>Mode: on</b>, and the threshold box with <code>2000</code>. Test the API from a terminal too (in Windows PowerShell type <code>curl.exe</code>):</p>
+<pre class="serial">curl http://nightlight.local/api/state
+{"lamp":true,"mv":1850,"mode":"on","onMv":2000}
+curl -X POST "http://nightlight.local/api/mode?m=blink"
+m must be auto, on or off
+curl -X POST "http://nightlight.local/api/threshold?mv=5000"
+Threshold must be 500 to 3000 mV</pre>
+<ul>
+  <li>Requirement 3: in <b>AUTO</b>, move your hand slowly over the LDR so the reading sits just below the threshold: the lamp doesn't flicker. It switches on only above the threshold and off only 400 mV lower.</li>
+  <li>Requirement 4: pressing <b>ON</b> while the lamp is already on prints nothing (no change, no line).</li>
+  <li>Requirement 7: type 5000 in the form and press <b>Save</b>: the red text appears under the form and the old threshold stays.</li>
+  <li>Open the page on two devices at once: press a button on one, and the other shows the change within a second.</li>
+</ul>
+<p><b>If the page doesn't open:</b> check that the phone is on the same network (not mobile data, not a guest network); try the IP instead of <code>nightlight.local</code> (some Android phones don't resolve <code>.local</code>); if the page opens but the numbers stay <code>?</code>, open the browser console (F12) and look for a JSON error.</p>
+</details>
+
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="Web_NightLight.ino" id="projAns"><pre>
+// Web night-light: LDR + hysteresis, page with auto/on/off and a threshold form
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;ESPmDNS.h&gt;
+
+const char* WIFI_SSID = "Home";             // your network name
+const char* WIFI_PASS = "your-password";    // your network password
+
+const int LDR_PIN = 35;                     // middle of the LDR divider (ADC1)
+const int LED_PIN = 4;                      // the "lamp"
+const int GAP_MV = 400;                     // hysteresis: off 400 mV below "on"
+
+WebServer server(80);
+String mode = "auto";                       // "auto", "on" or "off"
+int onMv = 2600;                            // darker than this: lamp on (auto)
+uint32_t ldrMv = 0;                         // latest averaged reading
+bool lampOn = false;
+unsigned long lastRead = 0;
+
+const char INDEX_HTML[] PROGMEM = R"rawliteral(
+&lt;!DOCTYPE html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+&lt;meta charset="utf-8"&gt;
+&lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;
+&lt;title&gt;Night-light&lt;/title&gt;
+&lt;style&gt;
+  body { font-family: sans-serif; text-align: center; background: #f2f4f8; }
+  .card { background: #fff; max-width: 340px; margin: 14px auto; padding: 12px; border-radius: 12px; }
+  button { font-size: 18px; padding: 8px 18px; margin: 4px; border: 0; border-radius: 8px; }
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;h1&gt;Night-light&lt;/h1&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;Lamp: &lt;span id="lamp"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;p&gt;Light sensor: &lt;span id="mv"&gt;?&lt;/span&gt; mV&lt;/p&gt;
+  &lt;p&gt;Mode: &lt;b id="mode"&gt;?&lt;/b&gt;&lt;/p&gt;
+  &lt;button onclick="setMode('auto')"&gt;AUTO&lt;/button&gt;
+  &lt;button onclick="setMode('on')"&gt;ON&lt;/button&gt;
+  &lt;button onclick="setMode('off')"&gt;OFF&lt;/button&gt;
+&lt;/div&gt;
+&lt;div class="card"&gt;
+  &lt;p&gt;Turn on above &lt;input id="th" type="number" min="500" max="3000" step="50"&gt; mV&lt;/p&gt;
+  &lt;button onclick="saveTh()"&gt;Save&lt;/button&gt;
+  &lt;p id="msg"&gt;&lt;/p&gt;
+&lt;/div&gt;
+&lt;script&gt;
+function show(s) {
+  document.getElementById('lamp').textContent = s.lamp ? 'ON' : 'OFF';
+  document.getElementById('mv').textContent = s.mv;
+  document.getElementById('mode').textContent = s.mode;
+  const th = document.getElementById('th');
+  if (document.activeElement !== th) th.value = s.onMv;
+}
+function refresh() {
+  fetch('/api/state').then(r =&gt; r.json()).then(show)
+    .catch(e =&gt; console.log('ESP32 unreachable', e));
+}
+function setMode(m) {
+  fetch('/api/mode?m=' + m, { method: 'POST' }).then(r =&gt; r.json()).then(show);
+}
+function saveTh() {
+  const v = document.getElementById('th').value;
+  fetch('/api/threshold?mv=' + v, { method: 'POST' })
+    .then(r =&gt; r.ok ? r.json().then(s =&gt; { show(s); return 'Saved'; }) : r.text())
+    .then(t =&gt; document.getElementById('msg').textContent = t);
+}
+refresh();
+setInterval(refresh, 1000);
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+)rawliteral";
+
+void setLamp(bool on, const char* why) {
+  if (on == lampOn) return;                 // no change, no message
+  lampOn = on;
+  digitalWrite(LED_PIN, on ? HIGH : LOW);
+  Serial.printf("Lamp %s (%s, %lu mV)\n", on ? "ON" : "OFF", why, (unsigned long)ldrMv);
+}
+
+void applyMode() {
+  if (mode == "on") setLamp(true, "manual");
+  else if (mode == "off") setLamp(false, "manual");
+  else if (!lampOn &amp;&amp; ldrMv &gt; (uint32_t)onMv) setLamp(true, "auto");
+  else if (lampOn &amp;&amp; ldrMv &lt; (uint32_t)(onMv - GAP_MV)) setLamp(false, "auto");
+}
+
+String stateJson() {
+  String json = "{\"lamp\":";
+  json += lampOn ? "true" : "false";
+  json += ",\"mv\":";
+  json += ldrMv;
+  json += ",\"mode\":\"" + mode + "\"";
+  json += ",\"onMv\":";
+  json += onMv;
+  json += "}";
+  return json;              // e.g. {"lamp":true,"mv":2710,"mode":"auto","onMv":2600}
+}
+
+void handleRoot()  { server.send(200, "text/html; charset=utf-8", INDEX_HTML); }
+void handleState() { server.send(200, "application/json", stateJson()); }
+
+void handleMode() {
+  String m = server.arg("m");
+  if (m != "auto" &amp;&amp; m != "on" &amp;&amp; m != "off") {
+    server.send(400, "text/plain", "m must be auto, on or off");
+    return;
+  }
+  mode = m;
+  applyMode();
+  handleState();
+}
+
+void handleThreshold() {
+  int v = server.arg("mv").toInt();         // "abc" or missing -&gt; 0
+  if (v &lt; 500 || v &gt; 3000) {
+    server.send(400, "text/plain", "Threshold must be 500 to 3000 mV");
+    return;
+  }
+  onMv = v;
+  Serial.printf("New threshold: %d mV\n", onMv);
+  applyMode();
+  handleState();
+}
+
+void handleNotFound() { server.send(404, "text/plain", "404: Not Found"); }
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting");
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - start &lt; 20000) {
+    delay(500);
+    Serial.print(".");
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nWiFi failed -&gt; restart in 5 s");
+    delay(5000);
+    ESP.restart();
+  }
+  Serial.print("\nOpen http://");
+  Serial.println(WiFi.localIP());
+  if (MDNS.begin("nightlight")) Serial.println("or   http://nightlight.local");
+
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/api/state", HTTP_GET, handleState);
+  server.on("/api/mode", HTTP_POST, handleMode);
+  server.on("/api/threshold", HTTP_POST, handleThreshold);
+  server.onNotFound(handleNotFound);
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();
+  if (millis() - lastRead &gt;= 500) {         // read the light twice a second
+    lastRead = millis();
+    uint32_t sum = 0;
+    for (int i = 0; i &lt; 8; i++) sum += analogReadMilliVolts(LDR_PIN);
+    ldrMv = sum / 8;
+    applyMode();
+  }
+  delay(2);
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="76-81"><b class="what">The lamp, in one place.</b> Nothing happens if the state is already right; otherwise store it, switch the pin and print one line with the reason and the reading.
+    <span class="why">Every path that can change the lamp (auto, the buttons, a new threshold) goes through this function. So there's exactly one place that writes the pin and exactly one message format, and the Serial Monitor becomes a trustworthy history.</span></li>
+  <li data-lines="83-88"><b class="what">Who decides?</b> <code>on</code> and <code>off</code> force the lamp. In <code>auto</code>, the reading decides with two different thresholds, depending on whether the lamp is on right now.
+    <span class="why">This is lesson 3.1's hysteresis, with the threshold now a variable the page can change. The <code>(uint32_t)</code> casts make both sides of each comparison the same type; <code>onMv - GAP_MV</code> can't go negative because the API never accepts a threshold below 500.</span></li>
+  <li data-lines="105-114"><b class="what">Changing the mode.</b> Check the word, answer 400 if it's unknown, otherwise store it, apply it at once and answer with the new state.
+    <span class="why">Checking first and changing afterwards means a bad request never leaves the device half-changed. Answering with the full state saves the page an extra request: the button press and the display update are one round-trip.</span></li>
+  <li data-lines="116-126"><b class="what">Changing the threshold.</b> <code>toInt()</code>, a range check, then store, print, apply and answer.
+    <span class="why">The range 500 to 3000 matches what the ADC can really measure (lesson 3.1: about 150 to 3100 mV). A threshold of 5000 would mean "never on", 0 would mean "always on"; neither is what anyone wants from a night-light, so the device refuses them instead of doing something surprising.</span></li>
+  <li data-lines="161-171"><b class="what">loop: serve and measure.</b> <code>handleClient()</code> in every round; the LDR every 500 ms, followed by <code>applyMode()</code>.
+    <span class="why">The web server must be asked "anyone knocking?" often, so there's no long work in loop. Averaging 8 readings takes well under a millisecond, and <code>delay(2)</code> is the same small breathing space as in <code>SmartHome</code>.</span></li>
+</ol>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">The lesson in three lines</div>
 <p>In HTTP the browser makes requests (GET to read, POST to change) and the ESP32 answers with a status code and content; the <code>WebServer</code> library connects each path to a function with <code>server.on</code>, and loop just calls <code>handleClient()</code>. The HTML page sits in a raw string <code>R"rawliteral(...)rawliteral"</code> and updates itself every second with <code>fetch</code> and JSON. Analog sensors only on ADC1, an active-LOW relay that starts switched off, a password with Basic Auth, and never port forwarding; for access from outside, MQTT in chapter 5.</p></div>
 

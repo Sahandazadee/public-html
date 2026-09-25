@@ -1066,6 +1066,342 @@ void loop() {
 </details>
 </div>
 
+<h2 id="project">پروژه تمرینی: دفترچه قطعی‌ها</h2>
+<div class="project">
+<p class="lede-ish">«Wi-Fi مدام قطع می‌شود!» وقتی به شرکت اینترنتت زنگ می‌زنی، اولین سؤال همیشه این است: «کی، و چقدر؟» ESP32 می‌تواند این را برایت جواب بدهد. بی‌صدا روی شبکه می‌نشیند و هر قطعی را با ساعت دقیق محلی شروعش و مدتش در یک دفترچه کوچک می‌نویسد؛ در Serial Monitor تایپ کن <code>log</code> و فهرست را بگیر. حالا که ساعت واقعی را می‌داند، ساعت ۲۲ یک چراغ خواب را هم روشن و ساعت ۷ خاموش می‌کند. یک دکمه آزمایش هر وقت بخواهی یک قطعی ساختگی می‌سازد تا همه چیز را بدون کشیدن سیم مودم امتحان کنی.</p>
+
+<h3 id="project-req">خواسته‌ها</h3>
+<ol>
+  <li>برد با الگوی <code>secrets.h</code> و اتصال دوباره خودکار، در پس‌زمینه وصل می‌شود؛ <code>setup()</code> هیچ‌وقت منتظر نمی‌ماند (در کد شروع آماده است). اولین اتصال <code>[up] IP 192.168.1.37</code> چاپ می‌کند (بخشی از TODO 3).</li>
+  <li>وقتی اتصال قطع می‌شود، <code>[down] 2026-09-24 21:03:15</code> با ساعت محلی چاپ می‌شود (یا <code>no clock</code> اگر NTP هنوز جواب نداده).</li>
+  <li>وقتی برمی‌گردد، یک ردیف در دفترچه ذخیره می‌شود (زمان شروع + مدت به ثانیه) و <code>[back] outage #1 lasted 11 s</code> چاپ می‌شود. دفترچه ۱۰ ردیف آخر را نگه می‌دارد؛ ردیف یازدهم روی قدیمی‌ترین نوشته می‌شود.</li>
+  <li>تا قطع است، هر ۱۰ ثانیه <code>WiFi.reconnect()</code> صدا زده می‌شود؛ اولین بار ۱۰ ثانیه بعد از قطع شدن.</li>
+  <li>فشار دکمه ۱ (GPIO27) وقتی وصل است، اتصال را عمدا قطع می‌کند (<code>[test] disconnecting</code>)؛ یعنی یک قطعی شبیه‌سازی‌شده.</li>
+  <li>تایپ <code>log</code> و Enter، <code>--- diary: N outage(s) ---</code> و بعد ردیف‌های ذخیره‌شده را، قدیمی‌ترین اول، چاپ می‌کند.</li>
+  <li>LED روی GPIO4 از ساعت ۲۲:۰۰ تا ۰۷:۰۰ به وقت محلی روشن است، ثانیه‌ای یک بار بررسی می‌شود، و تا وقتی ساعت تنظیم نشده خاموش است.</li>
+</ol>
+
+<h3 id="project-parts">قطعه‌ها و سیم‌کشی</h3>
+<ul>
+  <li>برد ESP32، دکمه ۱ (GPIO27) و LED + ۲۲۰ اهم روی GPIO4: دقیقا همان چیزی که از قبل روی بردبوردت است. LED نقش چراغ خواب را بازی می‌کند.</li>
+  <li>یک شبکه Wi-Fi ی ۲٫۴ گیگاهرتز و یک فایل <code>secrets.h</code>، مثل <a href="#secrets">همین درس</a></li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"BTN","name":"دکمه فشاری (قطعی آزمایشی)","img":"button.svg","pins":[["1","به GPIO27"],["4","به GND (پایه ضربدری)"]]},
+    {"id":"R1","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","سمت GPIO4"],["2","سمت LED"]]},
+    {"id":"LED1","name":"LED زرد (چراغ خواب)","img":"led.svg","pins":[["A","آند (+) پایه بلند"],["K","کاتد (−) پایه کوتاه"]]}
+  ],
+  "wires":[["GPIO27","BTN.1","blue","آزمایش"],["BTN.4","GND","black"],["GPIO4","R1.1","orange","چراغ خواب"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>دفترچه قطعی‌ها: دکمه روی GPIO27 قطعی ساختگی می‌سازد و LED روی GPIO4 چراغ خواب است. بقیه کارها از راه Wi-Fi انجام می‌شود.</figcaption></div>
+
+<h3 id="project-start">کد شروع</h3>
+<p>کد شروع در پس‌زمینه به Wi-Fi وصل می‌شود، NTP را با منطقه زمانی تو راه می‌اندازد و سه تابع کمکی آماده دارد: تابع رویداد، دکمه با Debounce و <code>clockText()</code> که ساعت محلی فعلی را در یک بافر متنی می‌نویسد. کامپایل می‌شود و جز خط اول چیزی چاپ نمی‌کند. منطق دفترچه با توست؛ شماره TODOها با شماره خواسته‌ها یکی است.</p>
+<div class="code" data-file="Outage_Diary.ino" id="projStart"><pre>
+// دفترچه قطعی: هر قطع Wi-Fi با ساعت و مدتش + چراغ خواب ساعت ۲۲
+#include &lt;WiFi.h&gt;
+#include &lt;time.h&gt;
+#include "secrets.h"                          // WIFI_SSID و WIFI_PASS
+
+const int LED_PIN = 4;                        // چراغ خواب
+const int BUTTON_PIN = 27;                    // دکمه آزمایش: قطعی ساختگی
+const char* TZ_INFO = "EST5EDT,M3.2.0,M11.1.0"; // تورنتو/نیویورک: مال خودت را بگذار
+const int NIGHT_ON_HOUR = 22;                 // چراغ روشن از ساعت 22:00 ...
+const int NIGHT_OFF_HOUR = 7;                 // ... تا 07:00
+const int MAX_ENTRIES = 10;
+
+volatile bool wifiUp = false;                 // فقط تابع رویداد آن را می‌نویسد
+bool wasUp = false;                           // چیزی که loop دفعه قبل دید
+unsigned long downStart = 0, lastRetry = 0, lastClock = 0;
+char downText[20] = "";                       // ساعت شروع قطعی فعلی
+char diaryWhen[MAX_ENTRIES][20];              // دفترچه: زمان‌های شروع ...
+unsigned long diarySecs[MAX_ENTRIES];         // ... و مدت‌ها
+int diaryCount = 0;                           // تعداد کل ردیف‌های نوشته‌شده
+int stableState = HIGH, lastReading = HIGH;
+unsigned long lastChangeTime = 0;
+
+void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+  if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) wifiUp = true;
+  if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) wifiUp = false;
+}
+
+bool buttonPressed() {                        // Debounce از درس ۳.۱
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChangeTime = millis(); lastReading = reading; }
+  if (millis() - lastChangeTime &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) return true;
+  }
+  return false;
+}
+
+void clockText(char* out, int size) {         // "2026-09-24 21:03:15" یا "no clock"
+  struct tm t;
+  if (getLocalTime(&amp;t, 10)) strftime(out, size, "%Y-%m-%d %H:%M:%S", &amp;t);
+  else snprintf(out, size, "no clock");
+}
+
+void printDiary() {
+  // TODO 6: "--- diary: N outage(s) ---" و بعد ردیف‌های ذخیره‌شده را چاپ کن،
+  //         قدیمی‌ترین اول: "#1  2026-09-24 21:03:15  lasted 11 s"
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  WiFi.onEvent(onWiFiEvent);
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  configTzTime(TZ_INFO, "pool.ntp.org", "time.google.com");
+  Serial.println("Outage diary started. Type log + Enter to see it.");
+}
+
+void loop() {
+  unsigned long now = millis();
+  bool up = wifiUp;                           // پرچم را یک بار بخوان
+
+  // TODO 2: اگر wasUp &amp;&amp; !up: downStart را نگه دار، downText را پر کن، "[down] ..." چاپ کن
+  // TODO 3: اگر !wasUp &amp;&amp; up: بعد از یک قطعی، یک ردیف ذخیره کن (خانه
+  //         diaryCount % MAX_ENTRIES) و "[back] outage #N lasted S s" چاپ کن؛
+  //         در اولین اتصال "[up] IP ..." چاپ کن
+  wasUp = up;
+
+  // TODO 4: اگر هنوز قطع است: هر ۱۰ ثانیه WiFi.reconnect()
+  // TODO 5: فشار دکمه وقتی وصل است: WiFi.disconnect()
+  // TODO 6: خط "log" در Serial تابع printDiary() را صدا بزند
+  // TODO 7: ثانیه‌ای یک بار: LED از NIGHT_ON_HOUR تا NIGHT_OFF_HOUR روشن
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="13-14"><b class="what">دو پرچم به جای کار در تابع رویداد.</b> تابع رویداد فقط <code>wifiUp</code> را عوض می‌کند؛ loop آن را با <code>wasUp</code>، یعنی چیزی که دفعه قبل دید، مقایسه می‌کند.
+    <span class="why">کتابخانه Wi-Fi تابع رویداد را از وظیفه (Task) پس‌زمینه خودش و در هر لحظه‌ای صدا می‌زند. اگر کار دفترچه (متن، آرایه، چاپ) را آن‌جا انجام می‌دادی، ممکن بود loop نیمه‌راه خواندن همان آرایه باشد. این که تابع رویداد فقط یک پرچم را عوض کند و کار اصلی در loop انجام شود، جلوی یک دسته کامل از باگ‌ها را می‌گیرد. مقایسه «الان» با «دفعه قبل» هم راهی است که loop لحظه تغییر را می‌فهمد.</span></li>
+  <li data-lines="16-19"><b class="what">خود دفترچه.</b> دو آرایه ۱۰تایی: زمان شروع به شکل متن (۲۰ حرف دقیقا برای <code>2026-09-24 21:03:15</code> به اضافه نشانه پایان نامرئی کافی است) و مدت. <code>diaryCount</code> همه قطعی‌هایی را که تا حالا رخ داده می‌شمارد.
+    <span class="why">متن در همان لحظه قطع شدن ذخیره می‌شود، نه بعدا، چون وقتی <code>log</code> را تایپ می‌کنی، «کی شروع شد؟» دیگر چیزی نیست که بشود حسابش کرد.</span></li>
+  <li data-lines="38-42"><b class="what">ساعت آماده.</b> <code>clockText()</code> یک بافر را با ساعت محلی قالب‌بندی‌شده، یا با <code>no clock</code>، پر می‌کند.
+    <span class="why">مهلت ۱۰ میلی‌ثانیه یعنی هیچ‌وقت loop را متوقف نمی‌کند. ساعت ESP32 در طول قطعی هم کار می‌کند، چون NTP فقط تنظیمش می‌کند؛ برای گفتن ساعت لازم نیست آنلاین باشد.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>این پروژه در Wokwi اجرا می‌شود. یک تب <code>secrets.h</code> اضافه کن (فلش کنار تب‌ها ← <b>New file…</b>) با <code>#define WIFI_SSID "Wokwi-GUEST"</code> و <code>#define WIFI_PASS ""</code>، <code>diagram.json</code> را با این یکی عوض کن، و با دکمه سبز قطعی ساختگی بساز. ساعتی که چاپ می‌شود ساعت واقعی فعلی در منطقه زمانی <code>TZ_INFO</code> است.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-pushbutton", "id": "btn1", "top": 110, "left": -170, "attrs": {"color": "green"}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": {"color": "yellow"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:27", "btn1:1.r", "green", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>راهنمایی ۱</summary>
+<p>TODOهای ۲ و ۳ دو <code>if</code> هستند که به <code>wasUp</code> و <code>up</code> نگاه می‌کنند: «وصل بود، الان قطع است» لحظه قطع شدن است؛ «قطع بود، الان وصل است» لحظه برگشتن. موقع قطع شدن <code>downStart = now</code> را ذخیره کن و <code>clockText(downText, sizeof(downText))</code> را صدا بزن. موقع برگشتن، خالی بودن <code>downText</code> (<code>downText[0] == '\0'</code>) یعنی این اولین اتصال است، نه پایان یک قطعی.</p></details>
+<details class="hint"><summary>راهنمایی ۲</summary>
+<p>دفترچه ۱۰ خانه‌ای که هیچ‌وقت پر نمی‌شود یک «بافر حلقوی» است: ردیف شماره <code>n</code> به خانه <code>n % 10</code> می‌رود. پس ردیف ۱۱ در خانه ۰، روی ردیف ۱، می‌نشیند. متن را با <code>strcpy(diaryWhen[i], downText);</code> کپی کن (آرایه متنی را نمی‌شود با <code>=</code> کپی کرد)، ثانیه‌ها را ذخیره کن و بعد <code>diaryCount</code> را یکی زیاد کن.</p></details>
+<details class="hint"><summary>راهنمایی ۳</summary>
+<p>برای چاپ، قدیمی‌ترین ردیفی که هنوز ذخیره است، وقتی بیشتر از ۱۰ ردیف داریم <code>diaryCount - 10</code> است، وگرنه ۰؛ از آن‌جا تا <code>diaryCount - 1</code> حلقه بزن و برای خانه باز از <code>n % 10</code> استفاده کن. برای چراغ خواب، «۲۲:۰۰ تا ۰۷:۰۰» از نیمه‌شب رد می‌شود، پس شرطش <code>hour &gt;= 22 || hour &lt; 7</code> است (<b>یا</b>، نه <b>و</b>).</p></details>
+
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>در Wokwi: منتظر <code>[up]</code> بمان، دکمه را بزن، صبر کن تا برگردد، دوباره بزن و بعد <code>log</code> را تایپ کن. ساعت‌های تو واقعی هستند:</p>
+<pre class="serial">Outage diary started. Type log + Enter to see it.
+[up] IP 10.10.0.2
+[test] disconnecting
+[down] 2026-09-24 14:03:15
+[back] outage #1 lasted 11 s
+[test] disconnecting
+[down] 2026-09-24 14:05:02
+[back] outage #2 lasted 11 s
+--- diary: 2 outage(s) ---
+#1  2026-09-24 14:03:15  lasted 11 s
+#2  2026-09-24 14:05:02  lasted 11 s</pre>
+<ul>
+  <li>خواسته‌های ۳ و ۴: یک قطعی آزمایشی ۱۰ ثانیه (اولین تلنگر) به اضافه ۱ تا ۳ ثانیه برای گرفتن دوباره IP طول می‌کشد، پس <b>۱۰ تا ۱۳ ثانیه</b> درست است. با مودم واقعی که خاموشش کرده‌ای، مدت همان زمانی است که خاموش بود (به اضافه چند ثانیه برای اتصال دوباره).</li>
+  <li>خواسته ۳: ۱۱ قطعی ساختگی بساز و بعد <code>log</code> را تایپ کن: ردیف‌های <code>#2</code> تا <code>#11</code> را می‌بینی و سرتیتر ۱۱ را نشان می‌دهد.</li>
+  <li>خواسته ۷: برای آزمایش چراغ خواب در روز، <code>NIGHT_ON_HOUR</code> را ساعت فعلی بگذار (مثلا ۱۴): در کمتر از یک ثانیه LED روشن می‌شود. بعدش آن را به ۲۲ برگردان.</li>
+  <li>خواسته ۵: فشار دکمه وقتی قطع است هیچ اثری ندارد، و اولین اتصال بعد از روشن شدن هرگز قطعی حساب نمی‌شود.</li>
+</ul>
+</details>
+
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="Outage_Diary.ino" id="projAns"><pre>
+// دفترچه قطعی: هر قطع Wi-Fi با ساعت و مدتش + چراغ خواب ساعت ۲۲
+#include &lt;WiFi.h&gt;
+#include &lt;time.h&gt;
+#include "secrets.h"                          // WIFI_SSID و WIFI_PASS
+
+const int LED_PIN = 4;                        // چراغ خواب
+const int BUTTON_PIN = 27;                    // دکمه آزمایش: قطعی ساختگی
+const char* TZ_INFO = "EST5EDT,M3.2.0,M11.1.0"; // تورنتو/نیویورک: مال خودت را بگذار
+const int NIGHT_ON_HOUR = 22;                 // چراغ روشن از ساعت 22:00 ...
+const int NIGHT_OFF_HOUR = 7;                 // ... تا 07:00
+const int MAX_ENTRIES = 10;
+
+volatile bool wifiUp = false;                 // فقط تابع رویداد آن را می‌نویسد
+bool wasUp = false;                           // چیزی که loop دفعه قبل دید
+unsigned long downStart = 0, lastRetry = 0, lastClock = 0;
+char downText[20] = "";                       // ساعت شروع قطعی فعلی
+char diaryWhen[MAX_ENTRIES][20];              // دفترچه: زمان‌های شروع ...
+unsigned long diarySecs[MAX_ENTRIES];         // ... و مدت‌ها
+int diaryCount = 0;                           // تعداد کل ردیف‌های نوشته‌شده
+int stableState = HIGH, lastReading = HIGH;
+unsigned long lastChangeTime = 0;
+
+void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+  if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) wifiUp = true;
+  if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) wifiUp = false;
+}
+
+bool buttonPressed() {                        // Debounce از درس ۳.۱
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChangeTime = millis(); lastReading = reading; }
+  if (millis() - lastChangeTime &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) return true;
+  }
+  return false;
+}
+
+void clockText(char* out, int size) {         // "2026-09-24 21:03:15" یا "no clock"
+  struct tm t;
+  if (getLocalTime(&amp;t, 10)) strftime(out, size, "%Y-%m-%d %H:%M:%S", &amp;t);
+  else snprintf(out, size, "no clock");
+}
+
+void printDiary() {
+  Serial.printf("--- diary: %d outage(s) ---\n", diaryCount);
+  int first = diaryCount &gt; MAX_ENTRIES ? diaryCount - MAX_ENTRIES : 0;
+  for (int n = first; n &lt; diaryCount; n++) {
+    int i = n % MAX_ENTRIES;                  // بافر حلقوی: خانه ردیف n
+    Serial.printf("#%d  %s  lasted %lu s\n", n + 1, diaryWhen[i], diarySecs[i]);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  WiFi.onEvent(onWiFiEvent);
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  configTzTime(TZ_INFO, "pool.ntp.org", "time.google.com");
+  Serial.println("Outage diary started. Type log + Enter to see it.");
+}
+
+void loop() {
+  unsigned long now = millis();
+  bool up = wifiUp;                           // پرچم را یک بار بخوان
+
+  // ۱) Wi-Fi قطع شد: زمانش را یادت بماند
+  if (wasUp &amp;&amp; !up) {
+    downStart = now;
+    lastRetry = now;                          // اولین تلنگر ۱۰ ثانیه بعد
+    clockText(downText, sizeof(downText));
+    Serial.printf("[down] %s\n", downText);
+  }
+  // ۲) Wi-Fi برگشت: یک ردیف در دفترچه بنویس
+  if (!wasUp &amp;&amp; up) {
+    if (downText[0] != '\0') {                // اولین اتصال نیست
+      int i = diaryCount % MAX_ENTRIES;
+      strcpy(diaryWhen[i], downText);
+      diarySecs[i] = (now - downStart) / 1000;
+      diaryCount++;
+      Serial.printf("[back] outage #%d lasted %lu s\n", diaryCount, diarySecs[i]);
+      downText[0] = '\0';
+    } else {
+      Serial.printf("[up] IP %s\n", WiFi.localIP().toString().c_str());
+    }
+  }
+  wasUp = up;
+
+  // ۳) هنوز قطع: هر ۱۰ ثانیه یک تلنگر (مثل RobustWiFi)
+  if (!up &amp;&amp; now - lastRetry &gt;= 10000) {
+    lastRetry = now;
+    WiFi.reconnect();
+  }
+
+  // ۴) دکمه آزمایش: اتصال را عمدا قطع کن
+  if (buttonPressed() &amp;&amp; up) {
+    Serial.println("[test] disconnecting");
+    WiFi.disconnect();
+  }
+
+  // ۵) فرمان Serial با اسم "log"
+  if (Serial.available() &gt; 0) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    if (cmd == "log") printDiary();
+  }
+
+  // ۶) چراغ خواب، ثانیه‌ای یک بار بررسی می‌شود
+  if (now - lastClock &gt;= 1000) {
+    lastClock = now;
+    struct tm t;
+    bool night = false;
+    if (getLocalTime(&amp;t, 10)) {
+      night = (t.tm_hour &gt;= NIGHT_ON_HOUR || t.tm_hour &lt; NIGHT_OFF_HOUR);
+    }
+    digitalWrite(LED_PIN, night ? HIGH : LOW);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="44-51"><b class="what">چاپ بافر حلقوی.</b> سرتیتر با تعداد کل، بعد ردیف‌ها از قدیمی‌ترینی که هنوز ذخیره است تا جدیدترین. <code>n</code> شماره ردیف است و <code>n % MAX_ENTRIES</code> خانه‌اش.
+    <span class="why">با ۱۱ قطعی، <code>first</code> برابر ۱ است، پس ردیف‌های ۲ تا ۱۱ (با شماره <code>#2</code> … <code>#11</code>) از خانه‌های ۱ تا ۹ و ۰ چاپ می‌شوند. شماره‌گذاری حتی بعد از بازنویسی ردیف‌های قدیمی درست می‌ماند.</span></li>
+  <li data-lines="67"><b class="what">پرچم را یک بار بخوان.</b> <code>up</code> یک کپی از <code>wifiUp</code> است که در شروع دور گرفته شده.
+    <span class="why"><code>wifiUp</code> ممکن است هر لحظه از وظیفه پس‌زمینه عوض شود. اگر دو <code>if</code> پایین جداگانه آن را می‌خواندند، یک تغییر در این بین باعث می‌شد هر کدام دنیای متفاوتی ببینند. یک کپی، یک تصویر یکدست.</span></li>
+  <li data-lines="69-75"><b class="what">قطع شدن.</b> لحظه را هم با <code>millis()</code> و هم به شکل متن ساعت ذخیره کن، اولین تلنگر اتصال دوباره را ۱۰ ثانیه عقب بینداز و چاپ کن.
+    <span class="why">دو زمان، دو کار: <code>millis()</code> برای اندازه گرفتن مدت (دقیق، هیچ‌وقت نمی‌پرد) و متن ساعت برای آدمی که دفترچه را می‌خواند. <code>lastRetry = now</code> اول به اتصال دوباره خودکار فرصت می‌دهد و قطعی آزمایشی را قابل پیش‌بینی می‌کند.</span></li>
+  <li data-lines="76-89"><b class="what">برگشتن.</b> اگر قطعی داشتیم (<code>downText</code> خالی نیست)، ردیف را در خانه <code>diaryCount % MAX_ENTRIES</code> بنویس، بشمارش، چاپش کن و <code>downText</code> را خالی کن. وگرنه این اولین اتصال است: IP را چاپ کن. در آخر <code>wasUp = up</code>.
+    <span class="why">خالی کردن <code>downText</code> است که برگشتن بعدی را دوباره قابل تشخیص می‌کند. <code>strcpy</code> متن را حرف به حرف کپی می‌کند؛ <code>=</code> برای آرایه اصلا کامپایل نمی‌شد. به‌روز کردن <code>wasUp</code> در آخر است که «وضعیت» را به «لحظه تغییر» تبدیل می‌کند.</span></li>
+  <li data-lines="91-101"><b class="what">تلنگر اتصال و دکمه آزمایش.</b> قطع: هر ۱۰ ثانیه <code>WiFi.reconnect()</code>. دکمه وقتی وصل است: <code>WiFi.disconnect()</code>.
+    <span class="why">بعد از یک <code>disconnect()</code> ی عمدی، کتابخانه Wi-Fi عمدا خودش دوباره وصل <b>نمی‌شود</b> (دلیل ۸، <code>ASSOC_LEAVE</code>)؛ فقط تلنگر ۱۰ ثانیه‌ای ما آن را برمی‌گرداند. برای همین قطعی آزمایشی همیشه حدود ۱۰ ثانیه است، و این نمایش خوبی است که تلنگر برنامه <code>RobustWiFi</code> واقعا لازم است.</span></li>
+  <li data-lines="103-108"><b class="what">فرمان.</b> یک خط از Serial Monitor؛ <code>log</code> دفترچه را چاپ می‌کند.
+    <span class="why">همان الگوی <code>Serial_Commands</code> درس ۳.۱: <code>trim()</code> علامت نامرئی <code>\r</code> را حذف می‌کند تا مقایسه با هر تنظیم پایان خط کار کند.</span></li>
+  <li data-lines="110-119"><b class="what">چراغ خواب.</b> ثانیه‌ای یک بار: اگر ساعت تنظیم است و ساعت ۲۲ یا بعد از آن، یا قبل از ۷ است، LED روشن است.
+    <span class="why">بازه‌ای که از نیمه‌شب رد می‌شود <b>یا</b> لازم دارد: هیچ ساعتی هم‌زمان ≥ ۲۲ و &lt; ۷ نیست. ثانیه‌ای یک بار برای چراغی که روزی دو بار عوض می‌شود کاملا کافی است، و مقدار پیش‌فرض <code>night = false</code> چراغ را تا جواب NTP خاموش نگه می‌دارد، به جای حدس زدن از سال ۱۹۷۰.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p>جواب کامل (با همان تب <code>secrets.h</code> و همان diagram). با دکمه سبز چند قطعی ساختگی بساز و <code>log</code> را تایپ کن.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-pushbutton", "id": "btn1", "top": 110, "left": -170, "attrs": {"color": "green"}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": {"color": "yellow"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:27", "btn1:1.r", "green", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
 <p>ESP32 فقط Wi-Fi ۲٫۴ گیگاهرتز را می‌بیند، از روتر با DHCP یک IP داخلی می‌گیرد و RSSI بهتر از ‎−70 برای کار پایدار لازم دارد. <code>WiFi.begin</code> فقط شروع می‌کند؛ با <code>onEvent</code> (GOT_IP و DISCONNECTED)، <code>setAutoReconnect</code> و یک نگهبان <code>millis()</code> اتصالی می‌سازی که هرگز loop را قفل نمی‌کند. رمز را در <code>secrets.h</code> نگه دار و ساعت محلی را با <code>configTzTime("EST5EDT,M3.2.0,M11.1.0", ...)</code> (یا رشته شهر خودت) بگیر.</p></div>
 

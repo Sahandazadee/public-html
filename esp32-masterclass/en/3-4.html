@@ -1544,6 +1544,775 @@ void loop() {
 </details>
 </div>
 
+<h2 id="project">Practice project: Thermostat fan</h2>
+<div class="project">
+<p class="lede-ish">A 3D printer enclosure, a small greenhouse or a cabinet full of electronics all need the same thing: a fan that comes on by itself when it gets warm, runs faster the warmer it gets, and doesn't click on and off every few seconds around the threshold. You'll build that controller. The potentiometer plays the temperature sensor (so you can "heat up" the room with one finger), the transistor circuit from this lesson drives the motor with PWM, and an optional WS2812 ring glows from blue to red. Later you can swap the potentiometer for the DHT22 from lesson 3.3 by changing just one function.</p>
+
+<h3 id="project-req">Requirements</h3>
+<ol>
+  <li>Ten times a second, the potentiometer is read (average of 16 samples) and turned into a "temperature" from 15.0 to 40.0 °C. (This part is already done in the starter.)</li>
+  <li>Hysteresis: the fan switches on at 28.0 °C or more (<code>Fan ON</code>) and only off again at 26.0 °C or less (<code>Fan OFF</code>).</li>
+  <li>While the fan is on, its speed rises with the temperature: duty <code>MIN_DUTY</code> (110) at 26 °C, up to 255 at 35 °C and above, as 20 kHz PWM on GPIO26. When it's off, the duty is 0.</li>
+  <li>The status LED on GPIO4 is lit exactly while the fan runs.</li>
+  <li>The ring on GPIO32 shows the temperature: all 16 pixels the same color, pure blue at 15 °C, pure red at 40 °C, a mix in between; brightness 40 out of 255.</li>
+  <li>Twice a second the Serial Monitor shows <code>T=27.4 C  fan=OFF  duty=0</code>.</li>
+</ol>
+
+<h3 id="project-parts">Parts and wiring</h3>
+<ul>
+  <li>10 kΩ potentiometer (GPIO34) and LED + 220 Ω (GPIO4): already on your breadboard</li>
+  <li>The motor circuit from <a href="#bjt-build">Building the circuit</a>: 2N2222 (or S8050), 470 Ω base resistor, 1N5819 diode, small DC motor, separate 5 V supply. If you have the optional MOSFET and a 12 V fan, use the circuit from <a href="#mosfet-circuit">the MOSFET section</a> instead; both take the same signal from GPIO26.</li>
+  <li>Optional: 16-LED WS2812 ring (or a short strip) + 330 Ω resistor on GPIO32. The program runs fine without it.</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"POT","name":"10 kΩ potentiometer (temperature)","img":"pot.svg","pins":[["VCC","outer leg"],["SIG","middle leg"],["GND","other outer leg"]]},
+    {"id":"RB","name":"470 Ω base resistor","img":"resistor.svg","pins":[["1","GPIO side"],["2","base side"]]},
+    {"id":"Q1","name":"NPN transistor (2N2222 or S8050)","pins":[["B","base"],["C","collector"],["E","emitter"]]},
+    {"id":"M1","name":"Small 5 V DC motor (the fan)","pins":[["+","red wire"],["-","black wire"]]},
+    {"id":"D1","name":"1N5819 diode","pins":[["K","cathode (stripe)"],["A","anode"]]},
+    {"id":"PSU","name":"Separate 5 V supply","pins":[["+","+5V output"],["-","negative"]]},
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO4 side"],["2","LED side"]]},
+    {"id":"LED1","name":"Status LED","img":"led.svg","pins":[["A","anode (+)"],["K","cathode (−)"]]},
+    {"id":"RD","name":"330 Ω resistor (data, optional)","img":"resistor.svg","pins":[["1","GPIO side"],["2","ring side"]]},
+    {"id":"RING","name":"WS2812 ring, 16 LEDs (optional)","pins":[["DIN","data in"],["5V","power"],["GND","ground"]]}
+  ],
+  "wires":[["3V3","POT.VCC","red"],["GPIO34","POT.SIG","blue","temperature"],["POT.GND","GND","black"],["GPIO26","RB.1","orange","PWM 20kHz"],["RB.2","Q1.B","orange"],["Q1.E","GND","black"],["Q1.C","M1.-","purple"],["PSU.+","M1.+","red"],["D1.K","M1.+","red"],["D1.A","M1.-","purple"],["PSU.-","GND","black"],["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"],["GPIO32","RD.1","blue","WS2812"],["RD.2","RING.DIN","blue"],["5V","RING.5V","red"],["RING.GND","GND","black"]]
+}</script><figcaption>Thermostat fan: the potentiometer "temperature" on GPIO34, the transistor + motor + flyback diode on GPIO26 with its own 5 V supply (grounds connected), the status LED on GPIO4 and the optional ring on GPIO32. At brightness 40, 16 pixels draw well under 200 mA, so the ring can use the board's 5V pin.</figcaption></div>
+
+<h3 id="project-start">Starter code</h3>
+<p>The starter sets up the PWM pin, the ring and the 10-per-second rhythm, and it already reads the temperature. It compiles, but the fan never starts and the ring stays dark. The decisions are yours; the TODO numbers match the requirements.</p>
+<div class="code" data-file="Thermostat_Fan.ino" id="projStart"><pre>
+// Thermostat fan: pot = temperature, hysteresis, PWM speed, color ring
+#include &lt;Adafruit_NeoPixel.h&gt;
+
+const int POT_PIN  = 34;      // temperature stand-in (ADC1)
+const int FAN_PIN  = 26;      // to the transistor/MOSFET gate circuit
+const int LED_PIN  = 4;       // status LED: lit while the fan runs
+const int RING_PIN = 32;      // WS2812 data (optional part)
+const int NUM_LEDS = 16;
+const float FAN_ON_C  = 28.0; // start above this
+const float FAN_OFF_C = 26.0; // stop below this (hysteresis)
+const int MIN_DUTY = 110;     // slowest speed that still turns the motor
+
+Adafruit_NeoPixel ring(NUM_LEDS, RING_PIN, NEO_GRB + NEO_KHZ800);
+bool fanOn = false;
+int duty = 0;
+unsigned long lastUpdate = 0, lastPrint = 0;
+
+float readTempC() {
+  long sum = 0;
+  for (int i = 0; i &lt; 16; i++) sum += analogRead(POT_PIN);
+  return 15.0 + (sum / 16) * 25.0 / 4095.0;   // 0...4095 -&gt; 15.0...40.0 C
+}
+
+void showColor(float t) {
+  // TODO 5: red = 0 at 15.0 C ... 255 at 40.0 C, blue = 255 - red;
+  //         paint all NUM_LEDS pixels with that color, then ring.show()
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  ledcAttach(FAN_PIN, 20000, 8);   // 20 kHz: no motor whine
+  ledcWrite(FAN_PIN, 0);           // start with the fan off
+  ring.begin();
+  ring.setBrightness(40);          // about 15%: small current budget
+  ring.clear();
+  ring.show();
+}
+
+void loop() {
+  unsigned long now = millis();
+  if (now - lastUpdate &lt; 100) return;   // 10 updates per second are enough
+  lastUpdate = now;
+
+  float t = readTempC();
+
+  // TODO 2: hysteresis: fanOn = true at t &gt;= FAN_ON_C ("Fan ON"),
+  //         false at t &lt;= FAN_OFF_C ("Fan OFF")
+  // TODO 3: fan on: duty = MIN_DUTY at 26.0 C ... 255 at 35.0 C (constrain!);
+  //         fan off: duty = 0; then ledcWrite(FAN_PIN, duty)
+  // TODO 4: status LED on while the fan runs
+  showColor(t);
+  // TODO 6: every 500 ms print "T=27.4 C  fan=OFF  duty=0"
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="9-11"><b class="what">The three numbers that define the thermostat.</b> On at 28.0, off at 26.0, and the slowest useful speed.
+    <span class="why">Putting them at the top as constants means you can tune the device without reading the logic. Find <code>MIN_DUTY</code> for your motor the way you did in exercise 1: below it, the motor only hums.</span></li>
+  <li data-lines="18-22"><b class="what">A pretend thermometer.</b> 16 readings averaged, then stretched over 15.0 to 40.0 °C.
+    <span class="why">Writing <code>25.0 / 4095.0</code> with a decimal point forces floating-point math; with whole numbers, <code>25 / 4095</code> would be 0 and the temperature would always be 15.0.</span></li>
+  <li data-lines="40-43"><b class="what">Ten times a second.</b> If less than 100 ms has passed, loop returns immediately.
+    <span class="why">A room's temperature doesn't change in milliseconds, and the ring doesn't need to be refreshed thousands of times a second (each <code>show()</code> briefly pauses interrupts). This "early return" is the same guard as in <code>Weather_OLED</code>.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>Wokwi has no transistor-driven DC motor, so in this diagram a <b>green LED on GPIO26</b> stands in for the fan: the brighter it is, the faster your motor would spin. The red LED on GPIO4 is the status LED, and the ring is on GPIO32. Add <code>Adafruit NeoPixel</code> in Library Manager.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-potentiometer", "id": "pot1", "top": -40, "left": -170, "attrs": {}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 130, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 60, "left": 200, "attrs": {"color": "red"}},
+    {"type": "wokwi-resistor", "id": "r2", "top": 130, "left": 250, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led2", "top": 60, "left": 280, "attrs": {"color": "green"}},
+    {"type": "wokwi-resistor", "id": "r3", "top": 240, "left": 150, "attrs": {"value": "330"}},
+    {"type": "wokwi-led-ring", "id": "ring1", "top": -150, "left": 220, "attrs": {"pixels": "16"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:26", "r2:2", "orange", [] ],
+    [ "r2:1", "led2:A", "orange", [] ],
+    [ "led2:C", "esp:GND.2", "black", [] ],
+    [ "esp:32", "r3:1", "blue", [] ],
+    [ "r3:2", "ring1:DIN", "blue", [] ],
+    [ "ring1:VCC", "esp:5V", "red", [] ],
+    [ "ring1:GND", "esp:GND.2", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>Hint 1</summary>
+<p>Hysteresis needs the fan's current state in the condition: <code>if (!fanOn &amp;&amp; t &gt;= FAN_ON_C) { … } else if (fanOn &amp;&amp; t &lt;= FAN_OFF_C) { … }</code>. Between 26 and 28 neither branch runs, so the fan simply keeps doing what it was doing.</p></details>
+<details class="hint"><summary>Hint 2</summary>
+<p><code>map()</code> only works with whole numbers, so work in tenths of a degree: <code>map((int)(t * 10), 260, 350, MIN_DUTY, 255)</code>. Above 35 °C, <code>map()</code> keeps going past 255, so wrap it in <code>constrain(…, MIN_DUTY, 255)</code>.</p></details>
+<details class="hint"><summary>Hint 3</summary>
+<p>For the color: <code>int red = constrain(map((int)(t * 10), 150, 400, 0, 255), 0, 255);</code> and <code>ring.Color(red, 0, 255 - red)</code>. Put that color into every pixel with a <code>for</code> loop and call <code>ring.show()</code> once at the end, as in <code>NeoPixel_Demo</code>.</p></details>
+
+<details class="expect"><summary>What should you see?</summary>
+<p>Start with the knob at the cold end, turn it slowly to the hot end, then back to the middle and further down. Your decimals will differ slightly; the pattern won't:</p>
+<pre class="serial">T=15.0 C  fan=OFF  duty=0
+T=21.3 C  fan=OFF  duty=0
+T=27.6 C  fan=OFF  duty=0
+Fan ON
+T=28.1 C  fan=ON  duty=143
+T=31.0 C  fan=ON  duty=190
+T=35.2 C  fan=ON  duty=255
+T=40.0 C  fan=ON  duty=255
+T=27.0 C  fan=ON  duty=126
+Fan OFF
+T=25.8 C  fan=OFF  duty=0</pre>
+<ul>
+  <li>Requirement 2: stop the knob at about 27 °C on the way <b>up</b>: the fan stays off. Stop at 27 °C on the way <b>down</b>: it stays on. That difference is the hysteresis.</li>
+  <li>Requirement 3: the motor (or the green LED in Wokwi) starts at a clearly visible but slow speed, never at a weak hum, and reaches full speed around 35 °C.</li>
+  <li>Requirement 4: the status LED switches exactly on the <code>Fan ON</code> and <code>Fan OFF</code> lines.</li>
+  <li>Requirement 5: the ring is blue at the cold end, purple around 27 °C and red at the hot end, and all 16 pixels always have the same color.</li>
+</ul>
+</details>
+
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="Thermostat_Fan.ino" id="projAns"><pre>
+// Thermostat fan: pot = temperature, hysteresis, PWM speed, color ring
+#include &lt;Adafruit_NeoPixel.h&gt;
+
+const int POT_PIN  = 34;      // temperature stand-in (ADC1)
+const int FAN_PIN  = 26;      // to the transistor/MOSFET gate circuit
+const int LED_PIN  = 4;       // status LED: lit while the fan runs
+const int RING_PIN = 32;      // WS2812 data (optional part)
+const int NUM_LEDS = 16;
+const float FAN_ON_C  = 28.0; // start above this
+const float FAN_OFF_C = 26.0; // stop below this (hysteresis)
+const int MIN_DUTY = 110;     // slowest speed that still turns the motor
+
+Adafruit_NeoPixel ring(NUM_LEDS, RING_PIN, NEO_GRB + NEO_KHZ800);
+bool fanOn = false;
+int duty = 0;
+unsigned long lastUpdate = 0, lastPrint = 0;
+
+float readTempC() {
+  long sum = 0;
+  for (int i = 0; i &lt; 16; i++) sum += analogRead(POT_PIN);
+  return 15.0 + (sum / 16) * 25.0 / 4095.0;   // 0...4095 -&gt; 15.0...40.0 C
+}
+
+void showColor(float t) {
+  int red = constrain(map((int)(t * 10), 150, 400, 0, 255), 0, 255);
+  uint32_t c = ring.Color(red, 0, 255 - red);   // cold = blue, hot = red
+  for (int i = 0; i &lt; NUM_LEDS; i++) ring.setPixelColor(i, c);
+  ring.show();
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  ledcAttach(FAN_PIN, 20000, 8);   // 20 kHz: no motor whine
+  ledcWrite(FAN_PIN, 0);           // start with the fan off
+  ring.begin();
+  ring.setBrightness(40);          // about 15%: small current budget
+  ring.clear();
+  ring.show();
+}
+
+void loop() {
+  unsigned long now = millis();
+  if (now - lastUpdate &lt; 100) return;   // 10 updates per second are enough
+  lastUpdate = now;
+
+  float t = readTempC();
+
+  // 1) hysteresis: two thresholds, so the fan doesn't chatter at 28.0
+  if (!fanOn &amp;&amp; t &gt;= FAN_ON_C) {
+    fanOn = true;
+    Serial.println("Fan ON");
+  } else if (fanOn &amp;&amp; t &lt;= FAN_OFF_C) {
+    fanOn = false;
+    Serial.println("Fan OFF");
+  }
+
+  // 2) speed: MIN_DUTY at 26 C, full speed at 35 C and above
+  if (fanOn) {
+    duty = constrain(map((int)(t * 10), 260, 350, MIN_DUTY, 255), MIN_DUTY, 255);
+  } else {
+    duty = 0;
+  }
+  ledcWrite(FAN_PIN, duty);
+  digitalWrite(LED_PIN, fanOn ? HIGH : LOW);
+
+  // 3) color ring
+  showColor(t);
+
+  // 4) report twice a second
+  if (now - lastPrint &gt;= 500) {
+    lastPrint = now;
+    Serial.printf("T=%.1f C  fan=%s  duty=%d\n", t, fanOn ? "ON" : "OFF", duty);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="24-29"><b class="what">Temperature as a color.</b> In tenths of a degree, 150 (15.0 °C) becomes red 0 and 400 (40.0 °C) becomes red 255; blue is whatever is left. All 16 pixels get the same color and are sent with one <code>show()</code>.
+    <span class="why">Red + blue always adds up to 255, so the ring's brightness (and current) stays constant; only the hue changes. <code>constrain</code> is a safety net in case the input ever goes outside 15 to 40.</span></li>
+  <li data-lines="34-39"><b class="what">Safe start.</b> 20 kHz, 8 bits, duty 0; the ring is cleared.
+    <span class="why">A motor must never start "by accident" during a reset. 20 kHz is above human hearing, so the motor doesn't whine at low speeds (lesson section <a href="#mosfet-pwm">speed control with PWM</a>).</span></li>
+  <li data-lines="49-56"><b class="what">Hysteresis.</b> The fan's current state is part of each condition, so only a real crossing of 28 (upwards) or 26 (downwards) changes it.
+    <span class="why">A real sensor's value wobbles by ±0.1 °C. With one threshold, a fan at 28.0 would start and stop every second, which wears out the motor and drives people mad. A 2 °C gap is typical for small fans.</span></li>
+  <li data-lines="58-65"><b class="what">Speed and status LED.</b> On: duty from 110 at 26 °C to 255 at 35 °C, clamped at both ends. Off: 0. The LED simply follows <code>fanOn</code>.
+    <span class="why">The speed line starts at 26 °C, not 28 °C, so that when the fan switches on at 28 it already starts a bit above <code>MIN_DUTY</code> (143), and as the room cools the fan slows down smoothly to its minimum before switching off at 26. Clamping the bottom at <code>MIN_DUTY</code> guarantees it never just hums.</span></li>
+  <li data-lines="67-74"><b class="what">Ring and report.</b> The color is refreshed every round (10 times a second); the Serial line only every 500 ms.
+    <span class="why">Two different rhythms again: what a person watches (the ring) updates quickly, and what a person reads (the Serial Monitor) slowly enough to be readable.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p>The complete answer on the same diagram (with <code>Adafruit NeoPixel</code>). The green LED on GPIO26 gets brighter as the "fan" speeds up.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-potentiometer", "id": "pot1", "top": -40, "left": -170, "attrs": {}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 130, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 60, "left": 200, "attrs": {"color": "red"}},
+    {"type": "wokwi-resistor", "id": "r2", "top": 130, "left": 250, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led2", "top": 60, "left": 280, "attrs": {"color": "green"}},
+    {"type": "wokwi-resistor", "id": "r3", "top": 240, "left": 150, "attrs": {"value": "330"}},
+    {"type": "wokwi-led-ring", "id": "ring1", "top": -150, "left": 220, "attrs": {"pixels": "16"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:26", "r2:2", "orange", [] ],
+    [ "r2:1", "led2:A", "orange", [] ],
+    [ "led2:C", "esp:GND.2", "black", [] ],
+    [ "esp:32", "r3:1", "blue", [] ],
+    [ "r3:2", "ring1:DIN", "blue", [] ],
+    [ "ring1:VCC", "esp:5V", "red", [] ],
+    [ "ring1:GND", "esp:GND.2", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
+<h2 id="capstone">Chapter 3 final project: Desk weather station v1</h2>
+<div class="project">
+<p class="lede-ish">This is the project where chapter 3 comes together. On your desk stands a small weather station: a needle swings to show the temperature like an old analog gauge, a small screen shows the details page by page, a buzzer beeps when the room gets too warm, and an SD card quietly records everything for later. It uses a debounced button and Serial commands (3.1), PWM for the servo and the buzzer (3.2), the DHT22, the OLED and the SD card (3.3), and the idea from this lesson that every output has its own job and its own power. Version 1 works offline; in chapter 4 it will learn to talk to your phone.</p>
+
+<h3 id="capstone-req">Requirements</h3>
+<ol>
+  <li>Every 2 seconds, temperature and humidity are read from the DHT22 (GPIO13). A failed reading prints <code>DHT22 read error</code> and is skipped. Each good reading prints one line: <code>T=24.0 C  H=40.0 %  needle=84  alarm=off</code>.</li>
+  <li>Button 1 (GPIO27, debounced) steps through three OLED pages: <code>1/3 Now</code> (temperature and humidity), <code>2/3 Min/Max</code> (lowest and highest temperature since start-up) and <code>3/3 Alarm</code> (threshold and state). The page changes immediately on the press.</li>
+  <li>The servo on GPIO32 is the needle: 10 °C = 0°, 40 °C = 180°, outside that range it stays at the end. It only moves when the angle changes by 2° or more.</li>
+  <li>The alarm switches on when the temperature reaches the threshold and off only below threshold − 0.5 °C. While it's on, the LED on GPIO4 is lit and the buzzer (GPIO25) gives a 100 ms beep at 1000 Hz once a second.</li>
+  <li>The threshold starts at 30.0 °C and can be changed from the Serial Monitor: typing a number from 20 to 40 and Enter prints <code>Alarm threshold: 25.0 C</code>; anything else prints <code>Type a number from 20 to 40</code>.</li>
+  <li>Every 60 seconds a line <code>seconds,temp,humidity</code> is added to <code>/station.csv</code> (header only once). Without a card: <code>SD missing: no logging</code>, <code>no SD</code> on the screen, and everything else still works.</li>
+  <li>No <code>delay()</code> in loop: the button and the Serial Monitor react instantly, even in the middle of a beep.</li>
+</ol>
+
+<h3 id="capstone-parts">Parts and wiring</h3>
+<ul>
+  <li>Already on your breadboard: button 1 (GPIO27), status LED + 220 Ω (GPIO4)</li>
+  <li>From lesson 3.2: SG90 servo (GPIO32, from the 5V pin) and passive buzzer (GPIO25)</li>
+  <li>From lesson 3.3: DHT22 (GPIO13), SSD1306 OLED (I2C 21/22), microSD module + card (VSPI 5/18/19/23; optional)</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"DHTM","name":"3-pin DHT22 module","img":"dht22.svg","pins":[["+","VCC"],["OUT","DATA"],["-","GND"]]},
+    {"id":"OLED","name":"SSD1306 OLED (I2C)","pins":[["GND","ground"],["VCC","3.3 V"],["SCL","I2C clock"],["SDA","I2C data"]]},
+    {"id":"SD","name":"microSD module (SPI)","img":"sdmodule.svg","pins":[["GND","ground"],["VCC","5V or 3V3 (check your module!)"],["MISO","data to the ESP32"],["MOSI","data to the card"],["SCK","clock"],["CS","chip select"]]},
+    {"id":"SERVO","name":"SG90 servo (needle)","img":"servo.svg","pins":[["GND","brown wire"],["V+","red wire (+5 V)"],["SIG","orange wire"]]},
+    {"id":"BZ","name":"Passive buzzer","img":"buzzer.svg","pins":[["1","+ leg"],["2","− leg"]]},
+    {"id":"BTN","name":"Push button (menu)","img":"button.svg","pins":[["1","to GPIO27"],["4","to GND"]]},
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO4 side"],["2","LED side"]]},
+    {"id":"LED1","name":"Red LED (alarm)","img":"led.svg","pins":[["A","anode (+)"],["K","cathode (−)"]]}
+  ],
+  "wires":[["3V3","DHTM.+","red"],["GPIO13","DHTM.OUT","blue","DHT"],["DHTM.-","GND","black"],["OLED.GND","GND","black"],["3V3","OLED.VCC","red"],["GPIO22","OLED.SCL","green"],["GPIO21","OLED.SDA","yellow"],["SD.GND","GND","black"],["5V","SD.VCC","red"],["GPIO19","SD.MISO","blue"],["GPIO23","SD.MOSI","orange"],["GPIO18","SD.SCK","green"],["GPIO5","SD.CS","purple"],["5V","SERVO.V+","red"],["GPIO32","SERVO.SIG","orange","needle"],["SERVO.GND","GND","black"],["GPIO25","BZ.1","orange","beep"],["BZ.2","GND","black"],["GPIO27","BTN.1","blue","menu"],["BTN.4","GND","black"],["GPIO4","R1.1","orange","alarm"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>Desk weather station: every part stays on its course pin, so nothing needs to be rewired from lessons 3.1 to 3.3. The servo and the SD module both use the 5V pin; if the board resets when the needle moves, give the servo its own 5 V supply (method 2 in <a href="3-2.html#servo-power">lesson 3.2</a>).</figcaption></div>
+
+<h3 id="capstone-start">Starter code</h3>
+<p>The starter has all the libraries and objects, the debounce function, a complete <code>showScreen()</code> for the three pages, and a <code>setup()</code> that already mounts the card and writes the header. What's missing is the station's "brain": reading, needle, alarm, menu, Serial command and logging. The TODO numbers match the requirements.</p>
+<div class="code" data-file="Desk_Station.ino" id="capStart"><pre>
+// Desk weather station v1: DHT22, OLED menu, servo needle, alarm, SD log
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+#include &lt;SPI.h&gt;
+#include &lt;SD.h&gt;
+#include &lt;ESP32Servo.h&gt;
+
+const int BUTTON_PIN = 27;      // menu button to GND
+const int LED_PIN    = 4;       // alarm LED
+const int BUZZER_PIN = 25;      // passive buzzer
+const int SERVO_PIN  = 32;      // needle servo
+const int SD_CS      = 5;       // SCK=18, MISO=19, MOSI=23
+const char *LOG_FILE = "/station.csv";
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+DHT dht(13, DHT22);
+Servo needle;
+
+float tNow = NAN, hNow = NAN, tMin = NAN, tMax = NAN;
+float alarmC = 30.0;            // alarm threshold, changed from Serial
+bool alarmOn = false, sdOk = false, beepOn = false;
+int screen = 0;                 // 0 = now, 1 = min/max, 2 = alarm
+int lastAngle = -100;           // far away: the first angle is always written
+unsigned long lastRead = 0, lastLog = 0, lastBeep = 0;
+int stableState = HIGH, lastReading = HIGH;
+unsigned long lastChangeTime = 0;
+
+bool buttonPressed() {          // debounce from lesson 3.1
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChangeTime = millis(); lastReading = reading; }
+  if (millis() - lastChangeTime &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) return true;
+  }
+  return false;
+}
+
+void showScreen() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  const char *titles[] = {"1/3 Now", "2/3 Min/Max", "3/3 Alarm"};
+  display.print(titles[screen]);
+  if (!sdOk) display.print("  no SD");
+  display.setTextSize(2);
+  if (isnan(tNow)) {
+    display.setCursor(0, 20);
+    display.print("waiting");
+  } else if (screen == 0) {
+    display.setCursor(0, 20);
+    display.printf("%.1f C", tNow);
+    display.setCursor(0, 44);
+    display.printf("%.1f %%", hNow);
+  } else if (screen == 1) {
+    display.setCursor(0, 20);
+    display.printf("lo %.1f", tMin);
+    display.setCursor(0, 44);
+    display.printf("hi %.1f", tMax);
+  } else {
+    display.setCursor(0, 20);
+    display.printf("at %.1f", alarmC);
+    display.setCursor(0, 44);
+    display.print(alarmOn ? "ALARM!" : "ok");
+  }
+  display.display();
+}
+
+void readSerial() {             // Serial input from lesson 3.1
+  // TODO 5: read a line; a number from 20 to 40 becomes alarmC
+  //         ("Alarm threshold: 30.0 C" + showScreen()), otherwise
+  //         print "Type a number from 20 to 40"
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LED_PIN, OUTPUT);
+  needle.setPeriodHertz(50);
+  needle.attach(SERVO_PIN, 500, 2400);  // servo first: it takes LEDC channel 0
+  ledcAttach(BUZZER_PIN, 2000, 10);
+  ledcWriteTone(BUZZER_PIN, 0);
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found!");
+    while (true) delay(1000);
+  }
+  display.setTextColor(SSD1306_WHITE);
+  dht.begin();
+  sdOk = SD.begin(SD_CS);
+  if (sdOk &amp;&amp; !SD.exists(LOG_FILE)) {
+    File f = SD.open(LOG_FILE, FILE_WRITE);
+    f.println("seconds,temp,humidity");
+    f.close();
+  }
+  Serial.println(sdOk ? "SD ready" : "SD missing: no logging");
+  Serial.printf("Alarm threshold: %.1f C (type 20-40 to change)\n", alarmC);
+  showScreen();
+}
+
+void loop() {
+  unsigned long now = millis();
+  readSerial();
+
+  // TODO 1: every 2 s read T and H; on nan print "DHT22 read error";
+  //         otherwise store them, update tMin/tMax and print the status line
+  // TODO 2: button pressed -&gt; screen = next of 0, 1, 2; showScreen()
+  // TODO 3: needle: 10.0-40.0 C -&gt; 0-180 degrees, move only on 2+ degrees
+  // TODO 4: alarm on at t &gt;= alarmC, off below alarmC - 0.5; LED follows;
+  //         while on: 1000 Hz beep of 100 ms once per second (no delay!)
+  // TODO 6: every 60 s append "seconds,temp,humidity" (if sdOk)
+}
+</pre></div>
+<ol class="walk" data-for="capStart">
+  <li data-lines="21-26"><b class="what">The station's memory.</b> Current values, min/max (all <code>NAN</code> at the start), the threshold, three on/off flags, the page number and one timestamp per rhythm.
+    <span class="why">Everything the screen can show lives in these variables. Your code only changes variables and calls <code>showScreen()</code>; it never draws directly. That separation keeps a big program manageable.</span></li>
+  <li data-lines="40-68"><b class="what">Three pages in one function.</b> The title line shows the page number; below it, one of three layouts chosen by <code>screen</code>. Before the first reading, every page shows <code>waiting</code>.
+    <span class="why">Text size 2 is 12 pixels per character, so a page holds two lines of up to 10 characters. That's why the values are short (<code>lo 18.5</code>) and the units are only on the first page.</span></li>
+  <li data-lines="80-83"><b class="what">Servo before buzzer.</b> The needle is attached first, then the buzzer's <code>ledcAttach()</code>.
+    <span class="why">The ESP32Servo library always takes LEDC channel 0 without asking the core. If <code>ledcAttach()</code> had already taken channel 0 for the buzzer, both would share one channel, and the needle would jump around whenever the buzzer beeps. With the servo first, the core simply gives the buzzer the next free channel.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="capStart">
+<p>This diagram has all the parts: DHT22, OLED, microSD, servo, buzzer, button and LED. Add <code>Adafruit SSD1306</code>, <code>DHT sensor library</code> and <code>ESP32Servo</code> in Library Manager. Click the DHT22 to change the temperature, and type the threshold in the Serial Monitor's input line.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-dht22", "id": "dht1", "top": -60, "left": -150, "attrs": {"temperature": "24", "humidity": "40"}},
+    {"type": "wokwi-pushbutton", "id": "btn1", "top": 110, "left": -170, "attrs": {"color": "green"}},
+    {"type": "wokwi-buzzer", "id": "bz1", "top": 190, "left": -170, "attrs": {"volume": "0.2"}},
+    {"type": "board-ssd1306", "id": "oled1", "top": 60, "left": 200, "attrs": {"i2cAddress": "0x3c"}},
+    {"type": "wokwi-microsd-card", "id": "sd1", "top": 170, "left": 220, "attrs": {}},
+    {"type": "wokwi-servo", "id": "servo1", "top": -120, "left": 200, "attrs": {}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 280, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 250, "left": 110, "attrs": {"color": "red"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:27", "btn1:1.r", "green", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "bz1:1", "esp:25", "orange", [] ],
+    [ "bz1:2", "esp:GND.1", "black", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "sd1:GND", "esp:GND.2", "black", [] ],
+    [ "sd1:VCC", "esp:3V3", "red", [] ],
+    [ "sd1:DO", "esp:19", "blue", [] ],
+    [ "sd1:DI", "esp:23", "orange", [] ],
+    [ "sd1:SCK", "esp:18", "green", [] ],
+    [ "sd1:CS", "esp:5", "purple", [] ],
+    [ "servo1:GND", "esp:GND.2", "black", [] ],
+    [ "servo1:V+", "esp:5V", "red", [] ],
+    [ "servo1:PWM", "esp:32", "orange", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>Hint 1</summary>
+<p>Start with TODO 1 and 2 only, and test: the pages should change and fill with numbers. Then add one requirement at a time. TODO 1 is the min/max project from lesson 3.3 plus humidity; TODO 2 is <code>screen = (screen + 1) % 3;</code> (the <code>%</code> makes 3 wrap around to 0) followed by <code>showScreen()</code>.</p></details>
+<details class="hint"><summary>Hint 2</summary>
+<p>TODO 3 and 4 belong inside the 2-second block, right after a good reading: the needle is the tank gauge of lesson 3.2 with <code>map((int)(t * 10), 100, 400, 0, 180)</code> plus <code>constrain</code>; the alarm is two conditions with hysteresis (<code>t &gt;= alarmC</code> to switch on, <code>t &lt; alarmC - 0.5</code> to switch off).</p></details>
+<details class="hint"><summary>Hint 3</summary>
+<p>A short beep once a second without <code>delay()</code> needs two checks: "is it time to start a beep?" (alarm on, not beeping, 1000 ms since the last start) and "is it time to stop?" (beeping and 100 ms since the start, <b>or</b> the alarm just went off). TODO 5 is the <code>Serial_Commands</code> example from lesson 3.1 with <code>toFloat()</code> instead of <code>toInt()</code>.</p></details>
+
+<details class="expect"><summary>What should you see?</summary>
+<p>In Wokwi (DHT22 at 24 °C, humidity 40 %): let it run, type <code>25</code> + Enter, set the DHT22 to 26, then to 24.6, then to 24, and finally type <code>50</code>:</p>
+<pre class="serial">SD ready
+Alarm threshold: 30.0 C (type 20-40 to change)
+T=24.0 C  H=40.0 %  needle=84  alarm=off
+Alarm threshold: 25.0 C
+T=26.0 C  H=40.0 %  needle=96  alarm=ON
+T=24.6 C  H=40.0 %  needle=87  alarm=ON
+T=24.0 C  H=40.0 %  needle=84  alarm=off
+Type a number from 20 to 40</pre>
+<ul>
+  <li>Requirement 2: each press moves exactly one page forward (1/3 → 2/3 → 3/3 → 1/3), instantly, without waiting for the next reading.</li>
+  <li>Requirement 3: at 24 °C the needle points a little before the middle (84°), at 26 °C slightly past it (96°). Below 10 °C it stays at 0°, above 40 °C at 180°.</li>
+  <li>Requirement 4: at 24.6 °C the alarm stays on (24.6 is still above 25.0 − 0.5); only at 24.0 does it switch off. While it's on you hear one short beep per second and the red LED is lit; page 3/3 says <code>ALARM!</code>.</li>
+  <li>Requirements 6 and 7: after a minute, <code>logged</code> appears. Press the button right in the middle of a beep: the page still changes instantly, and the beep stays 100 ms long.</li>
+</ul>
+</details>
+
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="Desk_Station.ino" id="capAns"><pre>
+// Desk weather station v1: DHT22, OLED menu, servo needle, alarm, SD log
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+#include &lt;SPI.h&gt;
+#include &lt;SD.h&gt;
+#include &lt;ESP32Servo.h&gt;
+
+const int BUTTON_PIN = 27;      // menu button to GND
+const int LED_PIN    = 4;       // alarm LED
+const int BUZZER_PIN = 25;      // passive buzzer
+const int SERVO_PIN  = 32;      // needle servo
+const int SD_CS      = 5;       // SCK=18, MISO=19, MOSI=23
+const char *LOG_FILE = "/station.csv";
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+DHT dht(13, DHT22);
+Servo needle;
+
+float tNow = NAN, hNow = NAN, tMin = NAN, tMax = NAN;
+float alarmC = 30.0;            // alarm threshold, changed from Serial
+bool alarmOn = false, sdOk = false, beepOn = false;
+int screen = 0;                 // 0 = now, 1 = min/max, 2 = alarm
+int lastAngle = -100;           // far away: the first angle is always written
+unsigned long lastRead = 0, lastLog = 0, lastBeep = 0;
+int stableState = HIGH, lastReading = HIGH;
+unsigned long lastChangeTime = 0;
+
+bool buttonPressed() {          // debounce from lesson 3.1
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChangeTime = millis(); lastReading = reading; }
+  if (millis() - lastChangeTime &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) return true;
+  }
+  return false;
+}
+
+void showScreen() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  const char *titles[] = {"1/3 Now", "2/3 Min/Max", "3/3 Alarm"};
+  display.print(titles[screen]);
+  if (!sdOk) display.print("  no SD");
+  display.setTextSize(2);
+  if (isnan(tNow)) {
+    display.setCursor(0, 20);
+    display.print("waiting");
+  } else if (screen == 0) {
+    display.setCursor(0, 20);
+    display.printf("%.1f C", tNow);
+    display.setCursor(0, 44);
+    display.printf("%.1f %%", hNow);
+  } else if (screen == 1) {
+    display.setCursor(0, 20);
+    display.printf("lo %.1f", tMin);
+    display.setCursor(0, 44);
+    display.printf("hi %.1f", tMax);
+  } else {
+    display.setCursor(0, 20);
+    display.printf("at %.1f", alarmC);
+    display.setCursor(0, 44);
+    display.print(alarmOn ? "ALARM!" : "ok");
+  }
+  display.display();
+}
+
+void readSerial() {             // Serial input from lesson 3.1
+  if (Serial.available() == 0) return;
+  String line = Serial.readStringUntil('\n');
+  line.trim();
+  float v = line.toFloat();
+  if (v &gt;= 20 &amp;&amp; v &lt;= 40) {
+    alarmC = v;
+    Serial.printf("Alarm threshold: %.1f C\n", alarmC);
+    showScreen();
+  } else {
+    Serial.println("Type a number from 20 to 40");
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LED_PIN, OUTPUT);
+  needle.setPeriodHertz(50);
+  needle.attach(SERVO_PIN, 500, 2400);  // servo first: it takes LEDC channel 0
+  ledcAttach(BUZZER_PIN, 2000, 10);
+  ledcWriteTone(BUZZER_PIN, 0);
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found!");
+    while (true) delay(1000);
+  }
+  display.setTextColor(SSD1306_WHITE);
+  dht.begin();
+  sdOk = SD.begin(SD_CS);
+  if (sdOk &amp;&amp; !SD.exists(LOG_FILE)) {
+    File f = SD.open(LOG_FILE, FILE_WRITE);
+    f.println("seconds,temp,humidity");
+    f.close();
+  }
+  Serial.println(sdOk ? "SD ready" : "SD missing: no logging");
+  Serial.printf("Alarm threshold: %.1f C (type 20-40 to change)\n", alarmC);
+  showScreen();
+}
+
+void loop() {
+  unsigned long now = millis();
+  readSerial();
+
+  // 1) menu button: next screen
+  if (buttonPressed()) {
+    screen = (screen + 1) % 3;
+    showScreen();
+  }
+
+  // 2) every 2 s: read the sensor, needle, min/max, alarm
+  if (now - lastRead &gt;= 2000) {
+    lastRead = now;
+    float t = dht.readTemperature();
+    float h = dht.readHumidity();
+    if (isnan(t) || isnan(h)) {
+      Serial.println("DHT22 read error");
+    } else {
+      tNow = t;
+      hNow = h;
+      if (isnan(tMin) || t &lt; tMin) tMin = t;
+      if (isnan(tMax) || t &gt; tMax) tMax = t;
+      int angle = constrain(map((int)(t * 10), 100, 400, 0, 180), 0, 180);
+      if (abs(angle - lastAngle) &gt;= 2) {
+        needle.write(angle);
+        lastAngle = angle;
+      }
+      if (!alarmOn &amp;&amp; t &gt;= alarmC) alarmOn = true;
+      else if (alarmOn &amp;&amp; t &lt; alarmC - 0.5) alarmOn = false;
+      digitalWrite(LED_PIN, alarmOn ? HIGH : LOW);
+      Serial.printf("T=%.1f C  H=%.1f %%  needle=%d  alarm=%s\n",
+                    t, h, lastAngle, alarmOn ? "ON" : "off");
+      showScreen();
+    }
+  }
+
+  // 3) alarm sound: 100 ms beep once per second
+  if (alarmOn &amp;&amp; !beepOn &amp;&amp; now - lastBeep &gt;= 1000) {
+    lastBeep = now;
+    beepOn = true;
+    ledcWriteTone(BUZZER_PIN, 1000);
+  }
+  if (beepOn &amp;&amp; (now - lastBeep &gt;= 100 || !alarmOn)) {
+    beepOn = false;
+    ledcWriteTone(BUZZER_PIN, 0);
+  }
+
+  // 4) every 60 s: one CSV line
+  if (now - lastLog &gt;= 60000) {
+    lastLog = now;
+    if (sdOk &amp;&amp; !isnan(tNow)) {
+      File f = SD.open(LOG_FILE, FILE_APPEND);
+      if (f) {
+        f.printf("%lu,%.1f,%.1f\n", now / 1000, tNow, hNow);
+        f.close();
+        Serial.println("logged");
+      }
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="capAns">
+  <li data-lines="70-82"><b class="what">The Serial command.</b> If a line has arrived, read it up to Enter, trim it and convert it to a number. Only 20 to 40 is accepted.
+    <span class="why"><code>toFloat()</code> turns text that isn't a number into 0.0, so the range check also catches typos like <code>abc</code>. The first line returns at once when nothing has arrived, so this function costs almost nothing in every round of loop.</span></li>
+  <li data-lines="114-118"><b class="what">The menu.</b> Each press moves to the next page; <code>% 3</code> wraps 3 back to 0. The page is redrawn right away.
+    <span class="why">Checking the button in every round of loop, not just every 2 seconds, is what makes it feel instant.</span></li>
+  <li data-lines="121-131"><b class="what">One reading, many results.</b> Every 2 seconds: read both values, skip the round if either is <code>NAN</code>, then store them and update min and max.
+    <span class="why">All the decisions below (needle, alarm, screen) use the same fresh reading. That's why they sit inside this one block instead of in separate timers of their own.</span></li>
+  <li data-lines="132-136"><b class="what">The needle.</b> 10.0 to 40.0 °C in tenths of a degree becomes 0 to 180°, clamped at both ends, with the 2° deadband.
+    <span class="why">A 30 °C range across 180° makes 6° per degree Celsius: easy to read from across the room. Without <code>constrain</code>, a hot day would ask the servo for 200° and push it against its end stop.</span></li>
+  <li data-lines="137-142"><b class="what">Alarm state, LED, report.</b> On at the threshold, off half a degree below it. The LED follows the state, a status line is printed and the screen is redrawn.
+    <span class="why">The alarm is only decided here, once per reading. The beeping below only <b>reads</b> <code>alarmOn</code>. Keeping "deciding" and "making noise" apart makes both easy to change.</span></li>
+  <li data-lines="146-155"><b class="what">The beep.</b> Start: alarm on, not beeping, a second since the last start. Stop: 100 ms later, or immediately when the alarm switches off.
+    <span class="why">This is a tiny state machine with two states (beeping / silent). The <code>|| !alarmOn</code> matters: without it, an alarm that ended in the middle of a beep would leave the buzzer on until the 100 ms were up. Here that's harmless; in a program where the beep lasts seconds, it wouldn't be.</span></li>
+  <li data-lines="157-168"><b class="what">The log.</b> Once a minute, if there is a card and a valid reading.
+    <span class="why">The same pattern as the min/max project in 3.3. In chapter 4 you'll replace the seconds with the real time of day from NTP.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="capAns">
+<p>The complete station in the simulator (with the three libraries). Try all seven requirements; for the SD test, delete the microSD part from the diagram and run again.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-dht22", "id": "dht1", "top": -60, "left": -150, "attrs": {"temperature": "24", "humidity": "40"}},
+    {"type": "wokwi-pushbutton", "id": "btn1", "top": 110, "left": -170, "attrs": {"color": "green"}},
+    {"type": "wokwi-buzzer", "id": "bz1", "top": 190, "left": -170, "attrs": {"volume": "0.2"}},
+    {"type": "board-ssd1306", "id": "oled1", "top": 60, "left": 200, "attrs": {"i2cAddress": "0x3c"}},
+    {"type": "wokwi-microsd-card", "id": "sd1", "top": 170, "left": 220, "attrs": {}},
+    {"type": "wokwi-servo", "id": "servo1", "top": -120, "left": 200, "attrs": {}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 280, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 250, "left": 110, "attrs": {"color": "red"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:27", "btn1:1.r", "green", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "bz1:1", "esp:25", "orange", [] ],
+    [ "bz1:2", "esp:GND.1", "black", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "sd1:GND", "esp:GND.2", "black", [] ],
+    [ "sd1:VCC", "esp:3V3", "red", [] ],
+    [ "sd1:DO", "esp:19", "blue", [] ],
+    [ "sd1:DI", "esp:23", "orange", [] ],
+    [ "sd1:SCK", "esp:18", "green", [] ],
+    [ "sd1:CS", "esp:5", "purple", [] ],
+    [ "servo1:GND", "esp:GND.2", "black", [] ],
+    [ "servo1:V+", "esp:5V", "red", [] ],
+    [ "servo1:PWM", "esp:32", "orange", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">The lesson in three lines</div>
 <p>An ESP32 pin only gives the command (3.3 V, under 20 mA); the heavy work is done by a transistor (up to a few hundred milliamps), a logic-level MOSFET (several amps and PWM), a relay (isolated) or a ready-made driver (H-bridge, ULN2003, A4988). A heavy load needs a separate supply with a common ground, and every coil needs a flyback diode. The 28BYJ-48 stepper turns with the order IN1, IN3, IN2, IN4, and each WS2812B LED draws up to 60 mA: the current budget first, then the animation.</p></div>
 

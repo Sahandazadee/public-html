@@ -1404,6 +1404,343 @@ void loop() {
 </details>
 </div>
 
+<h2 id="project">Practice project: Kitchen timer</h2>
+<div class="project">
+<p class="lede-ish">Pasta needs 9 minutes, tea needs 4, and a boiled egg needs you to remember it. In this project you build a small kitchen timer: turn the knob to choose a time, press the button to start, and the LED blinks faster and faster as the end gets closer. It uses everything from this lesson at once: a debounced button, a smoothed potentiometer and several jobs running together with <code>millis()</code>. To keep testing quick, the knob chooses seconds (5 to 60) instead of minutes; changing one number turns it into a real minutes timer later.</p>
+
+<h3 id="project-req">Requirements</h3>
+<ol>
+  <li>While the timer is waiting, the potentiometer chooses 5, 10, 15 … 60 seconds (12 equal steps). A line <code>Set: 25 s</code> appears only when the value actually changes, never as a stream of repeated lines.</li>
+  <li>A press of the button (GPIO27, debounced) starts the countdown and prints <code>Start: 25 s</code>.</li>
+  <li>A press during the countdown cancels it: <code>Cancelled</code>, the LED goes off and the timer waits again.</li>
+  <li>During the countdown, <code>Left: N s</code> is printed exactly once per second (25, 24 … 1).</li>
+  <li>The LED on GPIO4 blinks every 500 ms, and every 100 ms in the last 5 seconds.</li>
+  <li>At zero: <code>DING! Time is up</code> and a steady LED for 3 seconds (or until the next press), then <code>Ready: 25 s</code>.</li>
+  <li>No <code>delay()</code> anywhere: the button must react at every moment, even in the middle of a blink.</li>
+</ol>
+
+<h3 id="project-parts">Parts and wiring</h3>
+<ul>
+  <li>ESP32 board on the breadboard</li>
+  <li>10 kΩ potentiometer (on GPIO34, as in this lesson)</li>
+  <li>Push button (button 1 on GPIO27, to GND)</li>
+  <li>LED + 220 Ω resistor (status LED on GPIO4)</li>
+</ul>
+<p>This is exactly the circuit you already have from this lesson; nothing new to wire.</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"POT","name":"10 kΩ potentiometer","img":"pot.svg","pins":[["VCC","outer leg"],["SIG","middle leg (wiper)"],["GND","other outer leg"]]},
+    {"id":"BTN","name":"Push button","img":"button.svg","pins":[["1","to GPIO27"],["4","to GND (diagonal leg)"]]},
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO4 side"],["2","LED side"]]},
+    {"id":"LED1","name":"Red LED","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−), short leg"]]}
+  ],
+  "wires":[["3V3","POT.VCC","red"],["GPIO34","POT.SIG","blue","time knob"],["GND","POT.GND","black"],["GPIO27","BTN.1","blue","start/cancel"],["BTN.4","GND","black"],["GPIO4","R1.1","orange","status"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>Kitchen timer: the potentiometer chooses the time, the button starts and cancels, and the LED shows the countdown. All three are the course's permanent parts.</figcaption></div>
+
+<h3 id="project-start">Starter code</h3>
+<p>The starter already has the pins, the variables, the debounce function from this lesson and a <code>setLed()</code> helper. It compiles and runs, but it only prints the first two lines. Your job is the <code>// TODO</code> lines; their numbers match the requirements above.</p>
+<div class="code" data-file="Kitchen_Timer.ino" id="projStart"><pre>
+// Kitchen timer: pot sets 5-60 s, button starts/cancels, no delay()
+const int POT_PIN = 34;               // potentiometer (ADC1)
+const int BUTTON_PIN = 27;            // button 1 to GND, INPUT_PULLUP
+const int LED_PIN = 4;                // status LED through 220 ohms
+const unsigned long DEBOUNCE_MS = 30;
+
+enum State { IDLE, RUNNING, DONE };   // the three situations the timer can be in
+State state = IDLE;
+
+int setSeconds = 5;                   // the chosen time: 5, 10 ... 60
+int lastRaw = -1000;                  // pot value when we last accepted a change
+unsigned long startTime = 0;          // when the countdown began
+unsigned long doneTime = 0;           // when the time ran out
+int lastShown = -1;                   // last "Left" second we printed
+unsigned long lastBlink = 0;
+bool ledOn = false;
+
+int stableState = HIGH, lastReading = HIGH;
+unsigned long lastChangeTime = 0;
+
+// true exactly once per real press (debounce from this lesson)
+bool buttonPressed() {
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChangeTime = millis(); lastReading = reading; }
+  if (millis() - lastChangeTime &gt; DEBOUNCE_MS &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) return true;
+  }
+  return false;
+}
+
+void setLed(bool on) {
+  ledOn = on;
+  digitalWrite(LED_PIN, on ? HIGH : LOW);
+}
+
+void readPot() {
+  // TODO 1: average 8 readings of POT_PIN, ignore changes smaller than 50,
+  //         turn the value into 5, 10 ... 60 and print "Set: N s" on a change
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LED_PIN, OUTPUT);
+  Serial.println("Kitchen timer: turn the pot, press the button");
+  readPot();
+  Serial.printf("Ready: %d s\n", setSeconds);
+}
+
+void loop() {
+  unsigned long now = millis();
+  bool pressed = buttonPressed();
+
+  if (state == IDLE) {
+    readPot();
+    // TODO 2: on a press: state = RUNNING, remember the time, print "Start: N s"
+  } else if (state == RUNNING) {
+    // TODO 3: work out the milliseconds left; a press cancels ("Cancelled")
+    // TODO 4: print "Left: N s" once per second (use lastShown)
+    // TODO 5: toggle the LED every 500 ms, every 100 ms in the last 5 s
+    // TODO 6: at zero: steady LED, print "DING! Time is up", state = DONE
+  } else {                                    // DONE
+    // TODO 6 (end): after 3 s or a press: LED off, "Ready: N s", state = IDLE
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="7-8"><b class="what">Three situations with names.</b> <code>enum</code> is a short list of named numbers: <code>IDLE</code> is 0, <code>RUNNING</code> is 1 and <code>DONE</code> is 2. The variable <code>state</code> holds the situation the timer is in right now.
+    <span class="why">The same button press means "start" while waiting and "cancel" while running. Instead of juggling several true/false variables, you ask one question at the top of loop: "which situation am I in?" This pattern is called a state machine, and you'll use it in almost every project.</span></li>
+  <li data-lines="22-30"><b class="what">A ready-made debounce.</b> <code>buttonPressed()</code> is the block from <code>Toggle_Debounce</code>, packed into a function that returns <code>true</code> once per real press.
+    <span class="why">Call it exactly once per loop and keep the answer in a variable (<code>pressed</code>). If you called it twice, the second call could "use up" a press the first one had already seen.</span></li>
+  <li data-lines="37-40"><b class="what">Your first TODO.</b> <code>readPot()</code> is empty; it's called both from setup and from loop.
+    <span class="why">Putting the pot logic in a function keeps loop short and readable: loop only decides <b>when</b> to read the pot, the function decides <b>how</b>.</span></li>
+  <li data-lines="51-66"><b class="what">loop's skeleton.</b> The time and the button are read once at the top; then an <code>if / else if / else</code> chooses what to do in each situation.
+    <span class="why">Every TODO lives inside the right branch, so you never have to ask "is the timer running?" again in the middle of the code.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>Open Wokwi, replace <code>diagram.json</code> with the one below (potentiometer on GPIO34, green button on GPIO27, red LED on GPIO4) and paste the starter into <code>sketch.ino</code>. Fill in the TODOs one by one and press ▶ after each one; you can drag the potentiometer knob with the mouse.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-potentiometer", "id": "pot1", "top": -40, "left": -170, "attrs": {}},
+    {"type": "wokwi-pushbutton", "id": "btn1", "top": 110, "left": -170, "attrs": {"color": "green"}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": {"color": "red"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:27", "btn1:1.r", "green", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>Hint 1</summary>
+<p>For TODO 1, copy the averaging loop from <code>Pot_Smooth</code>. To get 12 equal steps, don't use <code>map()</code> (it only reaches the last step at exactly 4095). Instead: <code>raw * 12 / 4096</code> gives 0 to 11; add 1 and multiply by 5. Ignore the new value when <code>abs(raw - lastRaw) &lt; 50</code>, otherwise the value flickers between two steps when the knob stops right on a border.</p></details>
+<details class="hint"><summary>Hint 2</summary>
+<p>Time left in milliseconds: <code>long leftMs = (long)setSeconds * 1000 - (long)(now - startTime);</code>. Turn it into whole seconds <b>rounded up</b> with <code>(leftMs + 999) / 1000</code>; then with 24.3 s left you show 25, and the last line is <code>Left: 1 s</code>, not <code>Left: 0 s</code>. Print only when this number differs from <code>lastShown</code>.</p></details>
+<details class="hint"><summary>Hint 3</summary>
+<p>The blink is the pattern from <code>Blink_NoDelay</code>, with a variable interval: <code>unsigned long interval = (leftMs &lt;= 5000) ? 100 : 500;</code>. For the end, write <code>state = DONE; doneTime = now;</code>; in the <code>DONE</code> branch, check <code>pressed || now - doneTime &gt;= 3000</code>.</p></details>
+
+<details class="expect"><summary>What should you see?</summary>
+<p>Turn the knob to the middle, press the button once and wait. The Serial Monitor shows (your first "Set" lines depend on where the knob started):</p>
+<pre class="serial">Kitchen timer: turn the pot, press the button
+Ready: 5 s
+Set: 30 s
+Set: 25 s
+Start: 25 s
+Left: 25 s
+Left: 24 s
+Left: 23 s
+...
+Left: 2 s
+Left: 1 s
+DING! Time is up
+Ready: 25 s</pre>
+<p>Now start again and press the button after a few seconds:</p>
+<pre class="serial">Start: 25 s
+Left: 25 s
+Left: 24 s
+Left: 23 s
+Cancelled
+Ready: 25 s</pre>
+<ul>
+  <li>Requirement 1: turn the knob slowly from one end to the other: you see exactly 12 different values from 5 to 60, each one once. Let go of the knob: no more lines appear.</li>
+  <li>Requirement 4: the <code>Left</code> lines come exactly one second apart; count along with a clock. Between <code>Start</code> and <code>DING</code> there are exactly 25 lines.</li>
+  <li>Requirement 5: the blinking clearly speeds up when <code>Left: 5 s</code> appears.</li>
+  <li>Requirements 3 and 7: press the button in the middle of a blink or during the last fast seconds: <code>Cancelled</code> appears immediately, and one press is only ever counted once.</li>
+  <li>Turning the knob during the countdown changes nothing; the new value only appears (as <code>Set</code>) after the timer is back to waiting.</li>
+</ul>
+</details>
+
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="Kitchen_Timer.ino" id="projAns"><pre>
+// Kitchen timer: pot sets 5-60 s, button starts/cancels, no delay()
+const int POT_PIN = 34;               // potentiometer (ADC1)
+const int BUTTON_PIN = 27;            // button 1 to GND, INPUT_PULLUP
+const int LED_PIN = 4;                // status LED through 220 ohms
+const unsigned long DEBOUNCE_MS = 30;
+
+enum State { IDLE, RUNNING, DONE };   // the three situations the timer can be in
+State state = IDLE;
+
+int setSeconds = 5;                   // the chosen time: 5, 10 ... 60
+int lastRaw = -1000;                  // pot value when we last accepted a change
+unsigned long startTime = 0;          // when the countdown began
+unsigned long doneTime = 0;           // when the time ran out
+int lastShown = -1;                   // last "Left" second we printed
+unsigned long lastBlink = 0;
+bool ledOn = false;
+
+int stableState = HIGH, lastReading = HIGH;
+unsigned long lastChangeTime = 0;
+
+// true exactly once per real press (debounce from this lesson)
+bool buttonPressed() {
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChangeTime = millis(); lastReading = reading; }
+  if (millis() - lastChangeTime &gt; DEBOUNCE_MS &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) return true;
+  }
+  return false;
+}
+
+void setLed(bool on) {
+  ledOn = on;
+  digitalWrite(LED_PIN, on ? HIGH : LOW);
+}
+
+void readPot() {
+  long sum = 0;
+  for (int i = 0; i &lt; 8; i++) sum += analogRead(POT_PIN);
+  int raw = sum / 8;                          // average of 8 samples
+  if (abs(raw - lastRaw) &lt; 50) return;        // deadband: ignore noise
+  lastRaw = raw;
+  int seconds = (raw * 12 / 4096 + 1) * 5;    // 12 equal steps: 5 ... 60
+  if (seconds != setSeconds) {
+    setSeconds = seconds;
+    Serial.printf("Set: %d s\n", setSeconds);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LED_PIN, OUTPUT);
+  Serial.println("Kitchen timer: turn the pot, press the button");
+  readPot();
+  Serial.printf("Ready: %d s\n", setSeconds);
+}
+
+void loop() {
+  unsigned long now = millis();
+  bool pressed = buttonPressed();
+
+  if (state == IDLE) {
+    readPot();
+    if (pressed) {
+      state = RUNNING;
+      startTime = now;
+      lastShown = -1;
+      Serial.printf("Start: %d s\n", setSeconds);
+    }
+  } else if (state == RUNNING) {
+    long leftMs = (long)setSeconds * 1000 - (long)(now - startTime);
+    if (pressed) {
+      state = IDLE;
+      setLed(false);
+      Serial.println("Cancelled");
+      Serial.printf("Ready: %d s\n", setSeconds);
+    } else if (leftMs &lt;= 0) {
+      state = DONE;
+      doneTime = now;
+      setLed(true);                           // steady light: time is up
+      Serial.println("DING! Time is up");
+    } else {
+      int leftS = (leftMs + 999) / 1000;      // round up: 4.2 s left shows 5
+      if (leftS != lastShown) {
+        lastShown = leftS;
+        Serial.printf("Left: %d s\n", leftS);
+      }
+      unsigned long interval = (leftMs &lt;= 5000) ? 100 : 500;   // faster at the end
+      if (now - lastBlink &gt;= interval) {
+        lastBlink = now;
+        setLed(!ledOn);
+      }
+    }
+  } else {                                    // DONE
+    if (pressed || now - doneTime &gt;= 3000) {  // 3 s of light, or a press
+      state = IDLE;
+      setLed(false);
+      Serial.printf("Ready: %d s\n", setSeconds);
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="37-41"><b class="what">A calm knob.</b> The average of 8 readings, and a change smaller than 50 (out of 4095) is ignored completely.
+    <span class="why">Even the average moves by a few units. Without this "deadband", a knob resting right on the border between 25 and 30 would print <code>Set: 25 s</code>, <code>Set: 30 s</code>, <code>Set: 25 s</code>… forever. 50 is about 1% of the range: small enough that you don't feel it, big enough to swallow the noise.</span></li>
+  <li data-lines="42-47"><b class="what">12 equal steps.</b> <code>raw * 12 / 4096</code> is integer division, so it gives 0 to 11; <code>+ 1</code> and <code>* 5</code> make that 5 to 60. The line is printed only when the number of seconds really changed.
+    <span class="why">Each step gets the same slice of the knob (about 341 units). With <code>map(raw, 0, 4095, 1, 12)</code>, 12 (60 s) would only appear at exactly 4095, a spot you can hardly hit by hand.</span></li>
+  <li data-lines="60-61"><b class="what">Read once, use everywhere.</b> <code>now</code> and <code>pressed</code> are taken once at the start of loop.
+    <span class="why">All decisions in this round of loop are based on the same moment and the same press; a press can't be "seen" in one branch and lost in another.</span></li>
+  <li data-lines="63-70"><b class="what">Waiting.</b> Only here is the knob read. A press starts the countdown: remember the time, reset <code>lastShown</code>, print.
+    <span class="why"><code>lastShown = -1</code> makes sure the first <code>Left</code> line of the new countdown is printed, even if the previous run stopped at the same number.</span></li>
+  <li data-lines="72-77"><b class="what">Time left, and cancelling.</b> Milliseconds left = the chosen time minus the time that has passed. A press cancels, turns the LED off and prints the chosen time again.
+    <span class="why">The subtraction <code>now - startTime</code> is the <code>millis()</code> pattern from this lesson, so it keeps working even when <code>millis()</code> wraps around after 49 days. The <code>(long)</code> casts matter: <code>leftMs</code> must be able to go negative, and an <code>unsigned long</code> can't.</span></li>
+  <li data-lines="78-82"><b class="what">Time is up.</b> When the time left reaches 0 or less, the state becomes <code>DONE</code>, the moment is stored and the LED stays on.
+    <span class="why">We check <code>&lt;= 0</code>, not <code>== 0</code>: loop doesn't run at the exact millisecond, and a loop that jumps from 1 ms left to −2 ms would never see exactly 0.</span></li>
+  <li data-lines="84-88"><b class="what">One line per second.</b> Round up to whole seconds, and print only when the number changes.
+    <span class="why">loop runs thousands of times per second; "print when it changes" (the same pattern as for the button in 2.3) gives exactly one line per second without a single <code>delay()</code>.</span></li>
+  <li data-lines="89-93"><b class="what">A blink that speeds up.</b> The interval is 500 ms, or 100 ms in the last 5 seconds; the rest is the blink pattern without delay.
+    <span class="why">The interval is just a variable, so "faster" means changing a number, not writing a second blink loop. You could add a third stage (for example 250 ms below 10 s) with one more condition.</span></li>
+  <li data-lines="95-100"><b class="what">After the DING.</b> Three seconds of steady light, or a press, then back to waiting.
+    <span class="why">This is a timer inside a state: <code>doneTime</code> is to <code>DONE</code> what <code>startTime</code> is to <code>RUNNING</code>. The press lets an impatient cook confirm the alarm without waiting.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p>The complete answer on the same circuit. Choose a short time (5 or 10 s) to see the whole cycle quickly.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-potentiometer", "id": "pot1", "top": -40, "left": -170, "attrs": {}},
+    {"type": "wokwi-pushbutton", "id": "btn1", "top": 110, "left": -170, "attrs": {"color": "green"}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": {"color": "red"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:27", "btn1:1.r", "green", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">The lesson in three lines</div>
 <p>A digital input without a pull-up floats; <code>INPUT_PULLUP</code> + a button to GND + reversed logic, plus debouncing with millis, make a button reliable. <code>millis()</code> with the "subtract and compare" pattern instead of delay lets several jobs run at once; interrupts are only for very fast events. The 12-bit ADC (0 to 4095) with 11 dB attenuation reads about 0.15 to 3.1 V; use ADC1, <code>analogReadMilliVolts</code> is more accurate, and with a voltage divider and hysteresis you can turn any resistive sensor, like an LDR, into a stable decision.</p></div>
 

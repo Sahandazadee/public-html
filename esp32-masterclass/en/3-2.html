@@ -450,7 +450,7 @@ angle= 90  pulse=1450us  duty=4751</div>
 const int POT_PIN = 34;
 const int SERVO_PIN = 32;
 Servo myServo;
-int lastAngle = -1;             // no angle written yet
+int lastAngle = -100;            // no angle written yet
 
 void setup() {
   Serial.begin(115200);
@@ -745,7 +745,7 @@ LDR=650 mV  angle=158</pre>
 const int LDR_PIN = 35;                 // middle of the LDR divider (lesson 3.1)
 const int SERVO_PIN = 32;
 Servo needle;                           // the servo is our "needle"
-int lastAngle = -1;                     // no angle written yet
+int lastAngle = -100;                    // no angle written yet
 
 uint32_t readLdrMv() {
   uint32_t sum = 0;
@@ -773,7 +773,7 @@ void loop() {
 }
 </pre></div>
 <ol class="walk" data-for="ex2ans">
-  <li data-lines="3-6"><b class="what">Two familiar parts.</b> The LDR on GPIO35 from lesson 3.1 and the servo on GPIO32 from this lesson. <code>lastAngle = -1</code> means "nothing written yet".
+  <li data-lines="3-6"><b class="what">Two familiar parts.</b> The LDR on GPIO35 from lesson 3.1 and the servo on GPIO32 from this lesson. <code>lastAngle = -100</code> means "nothing written yet"; it is deliberately far away so the first angle, even 0, always clears the 2° dead zone and gets written.
     <span class="why">Every angle from 1 to 180 is at least 2 away from −1, so the first reading is written straight away. The only exception is 0 (very dark at start-up); then the servo simply stays where it was.</span></li>
   <li data-lines="8-11"><b class="what">An average of 8 samples.</b> Exactly the function from the night light.
     <span class="why">A shaky needle is hard to read; averaging reduces the ADC noise before it reaches the servo.</span></li>
@@ -869,6 +869,286 @@ void loop() {
     [ "esp:RX", "$serialMonitor:TX", "", [] ],
     [ "bz1:1", "esp:25", "orange", [] ],
     [ "bz1:2", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
+<h2 id="project">Practice project: Tank gauge with overflow alarm</h2>
+<div class="project">
+<p class="lede-ish">A rain barrel, an aquarium top-up tank, a pet's water bowl: they all need someone to notice when they're nearly full. Your gauge has a real needle (the servo) that shows the level, and when the tank is above 90 % it warns you twice a second with the buzzer while the LED slowly "breathes". The potentiometer stands in for the level sensor; in a real build you'd swap in a float sensor or a distance sensor and keep the rest of the code. All three PWM jobs from this lesson (servo, tone and LED brightness) run at the same time, without a single <code>delay()</code>.</p>
+
+<h3 id="project-req">Requirements</h3>
+<ol>
+  <li>Every 20 ms, the average of 16 potentiometer readings becomes a level from 0 to 100 %.</li>
+  <li>The servo on GPIO32 is the needle: 0 % = 0°, 100 % = 180°. It only moves when the angle changes by 2° or more, and each move prints <code>Level: 57 %  angle: 102</code>.</li>
+  <li>The alarm switches on at 90 % or more (<code>ALARM: tank almost full!</code>) and only switches off again below 88 % (<code>Alarm off</code>): hysteresis, like the night-light in lesson 3.1.</li>
+  <li>While the alarm is on, the passive buzzer on GPIO25 beeps at 2 Hz: 250 ms of a 2000 Hz tone, 250 ms of silence.</li>
+  <li>While the alarm is on, the LED on GPIO4 breathes (0 → 255 → 0, one step every 8 ms); otherwise it's off.</li>
+  <li>No <code>delay()</code>: the needle keeps following the knob smoothly even while the alarm is sounding.</li>
+</ol>
+
+<h3 id="project-parts">Parts and wiring</h3>
+<ul>
+  <li>ESP32 board, 10 kΩ potentiometer (GPIO34), LED + 220 Ω resistor (GPIO4): already on your breadboard</li>
+  <li>SG90 servo (signal on GPIO32; powered from the 5V pin, method 1 in <a href="#servo-power">Powering the servo</a>)</li>
+  <li>Passive buzzer (GPIO25)</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"POT","name":"10 kΩ potentiometer","img":"pot.svg","pins":[["VCC","outer leg"],["SIG","middle leg"],["GND","other outer leg"]]},
+    {"id":"SERVO","name":"SG90 servo","img":"servo.svg","pins":[["GND","brown wire"],["V+","red wire (+5 V)"],["SIG","orange wire (signal)"]]},
+    {"id":"BZ","name":"Passive buzzer","img":"buzzer.svg","pins":[["1","+ leg (or the longer one)"],["2","− leg"]]},
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO4 side"],["2","LED side"]]},
+    {"id":"LED1","name":"Red LED","img":"led.svg","pins":[["A","anode (+)"],["K","cathode (−)"]]}
+  ],
+  "wires":[["3V3","POT.VCC","red"],["GPIO34","POT.SIG","blue","level"],["POT.GND","GND","black"],["5V","SERVO.V+","red"],["GPIO32","SERVO.SIG","orange","PWM 50Hz"],["SERVO.GND","GND","black"],["GPIO25","BZ.1","orange","tone"],["BZ.2","GND","black"],["GPIO4","R1.1","orange","breathing"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>Tank gauge: the potentiometer (level stand-in) on 3V3 and GPIO34, the servo needle on 5V and GPIO32, the buzzer on GPIO25 and the LED on GPIO4. All grounds are connected together.</figcaption></div>
+
+<h3 id="project-start">Starter code</h3>
+<p>The starter sets everything up: the servo, both LEDC pins, and a <code>readLevel()</code> function that already returns 0 to 100. It compiles and prints <code>Tank gauge ready</code>, and then nothing happens. The core logic in <code>loop()</code> is yours; the TODO numbers match the requirements.</p>
+<div class="code" data-file="Tank_Gauge.ino" id="projStart"><pre>
+// Tank gauge: servo needle + overflow alarm (buzzer and breathing LED)
+#include &lt;ESP32Servo.h&gt;
+
+const int POT_PIN = 34;        // level sensor stand-in (ADC1)
+const int SERVO_PIN = 32;      // servo signal (orange wire)
+const int BUZZER_PIN = 25;     // passive buzzer
+const int LED_PIN = 4;         // status LED through 220 ohms
+const int ALARM_ON = 90;       // % at which the alarm starts
+const int ALARM_OFF = 88;      // % below which it stops (hysteresis)
+
+Servo needle;
+int lastAngle = -100;            // far away: the first angle is always written
+bool alarmOn = false;
+unsigned long lastServo = 0, lastBeep = 0, lastStep = 0;
+bool beepOn = false;
+int duty = 0, step = 1;
+
+int readLevel() {
+  long sum = 0;
+  for (int i = 0; i &lt; 16; i++) sum += analogRead(POT_PIN);
+  return map(sum / 16, 0, 4095, 0, 100);     // 0 ... 100 %
+}
+
+void setup() {
+  Serial.begin(115200);
+  needle.setPeriodHertz(50);
+  needle.attach(SERVO_PIN, 500, 2400);
+  ledcAttach(BUZZER_PIN, 2000, 10);
+  ledcAttach(LED_PIN, 5000, 8);
+  ledcWriteTone(BUZZER_PIN, 0);              // silent at start
+  ledcWrite(LED_PIN, 0);
+  Serial.println("Tank gauge ready");
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  // TODO 1: every 20 ms (lastServo) read the level with readLevel()
+  // TODO 2: 0-100 % -&gt; 0-180 degrees; write only if it moved 2 or more,
+  //         then print "Level: N %  angle: A"
+  // TODO 3: alarm on at level &gt;= ALARM_ON, off below ALARM_OFF
+  //         (when it turns off: silence, LED duty 0)
+  // TODO 4: alarm on: toggle a 2000 Hz tone every 250 ms (lastBeep, beepOn)
+  // TODO 5: alarm on: breathing LED, duty +/- 1 every 8 ms (lastStep)
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="8-9"><b class="what">Two thresholds.</b> <code>ALARM_ON</code> and <code>ALARM_OFF</code> are 2 % apart.
+    <span class="why">With a single threshold at 90, a knob (or water surface) resting at 89.9…90.1 would switch the alarm on and off many times a second. The gap is the "dead zone" from the night-light in 3.1.</span></li>
+  <li data-lines="14-16"><b class="what">One clock per job.</b> <code>lastServo</code>, <code>lastBeep</code> and <code>lastStep</code> are three separate timestamps; <code>beepOn</code>, <code>duty</code> and <code>step</code> remember where each job is.
+    <span class="why">Three jobs with three different rhythms (20, 250 and 8 ms) are just three copies of the <code>millis()</code> pattern, each with its own memory. Sharing one timestamp would tie them together.</span></li>
+  <li data-lines="24-33"><b class="what">Three PWM outputs, ready.</b> The servo gets 50 Hz through the library; the buzzer and the LED get their own LEDC settings.
+    <span class="why">In core 3.x, pins with different frequencies automatically get different LEDC timers, so the tone changes don't disturb the servo pulses or the LED brightness. The servo is attached <b>first</b> on purpose: the ESP32Servo library always takes LEDC channel 0 without asking the core, so if a <code>ledcAttach()</code> had already taken channel 0, the servo and the buzzer would end up sharing one channel.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>Open Wokwi, replace <code>diagram.json</code> with this one and paste the starter into <code>sketch.ino</code>. In Library Manager, add <code>ESP32Servo</code>. Drag the potentiometer knob; once the needle and the alarm work, turn it all the way up.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-potentiometer", "id": "pot1", "top": -40, "left": -170, "attrs": {}},
+    {"type": "wokwi-buzzer", "id": "bz1", "top": 100, "left": -170, "attrs": {"volume": "0.2"}},
+    {"type": "wokwi-servo", "id": "servo1", "top": -90, "left": 200, "attrs": {}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 130, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 60, "left": 200, "attrs": {"color": "red"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "bz1:1", "esp:25", "orange", [] ],
+    [ "bz1:2", "esp:GND.1", "black", [] ],
+    [ "servo1:GND", "esp:GND.2", "black", [] ],
+    [ "servo1:V+", "esp:5V", "red", [] ],
+    [ "servo1:PWM", "esp:32", "orange", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>Hint 1</summary>
+<p>TODOs 1 and 2 are <code>Pot_Servo</code> from this lesson, inside an <code>if (now - lastServo &gt;= 20)</code> block: <code>map(level, 0, 100, 0, 180)</code>, then the 2° deadband with <code>abs()</code>. Keep <code>level</code> inside the same block, because TODO 3 needs it.</p></details>
+<details class="hint"><summary>Hint 2</summary>
+<p>For TODO 3 you need two <code>if</code>s that can't both be true: <code>if (!alarmOn &amp;&amp; level &gt;= ALARM_ON) { … } else if (alarmOn &amp;&amp; level &lt; ALARM_OFF) { … }</code>. When the alarm turns off, clean up: <code>ledcWriteTone(BUZZER_PIN, 0)</code>, <code>ledcWrite(LED_PIN, 0)</code>, and reset <code>beepOn</code>, <code>duty</code> and <code>step</code> so the next alarm starts from the beginning.</p></details>
+<details class="hint"><summary>Hint 3</summary>
+<p>A 2 Hz beep means "toggle every 250 ms": <code>beepOn = !beepOn; ledcWriteTone(BUZZER_PIN, beepOn ? 2000 : 0);</code>. The breathing is exercise 1's answer without the button: <code>duty += step;</code> and reverse <code>step</code> at 0 and 255. Both belong inside <code>if (alarmOn)</code>.</p></details>
+
+<details class="expect"><summary>What should you see?</summary>
+<p>Turn the knob slowly from 0 to the end and back to about 80 %. The exact numbers depend on your knob; the order doesn't:</p>
+<pre class="serial">Tank gauge ready
+Level: 0 %  angle: 0
+Level: 12 %  angle: 21
+Level: 34 %  angle: 61
+...
+Level: 89 %  angle: 160
+Level: 90 %  angle: 162
+ALARM: tank almost full!
+Level: 100 %  angle: 180
+...
+Level: 87 %  angle: 156
+Alarm off
+Level: 80 %  angle: 144</pre>
+<ul>
+  <li>Requirement 2: the needle follows the knob smoothly, and when you stop, the <code>Level</code> lines stop too (no jitter lines).</li>
+  <li>Requirement 3: stop at 89 %: the alarm stays on. Only below 88 % do you see <code>Alarm off</code>. Going back up to 89 % doesn't start it again; only 90 % does.</li>
+  <li>Requirements 4 and 5: during the alarm you hear exactly 2 beeps per second, and one full breath of the LED (dark → bright → dark) takes about 4 seconds (2 × 255 steps × 8 ms).</li>
+  <li>Requirement 6: turn the knob quickly while it beeps: the needle follows without stuttering, and the beep rhythm doesn't change.</li>
+</ul>
+</details>
+
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="Tank_Gauge.ino" id="projAns"><pre>
+// Tank gauge: servo needle + overflow alarm (buzzer and breathing LED)
+#include &lt;ESP32Servo.h&gt;
+
+const int POT_PIN = 34;        // level sensor stand-in (ADC1)
+const int SERVO_PIN = 32;      // servo signal (orange wire)
+const int BUZZER_PIN = 25;     // passive buzzer
+const int LED_PIN = 4;         // status LED through 220 ohms
+const int ALARM_ON = 90;       // % at which the alarm starts
+const int ALARM_OFF = 88;      // % below which it stops (hysteresis)
+
+Servo needle;
+int lastAngle = -100;            // far away: the first angle is always written
+bool alarmOn = false;
+unsigned long lastServo = 0, lastBeep = 0, lastStep = 0;
+bool beepOn = false;
+int duty = 0, step = 1;
+
+int readLevel() {
+  long sum = 0;
+  for (int i = 0; i &lt; 16; i++) sum += analogRead(POT_PIN);
+  return map(sum / 16, 0, 4095, 0, 100);     // 0 ... 100 %
+}
+
+void setup() {
+  Serial.begin(115200);
+  needle.setPeriodHertz(50);
+  needle.attach(SERVO_PIN, 500, 2400);
+  ledcAttach(BUZZER_PIN, 2000, 10);
+  ledcAttach(LED_PIN, 5000, 8);
+  ledcWriteTone(BUZZER_PIN, 0);              // silent at start
+  ledcWrite(LED_PIN, 0);
+  Serial.println("Tank gauge ready");
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  // 1) every 20 ms: read the level and move the needle
+  if (now - lastServo &gt;= 20) {
+    lastServo = now;
+    int level = readLevel();
+    int angle = map(level, 0, 100, 0, 180);
+    if (abs(angle - lastAngle) &gt;= 2) {       // deadband against jitter
+      needle.write(angle);
+      lastAngle = angle;
+      Serial.printf("Level: %d %%  angle: %d\n", level, angle);
+    }
+    // 2) alarm with hysteresis
+    if (!alarmOn &amp;&amp; level &gt;= ALARM_ON) {
+      alarmOn = true;
+      Serial.println("ALARM: tank almost full!");
+    } else if (alarmOn &amp;&amp; level &lt; ALARM_OFF) {
+      alarmOn = false;
+      ledcWriteTone(BUZZER_PIN, 0);
+      beepOn = false;
+      ledcWrite(LED_PIN, 0);
+      duty = 0;
+      step = 1;
+      Serial.println("Alarm off");
+    }
+  }
+
+  if (alarmOn) {
+    // 3) beep at 2 Hz: 250 ms tone, 250 ms silence
+    if (now - lastBeep &gt;= 250) {
+      lastBeep = now;
+      beepOn = !beepOn;
+      ledcWriteTone(BUZZER_PIN, beepOn ? 2000 : 0);
+    }
+    // 4) breathing LED: one step every 8 ms
+    if (now - lastStep &gt;= 8) {
+      lastStep = now;
+      duty += step;
+      if (duty &lt;= 0 || duty &gt;= 255) step = -step;
+      ledcWrite(LED_PIN, duty);
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="18-22"><b class="what">Level in percent.</b> The average of 16 readings, turned into 0 to 100 with <code>map()</code>.
+    <span class="why">Thinking in percent keeps the rest of the program readable: "90" is clearly "almost full", while "3686" means nothing to anyone. If you swap in a real sensor later, only this function changes.</span></li>
+  <li data-lines="39-47"><b class="what">The needle, 50 times a second.</b> Every 20 ms: read, convert to an angle, and move only when the change is at least 2°. Each move prints a line.
+    <span class="why">20 ms is exactly one servo period (50 Hz); updating faster doesn't move the servo faster. The deadband from <code>Pot_Servo</code> stops the needle from trembling and the Serial Monitor from filling up.</span></li>
+  <li data-lines="48-60"><b class="what">Alarm with hysteresis.</b> On at 90 % and above, off below 88 %. When it switches off, the buzzer and the LED are silenced and the counters are reset.
+    <span class="why">The reset matters: if the alarm stopped in the middle of a breath (say duty 140, going down), the next alarm would start from there. Starting every alarm the same way makes the device feel predictable.</span></li>
+  <li data-lines="63-69"><b class="what">A 2 Hz beep.</b> Every 250 ms the buzzer toggles between a 2000 Hz tone and silence.
+    <span class="why">A tone of 250 ms + silence of 250 ms = one beep every 500 ms = 2 per second. A beeping alarm is easier to notice than a continuous tone, and much less annoying. 2000 Hz is in the range where the ear is most sensitive and small buzzers are loudest.</span></li>
+  <li data-lines="70-76"><b class="what">Breathing.</b> One step up or down every 8 ms; the direction flips at 0 and 255.
+    <span class="why">This is exercise 1's answer, with the button replaced by <code>alarmOn</code>. Because it's inside <code>if (alarmOn)</code>, the LED stays exactly where the "Alarm off" block left it: at 0.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p>The complete answer on the same circuit (add <code>ESP32Servo</code> in Library Manager). Turn the knob all the way up to hear the alarm; the buzzer volume in this diagram is set low (0.2).</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-potentiometer", "id": "pot1", "top": -40, "left": -170, "attrs": {}},
+    {"type": "wokwi-buzzer", "id": "bz1", "top": 100, "left": -170, "attrs": {"volume": "0.2"}},
+    {"type": "wokwi-servo", "id": "servo1", "top": -90, "left": 200, "attrs": {}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 130, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 60, "left": 200, "attrs": {"color": "red"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "bz1:1", "esp:25", "orange", [] ],
+    [ "bz1:2", "esp:GND.1", "black", [] ],
+    [ "servo1:GND", "esp:GND.2", "black", [] ],
+    [ "servo1:V+", "esp:5V", "red", [] ],
+    [ "servo1:PWM", "esp:32", "orange", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
   ],
   "dependencies": {}
 }</script>

@@ -726,6 +726,823 @@ void loop() {
 </details>
 </div>
 
+<h2 id="project">پروژه تمرینی: دماسنج BLE</h2>
+<div class="project">
+<p class="lede-ish">دماسنج‌های بلوتوثی تجاری (برای یخچال، اتاق کودک یا محفظه خزنده‌ها) همه یک جور کار می‌کنند: گوشی وصل می‌شود، مشترک دما می‌شود، و فقط وقتی دما واقعا عوض شد خبردار می‌شود؛ این کار باتری هر دو طرف را نگه می‌دارد. تو یکی از این‌ها را با DHT22 می‌سازی و یک آستانه هشدار قابل نوشتن هم اضافه می‌کنی: روی گوشی ۳۰ را بنویس، و هر وقت هوا از آن گرم‌تر بود LED روی برد روشن می‌شود، حتی بعد از رفتن گوشی.</p>
+
+<h3 id="project-req">خواسته‌ها</h3>
+<ol>
+  <li>برد با اسم <code>ESP32-Thermo</code> آگهی می‌دهد، با یک سرویس و دو characteristic: دما (read + notify) و آستانه (read + write). (در کد شروع آماده است.)</li>
+  <li>هر ۲ ثانیه DHT22 (GPIO13) خوانده می‌شود؛ خواندن ناموفق <code>DHT22 read error</code> چاپ می‌کند و رد می‌شود. characteristic دما همیشه آخرین مقدار را به شکل متن با یک رقم اعشار دارد، مثلا <code>23.4</code>.</li>
+  <li>notify فقط وقتی فرستاده می‌شود که گوشی وصل است و دما <b>بیشتر از ۰٫۲ درجه</b> با آخرین مقدار فرستاده‌شده فرق دارد؛ درست بعد از وصل شدن گوشی، مقدار فعلی در خواندن بعدی فرستاده می‌شود. هر notify خط <code>notify: 23.4</code> را چاپ می‌کند.</li>
+  <li>نوشتن آستانه: عددی از ۵ تا ۵۰ پذیرفته می‌شود (<code>New threshold: 30.0 C</code>)؛ هر چیز دیگری رد می‌شود (<code>Rejected threshold [abc]</code>) و مقدار قبلی می‌ماند. خواندن characteristic همیشه آستانه‌ای را که واقعا استفاده می‌شود برمی‌گرداند.</li>
+  <li>LED روی GPIO4 تا وقتی دما بالای آستانه است روشن و وگرنه خاموش است، با گوشی یا بدون آن.</li>
+  <li>بعد از قطع شدن، برد دوباره آگهی می‌دهد. (در کد شروع آماده است.)</li>
+</ol>
+
+<h3 id="project-parts">قطعه‌ها و سیم‌کشی</h3>
+<ul>
+  <li>برد ESP32 (ESP32 اصلی، یا ESP32-C3/S3: BLE روی همه‌شان کار می‌کند) و LED + ۲۲۰ اهم روی GPIO4</li>
+  <li>DHT22 روی GPIO13، مثل <a href="3-3.html#dht22">درس ۳.۳</a></li>
+  <li>گوشی با برنامه رایگان nRF Connect (اندروید یا آیفون)</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"DHTM","name":"ماژول DHT22 سه پایه","img":"dht22.svg","pins":[["+","VCC"],["OUT","DATA"],["-","GND"]]},
+    {"id":"R1","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","سمت GPIO4"],["2","سمت LED"]]},
+    {"id":"LED1","name":"LED قرمز (زیادی گرم)","img":"led.svg","pins":[["A","آند (+) پایه بلند"],["K","کاتد (−) پایه کوتاه"]]}
+  ],
+  "wires":[["3V3","DHTM.+","red"],["GPIO13","DHTM.OUT","blue","داده DHT"],["DHTM.-","GND","black"],["GPIO4","R1.1","orange","هشدار"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>دماسنج BLE: DHT22 روی GPIO13 و LED هشدار روی GPIO4. گوشی از راه بلوتوث و بدون سیم وصل می‌شود.</figcaption></div>
+
+<h3 id="project-start">کد شروع</h3>
+<p>کد شروع کل سرور GATT (سرویس، هر دو characteristic و descriptor ی 0x2902 برای notify) را می‌سازد و بعد از قطع شدن دوباره آگهی می‌دهد. کامپایل می‌شود و آگهی می‌دهد، ولی دما <code>--</code> می‌ماند و نوشتن آستانه هیچ کاری نمی‌کند. شماره TODOها با شماره خواسته‌ها یکی است.</p>
+<div class="code" data-file="BLE_Thermometer.ino" id="projStart"><pre>
+// دماسنج BLE: notify فقط برای تغییر واقعی، آستانه هشدار قابل نوشتن
+#include &lt;BLEDevice.h&gt;
+#include &lt;BLEServer.h&gt;
+#include &lt;BLEUtils.h&gt;
+#include &lt;BLE2902.h&gt;
+#include &lt;DHT.h&gt;
+
+// UUIDهای تازه برای این پروژه (با یک مولد UUID تصادفی ساخته شده‌اند)
+#define SERVICE_UUID  "6b1c2a10-4f3e-4d8a-9c55-2d1f0e7a9b01"
+#define TEMP_UUID     "6b1c2a11-4f3e-4d8a-9c55-2d1f0e7a9b01"
+#define THRESH_UUID   "6b1c2a12-4f3e-4d8a-9c55-2d1f0e7a9b01"
+
+const int LED_PIN = 4;                       // LED هشدار
+DHT dht(13, DHT22);
+BLEServer* pServer = nullptr;
+BLECharacteristic* pTempChar = nullptr;
+volatile bool deviceConnected = false;
+bool wasConnected = false;
+volatile float threshold = 28.0;             // گوشی آن را می‌نویسد
+float lastSent = -100;                       // عدد دور: اولین خواندن همیشه فرستاده می‌شود
+unsigned long lastRead = 0;
+
+class ServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* s) override {
+    deviceConnected = true;
+    Serial.println("Phone connected");
+  }
+  void onDisconnect(BLEServer* s) override {
+    deviceConnected = false;
+    Serial.println("Phone disconnected");
+  }
+};
+
+class ThreshCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* c) override {
+    // TODO 4: متن را بخوان، trim کن، toFloat(); فقط ۵ تا ۵۰ را بپذیر
+    //         ("New threshold: 30.0 C")، وگرنه "Rejected threshold [..]"؛
+    //         در آخر آستانه فعلی را با setValue() بگذار
+  }
+};
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  dht.begin();
+
+  BLEDevice::init("ESP32-Thermo");
+  pServer = BLEDevice::createServer();
+  pServer-&gt;setCallbacks(new ServerCallbacks());
+  BLEService* service = pServer-&gt;createService(SERVICE_UUID);
+
+  pTempChar = service-&gt;createCharacteristic(
+      TEMP_UUID,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+  pTempChar-&gt;addDescriptor(new BLE2902());
+  pTempChar-&gt;setValue("--");
+
+  BLECharacteristic* pThresh = service-&gt;createCharacteristic(
+      THRESH_UUID,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
+  pThresh-&gt;setCallbacks(new ThreshCallbacks());
+  pThresh-&gt;setValue("28.0");
+
+  service-&gt;start();
+  BLEAdvertising* adv = BLEDevice::getAdvertising();
+  adv-&gt;addServiceUUID(SERVICE_UUID);
+  adv-&gt;setScanResponse(true);
+  BLEDevice::startAdvertising();
+  Serial.println("Advertising as ESP32-Thermo ...");
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  // TODO 2: هر ۲ ثانیه دما را بخوان؛ اگر nan بود "DHT22 read error" چاپ کن؛
+  //         وگرنه آن را به شکل متن با یک رقم اعشار ("23.4") با setValue() بگذار
+  // TODO 5: اگر t &gt; threshold بود LED روشن، وگرنه خاموش
+  // TODO 3: اگر وصل است و |t - lastSent| &gt; 0.2: notify()، lastSent = t،
+  //         و "notify: 23.4" را چاپ کن
+
+  // ۲) گوشی رفت؟ دوباره آگهی کن
+  if (!deviceConnected &amp;&amp; wasConnected) {
+    delay(500);
+    pServer-&gt;startAdvertising();
+    Serial.println("Advertising again");
+    wasConnected = false;
+  }
+  if (deviceConnected &amp;&amp; !wasConnected) {
+    wasConnected = true;
+    lastSent = -100;                         // گوشی تازه: مقدار فعلی را زود بفرست
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="8-11"><b class="what">UUIDهای تازه.</b> این پروژه شناسه‌های سرویس و characteristic خودش را دارد، متفاوت با <code>BLE_LED_Counter</code>.
+    <span class="why">nRF Connect چیزهایی را که درباره یک UUID یاد گرفته به خاطر می‌سپارد. استفاده دوباره از شناسه‌های درس برای دستگاهی که رفتار دیگری دارد فقط گیج‌کننده است. سه شناسه این‌جا فقط در یک رقم فرق دارند، تا در برنامه راحت به شکل یک خانواده شناخته شوند.</span></li>
+  <li data-lines="19-20"><b class="what">دو مقدار مشترک.</b> <code>threshold</code> از callback بلوتوث نوشته و در loop خوانده می‌شود، پس <code>volatile</code> است. <code>lastSent</code> از یک عدد دور (منفی ۱۰۰) شروع می‌کند.
+    <span class="why">callback در وظیفه بلوتوث اجرا می‌شود و loop در وظیفه خودش؛ <code>volatile</code> به کامپایلر می‌گوید هر بار واقعا متغیر را بخواند. با <code>lastSent</code> روی منفی ۱۰۰، اولین دمای واقعی همیشه «تغییر بیشتر از ۰٫۲» حساب می‌شود.</span></li>
+  <li data-lines="34-40"><b class="what">onWrite تو.</b> وقتی گوشی در characteristic آستانه می‌نویسد، کتابخانه این را صدا می‌زند.
+    <span class="why">کوتاهش نگه دار: بررسی، ذخیره، چاپ. کار سنگین در callback بلوتوث خود پشته بلوتوث را معطل می‌کند.</span></li>
+</ol>
+<div class="callout warn"><div class="ct">روی برد خودت بساز</div>
+<p>Wokwi نمی‌تواند بلوتوث را شبیه‌سازی کند، پس این پروژه یک ESP32 واقعی، DHT22 و LED نقشه بالا و یک گوشی با nRF Connect لازم دارد (قدم‌ها در <a href="#ble">بخش ب همین درس</a> هستند). بخش DHT22 (خواندن، LED و منطق آستانه) را بدون گوشی هم در Serial Monitor می‌بینی.</p></div>
+
+<details class="hint"><summary>راهنمایی ۱</summary>
+<p>TODO 2: بلوک ۲ ثانیه‌ای درس ۳.۳. عدد اعشاری را با <code>String(t, 1)</code> به متن تبدیل کن (آرگومان دوم تعداد رقم اعشار است) و آن را در هر خواندن سالم با <code>pTempChar-&gt;setValue(msg)</code> ذخیره کن، نه فقط وقتی notify می‌فرستی. این‌طوری یک <b>Read</b> ساده در برنامه همیشه به‌روز است.</p></details>
+<details class="hint"><summary>راهنمایی ۲</summary>
+<p>TODO 3: «بیشتر از ۰٫۲ فاصله» یعنی <code>fabs(t - lastSent) &gt; 0.2</code> (<code>fabs</code> همان <code>abs</code> برای عدد اعشاری است). <code>lastSent</code> را فقط بعد از <code>notify()</code> به‌روز کن. DHT22 با پله‌های ۰٫۱ درجه گزارش می‌دهد، پس ۲۳٫۴ ← ۲۳٫۵ ← ۲۳٫۶ چیزی نمی‌فرستد و ۲۳٫۷ اولین تغییری است که بیرون می‌رود.</p></details>
+<details class="hint"><summary>راهنمایی ۳</summary>
+<p>TODO 4 همان الگوی <code>LedCallbacks</code> است، با عدد: <code>String v = c-&gt;getValue(); v.trim(); float x = v.toFloat();</code>. متنی که عدد نیست ۰٫۰ می‌دهد، پس بازه ۵ تا ۵۰ آن را هم رد می‌کند. با <code>c-&gt;setValue(String(threshold, 1));</code> تمام کن تا یک Read مقداری را نشان دهد که برد واقعا استفاده می‌کند.</p></details>
+
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>با nRF Connect وصل شو، notify را روی characteristic دما روشن کن (آیکون سه فلش)، روی سنسور ها کن، بعد <code>30</code> و <code>abc</code> (به شکل متن UTF-8) را در آستانه بنویس:</p>
+<pre class="serial">Advertising as ESP32-Thermo ...
+Phone connected
+notify: 22.8
+notify: 23.1
+notify: 24.6
+notify: 26.0
+New threshold: 30.0 C
+Rejected threshold [abc]
+notify: 25.7
+Phone disconnected
+Advertising again</pre>
+<ul>
+  <li>خواسته ۳: وقتی به سنسور دست نمی‌زنی، notifyها کاملا قطع می‌شوند (دمای یک اتاق به ندرت در یک دقیقه بیشتر از ۰٫۲ درجه عوض می‌شود)، ولی Read همچنان مقدار فعلی را نشان می‌دهد.</li>
+  <li>خواسته ۳: قطع و دوباره وصل کن: مقدار فعلی در کمتر از ۲ ثانیه می‌رسد، حتی اگر عوض نشده باشد.</li>
+  <li>خواسته‌های ۴ و ۵: با پیش‌فرض ۲۸٫۰، ها کردن روی DHT22 می‌تواند LED را روشن کند؛ بعد از نوشتن ۳۰، LED در خواندن بعدی خاموش می‌شود (مگر دما بالای ۳۰ باشد). خواندن آستانه بعد از <code>abc</code>، <code>30.0</code> نشان می‌دهد.</li>
+  <li>خواسته ۵: برنامه گوشی را ببند: LED بدون گوشی هم از آستانه پیروی می‌کند.</li>
+</ul>
+<p><b>اگر کار نکرد:</b> اگر هیچ notify ی نمی‌رسد، notify در برنامه روشن نشده (یا descriptor ی 0x2902 نیست)؛ اگر اسم یا characteristicهای قدیمی در فهرست است، گوشی آن‌ها را نگه داشته، پس بلوتوث را خاموش و روشن کن؛ خطای <code>Sketch too big</code> با انتخاب <b>Huge APP</b> به عنوان Partition Scheme حل می‌شود (جدول <a href="#debug">عیب‌یابی</a> را ببین).</p>
+</details>
+
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="BLE_Thermometer.ino" id="projAns"><pre>
+// دماسنج BLE: notify فقط برای تغییر واقعی، آستانه هشدار قابل نوشتن
+#include &lt;BLEDevice.h&gt;
+#include &lt;BLEServer.h&gt;
+#include &lt;BLEUtils.h&gt;
+#include &lt;BLE2902.h&gt;
+#include &lt;DHT.h&gt;
+
+// UUIDهای تازه برای این پروژه (با یک مولد UUID تصادفی ساخته شده‌اند)
+#define SERVICE_UUID  "6b1c2a10-4f3e-4d8a-9c55-2d1f0e7a9b01"
+#define TEMP_UUID     "6b1c2a11-4f3e-4d8a-9c55-2d1f0e7a9b01"
+#define THRESH_UUID   "6b1c2a12-4f3e-4d8a-9c55-2d1f0e7a9b01"
+
+const int LED_PIN = 4;                       // LED هشدار
+DHT dht(13, DHT22);
+BLEServer* pServer = nullptr;
+BLECharacteristic* pTempChar = nullptr;
+volatile bool deviceConnected = false;
+bool wasConnected = false;
+volatile float threshold = 28.0;             // گوشی آن را می‌نویسد
+float lastSent = -100;                       // عدد دور: اولین خواندن همیشه فرستاده می‌شود
+unsigned long lastRead = 0;
+
+class ServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* s) override {
+    deviceConnected = true;
+    Serial.println("Phone connected");
+  }
+  void onDisconnect(BLEServer* s) override {
+    deviceConnected = false;
+    Serial.println("Phone disconnected");
+  }
+};
+
+class ThreshCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* c) override {
+    String v = c-&gt;getValue();
+    v.trim();
+    float x = v.toFloat();                   // "abc" می‌شود 0.0
+    if (x &gt;= 5 &amp;&amp; x &lt;= 50) {
+      threshold = x;
+      Serial.printf("New threshold: %.1f C\n", x);
+    } else {
+      Serial.printf("Rejected threshold [%s]\n", v.c_str());
+    }
+    c-&gt;setValue(String(threshold, 1));       // خواندن دوباره = مقداری که واقعا استفاده می‌شود
+  }
+};
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  dht.begin();
+
+  BLEDevice::init("ESP32-Thermo");
+  pServer = BLEDevice::createServer();
+  pServer-&gt;setCallbacks(new ServerCallbacks());
+  BLEService* service = pServer-&gt;createService(SERVICE_UUID);
+
+  pTempChar = service-&gt;createCharacteristic(
+      TEMP_UUID,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+  pTempChar-&gt;addDescriptor(new BLE2902());
+  pTempChar-&gt;setValue("--");
+
+  BLECharacteristic* pThresh = service-&gt;createCharacteristic(
+      THRESH_UUID,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
+  pThresh-&gt;setCallbacks(new ThreshCallbacks());
+  pThresh-&gt;setValue("28.0");
+
+  service-&gt;start();
+  BLEAdvertising* adv = BLEDevice::getAdvertising();
+  adv-&gt;addServiceUUID(SERVICE_UUID);
+  adv-&gt;setScanResponse(true);
+  BLEDevice::startAdvertising();
+  Serial.println("Advertising as ESP32-Thermo ...");
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  // ۱) هر ۲ ثانیه: خواندن، LED هشدار، notify برای تغییر واقعی
+  if (now - lastRead &gt;= 2000) {
+    lastRead = now;
+    float t = dht.readTemperature();
+    if (isnan(t)) {
+      Serial.println("DHT22 read error");
+    } else {
+      digitalWrite(LED_PIN, t &gt; threshold ? HIGH : LOW);
+      String msg = String(t, 1);             // "23.4"
+      pTempChar-&gt;setValue(msg);              // همیشه قابل خواندن
+      if (deviceConnected &amp;&amp; fabs(t - lastSent) &gt; 0.2) {
+        pTempChar-&gt;notify();
+        lastSent = t;
+        Serial.println("notify: " + msg);
+      }
+    }
+  }
+
+  // ۲) گوشی رفت؟ دوباره آگهی کن
+  if (!deviceConnected &amp;&amp; wasConnected) {
+    delay(500);
+    pServer-&gt;startAdvertising();
+    Serial.println("Advertising again");
+    wasConnected = false;
+  }
+  if (deviceConnected &amp;&amp; !wasConnected) {
+    wasConnected = true;
+    lastSent = -100;                         // گوشی تازه: مقدار فعلی را زود بفرست
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="34-47"><b class="what">callback آستانه.</b> متن را بخوان، تمیزش کن و به عدد تبدیلش کن. ۵ تا ۵۰ پذیرفته و بقیه رد می‌شوند؛ در هر دو حالت characteristic به مقداری که واقعا استفاده می‌شود برمی‌گردد.
+    <span class="why">بدون خط آخر، یک <code>abc</code> ی رد شده در characteristic می‌ماند و Read بعدی در برنامه <code>abc</code> نشان می‌داد، در حالی که برد از ۳۰ استفاده می‌کند. مقداری که گوشی می‌بیند همیشه باید حقیقت باشد.</span></li>
+  <li data-lines="83-91"><b class="what">خواندن و LED.</b> هر ۲ ثانیه؛ یک خواندن سالم LED را عوض می‌کند و مقدار characteristic را به‌روز می‌کند.
+    <span class="why">LED فقط به سنسور و آستانه بستگی دارد، نه به اتصال. دماسنج باید کار اصلی‌اش را وقتی کسی نگاهش نمی‌کند هم انجام دهد.</span></li>
+  <li data-lines="92-96"><b class="what">notify برای تغییر واقعی.</b> فقط وقتی وصل است و بیشتر از ۰٫۲ درجه با آخرین مقدار فرستاده‌شده فاصله دارد؛ بعد همان مقدار را به خاطر بسپار.
+    <span class="why">مقایسه با آخرین مقدار <b>فرستاده‌شده</b> (نه آخرین خواندن) است که تغییرهای آرام را می‌گیرد: ۰٫۱ درجه در هر دقیقه بین دو خواندن هیچ‌وقت تغییر حساب نمی‌شد، ولی بعد از سه دقیقه ۰٫۳ با چیزی که گوشی می‌داند فاصله دارد و یک notify بیرون می‌رود. notify کمتر یعنی زمان رادیوی کمتر و عمر باتری بیشتر برای هر دو دستگاه.</span></li>
+  <li data-lines="100-110"><b class="what">بعد از قطع شدن.</b> دوباره آگهی کن؛ در اتصال تازه <code>lastSent</code> را به اول برگردان.
+    <span class="why">گوشی تازه‌وصل‌شده هیچ چیزی نمی‌داند، پس این برگرداندن خواندن بعدی را «تغییر» می‌کند و فورا فرستاده می‌شود. بدون آن، یک گوشی تازه ممکن بود مدت زیادی منتظر اولین عددش بماند.</span></li>
+</ol>
+</details>
+</div>
+
+<h2 id="capstone">پروژه پایانی فصل ۴: چراغ هوشمند</h2>
+<div class="project">
+<p class="lede-ish">یک چراغ هوشمند واقعی را می‌شود از یک صفحه وب روی هر دستگاهی در خانه، از برنامه گوشی با بلوتوث وقتی Wi-Fi قطع است، و با یک زمان‌سنج که عصرها روشنش می‌کند، کنترل کرد. سختی کار هیچ‌کدام از این‌ها به تنهایی نیست؛ هماهنگ نگه داشتنشان است. روی گوشی خاموشش کن، صفحه وب باید یک ثانیه بعد «خاموش» نشان دهد؛ در مرورگر روشنش کن، گوشی باید خبردار شود. این پروژه کل فصل ۴ را کنار هم می‌گذارد: اتصال Wi-Fi مقاوم و ساعت NTP (۴.۱)، وب سرور با API (۴.۲) و یک characteristic ی BLE با notify (۴.۳)، همه دور <b>یک</b> وضعیت مشترک.</p>
+
+<h3 id="capstone-req">خواسته‌ها</h3>
+<ol>
+  <li>برد به Wi-Fi وصل می‌شود (سقف ۲۰ ثانیه و بعد ریست)، در <code>http://smartlamp.local</code> جواب می‌دهد و ساعتش را با NTP در منطقه زمانی تو تنظیم می‌کند. (در کد شروع آماده است.)</li>
+  <li><code>setLamp()</code> تنها تابعی است که پین چراغ (GPIO4) را می‌نویسد. اگر چراغ از قبل در همان وضعیت است کاری نمی‌کند؛ وگرنه منبع را چاپ می‌کند، مثلا <code>[web] lamp ON</code>، <code>[ble] lamp OFF</code> یا <code>[schedule] lamp ON</code>.</li>
+  <li>همه فرمان‌ها از یک تابع می‌گذرند، <code>applyCommand(cmd, source)</code>: <code>on</code> و <code>off</code> چراغ را عوض و حالت را دستی می‌کنند؛ <code>auto</code> کنترل را به برنامه زمانی برمی‌گرداند و فورا اعمالش می‌کند؛ هر کلمه دیگری <code>false</code> برمی‌گرداند.</li>
+  <li>در حالت خودکار، چراغ از <code>ON_HOUR</code> (۱۹:۰۰) تا <code>OFF_HOUR</code> (۲۳:۰۰) به وقت محلی روشن است و ثانیه‌ای یک بار بررسی می‌شود. قبل از جواب NTP، برنامه زمانی به چراغ دست نمی‌زند.</li>
+  <li>BLE: دستگاه با اسم <code>ESP32-Lamp</code> و یک characteristic (read، write، notify) آگهی می‌دهد. مقدارش همیشه وضعیت فعلی به شکل متن است، <code>on,auto</code> یا <code>off,manual</code>، و بعد از هر تغییر از <b>هر</b> منبعی (وب، گوشی یا برنامه زمانی) گوشی یک notify می‌گیرد.</li>
+  <li>callback نوشتن BLE فقط یک یادداشت در <code>bleCmd</code> می‌گذارد؛ کار اصلی را loop انجام می‌دهد. یک کلمه ناشناخته <code>[ble] unknown command</code> چاپ می‌کند.</li>
+  <li>صفحه وب (آماده) دکمه‌های ON، OFF و AUTO دارد و چراغ، حالت و ساعت را نشان می‌دهد؛ <code>POST /api/lamp?cmd=…</code> با وضعیت تازه جواب می‌دهد، یا با ۴۰۰ برای فرمان ناشناخته. تغییری که روی گوشی داده شود در کمتر از یک ثانیه روی صفحه می‌آید.</li>
+</ol>
+
+<h3 id="capstone-parts">قطعه‌ها و سیم‌کشی</h3>
+<ul>
+  <li>برد ESP32 (ESP32 اصلی که هم Wi-Fi و هم BLE دارد) و LED + ۲۲۰ اهم روی GPIO4 به عنوان چراغ</li>
+  <li>اختیاری: ماژول رله <a href="3-4.html#relay">درس ۳.۴</a> روی GPIO26 برای یک چراغ کم‌ولتاژ واقعی؛ در این صورت <code>LAMP_PIN</code> را ۲۶ بگذار و پین را با منطق <code>setRelay()</code> بنویس (بیشتر ماژول‌ها با LOW روشن می‌شوند)</li>
+  <li>گوشی با nRF Connect و یک مرورگر روی همان شبکه ۲٫۴ گیگاهرتز</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"R1","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","سمت GPIO4"],["2","سمت LED"]]},
+    {"id":"LED1","name":"LED سفید یا زرد (چراغ)","img":"led.svg","pins":[["A","آند (+) پایه بلند"],["K","کاتد (−) پایه کوتاه"]]}
+  ],
+  "wires":[["GPIO4","R1.1","orange","چراغ"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>چراغ هوشمند: سخت‌افزارش فقط LED چراغ روی GPIO4 است. بقیه چیزها (صفحه، گوشی، ساعت) از راه هوا می‌رسند.</figcaption></div>
+
+<h3 id="capstone-start">کد شروع</h3>
+<p>کد شروع اتصال، NTP، صفحه وب و مسیرهایش، راه‌اندازی کامل BLE و <code>publishState()</code> را دارد. کامپایل می‌شود و صفحه را نشان می‌دهد، ولی هیچ چیزی را عوض نمی‌کند. شماره TODOها با شماره خواسته‌ها یکی است. <b>قبل از آپلود:</b> <code>Tools › Partition Scheme › Huge APP (3MB No OTA/1MB SPIFFS)</code> را انتخاب کن. Wi-Fi، وب سرور و بلوتوث با هم حدود ۱٫۷ مگابایت‌اند و در فضای برنامه پیش‌فرض ۱٫۲ مگابایتی جا نمی‌شوند (خطای <code>Sketch too big</code> می‌گرفتی)؛ درس ۵.۵ پارتیشن‌ها را کامل توضیح می‌دهد.</p>
+<div class="code" data-file="Smart_Lamp.ino" id="capStart"><pre>
+// چراغ هوشمند: صفحه وب + BLE + برنامه زمانی NTP، یک وضعیت مشترک
+// Tools &gt; Partition Scheme &gt; Huge APP (Wi-Fi + BLE در 1.2 مگابایت جا نمی‌شوند)
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;ESPmDNS.h&gt;
+#include &lt;time.h&gt;
+#include &lt;BLEDevice.h&gt;
+#include &lt;BLEServer.h&gt;
+#include &lt;BLEUtils.h&gt;
+#include &lt;BLE2902.h&gt;
+
+const char* WIFI_SSID = "Home";             // اسم شبکه تو
+const char* WIFI_PASS = "your-password";    // رمز شبکه تو
+const char* TZ_INFO = "EST5EDT,M3.2.0,M11.1.0"; // تورنتو/نیویورک: مال خودت را بگذار
+const int LAMP_PIN = 4;                     // چراغ (LED؛ یا رله، درس ۳.۴)
+const int ON_HOUR = 19;                     // حالت خودکار: روشن از 19:00 ...
+const int OFF_HOUR = 23;                    // ... تا 23:00
+
+#define SERVICE_UUID "8f3a0c20-1b7d-4e61-a7c2-5d9e4b3f6a10"
+#define LAMP_UUID    "8f3a0c21-1b7d-4e61-a7c2-5d9e4b3f6a10"
+
+WebServer server(80);
+BLEServer* pServer = nullptr;
+BLECharacteristic* pLampChar = nullptr;
+volatile bool deviceConnected = false;
+bool wasConnected = false;
+volatile int bleCmd = 0;                    // 0 هیچ، 1 روشن، 2 خاموش، 3 خودکار، -1 نامعتبر
+
+bool lampOn = false;
+bool autoMode = true;
+unsigned long lastSchedule = 0;
+
+String stateText() {                        // "on,auto" یا "off,manual"
+  return String(lampOn ? "on" : "off") + (autoMode ? ",auto" : ",manual");
+}
+
+void publishState() {                       // به گوشی خبر بده
+  pLampChar-&gt;setValue(stateText());
+  if (deviceConnected) pLampChar-&gt;notify();
+}
+
+void setLamp(bool on, const char* source) { // تنها جایی که پین را می‌نویسد
+  // TODO 2: فقط در تغییر واقعی: lampOn = on، LAMP_PIN را بنویس،
+  //         "[web] lamp ON" چاپ کن
+}
+
+void runSchedule() {
+  // TODO 4: اگر ساعت نداریم return؛ وگرنه چراغ از ON_HOUR
+  //         تا OFF_HOUR روشن، با منبع "schedule"
+}
+
+bool applyCommand(const String&amp; cmd, const char* source) {
+  // TODO 3: "on"/"off" یعنی حالت دستی + setLamp؛ "auto" یعنی حالت خودکار،
+  //         runSchedule()؛ ناشناخته: return false؛ بعد publishState()
+  return false;
+}
+
+class ServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* s) override { deviceConnected = true; }
+  void onDisconnect(BLEServer* s) override { deviceConnected = false; }
+};
+
+class LampCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* c) override {
+    // TODO 6: فقط یادداشت بگذار: bleCmd = 1 (on)، 2 (off)، 3 (auto)، -1 (بقیه)
+  }
+};
+
+const char INDEX_HTML[] PROGMEM = R"rawliteral(
+&lt;!DOCTYPE html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+&lt;meta charset="utf-8"&gt;
+&lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;
+&lt;title&gt;Smart lamp&lt;/title&gt;
+&lt;style&gt;
+  body { font-family: sans-serif; text-align: center; background: #f2f4f8; }
+  .card { background: #fff; max-width: 340px; margin: 14px auto; padding: 12px; border-radius: 12px; }
+  button { font-size: 18px; padding: 8px 18px; margin: 4px; border: 0; border-radius: 8px; }
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;h1&gt;Smart lamp&lt;/h1&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;Lamp: &lt;span id="lamp"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;p&gt;Mode: &lt;b id="mode"&gt;?&lt;/b&gt; &amp;middot; Time: &lt;span id="time"&gt;?&lt;/span&gt;&lt;/p&gt;
+  &lt;button onclick="send('on')"&gt;ON&lt;/button&gt;
+  &lt;button onclick="send('off')"&gt;OFF&lt;/button&gt;
+  &lt;button onclick="send('auto')"&gt;AUTO&lt;/button&gt;
+&lt;/div&gt;
+&lt;script&gt;
+function show(s) {
+  document.getElementById('lamp').textContent = s.lamp ? 'ON' : 'OFF';
+  document.getElementById('mode').textContent = s.auto ? 'auto' : 'manual';
+  document.getElementById('time').textContent = s.time;
+}
+function refresh() {
+  fetch('/api/state').then(r =&gt; r.json()).then(show)
+    .catch(e =&gt; console.log('ESP32 unreachable', e));
+}
+function send(cmd) {
+  fetch('/api/lamp?cmd=' + cmd, { method: 'POST' }).then(r =&gt; r.json()).then(show);
+}
+refresh();
+setInterval(refresh, 1000);
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+)rawliteral";
+
+String stateJson() {
+  char clock[9] = "--:--:--";
+  struct tm t;
+  if (getLocalTime(&amp;t, 10)) strftime(clock, sizeof(clock), "%H:%M:%S", &amp;t);
+  String json = "{\"lamp\":";
+  json += lampOn ? "true" : "false";
+  json += ",\"auto\":";
+  json += autoMode ? "true" : "false";
+  json += ",\"time\":\"";
+  json += clock;
+  json += "\"}";
+  return json;                              // مثلا {"lamp":true,"auto":false,"time":"19:04:10"}
+}
+
+void handleRoot()  { server.send(200, "text/html; charset=utf-8", INDEX_HTML); }
+void handleState() { server.send(200, "application/json", stateJson()); }
+void handleLamp() {
+  if (!applyCommand(server.arg("cmd"), "web")) {
+    server.send(400, "text/plain", "cmd must be on, off or auto");
+    return;
+  }
+  handleState();
+}
+void handleNotFound() { server.send(404, "text/plain", "404: Not Found"); }
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LAMP_PIN, OUTPUT);
+  digitalWrite(LAMP_PIN, LOW);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting");
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - start &lt; 20000) {
+    delay(500);
+    Serial.print(".");
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nWiFi failed -&gt; restart in 5 s");
+    delay(5000);
+    ESP.restart();
+  }
+  Serial.print("\nOpen http://");
+  Serial.println(WiFi.localIP());
+  if (MDNS.begin("smartlamp")) Serial.println("or   http://smartlamp.local");
+  configTzTime(TZ_INFO, "pool.ntp.org", "time.google.com");
+
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/api/state", HTTP_GET, handleState);
+  server.on("/api/lamp", HTTP_POST, handleLamp);
+  server.onNotFound(handleNotFound);
+  server.begin();
+
+  BLEDevice::init("ESP32-Lamp");
+  pServer = BLEDevice::createServer();
+  pServer-&gt;setCallbacks(new ServerCallbacks());
+  BLEService* service = pServer-&gt;createService(SERVICE_UUID);
+  pLampChar = service-&gt;createCharacteristic(
+      LAMP_UUID,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE |
+      BLECharacteristic::PROPERTY_NOTIFY);
+  pLampChar-&gt;addDescriptor(new BLE2902());
+  pLampChar-&gt;setCallbacks(new LampCallbacks());
+  service-&gt;start();
+  BLEAdvertising* adv = BLEDevice::getAdvertising();
+  adv-&gt;addServiceUUID(SERVICE_UUID);
+  adv-&gt;setScanResponse(true);
+  BLEDevice::startAdvertising();
+  publishState();
+  Serial.println("BLE: advertising as ESP32-Lamp");
+}
+
+void loop() {
+  server.handleClient();
+
+  // TODO 6: اگر bleCmd != 0: صفرش کن و applyCommand(..., "ble") را اجرا کن؛
+  //         برای -1: "[ble] unknown command" چاپ کن و publishState()
+  // TODO 4: حالت خودکار: ثانیه‌ای یک بار runSchedule()؛ با تغییر publishState()
+
+  // ۳) گوشی رفت؟ دوباره آگهی کن
+  if (!deviceConnected &amp;&amp; wasConnected) {
+    delay(500);
+    pServer-&gt;startAdvertising();
+    wasConnected = false;
+  }
+  if (deviceConnected &amp;&amp; !wasConnected) wasConnected = true;
+
+  delay(2);
+}
+</pre></div>
+<ol class="walk" data-for="capStart">
+  <li data-lines="27"><b class="what">صندوق یادداشت برای بلوتوث.</b> <code>bleCmd</code> عددی است که callback ی BLE می‌نویسد و loop می‌خواند: ۰ یعنی «خبر تازه‌ای نیست».
+    <span class="why">callback ی BLE در وظیفه بلوتوث اجرا می‌شود و handlerهای وب داخل loop. اگر هر دو می‌توانستند مستقیم <code>setLamp()</code> را صدا بزنند، دو وظیفه ممکن بود هم‌زمان چراغ و متن وضعیت را عوض کنند. با صندوق یادداشت، هر تغییری در loop و یکی پس از دیگری انجام می‌شود. همان ایده <code>wifiUp</code> در دفترچه قطعی‌های درس ۴.۱ است.</span></li>
+  <li data-lines="29-40"><b class="what">یک وضعیت، یک پیام.</b> <code>lampOn</code> و <code>autoMode</code> کل وضعیت‌اند. <code>stateText()</code> آن‌ها را به <code>on,auto</code> و مشابهش تبدیل می‌کند؛ <code>publishState()</code> آن را در characteristic می‌گذارد و به گوشی وصل‌شده notify می‌فرستد.
+    <span class="why">صفحه وب همین دو متغیر را از راه <code>/api/state</code> می‌خواند. چون هر دو «صفحه نمایش» یک وضعیت را می‌خوانند، نمی‌توانند با هم اختلاف داشته باشند؛ فقط ممکن است یک لحظه عقب‌تر باشند.</span></li>
+  <li data-lines="42-56"><b class="what">سه تابع خالی.</b> <code>setLamp()</code>، <code>runSchedule()</code> و <code>applyCommand()</code> مغز چراغ هستند؛ آن‌ها را تو می‌نویسی.
+    <span class="why">handler ی وب از قبل <code>applyCommand(…, "web")</code> را صدا می‌زند، و <code>return false</code> کد شروع دلیل این است که فعلا هر فشار دکمه ۴۰۰ می‌گیرد. وقتی تابع تو برای سه کلمه <code>true</code> برگرداند، صفحه کار می‌کند.</span></li>
+</ol>
+<div class="callout warn"><div class="ct">روی برد خودت بساز</div>
+<p>این پروژه ESP32 واقعی لازم دارد: Wokwi نمی‌تواند بلوتوث را شبیه‌سازی کند، و Wi-Fi رایگانش نمی‌تواند صفحه وب برد را در مرورگر تو باز کند. برد با LED چراغ، گوشی با nRF Connect و یک مرورگر روی همان شبکه لازم داری. مرحله به مرحله امتحان کن: اول بخش وب (خواسته‌های ۲ تا ۴ و ۷)، بعد بلوتوث (۵ و ۶).</p></div>
+
+<details class="hint"><summary>راهنمایی ۱</summary>
+<p><code>setLamp()</code> همان تابع پروژه چراغ خواب تحت وب است: <code>if (on == lampOn) return;</code>، بعد ذخیره، نوشتن پین و چاپ با <code>Serial.printf("[%s] lamp %s\n", source, …)</code>. برای <code>runSchedule()</code> از <code>getLocalTime(&amp;t, 10)</code> استفاده کن و اگر شکست خورد <code>return</code> کن؛ چراغ باید وقتی روشن باشد که <code>t.tm_hour &gt;= ON_HOUR &amp;&amp; t.tm_hour &lt; OFF_HOUR</code> (این بازه از نیمه‌شب رد نمی‌شود، پس <b>و</b> است).</p></details>
+<details class="hint"><summary>راهنمایی ۲</summary>
+<p><code>applyCommand()</code>: یک زنجیره <code>if / else if</code> روی سه کلمه، با <code>else return false;</code> در آخر. بعد از زنجیره (یعنی فقط برای کلمه‌های معتبر) <code>publishState()</code> را صدا بزن و <code>return true</code>. همین یک <code>publishState()</code> است که گوشی را بعد از فرمان وب، فرمان گوشی و رفتن به حالت خودکار به‌روز نگه می‌دارد.</p></details>
+<details class="hint"><summary>راهنمایی ۳</summary>
+<p>در loop اول یادداشت را کپی کن: <code>int cmd = bleCmd; if (cmd != 0) { bleCmd = 0; … }</code>، بعد <code>applyCommand("on", "ble")</code> و مانند آن را صدا بزن. برای برنامه زمانی، <code>lampOn</code> را قبل از <code>runSchedule()</code> نگه دار و فقط اگر عوض شد <code>publishState()</code> را صدا بزن؛ وگرنه گوشی هر ثانیه یک notify می‌گرفت.</p></details>
+
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>Serial Monitor در ساعت ۱۸:۵۹، با صفحه باز و nRF Connect وصل با notify روشن. در صفحه اول ON و بعد OFF را بزن، از گوشی <code>auto</code> را بنویس، تا ساعت ۱۹:۰۰ صبر کن و بعد <code>blink</code> را بنویس:</p>
+<pre class="serial">Connecting....
+Open http://192.168.1.52
+or   http://smartlamp.local
+BLE: advertising as ESP32-Lamp
+[web] lamp ON
+[web] lamp OFF
+[ble] auto mode
+[schedule] lamp ON
+[ble] unknown command</pre>
+<p>فشار دکمه فقط وقتی خط چاپ می‌کند که چراغ واقعا عوض شود. روی گوشی، مقدار characteristic همراه می‌آید: <code>on,manual</code> ← <code>off,manual</code> ← <code>off,auto</code> ← <code>on,auto</code>، که هر کدام به شکل یک notify می‌رسد.</p>
+<ul>
+  <li>خواسته ۷: در صفحه دکمه‌ای بزن: گوشی فورا notify می‌گیرد. از گوشی <code>off</code> را بنویس: صفحه در کمتر از یک ثانیه <b>OFF</b> و <b>manual</b> نشان می‌دهد.</li>
+  <li>خواسته ۳: در حالت دستی برنامه زمانی هیچ کاری نمی‌کند، حتی ساعت ۱۹:۰۰. فقط <code>auto</code> کنترل را به ساعت برمی‌گرداند، و چراغ فورا وضعیتی را می‌گیرد که ساعت می‌گوید.</li>
+  <li>خواسته ۴: برای آزمایش بدون صبر تا عصر، <code>ON_HOUR</code> را ساعت فعلی و <code>OFF_HOUR</code> را ساعت بعدی بگذار.</li>
+  <li>خواسته ۷: <code>curl -X POST "http://smartlamp.local/api/lamp?cmd=blink"</code> جواب می‌دهد <code>cmd must be on, off or auto</code> و چراغ عوض نمی‌شود.</li>
+</ul>
+<p><b>اگر کار نکرد:</b> <code>Sketch too big</code> یعنی Partition Scheme هنوز پیش‌فرض است؛ اگر صفحه باز می‌شود ولی دکمه‌ها خطا می‌دهند، <code>applyCommand()</code> هنوز <code>false</code> برمی‌گرداند؛ اگر گوشی تغییرهای صفحه را نمی‌بیند، یا بعد از فرمان <code>publishState()</code> صدا زده نمی‌شود یا notify در برنامه روشن نیست.</p>
+</details>
+
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="Smart_Lamp.ino" id="capAns"><pre>
+// چراغ هوشمند: صفحه وب + BLE + برنامه زمانی NTP، یک وضعیت مشترک
+// Tools &gt; Partition Scheme &gt; Huge APP (Wi-Fi + BLE در 1.2 مگابایت جا نمی‌شوند)
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+#include &lt;ESPmDNS.h&gt;
+#include &lt;time.h&gt;
+#include &lt;BLEDevice.h&gt;
+#include &lt;BLEServer.h&gt;
+#include &lt;BLEUtils.h&gt;
+#include &lt;BLE2902.h&gt;
+
+const char* WIFI_SSID = "Home";             // اسم شبکه تو
+const char* WIFI_PASS = "your-password";    // رمز شبکه تو
+const char* TZ_INFO = "EST5EDT,M3.2.0,M11.1.0"; // تورنتو/نیویورک: مال خودت را بگذار
+const int LAMP_PIN = 4;                     // چراغ (LED؛ یا رله، درس ۳.۴)
+const int ON_HOUR = 19;                     // حالت خودکار: روشن از 19:00 ...
+const int OFF_HOUR = 23;                    // ... تا 23:00
+
+#define SERVICE_UUID "8f3a0c20-1b7d-4e61-a7c2-5d9e4b3f6a10"
+#define LAMP_UUID    "8f3a0c21-1b7d-4e61-a7c2-5d9e4b3f6a10"
+
+WebServer server(80);
+BLEServer* pServer = nullptr;
+BLECharacteristic* pLampChar = nullptr;
+volatile bool deviceConnected = false;
+bool wasConnected = false;
+volatile int bleCmd = 0;                    // 0 هیچ، 1 روشن، 2 خاموش، 3 خودکار، -1 نامعتبر
+
+bool lampOn = false;
+bool autoMode = true;
+unsigned long lastSchedule = 0;
+
+String stateText() {                        // "on,auto" یا "off,manual"
+  return String(lampOn ? "on" : "off") + (autoMode ? ",auto" : ",manual");
+}
+
+void publishState() {                       // به گوشی خبر بده
+  pLampChar-&gt;setValue(stateText());
+  if (deviceConnected) pLampChar-&gt;notify();
+}
+
+void setLamp(bool on, const char* source) { // تنها جایی که پین را می‌نویسد
+  if (on == lampOn) return;
+  lampOn = on;
+  digitalWrite(LAMP_PIN, on ? HIGH : LOW);
+  Serial.printf("[%s] lamp %s\n", source, on ? "ON" : "OFF");
+}
+
+void runSchedule() {
+  struct tm t;
+  if (!getLocalTime(&amp;t, 10)) return;        // هنوز ساعت نداریم: به چراغ دست نزن
+  bool shouldBeOn = (t.tm_hour &gt;= ON_HOUR &amp;&amp; t.tm_hour &lt; OFF_HOUR);
+  setLamp(shouldBeOn, "schedule");
+}
+
+bool applyCommand(const String&amp; cmd, const char* source) {
+  if (cmd == "on")        { autoMode = false; setLamp(true, source); }
+  else if (cmd == "off")  { autoMode = false; setLamp(false, source); }
+  else if (cmd == "auto") { autoMode = true; Serial.printf("[%s] auto mode\n", source); runSchedule(); }
+  else return false;                        // کلمه ناشناخته
+  publishState();
+  return true;
+}
+
+class ServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* s) override { deviceConnected = true; }
+  void onDisconnect(BLEServer* s) override { deviceConnected = false; }
+};
+
+class LampCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* c) override {
+    String v = c-&gt;getValue();
+    v.trim();
+    v.toLowerCase();
+    if (v == "on") bleCmd = 1;              // این‌جا فقط یادداشت بگذار؛
+    else if (v == "off") bleCmd = 2;        // کار را loop() انجام می‌دهد
+    else if (v == "auto") bleCmd = 3;
+    else bleCmd = -1;
+  }
+};
+
+const char INDEX_HTML[] PROGMEM = R"rawliteral(
+&lt;!DOCTYPE html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+&lt;meta charset="utf-8"&gt;
+&lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;
+&lt;title&gt;Smart lamp&lt;/title&gt;
+&lt;style&gt;
+  body { font-family: sans-serif; text-align: center; background: #f2f4f8; }
+  .card { background: #fff; max-width: 340px; margin: 14px auto; padding: 12px; border-radius: 12px; }
+  button { font-size: 18px; padding: 8px 18px; margin: 4px; border: 0; border-radius: 8px; }
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;h1&gt;Smart lamp&lt;/h1&gt;
+&lt;div class="card"&gt;
+  &lt;h2&gt;Lamp: &lt;span id="lamp"&gt;?&lt;/span&gt;&lt;/h2&gt;
+  &lt;p&gt;Mode: &lt;b id="mode"&gt;?&lt;/b&gt; &amp;middot; Time: &lt;span id="time"&gt;?&lt;/span&gt;&lt;/p&gt;
+  &lt;button onclick="send('on')"&gt;ON&lt;/button&gt;
+  &lt;button onclick="send('off')"&gt;OFF&lt;/button&gt;
+  &lt;button onclick="send('auto')"&gt;AUTO&lt;/button&gt;
+&lt;/div&gt;
+&lt;script&gt;
+function show(s) {
+  document.getElementById('lamp').textContent = s.lamp ? 'ON' : 'OFF';
+  document.getElementById('mode').textContent = s.auto ? 'auto' : 'manual';
+  document.getElementById('time').textContent = s.time;
+}
+function refresh() {
+  fetch('/api/state').then(r =&gt; r.json()).then(show)
+    .catch(e =&gt; console.log('ESP32 unreachable', e));
+}
+function send(cmd) {
+  fetch('/api/lamp?cmd=' + cmd, { method: 'POST' }).then(r =&gt; r.json()).then(show);
+}
+refresh();
+setInterval(refresh, 1000);
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+)rawliteral";
+
+String stateJson() {
+  char clock[9] = "--:--:--";
+  struct tm t;
+  if (getLocalTime(&amp;t, 10)) strftime(clock, sizeof(clock), "%H:%M:%S", &amp;t);
+  String json = "{\"lamp\":";
+  json += lampOn ? "true" : "false";
+  json += ",\"auto\":";
+  json += autoMode ? "true" : "false";
+  json += ",\"time\":\"";
+  json += clock;
+  json += "\"}";
+  return json;                              // مثلا {"lamp":true,"auto":false,"time":"19:04:10"}
+}
+
+void handleRoot()  { server.send(200, "text/html; charset=utf-8", INDEX_HTML); }
+void handleState() { server.send(200, "application/json", stateJson()); }
+void handleLamp() {
+  if (!applyCommand(server.arg("cmd"), "web")) {
+    server.send(400, "text/plain", "cmd must be on, off or auto");
+    return;
+  }
+  handleState();
+}
+void handleNotFound() { server.send(404, "text/plain", "404: Not Found"); }
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LAMP_PIN, OUTPUT);
+  digitalWrite(LAMP_PIN, LOW);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting");
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED &amp;&amp; millis() - start &lt; 20000) {
+    delay(500);
+    Serial.print(".");
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nWiFi failed -&gt; restart in 5 s");
+    delay(5000);
+    ESP.restart();
+  }
+  Serial.print("\nOpen http://");
+  Serial.println(WiFi.localIP());
+  if (MDNS.begin("smartlamp")) Serial.println("or   http://smartlamp.local");
+  configTzTime(TZ_INFO, "pool.ntp.org", "time.google.com");
+
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/api/state", HTTP_GET, handleState);
+  server.on("/api/lamp", HTTP_POST, handleLamp);
+  server.onNotFound(handleNotFound);
+  server.begin();
+
+  BLEDevice::init("ESP32-Lamp");
+  pServer = BLEDevice::createServer();
+  pServer-&gt;setCallbacks(new ServerCallbacks());
+  BLEService* service = pServer-&gt;createService(SERVICE_UUID);
+  pLampChar = service-&gt;createCharacteristic(
+      LAMP_UUID,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE |
+      BLECharacteristic::PROPERTY_NOTIFY);
+  pLampChar-&gt;addDescriptor(new BLE2902());
+  pLampChar-&gt;setCallbacks(new LampCallbacks());
+  service-&gt;start();
+  BLEAdvertising* adv = BLEDevice::getAdvertising();
+  adv-&gt;addServiceUUID(SERVICE_UUID);
+  adv-&gt;setScanResponse(true);
+  BLEDevice::startAdvertising();
+  publishState();
+  Serial.println("BLE: advertising as ESP32-Lamp");
+}
+
+void loop() {
+  server.handleClient();
+
+  // ۱) یادداشتی از callback ی BLE هست؟
+  int cmd = bleCmd;
+  if (cmd != 0) {
+    bleCmd = 0;
+    if (cmd == 1) applyCommand("on", "ble");
+    else if (cmd == 2) applyCommand("off", "ble");
+    else if (cmd == 3) applyCommand("auto", "ble");
+    else { Serial.println("[ble] unknown command"); publishState(); }
+  }
+
+  // ۲) حالت خودکار: ثانیه‌ای یک بار ساعت را ببین
+  if (autoMode &amp;&amp; millis() - lastSchedule &gt;= 1000) {
+    lastSchedule = millis();
+    bool before = lampOn;
+    runSchedule();
+    if (lampOn != before) publishState();
+  }
+
+  // ۳) گوشی رفت؟ دوباره آگهی کن
+  if (!deviceConnected &amp;&amp; wasConnected) {
+    delay(500);
+    pServer-&gt;startAdvertising();
+    wasConnected = false;
+  }
+  if (deviceConnected &amp;&amp; !wasConnected) wasConnected = true;
+
+  delay(2);
+}
+</pre></div>
+<ol class="walk" data-for="capAns">
+  <li data-lines="42-47"><b class="what">تنها در ورود به پین.</b> تغییری نیست، کاری نیست؛ وگرنه ذخیره کن، عوض کن و منبع را چاپ کن.
+    <span class="why">با سه راه کنترل چراغ، همین خط گزارش با منبع است که اجازه می‌دهد جواب بدهی «چرا چراغ همین الان روشن شد؟». یک در تنها یعنی رفتن بعدی به رله هم دقیقا یک خط را عوض می‌کند.</span></li>
+  <li data-lines="49-54"><b class="what">برنامه زمانی.</b> بدون ساعت معتبر کاری نکن؛ وگرنه بین ۱۹:۰۰ و ۲۳:۰۰ روشن.
+    <span class="why">درست بعد از روشن شدن، ساعت هنوز ۱۹۷۰ را نشان می‌دهد، و «چراغ خاموش است چون سال ۱۹۷۰ است» تصمیم مسخره‌ای بود. دست نزدن به چراغ تا جواب NTP انتخاب امن است. چون <code>setLamp()</code> «بدون تغییر» را نادیده می‌گیرد، صدا زدن این تابع در هر ثانیه هیچ هزینه‌ای ندارد و چیزی چاپ نمی‌کند.</span></li>
+  <li data-lines="56-63"><b class="what">همه فرمان‌ها، یک مسیر.</b> on/off: دستی + چراغ. auto: برگشت به برنامه زمانی که فورا اعمال می‌شود. ناشناخته: <code>false</code>. هر فرمان معتبر با <code>publishState()</code> تمام می‌شود.
+    <span class="why">handler ی وب و یادداشت BLE هر دو این تابع را با <code>source</code> متفاوت صدا می‌زنند. قلب «وضعیت مشترک» همین است: دو چراغ نداریم (یکی وبی و یکی بلوتوثی)، یک چراغ داریم با دو کنترل از راه دور.</span></li>
+  <li data-lines="70-80"><b class="what">callback ی BLE یادداشت می‌گذارد.</b> متن را تمیز کن و به یک عدد ترجمه کن؛ همین.
+    <span class="why">هر کاری که به چراغ، Serial Monitor یا <code>notify()</code> دست می‌زند بعدا در loop انجام می‌شود. صدا زدن <code>notify()</code> از داخل یک callback نوشتن، دقیقا از آن چیزهایی است که روی میز تو کار می‌کند و در استفاده واقعی از هر صد بار یک بار شکست می‌خورد.</span></li>
+  <li data-lines="140-146"><b class="what">مسیر وب.</b> <code>applyCommand(server.arg("cmd"), "web")</code>؛ اگر false برگرداند ۴۰۰، وگرنه وضعیت تازه به شکل JSON.
+    <span class="why">این مسیر هیچ منطق چراغی ندارد؛ فقط HTTP را به فرمان ترجمه می‌کند. اضافه کردن کنترل سوم در آینده (MQTT در فصل ۵) هم همین‌قدر کوتاه خواهد بود.</span></li>
+  <li data-lines="201-209"><b class="what">خواندن یادداشت.</b> کپی کن، پاکش کن، فرمان را با منبع <code>ble</code> اجرا کن. برای کلمه ناشناخته، وضعیت واقعی را دوباره منتشر کن.
+    <span class="why">بعد از این که گوشی <code>blink</code> را نوشت، characteristic مقدار <code>blink</code> دارد. انتشار وضعیت واقعی آن را بازنویسی می‌کند تا Read بعدی گوشی حقیقت را نشان دهد، نه اشتباه تایپی را.</span></li>
+  <li data-lines="211-217"><b class="what">ساعت، ثانیه‌ای یک بار.</b> فقط در حالت خودکار؛ فقط اگر برنامه زمانی واقعا چراغ را عوض کرد، به گوشی notify بفرست.
+    <span class="why">یک notify در هر ثانیه باتری گوشی را بی‌دلیل خالی می‌کرد. مقایسه قبل و بعد همان قانون «فقط تغییرها را گزارش کن» است که از دکمه درس ۲.۳ به بعد به کار برده‌ای.</span></li>
+</ol>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
 <p>بلوتوث کلاسیک یک لوله پیوسته است (با <code>BluetoothSerial</code> مثل Serial بی‌سیم، فقط روی ESP32 معمولی و فقط با اندروید) و BLE یک جدول مقدار کم‌مصرف است که روی ESP32، C3، S3 و C6 و با آیفون هم کار می‌کند. در BLE سرور سرویس‌هایی دارد که characteristicهایی با UUID و مجوز Read/Write/Notify دارند؛ notify بدون descriptor 0x2902 و اشتراک گوشی نمی‌رسد و بعد از هر قطع شدن باید آگهی را دوباره شروع کنی. ورودی را با <code>trim</code> و <code>toLowerCase</code> تمیز کن، در core 3.x <code>getValue()</code> یک <code>String</code> است، و بدون Pairing هر کسی در برد می‌تواند وصل شود.</p></div>
 

@@ -1066,6 +1066,342 @@ void loop() {
 </details>
 </div>
 
+<h2 id="project">Practice project: Outage diary</h2>
+<div class="project">
+<p class="lede-ish">"The Wi-Fi keeps dropping!" When you call your internet provider, the first question is always "when, and for how long?" Your ESP32 can answer that for you. It sits quietly on the network and writes every dropout into a small diary with the exact local time it started and how long it lasted; type <code>log</code> in the Serial Monitor and you get the list. Since it knows the real time anyway, it also switches on a night light at 22:00 and off at 07:00. A test button lets you fake an outage whenever you like, so you can try everything without unplugging your router.</p>
+
+<h3 id="project-req">Requirements</h3>
+<ol>
+  <li>The board connects in the background with the <code>secrets.h</code> pattern and auto-reconnect; <code>setup()</code> never waits (already done in the starter). The first connection prints <code>[up] IP 192.168.1.37</code> (part of TODO 3).</li>
+  <li>When the connection drops, <code>[down] 2026-09-24 21:03:15</code> is printed with the local time (or <code>no clock</code> if NTP hasn't answered yet).</li>
+  <li>When it comes back, one diary entry is stored (start time + duration in seconds) and <code>[back] outage #1 lasted 11 s</code> is printed. The diary keeps the last 10 entries; the 11th overwrites the oldest.</li>
+  <li>While offline, <code>WiFi.reconnect()</code> is called every 10 seconds, the first time 10 s after the drop.</li>
+  <li>A press of button 1 (GPIO27) while online disconnects on purpose (<code>[test] disconnecting</code>), which simulates an outage.</li>
+  <li>Typing <code>log</code> + Enter prints <code>--- diary: N outage(s) ---</code> and then the stored entries, oldest first.</li>
+  <li>The LED on GPIO4 is on from 22:00 to 07:00 local time, checked once per second, and off while the clock isn't set.</li>
+</ol>
+
+<h3 id="project-parts">Parts and wiring</h3>
+<ul>
+  <li>ESP32 board, button 1 (GPIO27) and the LED + 220 Ω on GPIO4: exactly what's already on your breadboard. The LED plays the night light.</li>
+  <li>A 2.4 GHz Wi-Fi network and a <code>secrets.h</code> file, as in <a href="#secrets">this lesson</a></li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"BTN","name":"Push button (test outage)","img":"button.svg","pins":[["1","to GPIO27"],["4","to GND (diagonal leg)"]]},
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO4 side"],["2","LED side"]]},
+    {"id":"LED1","name":"Yellow LED (night light)","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−), short leg"]]}
+  ],
+  "wires":[["GPIO27","BTN.1","blue","test"],["BTN.4","GND","black"],["GPIO4","R1.1","orange","night light"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>Outage diary: the button on GPIO27 fakes an outage, the LED on GPIO4 is the night light. Everything else happens over Wi-Fi.</figcaption></div>
+
+<h3 id="project-start">Starter code</h3>
+<p>The starter connects to Wi-Fi in the background, starts NTP with your time zone, and has three helpers ready: the event handler, the debounced button and <code>clockText()</code>, which writes the current local time into a text buffer. It compiles and prints nothing but the first line. The diary logic is yours; the TODO numbers match the requirements.</p>
+<div class="code" data-file="Outage_Diary.ino" id="projStart"><pre>
+// Outage diary: every Wi-Fi drop with clock time and duration + 22:00 night light
+#include &lt;WiFi.h&gt;
+#include &lt;time.h&gt;
+#include "secrets.h"                          // WIFI_SSID and WIFI_PASS
+
+const int LED_PIN = 4;                        // night light
+const int BUTTON_PIN = 27;                    // test button: fake an outage
+const char* TZ_INFO = "EST5EDT,M3.2.0,M11.1.0"; // Toronto/New York: put yours
+const int NIGHT_ON_HOUR = 22;                 // light on from 22:00 ...
+const int NIGHT_OFF_HOUR = 7;                 // ... until 07:00
+const int MAX_ENTRIES = 10;
+
+volatile bool wifiUp = false;                 // only the event handler writes it
+bool wasUp = false;                           // what loop saw last time
+unsigned long downStart = 0, lastRetry = 0, lastClock = 0;
+char downText[20] = "";                       // clock time of the current drop
+char diaryWhen[MAX_ENTRIES][20];              // the diary: start times ...
+unsigned long diarySecs[MAX_ENTRIES];         // ... and durations
+int diaryCount = 0;                           // entries ever written
+int stableState = HIGH, lastReading = HIGH;
+unsigned long lastChangeTime = 0;
+
+void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+  if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) wifiUp = true;
+  if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) wifiUp = false;
+}
+
+bool buttonPressed() {                        // debounce from lesson 3.1
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChangeTime = millis(); lastReading = reading; }
+  if (millis() - lastChangeTime &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) return true;
+  }
+  return false;
+}
+
+void clockText(char* out, int size) {         // "2026-09-24 21:03:15" or "no clock"
+  struct tm t;
+  if (getLocalTime(&amp;t, 10)) strftime(out, size, "%Y-%m-%d %H:%M:%S", &amp;t);
+  else snprintf(out, size, "no clock");
+}
+
+void printDiary() {
+  // TODO 6: print "--- diary: N outage(s) ---" and then the stored entries,
+  //         oldest first: "#1  2026-09-24 21:03:15  lasted 11 s"
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  WiFi.onEvent(onWiFiEvent);
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  configTzTime(TZ_INFO, "pool.ntp.org", "time.google.com");
+  Serial.println("Outage diary started. Type log + Enter to see it.");
+}
+
+void loop() {
+  unsigned long now = millis();
+  bool up = wifiUp;                           // read the flag once
+
+  // TODO 2: wasUp &amp;&amp; !up: remember downStart, fill downText, print "[down] ..."
+  // TODO 3: !wasUp &amp;&amp; up: after a drop, store one diary entry (slot
+  //         diaryCount % MAX_ENTRIES) and print "[back] outage #N lasted S s";
+  //         on the very first connection print "[up] IP ..."
+  wasUp = up;
+
+  // TODO 4: still offline: WiFi.reconnect() every 10 s
+  // TODO 5: button pressed while online: WiFi.disconnect()
+  // TODO 6: a Serial line "log" calls printDiary()
+  // TODO 7: once per second: LED on from NIGHT_ON_HOUR to NIGHT_OFF_HOUR
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="13-14"><b class="what">Two flags instead of work in the handler.</b> The event handler only sets <code>wifiUp</code>; loop compares it with <code>wasUp</code>, what it saw last time.
+    <span class="why">The Wi-Fi library calls the handler from its own background task, at any moment. If you did the diary work (text, arrays, printing) in there, loop could be halfway through reading the same array. Letting the handler only flip a flag and doing the real work in loop avoids that whole class of bugs. Comparing "now" with "last time" is how loop notices the moment of a change.</span></li>
+  <li data-lines="16-19"><b class="what">The diary itself.</b> Two arrays of 10: the start time as text (20 characters is exactly enough for <code>2026-09-24 21:03:15</code> plus the invisible end marker) and the duration. <code>diaryCount</code> counts every outage ever.
+    <span class="why">Text is stored at the moment of the drop, not worked out later, because by the time you type <code>log</code>, "when did it start?" is no longer something you can calculate.</span></li>
+  <li data-lines="38-42"><b class="what">A ready clock.</b> <code>clockText()</code> fills a buffer with the formatted local time, or with <code>no clock</code>.
+    <span class="why">The 10 ms timeout means it never blocks loop. The ESP32's clock keeps running during an outage, because NTP only sets it; it doesn't have to be online to tell the time.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>This project runs in Wokwi. Add a <code>secrets.h</code> tab (arrow next to the tabs → <b>New file…</b>) with <code>#define WIFI_SSID "Wokwi-GUEST"</code> and <code>#define WIFI_PASS ""</code>, replace <code>diagram.json</code> with the one below, and use the green button to fake outages. The time printed is the real current time in the zone of <code>TZ_INFO</code>.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-pushbutton", "id": "btn1", "top": 110, "left": -170, "attrs": {"color": "green"}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": {"color": "yellow"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:27", "btn1:1.r", "green", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>Hint 1</summary>
+<p>TODOs 2 and 3 are two <code>if</code>s that look at <code>wasUp</code> and <code>up</code>: "was up, now down" is the moment of a drop; "was down, now up" is the moment it comes back. Store <code>downStart = now</code> and call <code>clockText(downText, sizeof(downText))</code> when it drops. When it comes back, <code>downText</code> being empty (<code>downText[0] == '\0'</code>) tells you this is the very first connection, not the end of an outage.</p></details>
+<details class="hint"><summary>Hint 2</summary>
+<p>A diary of 10 slots that never fills up is a "ring buffer": entry number <code>n</code> goes into slot <code>n % 10</code>. So entry 11 lands in slot 0, on top of entry 1. Copy the text with <code>strcpy(diaryWhen[i], downText);</code> (you can't copy text arrays with <code>=</code>), store the seconds, and then increase <code>diaryCount</code>.</p></details>
+<details class="hint"><summary>Hint 3</summary>
+<p>For printing, the oldest entry still stored is <code>diaryCount - 10</code> once there are more than 10, otherwise 0; loop from there to <code>diaryCount - 1</code> and use <code>n % 10</code> again for the slot. For the night light, "22:00 to 07:00" crosses midnight, so it's <code>hour &gt;= 22 || hour &lt; 7</code> (<b>or</b>, not <b>and</b>).</p></details>
+
+<details class="expect"><summary>What should you see?</summary>
+<p>In Wokwi: wait for <code>[up]</code>, press the button, wait until it's back, press again, then type <code>log</code>. Your times are the real ones:</p>
+<pre class="serial">Outage diary started. Type log + Enter to see it.
+[up] IP 10.10.0.2
+[test] disconnecting
+[down] 2026-09-24 14:03:15
+[back] outage #1 lasted 11 s
+[test] disconnecting
+[down] 2026-09-24 14:05:02
+[back] outage #2 lasted 11 s
+--- diary: 2 outage(s) ---
+#1  2026-09-24 14:03:15  lasted 11 s
+#2  2026-09-24 14:05:02  lasted 11 s</pre>
+<ul>
+  <li>Requirements 3 and 4: a test outage lasts 10 s (the first nudge) plus the 1 to 3 seconds it takes to get an IP again, so <b>10 to 13 s</b> is right. With a real router you switched off, the duration is however long it was off (plus a few seconds to reconnect).</li>
+  <li>Requirement 3: fake 11 outages, then type <code>log</code>: you see entries <code>#2</code> to <code>#11</code>, and the header says 11.</li>
+  <li>Requirement 7: to test the night light during the day, set <code>NIGHT_ON_HOUR</code> to the current hour (for example 14): within a second the LED comes on. Put it back to 22 afterwards.</li>
+  <li>Requirement 5: pressing the button while offline does nothing, and the first connection after start-up is never counted as an outage.</li>
+</ul>
+</details>
+
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="Outage_Diary.ino" id="projAns"><pre>
+// Outage diary: every Wi-Fi drop with clock time and duration + 22:00 night light
+#include &lt;WiFi.h&gt;
+#include &lt;time.h&gt;
+#include "secrets.h"                          // WIFI_SSID and WIFI_PASS
+
+const int LED_PIN = 4;                        // night light
+const int BUTTON_PIN = 27;                    // test button: fake an outage
+const char* TZ_INFO = "EST5EDT,M3.2.0,M11.1.0"; // Toronto/New York: put yours
+const int NIGHT_ON_HOUR = 22;                 // light on from 22:00 ...
+const int NIGHT_OFF_HOUR = 7;                 // ... until 07:00
+const int MAX_ENTRIES = 10;
+
+volatile bool wifiUp = false;                 // only the event handler writes it
+bool wasUp = false;                           // what loop saw last time
+unsigned long downStart = 0, lastRetry = 0, lastClock = 0;
+char downText[20] = "";                       // clock time of the current drop
+char diaryWhen[MAX_ENTRIES][20];              // the diary: start times ...
+unsigned long diarySecs[MAX_ENTRIES];         // ... and durations
+int diaryCount = 0;                           // entries ever written
+int stableState = HIGH, lastReading = HIGH;
+unsigned long lastChangeTime = 0;
+
+void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+  if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) wifiUp = true;
+  if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) wifiUp = false;
+}
+
+bool buttonPressed() {                        // debounce from lesson 3.1
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChangeTime = millis(); lastReading = reading; }
+  if (millis() - lastChangeTime &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) return true;
+  }
+  return false;
+}
+
+void clockText(char* out, int size) {         // "2026-09-24 21:03:15" or "no clock"
+  struct tm t;
+  if (getLocalTime(&amp;t, 10)) strftime(out, size, "%Y-%m-%d %H:%M:%S", &amp;t);
+  else snprintf(out, size, "no clock");
+}
+
+void printDiary() {
+  Serial.printf("--- diary: %d outage(s) ---\n", diaryCount);
+  int first = diaryCount &gt; MAX_ENTRIES ? diaryCount - MAX_ENTRIES : 0;
+  for (int n = first; n &lt; diaryCount; n++) {
+    int i = n % MAX_ENTRIES;                  // ring buffer: slot of entry n
+    Serial.printf("#%d  %s  lasted %lu s\n", n + 1, diaryWhen[i], diarySecs[i]);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  WiFi.onEvent(onWiFiEvent);
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  configTzTime(TZ_INFO, "pool.ntp.org", "time.google.com");
+  Serial.println("Outage diary started. Type log + Enter to see it.");
+}
+
+void loop() {
+  unsigned long now = millis();
+  bool up = wifiUp;                           // read the flag once
+
+  // 1) Wi-Fi went down: remember when
+  if (wasUp &amp;&amp; !up) {
+    downStart = now;
+    lastRetry = now;                          // first nudge 10 s from now
+    clockText(downText, sizeof(downText));
+    Serial.printf("[down] %s\n", downText);
+  }
+  // 2) Wi-Fi came back: write one diary entry
+  if (!wasUp &amp;&amp; up) {
+    if (downText[0] != '\0') {                // not the very first connection
+      int i = diaryCount % MAX_ENTRIES;
+      strcpy(diaryWhen[i], downText);
+      diarySecs[i] = (now - downStart) / 1000;
+      diaryCount++;
+      Serial.printf("[back] outage #%d lasted %lu s\n", diaryCount, diarySecs[i]);
+      downText[0] = '\0';
+    } else {
+      Serial.printf("[up] IP %s\n", WiFi.localIP().toString().c_str());
+    }
+  }
+  wasUp = up;
+
+  // 3) still offline: nudge every 10 s (as in RobustWiFi)
+  if (!up &amp;&amp; now - lastRetry &gt;= 10000) {
+    lastRetry = now;
+    WiFi.reconnect();
+  }
+
+  // 4) test button: drop the connection on purpose
+  if (buttonPressed() &amp;&amp; up) {
+    Serial.println("[test] disconnecting");
+    WiFi.disconnect();
+  }
+
+  // 5) Serial command "log"
+  if (Serial.available() &gt; 0) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    if (cmd == "log") printDiary();
+  }
+
+  // 6) night light, checked once per second
+  if (now - lastClock &gt;= 1000) {
+    lastClock = now;
+    struct tm t;
+    bool night = false;
+    if (getLocalTime(&amp;t, 10)) {
+      night = (t.tm_hour &gt;= NIGHT_ON_HOUR || t.tm_hour &lt; NIGHT_OFF_HOUR);
+    }
+    digitalWrite(LED_PIN, night ? HIGH : LOW);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="44-51"><b class="what">Printing the ring buffer.</b> The header with the total count, then entries from the oldest still stored to the newest. <code>n</code> is the entry's number, <code>n % MAX_ENTRIES</code> its slot.
+    <span class="why">With 11 outages, <code>first</code> is 1, so entries 2 to 11 are printed (as <code>#2</code> … <code>#11</code>) from slots 1…9 and 0. The numbering stays honest even after old entries were overwritten.</span></li>
+  <li data-lines="67"><b class="what">Read the flag once.</b> <code>up</code> is a copy of <code>wifiUp</code> taken at the start of the round.
+    <span class="why"><code>wifiUp</code> can change at any moment from the background task. If the two <code>if</code>s below read it separately, a change in between could make both see a different world. One copy, one consistent picture.</span></li>
+  <li data-lines="69-75"><b class="what">The drop.</b> Store the moment in <code>millis()</code> and as clock text, delay the first reconnect nudge by 10 s, and print.
+    <span class="why">Two times, two jobs: <code>millis()</code> for measuring the duration (exact, never jumps) and the clock text for a human reading the diary. <code>lastRetry = now</code> gives auto-reconnect its chance first, and makes the test outage predictable.</span></li>
+  <li data-lines="76-89"><b class="what">The return.</b> If there was a drop (<code>downText</code> not empty), write the entry into slot <code>diaryCount % MAX_ENTRIES</code>, count it, print it and clear <code>downText</code>. Otherwise it's the first connection: print the IP. Finally <code>wasUp = up</code>.
+    <span class="why">Clearing <code>downText</code> is what makes the next return recognisable again. <code>strcpy</code> copies text character by character; <code>=</code> would not compile for arrays. Updating <code>wasUp</code> at the end is what turns "state" into "moment of change".</span></li>
+  <li data-lines="91-101"><b class="what">Reconnect nudge and test button.</b> Offline: <code>WiFi.reconnect()</code> every 10 s. Button while online: <code>WiFi.disconnect()</code>.
+    <span class="why">After a voluntary <code>disconnect()</code>, the Wi-Fi library deliberately does <b>not</b> reconnect by itself (reason 8, <code>ASSOC_LEAVE</code>); only our 10-second nudge brings it back. That's why a test outage always lasts about 10 seconds, and it's a nice demonstration that the nudge from <code>RobustWiFi</code> really is needed.</span></li>
+  <li data-lines="103-108"><b class="what">The command.</b> A line from the Serial Monitor; <code>log</code> prints the diary.
+    <span class="why">The same pattern as lesson 3.1's <code>Serial_Commands</code>: <code>trim()</code> removes the invisible <code>\r</code> so the comparison works with every line-ending setting.</span></li>
+  <li data-lines="110-119"><b class="what">The night light.</b> Once a second: if the clock is set and the hour is 22 or later, or before 7, the LED is on.
+    <span class="why">A range that crosses midnight needs <b>or</b>: no hour is both ≥ 22 and &lt; 7. Checking only once a second is plenty for a light that switches twice a day, and <code>night = false</code> as the default keeps the light off until NTP has answered, instead of guessing from 1970.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p>The complete answer (with the same <code>secrets.h</code> tab and diagram). Fake a few outages with the green button and type <code>log</code>.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-pushbutton", "id": "btn1", "top": 110, "left": -170, "attrs": {"color": "green"}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": {"color": "yellow"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:27", "btn1:1.r", "green", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">The lesson in three lines</div>
 <p>The ESP32 sees only 2.4 GHz Wi-Fi, gets a local IP from the router through DHCP, and needs an RSSI better than −70 for stable operation. <code>WiFi.begin</code> only starts connecting; with <code>onEvent</code> (GOT_IP and DISCONNECTED), <code>setAutoReconnect</code> and a <code>millis()</code> watchdog you build a connection that never locks up loop. Keep your password in <code>secrets.h</code> and get local time with <code>configTzTime("EST5EDT,M3.2.0,M11.1.0", ...)</code> (or your own city's string).</p></div>
 

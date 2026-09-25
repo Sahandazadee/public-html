@@ -1404,6 +1404,343 @@ void loop() {
 </details>
 </div>
 
+<h2 id="project">پروژه تمرینی: تایمر آشپزخانه</h2>
+<div class="project">
+<p class="lede-ish">پاستا ۹ دقیقه می‌خواهد، چای ۴ دقیقه، و تخم‌مرغ آب‌پز کسی را می‌خواهد که یادش بماند. در این پروژه یک تایمر آشپزخانه کوچک می‌سازی: پیچ را بچرخان تا زمان را انتخاب کنی، دکمه را بزن تا شروع شود، و هر چه به پایان نزدیک‌تر شوی، LED تندتر چشمک می‌زند. این پروژه همه چیزهای این درس را با هم به کار می‌گیرد: دکمه با Debounce، پتانسیومتر صاف‌شده و چند کار هم‌زمان با <code>millis()</code>. برای این که آزمایش سریع باشد، پیچ ثانیه انتخاب می‌کند (۵ تا ۶۰) نه دقیقه؛ بعدا با عوض کردن یک عدد، یک تایمر دقیقه‌ای واقعی داری.</p>
+
+<h3 id="project-req">خواسته‌ها</h3>
+<ol>
+  <li>وقتی تایمر منتظر است، پتانسیومتر یکی از ۵، ۱۰، ۱۵ … ۶۰ ثانیه را انتخاب می‌کند (۱۲ پله مساوی). خط <code>Set: 25 s</code> فقط وقتی می‌آید که مقدار واقعا عوض شود، نه به شکل سیلی از خط‌های تکراری.</li>
+  <li>یک فشار دکمه (GPIO27، با Debounce) شمارش معکوس را شروع می‌کند و <code>Start: 25 s</code> چاپ می‌کند.</li>
+  <li>فشار دکمه وسط شمارش آن را لغو می‌کند: <code>Cancelled</code>، LED خاموش می‌شود و تایمر دوباره منتظر می‌ماند.</li>
+  <li>در طول شمارش، <code>Left: N s</code> دقیقا ثانیه‌ای یک بار چاپ می‌شود (۲۵، ۲۴ … ۱).</li>
+  <li>LED روی GPIO4 هر ۵۰۰ میلی‌ثانیه، و در ۵ ثانیه آخر هر ۱۰۰ میلی‌ثانیه، چشمک می‌زند.</li>
+  <li>در صفر: <code>DING! Time is up</code> و LED ثابت برای ۳ ثانیه (یا تا فشار بعدی)، بعد <code>Ready: 25 s</code>.</li>
+  <li>هیچ <code>delay()</code> ی در کار نیست: دکمه باید در هر لحظه، حتی وسط یک چشمک، جواب بدهد.</li>
+</ol>
+
+<h3 id="project-parts">قطعه‌ها و سیم‌کشی</h3>
+<ul>
+  <li>برد ESP32 روی بردبورد</li>
+  <li>پتانسیومتر ۱۰ کیلو (روی GPIO34، مثل همین درس)</li>
+  <li>دکمه فشاری (دکمه ۱ روی GPIO27، به GND)</li>
+  <li>LED + مقاومت ۲۲۰ اهم (LED وضعیت روی GPIO4)</li>
+</ul>
+<p>این دقیقا همان مداری است که از این درس روی بردبوردت داری؛ سیم‌کشی تازه‌ای لازم نیست.</p>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"POT","name":"پتانسیومتر ۱۰ کیلو","img":"pot.svg","pins":[["VCC","پایه کناری"],["SIG","پایه وسط (Wiper)"],["GND","پایه کناری دیگر"]]},
+    {"id":"BTN","name":"دکمه فشاری","img":"button.svg","pins":[["1","به GPIO27"],["4","به GND (پایه ضربدری)"]]},
+    {"id":"R1","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","سمت GPIO4"],["2","سمت LED"]]},
+    {"id":"LED1","name":"LED قرمز","img":"led.svg","pins":[["A","آند (+) پایه بلند"],["K","کاتد (−) پایه کوتاه"]]}
+  ],
+  "wires":[["3V3","POT.VCC","red"],["GPIO34","POT.SIG","blue","پیچ زمان"],["GND","POT.GND","black"],["GPIO27","BTN.1","blue","شروع/لغو"],["BTN.4","GND","black"],["GPIO4","R1.1","orange","وضعیت"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>تایمر آشپزخانه: پتانسیومتر زمان را انتخاب می‌کند، دکمه شروع و لغو می‌کند و LED شمارش را نشان می‌دهد. هر سه، قطعه‌های ثابت دوره هستند.</figcaption></div>
+
+<h3 id="project-start">کد شروع</h3>
+<p>کد شروع پین‌ها، متغیرها، تابع Debounce همین درس و یک تابع کمکی <code>setLed()</code> را از قبل دارد. کامپایل و اجرا می‌شود، ولی فقط دو خط اول را چاپ می‌کند. کار تو خط‌های <code>// TODO</code> است؛ شماره‌هایشان با شماره خواسته‌های بالا یکی است.</p>
+<div class="code" data-file="Kitchen_Timer.ino" id="projStart"><pre>
+// تایمر آشپزخانه: پتانسیومتر ۵ تا ۶۰ ثانیه، دکمه شروع/لغو، بدون delay()
+const int POT_PIN = 34;               // پتانسیومتر (ADC1)
+const int BUTTON_PIN = 27;            // دکمه ۱ به GND، با INPUT_PULLUP
+const int LED_PIN = 4;                // LED وضعیت با مقاومت 220 اهم
+const unsigned long DEBOUNCE_MS = 30;
+
+enum State { IDLE, RUNNING, DONE };   // سه حالتی که تایمر می‌تواند داشته باشد
+State state = IDLE;
+
+int setSeconds = 5;                   // زمان انتخاب‌شده: 5، 10 ... 60
+int lastRaw = -1000;                  // مقدار پتانسیومتر در آخرین تغییر پذیرفته‌شده
+unsigned long startTime = 0;          // لحظه شروع شمارش معکوس
+unsigned long doneTime = 0;           // لحظه تمام شدن زمان
+int lastShown = -1;                   // آخرین ثانیه‌ای که با "Left" چاپ کردیم
+unsigned long lastBlink = 0;
+bool ledOn = false;
+
+int stableState = HIGH, lastReading = HIGH;
+unsigned long lastChangeTime = 0;
+
+// برای هر فشار واقعی دقیقا یک بار true (Debounce همین درس)
+bool buttonPressed() {
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChangeTime = millis(); lastReading = reading; }
+  if (millis() - lastChangeTime &gt; DEBOUNCE_MS &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) return true;
+  }
+  return false;
+}
+
+void setLed(bool on) {
+  ledOn = on;
+  digitalWrite(LED_PIN, on ? HIGH : LOW);
+}
+
+void readPot() {
+  // TODO 1: میانگین ۸ خواندن POT_PIN، تغییر کمتر از ۵۰ را نادیده بگیر،
+  //         مقدار را به 5، 10 ... 60 تبدیل کن و با هر تغییر "Set: N s" چاپ کن
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LED_PIN, OUTPUT);
+  Serial.println("Kitchen timer: turn the pot, press the button");
+  readPot();
+  Serial.printf("Ready: %d s\n", setSeconds);
+}
+
+void loop() {
+  unsigned long now = millis();
+  bool pressed = buttonPressed();
+
+  if (state == IDLE) {
+    readPot();
+    // TODO 2: با فشار دکمه: state = RUNNING، زمان را نگه دار، "Start: N s" چاپ کن
+  } else if (state == RUNNING) {
+    // TODO 3: میلی‌ثانیه‌های باقی‌مانده را حساب کن؛ فشار دکمه لغو می‌کند ("Cancelled")
+    // TODO 4: ثانیه‌ای یک بار "Left: N s" چاپ کن (با lastShown)
+    // TODO 5: LED را هر ۵۰۰ میلی‌ثانیه، و در ۵ ثانیه آخر هر ۱۰۰ میلی‌ثانیه، عوض کن
+    // TODO 6: در صفر: LED ثابت، "DING! Time is up" چاپ کن، state = DONE
+  } else {                                    // DONE
+    // TODO 6 (ادامه): بعد از ۳ ثانیه یا یک فشار: LED خاموش، "Ready: N s"، state = IDLE
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="7-8"><b class="what">سه حالت با اسم.</b> <code>enum</code> یک فهرست کوتاه از عددهای اسم‌دار است: <code>IDLE</code> یعنی ۰، <code>RUNNING</code> یعنی ۱ و <code>DONE</code> یعنی ۲. متغیر <code>state</code> حالتی را نگه می‌دارد که تایمر همین الان در آن است.
+    <span class="why">یک فشار دکمه وقتی منتظریم یعنی «شروع» و وقتی در حال شمارشیم یعنی «لغو». به جای بازی با چند متغیر درست/غلط، بالای loop فقط یک سؤال می‌پرسی: «در کدام حالتم؟» به این الگو ماشین حالت (State Machine) می‌گویند و تقریبا در همه پروژه‌ها به کارش می‌بری.</span></li>
+  <li data-lines="22-30"><b class="what">Debounce آماده.</b> <code>buttonPressed()</code> همان بلوک <code>Toggle_Debounce</code> است که داخل یک تابع رفته و برای هر فشار واقعی یک بار <code>true</code> برمی‌گرداند.
+    <span class="why">آن را در هر دور loop دقیقا یک بار صدا بزن و جوابش را در یک متغیر (<code>pressed</code>) نگه دار. اگر دو بار صدایش بزنی، ممکن است دومی فشاری را «مصرف» کند که اولی دیده بود.</span></li>
+  <li data-lines="37-40"><b class="what">اولین TODO تو.</b> <code>readPot()</code> خالی است؛ هم از setup و هم از loop صدا زده می‌شود.
+    <span class="why">گذاشتن منطق پتانسیومتر در یک تابع، loop را کوتاه و خوانا نگه می‌دارد: loop فقط تصمیم می‌گیرد <b>کی</b> پتانسیومتر خوانده شود و تابع تصمیم می‌گیرد <b>چطور</b>.</span></li>
+  <li data-lines="51-66"><b class="what">اسکلت loop.</b> زمان و دکمه یک بار در بالا خوانده می‌شوند؛ بعد یک <code>if / else if / else</code> انتخاب می‌کند در هر حالت چه کاری انجام شود.
+    <span class="why">هر TODO داخل شاخه درست خودش است، پس دیگر لازم نیست وسط کد دوباره بپرسی «تایمر در حال کار است؟».</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>Wokwi را باز کن، <code>diagram.json</code> را با این یکی عوض کن (پتانسیومتر روی GPIO34، دکمه سبز روی GPIO27، LED قرمز روی GPIO4) و کد شروع را در <code>sketch.ino</code> بچسبان. TODOها را یکی یکی پر کن و بعد از هر کدام ▶ را بزن؛ پیچ پتانسیومتر را با ماوس می‌چرخانی.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-potentiometer", "id": "pot1", "top": -40, "left": -170, "attrs": {}},
+    {"type": "wokwi-pushbutton", "id": "btn1", "top": 110, "left": -170, "attrs": {"color": "green"}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": {"color": "red"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:27", "btn1:1.r", "green", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>راهنمایی ۱</summary>
+<p>برای TODO 1 حلقه میانگین‌گیری <code>Pot_Smooth</code> را کپی کن. برای ۱۲ پله مساوی از <code>map()</code> استفاده نکن (پله آخر را فقط دقیقا در ۴۰۹۵ می‌دهد). به جایش: <code>raw * 12 / 4096</code> عددی از ۰ تا ۱۱ می‌دهد؛ یکی به آن اضافه کن و در ۵ ضرب کن. اگر <code>abs(raw - lastRaw) &lt; 50</code> بود، مقدار تازه را نادیده بگیر؛ وگرنه وقتی پیچ درست روی مرز دو پله بایستد، مقدار بین دو پله می‌پرد.</p></details>
+<details class="hint"><summary>راهنمایی ۲</summary>
+<p>زمان باقی‌مانده به میلی‌ثانیه: <code>long leftMs = (long)setSeconds * 1000 - (long)(now - startTime);</code>. آن را با <code>(leftMs + 999) / 1000</code> به ثانیه کامل <b>رو به بالا</b> گرد کن؛ این‌طوری وقتی ۲۴٫۳ ثانیه مانده، ۲۵ نشان می‌دهی و خط آخر <code>Left: 1 s</code> است نه <code>Left: 0 s</code>. فقط وقتی چاپ کن که این عدد با <code>lastShown</code> فرق دارد.</p></details>
+<details class="hint"><summary>راهنمایی ۳</summary>
+<p>چشمک همان الگوی <code>Blink_NoDelay</code> است، با یک فاصله متغیر: <code>unsigned long interval = (leftMs &lt;= 5000) ? 100 : 500;</code>. برای پایان بنویس <code>state = DONE; doneTime = now;</code>؛ در شاخه <code>DONE</code> شرط <code>pressed || now - doneTime &gt;= 3000</code> را بررسی کن.</p></details>
+
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>پیچ را به وسط ببر، یک بار دکمه را بزن و صبر کن. Serial Monitor این را نشان می‌دهد (خط‌های Set اول به جای شروع پیچ بستگی دارد):</p>
+<pre class="serial">Kitchen timer: turn the pot, press the button
+Ready: 5 s
+Set: 30 s
+Set: 25 s
+Start: 25 s
+Left: 25 s
+Left: 24 s
+Left: 23 s
+...
+Left: 2 s
+Left: 1 s
+DING! Time is up
+Ready: 25 s</pre>
+<p>حالا دوباره شروع کن و بعد از چند ثانیه دکمه را بزن:</p>
+<pre class="serial">Start: 25 s
+Left: 25 s
+Left: 24 s
+Left: 23 s
+Cancelled
+Ready: 25 s</pre>
+<ul>
+  <li>خواسته ۱: پیچ را آرام از یک سر تا سر دیگر بچرخان: دقیقا ۱۲ مقدار مختلف از ۵ تا ۶۰ می‌بینی، هر کدام یک بار. پیچ را رها کن: دیگر خطی نمی‌آید.</li>
+  <li>خواسته ۴: خط‌های <code>Left</code> دقیقا یک ثانیه با هم فاصله دارند؛ با یک ساعت بشمار. بین <code>Start</code> و <code>DING</code> دقیقا ۲۵ خط است.</li>
+  <li>خواسته ۵: وقتی <code>Left: 5 s</code> می‌آید، چشمک به وضوح تند می‌شود.</li>
+  <li>خواسته‌های ۳ و ۷: دکمه را وسط یک چشمک یا در ثانیه‌های تند آخر بزن: <code>Cancelled</code> فورا می‌آید و هر فشار فقط یک بار حساب می‌شود.</li>
+  <li>چرخاندن پیچ در طول شمارش هیچ اثری ندارد؛ مقدار تازه فقط بعد از برگشتن تایمر به حالت انتظار (به شکل <code>Set</code>) ظاهر می‌شود.</li>
+</ul>
+</details>
+
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="Kitchen_Timer.ino" id="projAns"><pre>
+// تایمر آشپزخانه: پتانسیومتر ۵ تا ۶۰ ثانیه، دکمه شروع/لغو، بدون delay()
+const int POT_PIN = 34;               // پتانسیومتر (ADC1)
+const int BUTTON_PIN = 27;            // دکمه ۱ به GND، با INPUT_PULLUP
+const int LED_PIN = 4;                // LED وضعیت با مقاومت 220 اهم
+const unsigned long DEBOUNCE_MS = 30;
+
+enum State { IDLE, RUNNING, DONE };   // سه حالتی که تایمر می‌تواند داشته باشد
+State state = IDLE;
+
+int setSeconds = 5;                   // زمان انتخاب‌شده: 5، 10 ... 60
+int lastRaw = -1000;                  // مقدار پتانسیومتر در آخرین تغییر پذیرفته‌شده
+unsigned long startTime = 0;          // لحظه شروع شمارش معکوس
+unsigned long doneTime = 0;           // لحظه تمام شدن زمان
+int lastShown = -1;                   // آخرین ثانیه‌ای که با "Left" چاپ کردیم
+unsigned long lastBlink = 0;
+bool ledOn = false;
+
+int stableState = HIGH, lastReading = HIGH;
+unsigned long lastChangeTime = 0;
+
+// برای هر فشار واقعی دقیقا یک بار true (Debounce همین درس)
+bool buttonPressed() {
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChangeTime = millis(); lastReading = reading; }
+  if (millis() - lastChangeTime &gt; DEBOUNCE_MS &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) return true;
+  }
+  return false;
+}
+
+void setLed(bool on) {
+  ledOn = on;
+  digitalWrite(LED_PIN, on ? HIGH : LOW);
+}
+
+void readPot() {
+  long sum = 0;
+  for (int i = 0; i &lt; 8; i++) sum += analogRead(POT_PIN);
+  int raw = sum / 8;                          // میانگین ۸ نمونه
+  if (abs(raw - lastRaw) &lt; 50) return;        // ناحیه مرده: نویز را نادیده بگیر
+  lastRaw = raw;
+  int seconds = (raw * 12 / 4096 + 1) * 5;    // ۱۲ پله مساوی: 5 ... 60
+  if (seconds != setSeconds) {
+    setSeconds = seconds;
+    Serial.printf("Set: %d s\n", setSeconds);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LED_PIN, OUTPUT);
+  Serial.println("Kitchen timer: turn the pot, press the button");
+  readPot();
+  Serial.printf("Ready: %d s\n", setSeconds);
+}
+
+void loop() {
+  unsigned long now = millis();
+  bool pressed = buttonPressed();
+
+  if (state == IDLE) {
+    readPot();
+    if (pressed) {
+      state = RUNNING;
+      startTime = now;
+      lastShown = -1;
+      Serial.printf("Start: %d s\n", setSeconds);
+    }
+  } else if (state == RUNNING) {
+    long leftMs = (long)setSeconds * 1000 - (long)(now - startTime);
+    if (pressed) {
+      state = IDLE;
+      setLed(false);
+      Serial.println("Cancelled");
+      Serial.printf("Ready: %d s\n", setSeconds);
+    } else if (leftMs &lt;= 0) {
+      state = DONE;
+      doneTime = now;
+      setLed(true);                           // نور ثابت: زمان تمام شد
+      Serial.println("DING! Time is up");
+    } else {
+      int leftS = (leftMs + 999) / 1000;      // گرد کردن رو به بالا: 4.2 ثانیه باقی‌مانده 5 نشان داده می‌شود
+      if (leftS != lastShown) {
+        lastShown = leftS;
+        Serial.printf("Left: %d s\n", leftS);
+      }
+      unsigned long interval = (leftMs &lt;= 5000) ? 100 : 500;   // در انتها سریع‌تر
+      if (now - lastBlink &gt;= interval) {
+        lastBlink = now;
+        setLed(!ledOn);
+      }
+    }
+  } else {                                    // DONE
+    if (pressed || now - doneTime &gt;= 3000) {  // ۳ ثانیه نور، یا یک فشار
+      state = IDLE;
+      setLed(false);
+      Serial.printf("Ready: %d s\n", setSeconds);
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="37-41"><b class="what">پیچ آرام.</b> میانگین ۸ خواندن، و تغییر کمتر از ۵۰ (از ۴۰۹۵) کاملا نادیده گرفته می‌شود.
+    <span class="why">حتی میانگین هم چند واحد تکان می‌خورد. بدون این «ناحیه مرده»، پیچی که درست روی مرز ۲۵ و ۳۰ ایستاده، تا ابد <code>Set: 25 s</code>، <code>Set: 30 s</code>، <code>Set: 25 s</code>… چاپ می‌کرد. ۵۰ حدود ۱٪ کل بازه است: آن‌قدر کوچک که حسش نمی‌کنی و آن‌قدر بزرگ که نویز را قورت بدهد.</span></li>
+  <li data-lines="42-47"><b class="what">۱۲ پله مساوی.</b> <code>raw * 12 / 4096</code> تقسیم صحیح است، پس ۰ تا ۱۱ می‌دهد؛ <code>+ 1</code> و <code>* 5</code> آن را ۵ تا ۶۰ می‌کنند. خط فقط وقتی چاپ می‌شود که تعداد ثانیه‌ها واقعا عوض شده باشد.
+    <span class="why">هر پله سهم یکسانی از پیچ دارد (حدود ۳۴۱ واحد). با <code>map(raw, 0, 4095, 1, 12)</code>، عدد ۱۲ (۶۰ ثانیه) فقط دقیقا در ۴۰۹۵ می‌آمد؛ نقطه‌ای که با دست به سختی به آن می‌رسی.</span></li>
+  <li data-lines="60-61"><b class="what">یک بار بخوان، همه جا استفاده کن.</b> <code>now</code> و <code>pressed</code> یک بار در شروع loop گرفته می‌شوند.
+    <span class="why">همه تصمیم‌های این دور loop بر اساس یک لحظه و یک فشار گرفته می‌شوند؛ فشاری نمی‌تواند در یک شاخه «دیده» و در شاخه دیگر گم شود.</span></li>
+  <li data-lines="63-70"><b class="what">انتظار.</b> فقط این‌جا پیچ خوانده می‌شود. فشار دکمه شمارش را شروع می‌کند: زمان را نگه دار، <code>lastShown</code> را صفر کن، چاپ کن.
+    <span class="why"><code>lastShown = -1</code> مطمئن می‌شود اولین خط <code>Left</code> شمارش تازه چاپ شود، حتی اگر دور قبلی روی همان عدد متوقف شده بود.</span></li>
+  <li data-lines="72-77"><b class="what">زمان باقی‌مانده و لغو.</b> میلی‌ثانیه‌های باقی‌مانده = زمان انتخاب‌شده منهای زمانی که گذشته. فشار دکمه لغو می‌کند، LED را خاموش می‌کند و زمان انتخاب‌شده را دوباره چاپ می‌کند.
+    <span class="why">تفریق <code>now - startTime</code> همان الگوی <code>millis()</code> این درس است، پس حتی وقتی <code>millis()</code> بعد از ۴۹ روز از صفر شروع شود، درست کار می‌کند. تبدیل‌های <code>(long)</code> مهم‌اند: <code>leftMs</code> باید بتواند منفی شود و <code>unsigned long</code> نمی‌تواند.</span></li>
+  <li data-lines="78-82"><b class="what">زمان تمام شد.</b> وقتی زمان باقی‌مانده به ۰ یا کمتر برسد، حالت <code>DONE</code> می‌شود، لحظه‌اش ذخیره می‌شود و LED روشن می‌ماند.
+    <span class="why">شرط <code>&lt;= 0</code> است، نه <code>== 0</code>: loop دقیقا در همان میلی‌ثانیه اجرا نمی‌شود، و دوری که از ۱ میلی‌ثانیه باقی‌مانده به منفی ۲ بپرد، هیچ‌وقت خود ۰ را نمی‌بیند.</span></li>
+  <li data-lines="84-88"><b class="what">ثانیه‌ای یک خط.</b> رو به بالا به ثانیه کامل گرد کن و فقط وقتی عدد عوض شد چاپ کن.
+    <span class="why">loop هزاران بار در ثانیه اجرا می‌شود؛ «چاپ فقط هنگام تغییر» (همان الگوی دکمه در درس ۲.۳) بدون حتی یک <code>delay()</code> دقیقا ثانیه‌ای یک خط می‌دهد.</span></li>
+  <li data-lines="89-93"><b class="what">چشمکی که تند می‌شود.</b> فاصله ۵۰۰ میلی‌ثانیه است، یا در ۵ ثانیه آخر ۱۰۰ میلی‌ثانیه؛ بقیه همان الگوی چشمک بدون delay است.
+    <span class="why">فاصله فقط یک متغیر است، پس «تندتر» یعنی عوض کردن یک عدد، نه نوشتن یک حلقه چشمک دوم. می‌توانی با یک شرط دیگر مرحله سوم هم اضافه کنی (مثلا ۲۵۰ میلی‌ثانیه زیر ۱۰ ثانیه).</span></li>
+  <li data-lines="95-100"><b class="what">بعد از DING.</b> سه ثانیه نور ثابت، یا یک فشار دکمه، و بعد برگشت به انتظار.
+    <span class="why">این یک زمان‌سنج داخل یک حالت است: <code>doneTime</code> برای <code>DONE</code> همان کاری را می‌کند که <code>startTime</code> برای <code>RUNNING</code>. فشار دکمه به آشپز عجول اجازه می‌دهد بدون صبر کردن هشدار را تأیید کند.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p>جواب کامل روی همان مدار. یک زمان کوتاه (۵ یا ۱۰ ثانیه) انتخاب کن تا کل چرخه را سریع ببینی.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-potentiometer", "id": "pot1", "top": -40, "left": -170, "attrs": {}},
+    {"type": "wokwi-pushbutton", "id": "btn1", "top": 110, "left": -170, "attrs": {"color": "green"}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": {"color": "red"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:27", "btn1:1.r", "green", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
 <p>ورودی دیجیتال بدون Pull-up شناور است؛ <code>INPUT_PULLUP</code> + دکمه به GND + منطق برعکس، و Debounce با millis، دکمه را قابل اعتماد می‌کند. <code>millis()</code> با الگوی «تفریق و مقایسه» به جای delay اجازه می‌دهد چند کار هم‌زمان پیش برود؛ وقفه فقط برای رویدادهای خیلی سریع. ADC دوازده بیتی (۰ تا ۴۰۹۵) با تضعیف ۱۱dB حدود ۰٫۱۵ تا ۳٫۱ ولت را می‌خواند؛ از ADC1 استفاده کن، <code>analogReadMilliVolts</code> دقیق‌تر است، و با تقسیم ولتاژ و Hysteresis هر سنسور مقاومتی مثل LDR را به یک تصمیم پایدار تبدیل کن.</p></div>
 

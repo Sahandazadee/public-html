@@ -1544,6 +1544,775 @@ void loop() {
 </details>
 </div>
 
+<h2 id="project">پروژه تمرینی: فن ترموستاتی</h2>
+<div class="project">
+<p class="lede-ish">محفظه پرینتر سه‌بعدی، یک گلخانه کوچک یا کابینتی پر از وسایل الکترونیکی همه یک چیز لازم دارند: فنی که وقتی هوا گرم شد خودش روشن شود، هر چه گرم‌تر شد تندتر بچرخد، و دور و بر آستانه هر چند ثانیه یک بار تق‌تق روشن و خاموش نشود. تو همین کنترلر را می‌سازی. پتانسیومتر نقش سنسور دما را بازی می‌کند (تا بتوانی با یک انگشت اتاق را «گرم» کنی)، مدار ترانزیستوری همین درس موتور را با PWM می‌چرخاند، و یک حلقه WS2812 اختیاری از آبی تا قرمز می‌درخشد. بعدا می‌توانی فقط با عوض کردن یک تابع، DHT22 درس ۳.۳ را جای پتانسیومتر بگذاری.</p>
+
+<h3 id="project-req">خواسته‌ها</h3>
+<ol>
+  <li>ده بار در ثانیه پتانسیومتر خوانده می‌شود (میانگین ۱۶ نمونه) و به یک «دما» از ۱۵٫۰ تا ۴۰٫۰ درجه تبدیل می‌شود. (این بخش در کد شروع آماده است.)</li>
+  <li>Hysteresis: فن در ۲۸٫۰ درجه یا بیشتر روشن می‌شود (<code>Fan ON</code>) و فقط در ۲۶٫۰ درجه یا کمتر دوباره خاموش می‌شود (<code>Fan OFF</code>).</li>
+  <li>تا فن روشن است، سرعتش با دما بالا می‌رود: Duty برابر <code>MIN_DUTY</code> (۱۱۰) در ۲۶ درجه تا ۲۵۵ در ۳۵ درجه و بالاتر، به شکل PWM بیست کیلوهرتزی روی GPIO26. وقتی خاموش است، Duty صفر است.</li>
+  <li>LED وضعیت روی GPIO4 دقیقا در مدتی که فن می‌چرخد روشن است.</li>
+  <li>حلقه روی GPIO32 دما را نشان می‌دهد: همه ۱۶ پیکسل یک رنگ، آبی خالص در ۱۵ درجه، قرمز خالص در ۴۰ درجه، و ترکیبی از این دو در بین؛ روشنایی ۴۰ از ۲۵۵.</li>
+  <li>ثانیه‌ای دو بار Serial Monitor خط <code>T=27.4 C  fan=OFF  duty=0</code> را نشان می‌دهد.</li>
+</ol>
+
+<h3 id="project-parts">قطعه‌ها و سیم‌کشی</h3>
+<ul>
+  <li>پتانسیومتر ۱۰ کیلو (GPIO34) و LED + ۲۲۰ اهم (GPIO4): از قبل روی بردبوردت هستند</li>
+  <li>مدار موتور بخش <a href="#bjt-build">ساخت مدار</a>: 2N2222 (یا S8050)، مقاومت بیس ۴۷۰ اهم، دیود 1N5819، موتور DC کوچک و منبع ۵ ولت جدا. اگر ماسفت و فن ۱۲ ولتی اختیاری را داری، به جایش مدار <a href="#mosfet-circuit">بخش ماسفت</a> را بساز؛ هر دو همان سیگنال GPIO26 را می‌گیرند.</li>
+  <li>اختیاری: حلقه WS2812 با ۱۶ LED (یا یک نوار کوتاه) + مقاومت ۳۳۰ اهم روی GPIO32. برنامه بدون آن هم درست کار می‌کند.</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"POT","name":"پتانسیومتر ۱۰ کیلو (دما)","img":"pot.svg","pins":[["VCC","پایه کناری"],["SIG","پایه وسط"],["GND","پایه کناری دیگر"]]},
+    {"id":"RB","name":"مقاومت بیس ۴۷۰ اهم","img":"resistor.svg","pins":[["1","سمت GPIO"],["2","سمت بیس"]]},
+    {"id":"Q1","name":"ترانزیستور NPN (2N2222 یا S8050)","pins":[["B","بیس"],["C","کلکتور"],["E","امیتر"]]},
+    {"id":"M1","name":"موتور DC کوچک ۵ ولتی (فن)","pins":[["+","سیم قرمز"],["-","سیم مشکی"]]},
+    {"id":"D1","name":"دیود 1N5819","pins":[["K","کاتد (نوار)"],["A","آند"]]},
+    {"id":"PSU","name":"منبع ۵ ولت جدا","pins":[["+","خروجی +۵V"],["-","منفی"]]},
+    {"id":"R1","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","سمت GPIO4"],["2","سمت LED"]]},
+    {"id":"LED1","name":"LED وضعیت","img":"led.svg","pins":[["A","آند (+)"],["K","کاتد (−)"]]},
+    {"id":"RD","name":"مقاومت ۳۳۰ اهم (داده، اختیاری)","img":"resistor.svg","pins":[["1","سمت GPIO"],["2","سمت حلقه"]]},
+    {"id":"RING","name":"حلقه WS2812 با ۱۶ LED (اختیاری)","pins":[["DIN","ورودی داده"],["5V","تغذیه"],["GND","زمین"]]}
+  ],
+  "wires":[["3V3","POT.VCC","red"],["GPIO34","POT.SIG","blue","دما"],["POT.GND","GND","black"],["GPIO26","RB.1","orange","PWM 20kHz"],["RB.2","Q1.B","orange"],["Q1.E","GND","black"],["Q1.C","M1.-","purple"],["PSU.+","M1.+","red"],["D1.K","M1.+","red"],["D1.A","M1.-","purple"],["PSU.-","GND","black"],["GPIO4","R1.1","orange"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"],["GPIO32","RD.1","blue","WS2812"],["RD.2","RING.DIN","blue"],["5V","RING.5V","red"],["RING.GND","GND","black"]]
+}</script><figcaption>فن ترموستاتی: «دمای» پتانسیومتر روی GPIO34، ترانزیستور + موتور + دیود هرزگرد روی GPIO26 با منبع ۵ ولت خودش (زمین‌ها به هم وصل)، LED وضعیت روی GPIO4 و حلقه اختیاری روی GPIO32. با روشنایی ۴۰، شانزده پیکسل خیلی کمتر از ۲۰۰ میلی‌آمپر می‌کشند، پس حلقه می‌تواند از پایه 5V برد تغذیه شود.</figcaption></div>
+
+<h3 id="project-start">کد شروع</h3>
+<p>کد شروع پین PWM، حلقه و ریتم ده‌بار‌در‌ثانیه را آماده می‌کند و دما را هم از قبل می‌خواند. کامپایل می‌شود، ولی فن هیچ‌وقت روشن نمی‌شود و حلقه تاریک می‌ماند. تصمیم‌ها با توست؛ شماره TODOها با شماره خواسته‌ها یکی است.</p>
+<div class="code" data-file="Thermostat_Fan.ino" id="projStart"><pre>
+// فن ترموستاتی: پتانسیومتر = دما، Hysteresis، سرعت PWM، حلقه رنگی
+#include &lt;Adafruit_NeoPixel.h&gt;
+
+const int POT_PIN  = 34;      // به جای سنسور دما (ADC1)
+const int FAN_PIN  = 26;      // به مدار بیس ترانزیستور یا گیت ماسفت
+const int LED_PIN  = 4;       // LED وضعیت: تا فن می‌چرخد روشن است
+const int RING_PIN = 32;      // داده WS2812 (قطعه اختیاری)
+const int NUM_LEDS = 16;
+const float FAN_ON_C  = 28.0; // بالای این روشن شو
+const float FAN_OFF_C = 26.0; // زیر این خاموش شو (Hysteresis)
+const int MIN_DUTY = 110;     // کمترین سرعتی که موتور هنوز می‌چرخد
+
+Adafruit_NeoPixel ring(NUM_LEDS, RING_PIN, NEO_GRB + NEO_KHZ800);
+bool fanOn = false;
+int duty = 0;
+unsigned long lastUpdate = 0, lastPrint = 0;
+
+float readTempC() {
+  long sum = 0;
+  for (int i = 0; i &lt; 16; i++) sum += analogRead(POT_PIN);
+  return 15.0 + (sum / 16) * 25.0 / 4095.0;   // 0...4095 به 15.0...40.0 درجه
+}
+
+void showColor(float t) {
+  // TODO 5: red = 0 در 15.0 درجه ... 255 در 40.0 درجه، blue = 255 - red؛
+  //         همه NUM_LEDS پیکسل را با این رنگ کن، بعد ring.show()
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  ledcAttach(FAN_PIN, 20000, 8);   // 20 کیلوهرتز: بدون صدای سوت موتور
+  ledcWrite(FAN_PIN, 0);           // شروع با فن خاموش
+  ring.begin();
+  ring.setBrightness(40);          // حدود ۱۵٪: بودجه جریان کم
+  ring.clear();
+  ring.show();
+}
+
+void loop() {
+  unsigned long now = millis();
+  if (now - lastUpdate &lt; 100) return;   // ۱۰ به‌روزرسانی در ثانیه کافی است
+  lastUpdate = now;
+
+  float t = readTempC();
+
+  // TODO 2: Hysteresis: در t &gt;= FAN_ON_C مقدار fanOn = true ("Fan ON")،
+  //         در t &lt;= FAN_OFF_C مقدار false ("Fan OFF")
+  // TODO 3: فن روشن: duty = MIN_DUTY در 26.0 درجه ... 255 در 35.0 درجه (constrain!)؛
+  //         فن خاموش: duty = 0؛ بعد ledcWrite(FAN_PIN, duty)
+  // TODO 4: تا فن می‌چرخد LED وضعیت روشن
+  showColor(t);
+  // TODO 6: هر ۵۰۰ میلی‌ثانیه "T=27.4 C  fan=OFF  duty=0" چاپ کن
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="9-11"><b class="what">سه عددی که ترموستات را تعریف می‌کنند.</b> روشن در ۲۸٫۰، خاموش در ۲۶٫۰، و کمترین سرعت مفید.
+    <span class="why">گذاشتن آن‌ها به شکل ثابت در بالای برنامه یعنی می‌توانی دستگاه را بدون خواندن منطق تنظیم کنی. <code>MIN_DUTY</code> موتور خودت را همان‌طور که در تمرین ۱ پیدا کردی پیدا کن: زیر آن، موتور فقط وزوز می‌کند.</span></li>
+  <li data-lines="18-22"><b class="what">یک دماسنج خیالی.</b> میانگین ۱۶ خواندن، که روی ۱۵٫۰ تا ۴۰٫۰ درجه کشیده می‌شود.
+    <span class="why">نوشتن <code>25.0 / 4095.0</code> با ممیز، حساب اعشاری را اجباری می‌کند؛ با عدد صحیح، <code>25 / 4095</code> صفر می‌شد و دما همیشه ۱۵٫۰ بود.</span></li>
+  <li data-lines="40-43"><b class="what">ده بار در ثانیه.</b> اگر کمتر از ۱۰۰ میلی‌ثانیه گذشته، loop فورا برمی‌گردد.
+    <span class="why">دمای اتاق در چند میلی‌ثانیه عوض نمی‌شود، و حلقه لازم نیست هزاران بار در ثانیه تازه شود (هر <code>show()</code> وقفه‌ها را کوتاه متوقف می‌کند). این «برگشت زودهنگام» همان نگهبان برنامه <code>Weather_OLED</code> است.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>Wokwi موتور DC ی ترانزیستوری ندارد، پس در این diagram یک <b>LED سبز روی GPIO26</b> جای فن را گرفته: هر چه پرنورتر باشد، موتور تو تندتر می‌چرخید. LED قرمز روی GPIO4 همان LED وضعیت است و حلقه روی GPIO32 است. کتابخانه <code>Adafruit NeoPixel</code> را در Library Manager اضافه کن.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-potentiometer", "id": "pot1", "top": -40, "left": -170, "attrs": {}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 130, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 60, "left": 200, "attrs": {"color": "red"}},
+    {"type": "wokwi-resistor", "id": "r2", "top": 130, "left": 250, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led2", "top": 60, "left": 280, "attrs": {"color": "green"}},
+    {"type": "wokwi-resistor", "id": "r3", "top": 240, "left": 150, "attrs": {"value": "330"}},
+    {"type": "wokwi-led-ring", "id": "ring1", "top": -150, "left": 220, "attrs": {"pixels": "16"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:26", "r2:2", "orange", [] ],
+    [ "r2:1", "led2:A", "orange", [] ],
+    [ "led2:C", "esp:GND.2", "black", [] ],
+    [ "esp:32", "r3:1", "blue", [] ],
+    [ "r3:2", "ring1:DIN", "blue", [] ],
+    [ "ring1:VCC", "esp:5V", "red", [] ],
+    [ "ring1:GND", "esp:GND.2", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>راهنمایی ۱</summary>
+<p>Hysteresis وضعیت فعلی فن را در شرط لازم دارد: <code>if (!fanOn &amp;&amp; t &gt;= FAN_ON_C) { … } else if (fanOn &amp;&amp; t &lt;= FAN_OFF_C) { … }</code>. بین ۲۶ و ۲۸ هیچ‌کدام از دو شاخه اجرا نمی‌شود، پس فن همان کاری را که می‌کرد ادامه می‌دهد.</p></details>
+<details class="hint"><summary>راهنمایی ۲</summary>
+<p><code>map()</code> فقط با عدد صحیح کار می‌کند، پس با دهم درجه کار کن: <code>map((int)(t * 10), 260, 350, MIN_DUTY, 255)</code>. بالای ۳۵ درجه، <code>map()</code> از ۲۵۵ هم رد می‌شود؛ پس آن را داخل <code>constrain(…, MIN_DUTY, 255)</code> بگذار.</p></details>
+<details class="hint"><summary>راهنمایی ۳</summary>
+<p>برای رنگ: <code>int red = constrain(map((int)(t * 10), 150, 400, 0, 255), 0, 255);</code> و <code>ring.Color(red, 0, 255 - red)</code>. این رنگ را با یک حلقه <code>for</code> در همه پیکسل‌ها بگذار و در آخر یک بار <code>ring.show()</code> را صدا بزن، مثل <code>NeoPixel_Demo</code>.</p></details>
+
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>با پیچ در سمت سرد شروع کن، آرام تا سمت گرم بچرخان، بعد تا وسط و پایین‌تر برگردان. رقم‌های اعشار تو کمی فرق دارند؛ الگو نه:</p>
+<pre class="serial">T=15.0 C  fan=OFF  duty=0
+T=21.3 C  fan=OFF  duty=0
+T=27.6 C  fan=OFF  duty=0
+Fan ON
+T=28.1 C  fan=ON  duty=143
+T=31.0 C  fan=ON  duty=190
+T=35.2 C  fan=ON  duty=255
+T=40.0 C  fan=ON  duty=255
+T=27.0 C  fan=ON  duty=126
+Fan OFF
+T=25.8 C  fan=OFF  duty=0</pre>
+<ul>
+  <li>خواسته ۲: در مسیر <b>بالا رفتن</b> پیچ را حدود ۲۷ درجه نگه دار: فن خاموش می‌ماند. در مسیر <b>پایین آمدن</b> روی ۲۷ درجه نگه دار: روشن می‌ماند. این تفاوت همان Hysteresis است.</li>
+  <li>خواسته ۳: موتور (یا LED سبز در Wokwi) با سرعتی آرام ولی کاملا دیدنی شروع می‌کند، هرگز با یک وزوز ضعیف، و حدود ۳۵ درجه به تمام سرعت می‌رسد.</li>
+  <li>خواسته ۴: LED وضعیت دقیقا همراه خط‌های <code>Fan ON</code> و <code>Fan OFF</code> عوض می‌شود.</li>
+  <li>خواسته ۵: حلقه در سمت سرد آبی، حدود ۲۷ درجه بنفش و در سمت گرم قرمز است، و همه ۱۶ پیکسل همیشه یک رنگ‌اند.</li>
+</ul>
+</details>
+
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="Thermostat_Fan.ino" id="projAns"><pre>
+// فن ترموستاتی: پتانسیومتر = دما، Hysteresis، سرعت PWM، حلقه رنگی
+#include &lt;Adafruit_NeoPixel.h&gt;
+
+const int POT_PIN  = 34;      // به جای سنسور دما (ADC1)
+const int FAN_PIN  = 26;      // به مدار بیس ترانزیستور یا گیت ماسفت
+const int LED_PIN  = 4;       // LED وضعیت: تا فن می‌چرخد روشن است
+const int RING_PIN = 32;      // داده WS2812 (قطعه اختیاری)
+const int NUM_LEDS = 16;
+const float FAN_ON_C  = 28.0; // بالای این روشن شو
+const float FAN_OFF_C = 26.0; // زیر این خاموش شو (Hysteresis)
+const int MIN_DUTY = 110;     // کمترین سرعتی که موتور هنوز می‌چرخد
+
+Adafruit_NeoPixel ring(NUM_LEDS, RING_PIN, NEO_GRB + NEO_KHZ800);
+bool fanOn = false;
+int duty = 0;
+unsigned long lastUpdate = 0, lastPrint = 0;
+
+float readTempC() {
+  long sum = 0;
+  for (int i = 0; i &lt; 16; i++) sum += analogRead(POT_PIN);
+  return 15.0 + (sum / 16) * 25.0 / 4095.0;   // 0...4095 به 15.0...40.0 درجه
+}
+
+void showColor(float t) {
+  int red = constrain(map((int)(t * 10), 150, 400, 0, 255), 0, 255);
+  uint32_t c = ring.Color(red, 0, 255 - red);   // سرد = آبی، گرم = قرمز
+  for (int i = 0; i &lt; NUM_LEDS; i++) ring.setPixelColor(i, c);
+  ring.show();
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  ledcAttach(FAN_PIN, 20000, 8);   // 20 کیلوهرتز: بدون صدای سوت موتور
+  ledcWrite(FAN_PIN, 0);           // شروع با فن خاموش
+  ring.begin();
+  ring.setBrightness(40);          // حدود ۱۵٪: بودجه جریان کم
+  ring.clear();
+  ring.show();
+}
+
+void loop() {
+  unsigned long now = millis();
+  if (now - lastUpdate &lt; 100) return;   // ۱۰ به‌روزرسانی در ثانیه کافی است
+  lastUpdate = now;
+
+  float t = readTempC();
+
+  // ۱) Hysteresis: دو آستانه، تا فن روی 28.0 مدام قطع و وصل نشود
+  if (!fanOn &amp;&amp; t &gt;= FAN_ON_C) {
+    fanOn = true;
+    Serial.println("Fan ON");
+  } else if (fanOn &amp;&amp; t &lt;= FAN_OFF_C) {
+    fanOn = false;
+    Serial.println("Fan OFF");
+  }
+
+  // ۲) سرعت: MIN_DUTY در ۲۶ درجه، تمام سرعت از ۳۵ درجه به بالا
+  if (fanOn) {
+    duty = constrain(map((int)(t * 10), 260, 350, MIN_DUTY, 255), MIN_DUTY, 255);
+  } else {
+    duty = 0;
+  }
+  ledcWrite(FAN_PIN, duty);
+  digitalWrite(LED_PIN, fanOn ? HIGH : LOW);
+
+  // ۳) حلقه رنگی
+  showColor(t);
+
+  // ۴) گزارش، ثانیه‌ای دو بار
+  if (now - lastPrint &gt;= 500) {
+    lastPrint = now;
+    Serial.printf("T=%.1f C  fan=%s  duty=%d\n", t, fanOn ? "ON" : "OFF", duty);
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="24-29"><b class="what">دما به شکل رنگ.</b> با دهم درجه، ۱۵۰ (۱۵٫۰ درجه) قرمز ۰ و ۴۰۰ (۴۰٫۰ درجه) قرمز ۲۵۵ می‌شود؛ آبی هر چه باقی بماند است. هر ۱۶ پیکسل یک رنگ می‌گیرند و با یک <code>show()</code> فرستاده می‌شوند.
+    <span class="why">قرمز + آبی همیشه ۲۵۵ می‌شود، پس روشنایی (و جریان) حلقه ثابت می‌ماند و فقط رنگ عوض می‌شود. <code>constrain</code> یک تور ایمنی است، اگر ورودی روزی از ۱۵ تا ۴۰ بیرون رفت.</span></li>
+  <li data-lines="34-39"><b class="what">شروع امن.</b> ۲۰ کیلوهرتز، ۸ بیت، Duty صفر؛ حلقه پاک می‌شود.
+    <span class="why">موتور هرگز نباید وسط ریست «تصادفی» راه بیفتد. ۲۰ کیلوهرتز بالاتر از محدوده شنوایی انسان است، پس موتور در سرعت‌های کم سوت نمی‌زند (بخش <a href="#mosfet-pwm">کنترل سرعت با PWM</a>).</span></li>
+  <li data-lines="49-56"><b class="what">Hysteresis.</b> وضعیت فعلی فن بخشی از هر شرط است، پس فقط عبور واقعی از ۲۸ (رو به بالا) یا ۲۶ (رو به پایین) آن را عوض می‌کند.
+    <span class="why">مقدار یک سنسور واقعی ±۰٫۱ درجه تکان می‌خورد. با یک آستانه، فنی که روی ۲۸٫۰ است هر ثانیه روشن و خاموش می‌شد؛ هم موتور را فرسوده می‌کند و هم آدم‌ها را دیوانه. فاصله ۲ درجه برای فن‌های کوچک رایج است.</span></li>
+  <li data-lines="58-65"><b class="what">سرعت و LED وضعیت.</b> روشن: Duty از ۱۱۰ در ۲۶ درجه تا ۲۵۵ در ۳۵ درجه، که در دو سر محدود شده. خاموش: ۰. LED فقط از <code>fanOn</code> پیروی می‌کند.
+    <span class="why">خط سرعت از ۲۶ درجه شروع می‌شود نه ۲۸، تا وقتی فن در ۲۸ روشن می‌شود کمی بالاتر از <code>MIN_DUTY</code> (یعنی ۱۴۳) شروع کند، و وقتی اتاق خنک می‌شود فن نرم تا کمترین سرعتش آهسته شود و بعد در ۲۶ خاموش شود. محدود کردن پایین به <code>MIN_DUTY</code> تضمین می‌کند موتور هیچ‌وقت فقط وزوز نکند.</span></li>
+  <li data-lines="67-74"><b class="what">حلقه و گزارش.</b> رنگ در هر دور (ده بار در ثانیه) تازه می‌شود؛ خط Serial فقط هر ۵۰۰ میلی‌ثانیه.
+    <span class="why">باز هم دو ریتم متفاوت: چیزی که آدم نگاه می‌کند (حلقه) سریع به‌روز می‌شود، و چیزی که آدم می‌خواند (Serial Monitor) آن‌قدر آهسته که خواندنی باشد.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p>جواب کامل روی همان diagram (با <code>Adafruit NeoPixel</code>). هر چه «فن» تندتر شود، LED سبز روی GPIO26 پرنورتر می‌شود.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-potentiometer", "id": "pot1", "top": -40, "left": -170, "attrs": {}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 130, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 60, "left": 200, "attrs": {"color": "red"}},
+    {"type": "wokwi-resistor", "id": "r2", "top": 130, "left": 250, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led2", "top": 60, "left": 280, "attrs": {"color": "green"}},
+    {"type": "wokwi-resistor", "id": "r3", "top": 240, "left": 150, "attrs": {"value": "330"}},
+    {"type": "wokwi-led-ring", "id": "ring1", "top": -150, "left": 220, "attrs": {"pixels": "16"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:26", "r2:2", "orange", [] ],
+    [ "r2:1", "led2:A", "orange", [] ],
+    [ "led2:C", "esp:GND.2", "black", [] ],
+    [ "esp:32", "r3:1", "blue", [] ],
+    [ "r3:2", "ring1:DIN", "blue", [] ],
+    [ "ring1:VCC", "esp:5V", "red", [] ],
+    [ "ring1:GND", "esp:GND.2", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
+<h2 id="capstone">پروژه پایانی فصل ۳: ایستگاه هواشناسی رومیزی v1</h2>
+<div class="project">
+<p class="lede-ish">این پروژه‌ای است که فصل ۳ در آن کنار هم می‌نشیند. روی میزت یک ایستگاه هواشناسی کوچک ایستاده: یک عقربه مثل دماسنج‌های عقربه‌ای قدیمی دما را نشان می‌دهد، یک صفحه کوچک جزئیات را صفحه به صفحه نشان می‌دهد، وقتی اتاق زیادی گرم شد بازر بوق می‌زند، و یک کارت SD بی‌صدا همه چیز را برای بعد ثبت می‌کند. این پروژه از دکمه با Debounce و فرمان‌های Serial (۳.۱)، PWM برای سروو و بازر (۳.۲)، DHT22، OLED و کارت SD (۳.۳) و این ایده همین درس استفاده می‌کند که هر خروجی کار خودش و تغذیه خودش را دارد. نسخه ۱ بدون اینترنت کار می‌کند؛ در فصل ۴ یاد می‌گیرد با گوشی‌ات حرف بزند.</p>
+
+<h3 id="capstone-req">خواسته‌ها</h3>
+<ol>
+  <li>هر ۲ ثانیه دما و رطوبت از DHT22 (GPIO13) خوانده می‌شوند. خواندن ناموفق <code>DHT22 read error</code> چاپ می‌کند و رد می‌شود. هر خواندن سالم یک خط چاپ می‌کند: <code>T=24.0 C  H=40.0 %  needle=84  alarm=off</code>.</li>
+  <li>دکمه ۱ (GPIO27، با Debounce) بین سه صفحه OLED می‌چرخد: <code>1/3 Now</code> (دما و رطوبت)، <code>2/3 Min/Max</code> (کمترین و بیشترین دما از روشن شدن) و <code>3/3 Alarm</code> (آستانه و وضعیت). صفحه همان لحظه فشار عوض می‌شود.</li>
+  <li>سروو روی GPIO32 عقربه است: ۱۰ درجه = ۰ درجه عقربه، ۴۰ درجه = ۱۸۰ درجه عقربه؛ بیرون از این بازه در انتها می‌ماند. فقط وقتی حرکت می‌کند که زاویه ۲ درجه یا بیشتر عوض شود.</li>
+  <li>هشدار وقتی دما به آستانه برسد روشن می‌شود و فقط زیر آستانه منهای ۰٫۵ درجه خاموش می‌شود. تا روشن است، LED روی GPIO4 روشن است و بازر (GPIO25) ثانیه‌ای یک بوق ۱۰۰ میلی‌ثانیه‌ای ۱۰۰۰ هرتز می‌زند.</li>
+  <li>آستانه با ۳۰٫۰ درجه شروع می‌شود و از Serial Monitor عوض می‌شود: تایپ یک عدد از ۲۰ تا ۴۰ و Enter، <code>Alarm threshold: 25.0 C</code> چاپ می‌کند؛ هر چیز دیگری <code>Type a number from 20 to 40</code> چاپ می‌کند.</li>
+  <li>هر ۶۰ ثانیه یک خط <code>seconds,temp,humidity</code> به <code>/station.csv</code> اضافه می‌شود (سرتیتر فقط یک بار). بدون کارت: <code>SD missing: no logging</code>، <code>no SD</code> روی صفحه، و بقیه چیزها همچنان کار می‌کنند.</li>
+  <li>بدون <code>delay()</code> در loop: دکمه و Serial Monitor فورا جواب می‌دهند، حتی وسط یک بوق.</li>
+</ol>
+
+<h3 id="capstone-parts">قطعه‌ها و سیم‌کشی</h3>
+<ul>
+  <li>از قبل روی بردبوردت: دکمه ۱ (GPIO27)، LED وضعیت + ۲۲۰ اهم (GPIO4)</li>
+  <li>از درس ۳.۲: سروو SG90 (GPIO32، از پایه 5V) و بازر پسیو (GPIO25)</li>
+  <li>از درس ۳.۳: DHT22 (GPIO13)، OLED ی SSD1306 (I2C ۲۱/۲۲)، ماژول microSD + کارت (VSPI ۵/۱۸/۱۹/۲۳؛ اختیاری)</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"DHTM","name":"ماژول DHT22 سه پایه","img":"dht22.svg","pins":[["+","VCC"],["OUT","DATA"],["-","GND"]]},
+    {"id":"OLED","name":"OLED SSD1306 (I2C)","pins":[["GND","زمین"],["VCC","۳٫۳ ولت"],["SCL","ساعت I2C"],["SDA","داده I2C"]]},
+    {"id":"SD","name":"ماژول microSD (SPI)","img":"sdmodule.svg","pins":[["GND","زمین"],["VCC","5V یا 3V3 (ماژول را ببین!)"],["MISO","داده به ESP32"],["MOSI","داده به کارت"],["SCK","ساعت"],["CS","انتخاب تراشه"]]},
+    {"id":"SERVO","name":"سروو SG90 (عقربه)","img":"servo.svg","pins":[["GND","سیم قهوه‌ای"],["V+","سیم قرمز (+۵V)"],["SIG","سیم نارنجی"]]},
+    {"id":"BZ","name":"بازر پسیو","img":"buzzer.svg","pins":[["1","پایه +"],["2","پایه −"]]},
+    {"id":"BTN","name":"دکمه فشاری (منو)","img":"button.svg","pins":[["1","به GPIO27"],["4","به GND"]]},
+    {"id":"R1","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","سمت GPIO4"],["2","سمت LED"]]},
+    {"id":"LED1","name":"LED قرمز (هشدار)","img":"led.svg","pins":[["A","آند (+)"],["K","کاتد (−)"]]}
+  ],
+  "wires":[["3V3","DHTM.+","red"],["GPIO13","DHTM.OUT","blue","DHT"],["DHTM.-","GND","black"],["OLED.GND","GND","black"],["3V3","OLED.VCC","red"],["GPIO22","OLED.SCL","green"],["GPIO21","OLED.SDA","yellow"],["SD.GND","GND","black"],["5V","SD.VCC","red"],["GPIO19","SD.MISO","blue"],["GPIO23","SD.MOSI","orange"],["GPIO18","SD.SCK","green"],["GPIO5","SD.CS","purple"],["5V","SERVO.V+","red"],["GPIO32","SERVO.SIG","orange","عقربه"],["SERVO.GND","GND","black"],["GPIO25","BZ.1","orange","بوق"],["BZ.2","GND","black"],["GPIO27","BTN.1","blue","منو"],["BTN.4","GND","black"],["GPIO4","R1.1","orange","هشدار"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>ایستگاه هواشناسی رومیزی: هر قطعه روی پین ثابت دوره می‌ماند، پس از درس ۳.۱ تا ۳.۳ هیچ سیمی عوض نمی‌شود. سروو و ماژول SD هر دو از پایه 5V استفاده می‌کنند؛ اگر با حرکت عقربه برد ریست شد، به سروو منبع ۵ ولت جدا بده (روش ۲ در <a href="3-2.html#servo-power">درس ۳.۲</a>).</figcaption></div>
+
+<h3 id="capstone-start">کد شروع</h3>
+<p>کد شروع همه کتابخانه‌ها و شیءها، تابع Debounce، یک <code>showScreen()</code> کامل برای سه صفحه، و یک <code>setup()</code> را دارد که کارت را سوار و سرتیتر را می‌نویسد. چیزی که نیست «مغز» ایستگاه است: خواندن، عقربه، هشدار، منو، فرمان Serial و لاگ. شماره TODOها با شماره خواسته‌ها یکی است.</p>
+<div class="code" data-file="Desk_Station.ino" id="capStart"><pre>
+// ایستگاه هواشناسی رومیزی v1: DHT22، منوی OLED، عقربه سروو، هشدار، لاگ SD
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+#include &lt;SPI.h&gt;
+#include &lt;SD.h&gt;
+#include &lt;ESP32Servo.h&gt;
+
+const int BUTTON_PIN = 27;      // دکمه منو به GND
+const int LED_PIN    = 4;       // LED هشدار
+const int BUZZER_PIN = 25;      // بازر پسیو
+const int SERVO_PIN  = 32;      // سروو عقربه
+const int SD_CS      = 5;       // SCK=18، MISO=19، MOSI=23
+const char *LOG_FILE = "/station.csv";
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+DHT dht(13, DHT22);
+Servo needle;
+
+float tNow = NAN, hNow = NAN, tMin = NAN, tMax = NAN;
+float alarmC = 30.0;            // آستانه هشدار؛ از Serial عوض می‌شود
+bool alarmOn = false, sdOk = false, beepOn = false;
+int screen = 0;                 // 0 = الان، 1 = کمینه/بیشینه، 2 = هشدار
+int lastAngle = -100;           // عدد دور: اولین زاویه همیشه نوشته می‌شود
+unsigned long lastRead = 0, lastLog = 0, lastBeep = 0;
+int stableState = HIGH, lastReading = HIGH;
+unsigned long lastChangeTime = 0;
+
+bool buttonPressed() {          // Debounce از درس ۳.۱
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChangeTime = millis(); lastReading = reading; }
+  if (millis() - lastChangeTime &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) return true;
+  }
+  return false;
+}
+
+void showScreen() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  const char *titles[] = {"1/3 Now", "2/3 Min/Max", "3/3 Alarm"};
+  display.print(titles[screen]);
+  if (!sdOk) display.print("  no SD");
+  display.setTextSize(2);
+  if (isnan(tNow)) {
+    display.setCursor(0, 20);
+    display.print("waiting");
+  } else if (screen == 0) {
+    display.setCursor(0, 20);
+    display.printf("%.1f C", tNow);
+    display.setCursor(0, 44);
+    display.printf("%.1f %%", hNow);
+  } else if (screen == 1) {
+    display.setCursor(0, 20);
+    display.printf("lo %.1f", tMin);
+    display.setCursor(0, 44);
+    display.printf("hi %.1f", tMax);
+  } else {
+    display.setCursor(0, 20);
+    display.printf("at %.1f", alarmC);
+    display.setCursor(0, 44);
+    display.print(alarmOn ? "ALARM!" : "ok");
+  }
+  display.display();
+}
+
+void readSerial() {             // ورودی Serial از درس ۳.۱
+  // TODO 5: یک خط بخوان؛ عدد ۲۰ تا ۴۰ می‌شود alarmC
+  //         ("Alarm threshold: 30.0 C" و showScreen())، وگرنه
+  //         "Type a number from 20 to 40" را چاپ کن
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LED_PIN, OUTPUT);
+  needle.setPeriodHertz(50);
+  needle.attach(SERVO_PIN, 500, 2400);  // اول سروو: کانال 0 ی LEDC را برمی‌دارد
+  ledcAttach(BUZZER_PIN, 2000, 10);
+  ledcWriteTone(BUZZER_PIN, 0);
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found!");
+    while (true) delay(1000);
+  }
+  display.setTextColor(SSD1306_WHITE);
+  dht.begin();
+  sdOk = SD.begin(SD_CS);
+  if (sdOk &amp;&amp; !SD.exists(LOG_FILE)) {
+    File f = SD.open(LOG_FILE, FILE_WRITE);
+    f.println("seconds,temp,humidity");
+    f.close();
+  }
+  Serial.println(sdOk ? "SD ready" : "SD missing: no logging");
+  Serial.printf("Alarm threshold: %.1f C (type 20-40 to change)\n", alarmC);
+  showScreen();
+}
+
+void loop() {
+  unsigned long now = millis();
+  readSerial();
+
+  // TODO 1: هر ۲ ثانیه دما و رطوبت را بخوان؛ اگر nan بود "DHT22 read error"؛
+  //         وگرنه نگهشان دار، tMin/tMax را به‌روز کن و خط وضعیت را چاپ کن
+  // TODO 2: با فشار دکمه screen برود به بعدی از 0، 1، 2؛ showScreen()
+  // TODO 3: عقربه: 10.0 تا 40.0 درجه سانتی‌گراد به 0 تا 180 درجه، فقط با تغییر ۲ درجه یا بیشتر
+  // TODO 4: هشدار در t &gt;= alarmC روشن، زیر alarmC - 0.5 خاموش؛ LED هم همین‌طور؛
+  //         تا روشن است: ثانیه‌ای یک بوق ۱۰۰ میلی‌ثانیه‌ای 1000 هرتز (بدون delay!)
+  // TODO 6: هر ۶۰ ثانیه "seconds,temp,humidity" را اضافه کن (اگر sdOk)
+}
+</pre></div>
+<ol class="walk" data-for="capStart">
+  <li data-lines="21-26"><b class="what">حافظه ایستگاه.</b> مقدارهای فعلی، کمینه/بیشینه (همه در شروع <code>NAN</code>)، آستانه، سه پرچم روشن/خاموش، شماره صفحه و برای هر ریتم یک زمان.
+    <span class="why">هر چیزی که صفحه می‌تواند نشان دهد در همین متغیرها زندگی می‌کند. کد تو فقط متغیرها را عوض می‌کند و <code>showScreen()</code> را صدا می‌زند؛ هیچ‌وقت مستقیم رسم نمی‌کند. همین جدا کردن، یک برنامه بزرگ را قابل مدیریت نگه می‌دارد.</span></li>
+  <li data-lines="40-68"><b class="what">سه صفحه در یک تابع.</b> خط عنوان شماره صفحه را نشان می‌دهد؛ زیرش یکی از سه چیدمان، بسته به <code>screen</code>. قبل از اولین خواندن، هر صفحه <code>waiting</code> نشان می‌دهد.
+    <span class="why">اندازه متن ۲ یعنی هر حرف ۱۲ پیکسل، پس هر صفحه دو خط تا ۱۰ حرفی جا دارد. برای همین مقدارها کوتاه‌اند (<code>lo 18.5</code>) و واحدها فقط در صفحه اول آمده‌اند.</span></li>
+  <li data-lines="80-83"><b class="what">اول سروو، بعد بازر.</b> عقربه اول وصل می‌شود و بعد <code>ledcAttach()</code> بازر.
+    <span class="why">کتابخانه ESP32Servo همیشه بدون پرسیدن از هسته کانال ۰ ی LEDC را برمی‌دارد. اگر <code>ledcAttach()</code> قبلا کانال ۰ را برای بازر گرفته بود، هر دو روی یک کانال می‌افتادند و با هر بوق عقربه این طرف و آن طرف می‌پرید. وقتی سروو اول باشد، هسته به بازر کانال آزاد بعدی را می‌دهد.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="capStart">
+<p>این diagram همه قطعه‌ها را دارد: DHT22، OLED، microSD، سروو، بازر، دکمه و LED. در Library Manager کتابخانه‌های <code>Adafruit SSD1306</code>، <code>DHT sensor library</code> و <code>ESP32Servo</code> را اضافه کن. روی DHT22 کلیک کن تا دما را عوض کنی، و آستانه را در خط ورودی Serial Monitor تایپ کن.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-dht22", "id": "dht1", "top": -60, "left": -150, "attrs": {"temperature": "24", "humidity": "40"}},
+    {"type": "wokwi-pushbutton", "id": "btn1", "top": 110, "left": -170, "attrs": {"color": "green"}},
+    {"type": "wokwi-buzzer", "id": "bz1", "top": 190, "left": -170, "attrs": {"volume": "0.2"}},
+    {"type": "board-ssd1306", "id": "oled1", "top": 60, "left": 200, "attrs": {"i2cAddress": "0x3c"}},
+    {"type": "wokwi-microsd-card", "id": "sd1", "top": 170, "left": 220, "attrs": {}},
+    {"type": "wokwi-servo", "id": "servo1", "top": -120, "left": 200, "attrs": {}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 280, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 250, "left": 110, "attrs": {"color": "red"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:27", "btn1:1.r", "green", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "bz1:1", "esp:25", "orange", [] ],
+    [ "bz1:2", "esp:GND.1", "black", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "sd1:GND", "esp:GND.2", "black", [] ],
+    [ "sd1:VCC", "esp:3V3", "red", [] ],
+    [ "sd1:DO", "esp:19", "blue", [] ],
+    [ "sd1:DI", "esp:23", "orange", [] ],
+    [ "sd1:SCK", "esp:18", "green", [] ],
+    [ "sd1:CS", "esp:5", "purple", [] ],
+    [ "servo1:GND", "esp:GND.2", "black", [] ],
+    [ "servo1:V+", "esp:5V", "red", [] ],
+    [ "servo1:PWM", "esp:32", "orange", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>راهنمایی ۱</summary>
+<p>فقط با TODOهای ۱ و ۲ شروع کن و امتحان کن: صفحه‌ها باید عوض شوند و با عدد پر شوند. بعد هر بار یک خواسته اضافه کن. TODO 1 همان پروژه کمینه/بیشینه درس ۳.۳ به اضافه رطوبت است؛ TODO 2 یعنی <code>screen = (screen + 1) % 3;</code> (علامت <code>%</code> عدد ۳ را به ۰ برمی‌گرداند) و بعد <code>showScreen()</code>.</p></details>
+<details class="hint"><summary>راهنمایی ۲</summary>
+<p>TODOهای ۳ و ۴ داخل بلوک ۲ ثانیه‌ای، درست بعد از یک خواندن سالم، می‌روند: عقربه همان نشانگر مخزن درس ۳.۲ است با <code>map((int)(t * 10), 100, 400, 0, 180)</code> و <code>constrain</code>؛ هشدار دو شرط با Hysteresis است (<code>t &gt;= alarmC</code> برای روشن شدن و <code>t &lt; alarmC - 0.5</code> برای خاموش شدن).</p></details>
+<details class="hint"><summary>راهنمایی ۳</summary>
+<p>یک بوق کوتاه در هر ثانیه بدون <code>delay()</code> دو بررسی لازم دارد: «وقت شروع یک بوق است؟» (هشدار روشن، در حال بوق نیست، ۱۰۰۰ میلی‌ثانیه از شروع قبلی گذشته) و «وقت قطعش است؟» (در حال بوق و ۱۰۰ میلی‌ثانیه از شروع گذشته، <b>یا</b> هشدار همین الان خاموش شده). TODO 5 همان مثال <code>Serial_Commands</code> درس ۳.۱ است، با <code>toFloat()</code> به جای <code>toInt()</code>.</p></details>
+
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>در Wokwi (DHT22 روی ۲۴ درجه و رطوبت ۴۰ درصد): بگذار اجرا شود، <code>25</code> و Enter را تایپ کن، DHT22 را روی ۲۶، بعد ۲۴٫۶، بعد ۲۴ بگذار و در آخر <code>50</code> را تایپ کن:</p>
+<pre class="serial">SD ready
+Alarm threshold: 30.0 C (type 20-40 to change)
+T=24.0 C  H=40.0 %  needle=84  alarm=off
+Alarm threshold: 25.0 C
+T=26.0 C  H=40.0 %  needle=96  alarm=ON
+T=24.6 C  H=40.0 %  needle=87  alarm=ON
+T=24.0 C  H=40.0 %  needle=84  alarm=off
+Type a number from 20 to 40</pre>
+<ul>
+  <li>خواسته ۲: هر فشار دقیقا یک صفحه جلو می‌رود (۱/۳ ← ۲/۳ ← ۳/۳ ← ۱/۳)، فورا، بدون صبر برای خواندن بعدی.</li>
+  <li>خواسته ۳: در ۲۴ درجه عقربه کمی قبل از وسط است (۸۴ درجه) و در ۲۶ درجه کمی بعد از آن (۹۶ درجه). زیر ۱۰ درجه روی ۰ و بالای ۴۰ درجه روی ۱۸۰ می‌ماند.</li>
+  <li>خواسته ۴: در ۲۴٫۶ درجه هشدار روشن می‌ماند (۲۴٫۶ هنوز بالاتر از ۲۵٫۰ منهای ۰٫۵ است)؛ فقط در ۲۴٫۰ خاموش می‌شود. تا روشن است ثانیه‌ای یک بوق کوتاه می‌شنوی و LED قرمز روشن است؛ صفحه ۳/۳ می‌نویسد <code>ALARM!</code>.</li>
+  <li>خواسته‌های ۶ و ۷: بعد از یک دقیقه <code>logged</code> می‌آید. دکمه را درست وسط یک بوق بزن: صفحه باز هم فورا عوض می‌شود و بوق همان ۱۰۰ میلی‌ثانیه می‌ماند.</li>
+</ul>
+</details>
+
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="Desk_Station.ino" id="capAns"><pre>
+// ایستگاه هواشناسی رومیزی v1: DHT22، منوی OLED، عقربه سروو، هشدار، لاگ SD
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+#include &lt;SPI.h&gt;
+#include &lt;SD.h&gt;
+#include &lt;ESP32Servo.h&gt;
+
+const int BUTTON_PIN = 27;      // دکمه منو به GND
+const int LED_PIN    = 4;       // LED هشدار
+const int BUZZER_PIN = 25;      // بازر پسیو
+const int SERVO_PIN  = 32;      // سروو عقربه
+const int SD_CS      = 5;       // SCK=18، MISO=19، MOSI=23
+const char *LOG_FILE = "/station.csv";
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+DHT dht(13, DHT22);
+Servo needle;
+
+float tNow = NAN, hNow = NAN, tMin = NAN, tMax = NAN;
+float alarmC = 30.0;            // آستانه هشدار؛ از Serial عوض می‌شود
+bool alarmOn = false, sdOk = false, beepOn = false;
+int screen = 0;                 // 0 = الان، 1 = کمینه/بیشینه، 2 = هشدار
+int lastAngle = -100;           // عدد دور: اولین زاویه همیشه نوشته می‌شود
+unsigned long lastRead = 0, lastLog = 0, lastBeep = 0;
+int stableState = HIGH, lastReading = HIGH;
+unsigned long lastChangeTime = 0;
+
+bool buttonPressed() {          // Debounce از درس ۳.۱
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChangeTime = millis(); lastReading = reading; }
+  if (millis() - lastChangeTime &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) return true;
+  }
+  return false;
+}
+
+void showScreen() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  const char *titles[] = {"1/3 Now", "2/3 Min/Max", "3/3 Alarm"};
+  display.print(titles[screen]);
+  if (!sdOk) display.print("  no SD");
+  display.setTextSize(2);
+  if (isnan(tNow)) {
+    display.setCursor(0, 20);
+    display.print("waiting");
+  } else if (screen == 0) {
+    display.setCursor(0, 20);
+    display.printf("%.1f C", tNow);
+    display.setCursor(0, 44);
+    display.printf("%.1f %%", hNow);
+  } else if (screen == 1) {
+    display.setCursor(0, 20);
+    display.printf("lo %.1f", tMin);
+    display.setCursor(0, 44);
+    display.printf("hi %.1f", tMax);
+  } else {
+    display.setCursor(0, 20);
+    display.printf("at %.1f", alarmC);
+    display.setCursor(0, 44);
+    display.print(alarmOn ? "ALARM!" : "ok");
+  }
+  display.display();
+}
+
+void readSerial() {             // ورودی Serial از درس ۳.۱
+  if (Serial.available() == 0) return;
+  String line = Serial.readStringUntil('\n');
+  line.trim();
+  float v = line.toFloat();
+  if (v &gt;= 20 &amp;&amp; v &lt;= 40) {
+    alarmC = v;
+    Serial.printf("Alarm threshold: %.1f C\n", alarmC);
+    showScreen();
+  } else {
+    Serial.println("Type a number from 20 to 40");
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LED_PIN, OUTPUT);
+  needle.setPeriodHertz(50);
+  needle.attach(SERVO_PIN, 500, 2400);  // اول سروو: کانال 0 ی LEDC را برمی‌دارد
+  ledcAttach(BUZZER_PIN, 2000, 10);
+  ledcWriteTone(BUZZER_PIN, 0);
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found!");
+    while (true) delay(1000);
+  }
+  display.setTextColor(SSD1306_WHITE);
+  dht.begin();
+  sdOk = SD.begin(SD_CS);
+  if (sdOk &amp;&amp; !SD.exists(LOG_FILE)) {
+    File f = SD.open(LOG_FILE, FILE_WRITE);
+    f.println("seconds,temp,humidity");
+    f.close();
+  }
+  Serial.println(sdOk ? "SD ready" : "SD missing: no logging");
+  Serial.printf("Alarm threshold: %.1f C (type 20-40 to change)\n", alarmC);
+  showScreen();
+}
+
+void loop() {
+  unsigned long now = millis();
+  readSerial();
+
+  // ۱) دکمه منو: صفحه بعدی
+  if (buttonPressed()) {
+    screen = (screen + 1) % 3;
+    showScreen();
+  }
+
+  // ۲) هر ۲ ثانیه: سنسور، عقربه، کمینه/بیشینه، هشدار
+  if (now - lastRead &gt;= 2000) {
+    lastRead = now;
+    float t = dht.readTemperature();
+    float h = dht.readHumidity();
+    if (isnan(t) || isnan(h)) {
+      Serial.println("DHT22 read error");
+    } else {
+      tNow = t;
+      hNow = h;
+      if (isnan(tMin) || t &lt; tMin) tMin = t;
+      if (isnan(tMax) || t &gt; tMax) tMax = t;
+      int angle = constrain(map((int)(t * 10), 100, 400, 0, 180), 0, 180);
+      if (abs(angle - lastAngle) &gt;= 2) {
+        needle.write(angle);
+        lastAngle = angle;
+      }
+      if (!alarmOn &amp;&amp; t &gt;= alarmC) alarmOn = true;
+      else if (alarmOn &amp;&amp; t &lt; alarmC - 0.5) alarmOn = false;
+      digitalWrite(LED_PIN, alarmOn ? HIGH : LOW);
+      Serial.printf("T=%.1f C  H=%.1f %%  needle=%d  alarm=%s\n",
+                    t, h, lastAngle, alarmOn ? "ON" : "off");
+      showScreen();
+    }
+  }
+
+  // ۳) صدای هشدار: بوق ۱۰۰ میلی‌ثانیه‌ای، ثانیه‌ای یک بار
+  if (alarmOn &amp;&amp; !beepOn &amp;&amp; now - lastBeep &gt;= 1000) {
+    lastBeep = now;
+    beepOn = true;
+    ledcWriteTone(BUZZER_PIN, 1000);
+  }
+  if (beepOn &amp;&amp; (now - lastBeep &gt;= 100 || !alarmOn)) {
+    beepOn = false;
+    ledcWriteTone(BUZZER_PIN, 0);
+  }
+
+  // ۴) هر ۶۰ ثانیه: یک خط CSV
+  if (now - lastLog &gt;= 60000) {
+    lastLog = now;
+    if (sdOk &amp;&amp; !isnan(tNow)) {
+      File f = SD.open(LOG_FILE, FILE_APPEND);
+      if (f) {
+        f.printf("%lu,%.1f,%.1f\n", now / 1000, tNow, hNow);
+        f.close();
+        Serial.println("logged");
+      }
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="capAns">
+  <li data-lines="70-82"><b class="what">فرمان Serial.</b> اگر خطی رسیده، تا Enter بخوانش، تمیزش کن و به عدد تبدیلش کن. فقط ۲۰ تا ۴۰ پذیرفته می‌شود.
+    <span class="why"><code>toFloat()</code> متنی را که عدد نیست به ۰٫۰ تبدیل می‌کند، پس بررسی بازه اشتباه‌های تایپی مثل <code>abc</code> را هم می‌گیرد. خط اول وقتی چیزی نرسیده فورا برمی‌گردد، پس این تابع در هر دور loop تقریبا هیچ هزینه‌ای ندارد.</span></li>
+  <li data-lines="114-118"><b class="what">منو.</b> هر فشار به صفحه بعد می‌رود؛ <code>% 3</code> عدد ۳ را به ۰ برمی‌گرداند. صفحه فورا دوباره رسم می‌شود.
+    <span class="why">بررسی دکمه در هر دور loop، نه فقط هر ۲ ثانیه، همان چیزی است که حس «فوری» را می‌سازد.</span></li>
+  <li data-lines="121-131"><b class="what">یک خواندن، چند نتیجه.</b> هر ۲ ثانیه: هر دو مقدار را بخوان، اگر یکی <code>NAN</code> بود این دور را رد کن، وگرنه ذخیره کن و کمینه و بیشینه را به‌روز کن.
+    <span class="why">همه تصمیم‌های پایین (عقربه، هشدار، صفحه) از همین خواندن تازه استفاده می‌کنند. برای همین داخل همین یک بلوک‌اند، نه در زمان‌سنج‌های جدا.</span></li>
+  <li data-lines="132-136"><b class="what">عقربه.</b> ۱۰٫۰ تا ۴۰٫۰ درجه با دهم درجه به ۰ تا ۱۸۰ درجه تبدیل می‌شود، در دو سر محدود می‌شود، و ناحیه مرده ۲ درجه دارد.
+    <span class="why">بازه ۳۰ درجه روی ۱۸۰ درجه یعنی به ازای هر درجه سانتی‌گراد ۶ درجه عقربه: از آن سر اتاق هم خوانا است. بدون <code>constrain</code>، یک روز داغ از سروو ۲۰۰ درجه می‌خواست و آن را به ته مسیرش فشار می‌داد.</span></li>
+  <li data-lines="137-142"><b class="what">وضعیت هشدار، LED، گزارش.</b> روشن در آستانه، خاموش نیم درجه زیر آن. LED از وضعیت پیروی می‌کند، یک خط وضعیت چاپ می‌شود و صفحه دوباره رسم می‌شود.
+    <span class="why">درباره هشدار فقط این‌جا، در هر خواندن یک بار، تصمیم گرفته می‌شود. بوق زدن پایین فقط <code>alarmOn</code> را <b>می‌خواند</b>. جدا نگه داشتن «تصمیم گرفتن» و «سر و صدا کردن» تغییر دادن هر دو را آسان می‌کند.</span></li>
+  <li data-lines="146-155"><b class="what">بوق.</b> شروع: هشدار روشن، در حال بوق نیست، یک ثانیه از شروع قبلی گذشته. قطع: ۱۰۰ میلی‌ثانیه بعد، یا فورا وقتی هشدار خاموش شود.
+    <span class="why">این یک ماشین حالت کوچک با دو حالت است (در حال بوق / ساکت). بخش <code>|| !alarmOn</code> مهم است: بدون آن، هشداری که وسط یک بوق تمام شده، بازر را تا پایان ۱۰۰ میلی‌ثانیه روشن می‌گذاشت. این‌جا بی‌خطر است؛ در برنامه‌ای که بوقش چند ثانیه طول می‌کشد، نه.</span></li>
+  <li data-lines="157-168"><b class="what">لاگ.</b> دقیقه‌ای یک بار، اگر کارت و یک خواندن معتبر داریم.
+    <span class="why">همان الگوی پروژه کمینه/بیشینه درس ۳.۳. در فصل ۴ به جای ثانیه‌ها، ساعت واقعی روز را از NTP می‌نویسی.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="capAns">
+<p>ایستگاه کامل در شبیه‌ساز (با سه کتابخانه). هر هفت خواسته را امتحان کن؛ برای آزمایش SD، قطعه microSD را از diagram حذف کن و دوباره اجرا کن.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-dht22", "id": "dht1", "top": -60, "left": -150, "attrs": {"temperature": "24", "humidity": "40"}},
+    {"type": "wokwi-pushbutton", "id": "btn1", "top": 110, "left": -170, "attrs": {"color": "green"}},
+    {"type": "wokwi-buzzer", "id": "bz1", "top": 190, "left": -170, "attrs": {"volume": "0.2"}},
+    {"type": "board-ssd1306", "id": "oled1", "top": 60, "left": 200, "attrs": {"i2cAddress": "0x3c"}},
+    {"type": "wokwi-microsd-card", "id": "sd1", "top": 170, "left": 220, "attrs": {}},
+    {"type": "wokwi-servo", "id": "servo1", "top": -120, "left": 200, "attrs": {}},
+    {"type": "wokwi-resistor", "id": "r1", "top": 280, "left": 170, "rotate": 90, "attrs": {"value": "220"}},
+    {"type": "wokwi-led", "id": "led1", "top": 250, "left": 110, "attrs": {"color": "red"}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:27", "btn1:1.r", "green", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "bz1:1", "esp:25", "orange", [] ],
+    [ "bz1:2", "esp:GND.1", "black", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "sd1:GND", "esp:GND.2", "black", [] ],
+    [ "sd1:VCC", "esp:3V3", "red", [] ],
+    [ "sd1:DO", "esp:19", "blue", [] ],
+    [ "sd1:DI", "esp:23", "orange", [] ],
+    [ "sd1:SCK", "esp:18", "green", [] ],
+    [ "sd1:CS", "esp:5", "purple", [] ],
+    [ "servo1:GND", "esp:GND.2", "black", [] ],
+    [ "servo1:V+", "esp:5V", "red", [] ],
+    [ "servo1:PWM", "esp:32", "orange", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
 <p>پین ESP32 فقط فرمان می‌دهد (۳٫۳ ولت، زیر ۲۰ میلی‌آمپر)؛ کار سنگین را ترانزیستور (تا چند صد میلی‌آمپر)، ماسفت Logic-Level (چند آمپر و PWM)، رله (ایزوله) یا درایور آماده (H-Bridge، ULN2003، A4988) انجام می‌دهد. بار پرمصرف منبع جدا می‌خواهد با زمین مشترک، و هر سیم‌پیچ دیود هرزگرد. استپر 28BYJ-48 با ترتیب IN1، IN3، IN2، IN4 می‌چرخد، و WS2812B هر LED تا ۶۰ میلی‌آمپر می‌کشد: اول بودجه جریان، بعد انیمیشن.</p></div>
 

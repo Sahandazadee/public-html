@@ -1370,6 +1370,355 @@ void loop() {
 </details>
 </div>
 
+<h2 id="project">Practice project: Min/max thermometer</h2>
+<div class="project">
+<p class="lede-ish">Gardeners love min/max thermometers: in the morning you can see how cold it got in the greenhouse during the night, without having stayed up to watch. Yours shows the current temperature in big digits, today's lowest and highest values underneath, resets with one button press, and writes a line to the SD card every minute so you can draw the whole night in a spreadsheet later. It combines the three buses of this lesson on one board: the DHT22's own one-wire signal, I2C for the OLED and SPI for the card.</p>
+
+<h3 id="project-req">Requirements</h3>
+<ol>
+  <li>Every 2 seconds the DHT22 (GPIO13) is read. A failed reading prints <code>DHT22 read error</code> and changes nothing else.</li>
+  <li>The OLED shows the current temperature in large digits, and <code>Min</code> and <code>Max</code> underneath. The very first valid reading sets both min and max; before it, the screen shows <code>--.-</code>. Each valid reading prints <code>now=23.4  min=21.0  max=24.1</code>.</li>
+  <li>A press of button 1 (GPIO27, debounced) sets min and max to the current temperature and prints <code>Min/max reset</code>. The screen updates immediately.</li>
+  <li>At start-up the SD card is mounted and <code>/minmax.csv</code> gets the header <code>seconds,now,min,max</code> only if the file is new. With no card, the program prints <code>SD missing: no logging</code>, shows <code>no SD</code> on the screen and everything else keeps working.</li>
+  <li>Every 60 seconds one line <code>seconds,now,min,max</code> is appended (only with a card and a valid reading), and <code>logged</code> is printed.</li>
+  <li>No <code>delay()</code> in loop: the button reacts instantly at any time.</li>
+</ol>
+
+<h3 id="project-parts">Parts and wiring</h3>
+<ul>
+  <li>ESP32 board and push button 1 (GPIO27): already on your breadboard</li>
+  <li>DHT22 (3-pin module, or the bare sensor with a 10 kΩ pull-up, as in <a href="#dht22">this lesson</a>)</li>
+  <li>0.96-inch SSD1306 OLED (I2C)</li>
+  <li>microSD module + a FAT32 card (optional: without it, requirements 4 and 5 show the "no SD" behaviour)</li>
+</ul>
+<div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"DHTM","name":"3-pin DHT22 module (pull-up on board)","img":"dht22.svg","pins":[["+","VCC"],["OUT","DATA"],["-","GND"]]},
+    {"id":"OLED","name":"SSD1306 OLED (I2C)","pins":[["GND","ground"],["VCC","3.3 V"],["SCL","I2C clock"],["SDA","I2C data"]]},
+    {"id":"SD","name":"microSD module (SPI)","img":"sdmodule.svg","pins":[["GND","ground"],["VCC","5V or 3V3 (check your module!)"],["MISO","data to the ESP32"],["MOSI","data to the card"],["SCK","clock"],["CS","chip select"]]},
+    {"id":"BTN","name":"Push button","img":"button.svg","pins":[["1","to GPIO27"],["4","to GND (diagonal leg)"]]}
+  ],
+  "wires":[["3V3","DHTM.+","red"],["GPIO13","DHTM.OUT","blue","DHT data"],["DHTM.-","GND","black"],["OLED.GND","GND","black"],["3V3","OLED.VCC","red"],["GPIO22","OLED.SCL","green"],["GPIO21","OLED.SDA","yellow"],["SD.GND","GND","black"],["5V","SD.VCC","red"],["GPIO19","SD.MISO","blue"],["GPIO23","SD.MOSI","orange"],["GPIO18","SD.SCK","green"],["GPIO5","SD.CS","purple"],["GPIO27","BTN.1","blue","reset"],["BTN.4","GND","black"]]
+}</script><figcaption>Min/max thermometer: DHT22 on GPIO13, OLED on I2C (21/22), microSD on VSPI (CS 5, SCK 18, MISO 19, MOSI 23) and the reset button on GPIO27. The common blue SD module has its own regulator and runs from 5V; a module without a regulator goes on 3V3.</figcaption></div>
+
+<h3 id="project-start">Starter code</h3>
+<p>The starter already includes the libraries, the debounce function and a complete <code>showScreen()</code> that draws whatever is in <code>nowT</code>, <code>minT</code> and <code>maxT</code>. It compiles and shows <code>--.-</code> forever. You write the logic: reading, min/max, reset and logging. TODO numbers match the requirements.</p>
+<div class="code" data-file="MinMax_Thermometer.ino" id="projStart"><pre>
+// Min/max thermometer: DHT22 + OLED + reset button + SD log every minute
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+#include &lt;SPI.h&gt;
+#include &lt;SD.h&gt;
+
+const int BUTTON_PIN = 27;              // reset button to GND
+const int SD_CS = 5;                    // SCK=18, MISO=19, MOSI=23
+const char *LOG_FILE = "/minmax.csv";
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+DHT dht(13, DHT22);
+
+float nowT = NAN, minT = NAN, maxT = NAN;   // NAN = "no reading yet"
+bool sdOk = false;
+unsigned long lastRead = 0, lastLog = 0;
+int stableState = HIGH, lastReading = HIGH;
+unsigned long lastChangeTime = 0;
+
+bool buttonPressed() {                  // debounce from lesson 3.1
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChangeTime = millis(); lastReading = reading; }
+  if (millis() - lastChangeTime &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) return true;
+  }
+  return false;
+}
+
+void showScreen() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print("Now");
+  if (!sdOk) display.print("        no SD");
+  display.setTextSize(3);
+  display.setCursor(0, 12);
+  if (isnan(nowT)) display.print("--.-");
+  else display.printf("%.1f", nowT);
+  display.setTextSize(1);
+  display.setCursor(0, 44);
+  if (isnan(minT)) display.print("Min --.-");
+  else display.printf("Min %.1f C", minT);
+  display.setCursor(0, 56);
+  if (isnan(maxT)) display.print("Max --.-");
+  else display.printf("Max %.1f C", maxT);
+  display.display();
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found!");
+    while (true) delay(1000);
+  }
+  display.setTextColor(SSD1306_WHITE);
+  dht.begin();
+  // TODO 4: sdOk = SD.begin(SD_CS); if the file is new, write the header
+  //         "seconds,now,min,max"; print "SD ready" or "SD missing: no logging"
+  showScreen();
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  // TODO 1: every 2 s read dht.readTemperature(); on nan print "DHT22 read error"
+  // TODO 2: valid reading: nowT = t, update minT/maxT (NAN = first reading),
+  //         print "now=.. min=.. max=..", call showScreen()
+  // TODO 3: buttonPressed(): minT = maxT = nowT, print "Min/max reset", showScreen()
+  // TODO 5: every 60 s, if sdOk and nowT is valid, append "seconds,now,min,max"
+}
+</pre></div>
+<ol class="walk" data-for="projStart">
+  <li data-lines="16"><b class="what"><code>NAN</code> as "nothing yet".</b> All three temperatures start as <code>NAN</code> (Not A Number), the same value the DHT library returns when a reading fails.
+    <span class="why">You can't start min at 0: in a warm room, min would stay 0 forever. With <code>NAN</code> you can ask <code>isnan(minT)</code>, "do I have a value yet?", and let the first real reading fill it in.</span></li>
+  <li data-lines="32-50"><b class="what">A finished screen.</b> <code>showScreen()</code> draws "Now" (plus <code>no SD</code> if needed), the big number, and the two small lines. For <code>NAN</code> it draws <code>--.-</code>.
+    <span class="why">Drawing is not the point of this project, so it's done for you. The rule is: change the variables, then call <code>showScreen()</code>. The screen never "forgets" to show a change.</span></li>
+  <li data-lines="62-63"><b class="what">TODO 4 lives in setup.</b> Mounting the card and writing the header happen only once, at start-up.
+    <span class="why">This is the header-only-once pattern from <code>SD_Log</code>. If you wrote the header every time, each reset would add a text line in the middle of your numbers.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projStart">
+<p>Replace <code>diagram.json</code> with this one (DHT22, OLED, microSD card and a green button) and add <code>Adafruit SSD1306</code> and <code>DHT sensor library</code> in Library Manager. Click the DHT22 while the simulation runs to change the temperature.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-dht22", "id": "dht1", "top": -60, "left": -150, "attrs": {"temperature": "22.5", "humidity": "40"}},
+    {"type": "wokwi-pushbutton", "id": "btn1", "top": 110, "left": -170, "attrs": {"color": "green"}},
+    {"type": "board-ssd1306", "id": "oled1", "top": 60, "left": 200, "attrs": {"i2cAddress": "0x3c"}},
+    {"type": "wokwi-microsd-card", "id": "sd1", "top": 170, "left": 220, "attrs": {}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:27", "btn1:1.r", "green", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "sd1:GND", "esp:GND.2", "black", [] ],
+    [ "sd1:VCC", "esp:3V3", "red", [] ],
+    [ "sd1:DO", "esp:19", "blue", [] ],
+    [ "sd1:DI", "esp:23", "orange", [] ],
+    [ "sd1:SCK", "esp:18", "green", [] ],
+    [ "sd1:CS", "esp:5", "purple", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+
+<details class="hint"><summary>Hint 1</summary>
+<p>TODOs 1 and 2 are the 2-second block of <code>Weather_OLED</code>. The trick is the first reading: <code>if (isnan(minT) || t &lt; minT) minT = t;</code>. When <code>minT</code> is still <code>NAN</code>, the left part is true and the first reading is taken; later, only a smaller value wins. Do the same for max with <code>&gt;</code>.</p></details>
+<details class="hint"><summary>Hint 2</summary>
+<p>TODO 3: <code>if (buttonPressed()) { minT = nowT; maxT = nowT; … }</code>. If no reading has arrived yet, <code>nowT</code> is <code>NAN</code>, so min and max become <code>NAN</code> too, which is exactly right: "nothing yet".</p></details>
+<details class="hint"><summary>Hint 3</summary>
+<p>TODO 4 and 5 are <code>SD_Log</code> split in two: <code>sdOk = SD.begin(SD_CS);</code> and the header in setup; in loop, a 60-second <code>millis()</code> block with <code>SD.open(LOG_FILE, FILE_APPEND)</code>, <code>f.printf("%lu,%.1f,%.1f,%.1f\n", now / 1000, nowT, minT, maxT)</code> and <code>f.close()</code>. Check <code>sdOk</code> first, so a missing card never blocks anything.</p></details>
+
+<details class="expect"><summary>What should you see?</summary>
+<p>In Wokwi (the DHT22 starts at 22.5 °C): wait a few seconds, set the DHT22 to 30, then to 18, press the button, and wait for the first minute. The Serial Monitor shows:</p>
+<pre class="serial">SD ready
+now=22.5  min=22.5  max=22.5
+now=22.5  min=22.5  max=22.5
+now=30.0  min=22.5  max=30.0
+now=18.0  min=18.0  max=30.0
+Min/max reset
+now=18.0  min=18.0  max=18.0
+...
+logged</pre>
+<p>On a real board, the numbers are your room's and change slowly. After a few minutes, <code>/minmax.csv</code> on the card looks like this (the first column is the number of seconds since power-up, so every line is 60 higher):</p>
+<pre class="serial">seconds,now,min,max
+60,18.0,18.0,18.0
+120,18.0,18.0,18.0
+180,18.1,18.0,18.1</pre>
+<ul>
+  <li>Requirement 2: right after start-up the screen shows <code>--.-</code> for about 2 seconds, then the first temperature, with min = max = that temperature.</li>
+  <li>Requirement 3: after the reset, min and max both equal "now"; the old extremes are gone from the screen at once, not 2 seconds later.</li>
+  <li>Requirement 4: remove the card (in Wokwi, click the microSD part and press <kbd>Delete</kbd>) and restart: <code>SD missing: no logging</code>, <code>no SD</code> in the top line, and the thermometer still works and resets.</li>
+  <li>Requirements 1 and 6: disconnect the DHT22's data wire: every 2 s <code>DHT22 read error</code>, the last good values stay on the screen, and the button still resets instantly.</li>
+</ul>
+</details>
+
+<details class="answer"><summary>Full answer with explanation</summary>
+<div class="code" data-file="MinMax_Thermometer.ino" id="projAns"><pre>
+// Min/max thermometer: DHT22 + OLED + reset button + SD log every minute
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_GFX.h&gt;
+#include &lt;Adafruit_SSD1306.h&gt;
+#include &lt;DHT.h&gt;
+#include &lt;SPI.h&gt;
+#include &lt;SD.h&gt;
+
+const int BUTTON_PIN = 27;              // reset button to GND
+const int SD_CS = 5;                    // SCK=18, MISO=19, MOSI=23
+const char *LOG_FILE = "/minmax.csv";
+
+Adafruit_SSD1306 display(128, 64, &amp;Wire, -1);
+DHT dht(13, DHT22);
+
+float nowT = NAN, minT = NAN, maxT = NAN;   // NAN = "no reading yet"
+bool sdOk = false;
+unsigned long lastRead = 0, lastLog = 0;
+int stableState = HIGH, lastReading = HIGH;
+unsigned long lastChangeTime = 0;
+
+bool buttonPressed() {                  // debounce from lesson 3.1
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) { lastChangeTime = millis(); lastReading = reading; }
+  if (millis() - lastChangeTime &gt; 30 &amp;&amp; reading != stableState) {
+    stableState = reading;
+    if (stableState == LOW) return true;
+  }
+  return false;
+}
+
+void showScreen() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print("Now");
+  if (!sdOk) display.print("        no SD");
+  display.setTextSize(3);
+  display.setCursor(0, 12);
+  if (isnan(nowT)) display.print("--.-");
+  else display.printf("%.1f", nowT);
+  display.setTextSize(1);
+  display.setCursor(0, 44);
+  if (isnan(minT)) display.print("Min --.-");
+  else display.printf("Min %.1f C", minT);
+  display.setCursor(0, 56);
+  if (isnan(maxT)) display.print("Max --.-");
+  else display.printf("Max %.1f C", maxT);
+  display.display();
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found!");
+    while (true) delay(1000);
+  }
+  display.setTextColor(SSD1306_WHITE);
+  dht.begin();
+  sdOk = SD.begin(SD_CS);
+  if (sdOk &amp;&amp; !SD.exists(LOG_FILE)) {
+    File f = SD.open(LOG_FILE, FILE_WRITE);
+    f.println("seconds,now,min,max");
+    f.close();
+  }
+  Serial.println(sdOk ? "SD ready" : "SD missing: no logging");
+  showScreen();
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  // 1) every 2 s: read, update min/max
+  if (now - lastRead &gt;= 2000) {
+    lastRead = now;
+    float t = dht.readTemperature();
+    if (isnan(t)) {
+      Serial.println("DHT22 read error");
+    } else {
+      nowT = t;
+      if (isnan(minT) || t &lt; minT) minT = t;   // the first reading sets both
+      if (isnan(maxT) || t &gt; maxT) maxT = t;
+      Serial.printf("now=%.1f  min=%.1f  max=%.1f\n", nowT, minT, maxT);
+      showScreen();
+    }
+  }
+
+  // 2) button: min and max start again from the current value
+  if (buttonPressed()) {
+    minT = nowT;
+    maxT = nowT;
+    Serial.println("Min/max reset");
+    showScreen();
+  }
+
+  // 3) every 60 s: one CSV line (only with a card and a valid reading)
+  if (now - lastLog &gt;= 60000) {
+    lastLog = now;
+    if (sdOk &amp;&amp; !isnan(nowT)) {
+      File f = SD.open(LOG_FILE, FILE_APPEND);
+      if (f) {
+        f.printf("%lu,%.1f,%.1f,%.1f\n", now / 1000, nowT, minT, maxT);
+        f.close();
+        Serial.println("logged");
+      }
+    }
+  }
+}
+</pre></div>
+<ol class="walk" data-for="projAns">
+  <li data-lines="62-68"><b class="what">The card, once.</b> <code>sdOk</code> remembers whether the card mounted; the header is written only when the file doesn't exist yet.
+    <span class="why">Storing the result in <code>sdOk</code> instead of stopping with <code>while (true)</code> (as <code>SD_Log</code> did) is the "degrade gracefully" idea: a thermometer without a card is still a thermometer. Only the logging is switched off.</span></li>
+  <li data-lines="76-81"><b class="what">A reading every 2 seconds.</b> The same <code>millis()</code> guard as <code>Weather_OLED</code>; a failed reading is reported and skipped.
+    <span class="why">The DHT22 can't deliver more than one fresh reading every 2 seconds. A <code>NAN</code> must never reach min/max: <code>t &lt; minT</code> with a <code>NAN</code> is always false, so a stored <code>NAN</code> would freeze min forever.</span></li>
+  <li data-lines="82-86"><b class="what">Min and max.</b> Store the reading, then compare. The <code>isnan()</code> check lets the first reading fill in both values.
+    <span class="why">Two lines of logic do all the work. No special "first time" flag is needed, because <code>NAN</code> already means "first time".</span></li>
+  <li data-lines="91-96"><b class="what">Reset.</b> Min and max jump to the current value, a line is printed and the screen is redrawn right away.
+    <span class="why">Redrawing immediately is what makes a button feel responsive; without it you'd wait up to 2 seconds for the next reading to see any effect.</span></li>
+  <li data-lines="99-109"><b class="what">The log.</b> Every 60 s: open for appending, write one line, close. Seconds since start-up are <code>now / 1000</code>.
+    <span class="why">Closing after every line means a power cut loses at most one line. Once a minute is plenty for room temperature, and a whole night is only about 600 lines, a few kilobytes. With a real clock from the internet (lesson 4.1) you would write the time of day instead of seconds.</span></li>
+</ol>
+<div class="wokwi" data-board="esp32" data-code-from="projAns">
+<p>The complete answer on the same circuit (with <code>Adafruit SSD1306</code> and <code>DHT sensor library</code>). Change the DHT22's temperature a few times, press the green button, and wait one minute for <code>logged</code>.</p>
+<script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    {"type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {}},
+    {"type": "wokwi-dht22", "id": "dht1", "top": -60, "left": -150, "attrs": {"temperature": "22.5", "humidity": "40"}},
+    {"type": "wokwi-pushbutton", "id": "btn1", "top": 110, "left": -170, "attrs": {"color": "green"}},
+    {"type": "board-ssd1306", "id": "oled1", "top": 60, "left": 200, "attrs": {"i2cAddress": "0x3c"}},
+    {"type": "wokwi-microsd-card", "id": "sd1", "top": 170, "left": 220, "attrs": {}}
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [] ],
+    [ "dht1:SDA", "esp:13", "blue", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:27", "btn1:1.r", "green", [] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [] ],
+    [ "oled1:GND", "esp:GND.2", "black", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:SCL", "esp:22", "green", [] ],
+    [ "oled1:SDA", "esp:21", "yellow", [] ],
+    [ "sd1:GND", "esp:GND.2", "black", [] ],
+    [ "sd1:VCC", "esp:3V3", "red", [] ],
+    [ "sd1:DO", "esp:19", "blue", [] ],
+    [ "sd1:DI", "esp:23", "orange", [] ],
+    [ "sd1:SCK", "esp:18", "green", [] ],
+    [ "sd1:CS", "esp:5", "purple", [] ]
+  ],
+  "dependencies": {}
+}</script>
+</div>
+</details>
+</div>
+
 <div class="callout info"><div class="ct">The lesson in three lines</div>
 <p><b>I2C</b> has two wires (SDA=21, SCL=22) with pull-ups and an address for each device; scanner first, then the library; the OLED is at <code>0x3C</code> with the cycle clear → draw → <code>display()</code>. The DHT22 has its own single-wire protocol (not I2C), needs a 10 kΩ pull-up and at least 2 seconds between reads, and you check its output with <code>isnan</code>. <b>SPI</b> (VSPI: 23/19/18 and CS=5) is fast and is used for a FAT32 SD card with <code>FILE_APPEND</code> and <code>close()</code>. <b>UART</b> is crossed over (TX to RX), both sides must use the same speed, and the GPS on <code>Serial2.begin(9600, SERIAL_8N1, 16, 17)</code> sends NMEA sentences that TinyGPSPlus turns into decimal degrees; only under open sky.</p></div>
 
