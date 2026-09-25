@@ -523,6 +523,247 @@ void loop() {
 <p>How to find them: ask two questions about each part. (a) Can this pin do what the part needs? (Analog with Wi-Fi → ADC1; an output → not 34 to 39; a button with INPUT_PULLUP → not 34 to 39.) (b) Does this pin cause trouble at boot? (Strapping or boot glitch, especially when the part switches a real load like a pump, or pulls the pin up by itself.)</p></details>
 </div>
 
+<h2 id="project">Practice project: a pin plan for a plant waterer</h2>
+<div class="project">
+  <p class="lede-ish">You're going away for a week and your basil will not survive it. A small automatic waterer needs three things: a soil-moisture sensor, a pump, and a "water now" button for testing. On the bench, a potentiometer stands in for the soil sensor and an LED stands in for the pump. The real work of this project is the one this lesson is about: <b>choosing each pin for a reason, on paper, before any code</b>.</p>
+  <h3 id="project-req">Requirements</h3>
+  <ol>
+    <li>First write a pin table (part, GPIO, why this pin?) for the soil sensor on 34, the pump on 4 and a touch wire on 32, and copy it to the top of your sketch as a comment. Every "why" must name a rule from this lesson; "because it was free" doesn't count.</li>
+    <li>At start-up the pump (LED on GPIO4) is off, the touch threshold is calibrated (two thirds of the idle value) and one ready line is printed.</li>
+    <li>Right after start-up and then about every 5 seconds, the program reads the soil sensor and prints the raw value and a percentage from 0 to 100.</li>
+    <li>If the soil is below 30 %, the pump LED switches on and the line ends in <code>DRY, pump ON</code>; otherwise it switches off and the line ends in <code>OK, pump OFF</code>.</li>
+    <li>Touching the wire on GPIO32 forces an extra reading at once, marked with <code>[touch]</code>. Holding your finger there gives one reading, not a flood.</li>
+  </ol>
+  <h3 id="project-parts">Parts</h3>
+  <ul>
+    <li>ESP32 board, breadboard and jumper wires.</li>
+    <li>10 kΩ potentiometer (the soil sensor stand-in), on GPIO34.</li>
+    <li>One LED and a 220 Ω resistor (the pump stand-in), on GPIO4. It's the course's status LED, so leave it on the breadboard afterwards.</li>
+    <li>A jumper wire with a piece of aluminum foil (the touch pad), on GPIO32, only for this project.</li>
+  </ul>
+  <div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"POT","name":"10 kΩ potentiometer (soil sensor)","img":"pot.svg","pins":[["VCC","outer leg: to 3.3 V"],["SIG","middle leg: the reading"],["GND","other outer leg"]]},
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO side"],["2","LED side"]]},
+    {"id":"LED1","name":"LED (the pump)","img":"led.svg","pins":[["A","anode (+), long leg"],["K","cathode (−), short leg"]]},
+    {"id":"PAD","name":"Touch pad (wire + foil)","pins":[["1","free end, to the foil"]]}
+  ],
+  "wires":[["3V3","POT.VCC","red"],["GPIO34","POT.SIG","blue"],["GND","POT.GND","black"],["GPIO4","R1.1","orange","pump"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"],["GPIO32","PAD.1","purple","T9"]]
+}</script><figcaption>The potentiometer between 3V3 and GND with its middle leg on GPIO34 (3V3, not 5V!), the "pump" LED with its 220 Ω resistor on GPIO4, and a single wire from GPIO32 to a piece of foil.</figcaption></div>
+  <h3 id="project-start">Starter code</h3>
+  <p>The skeleton compiles and already calibrates touch and counts the 5-second rhythm. One small thing is new: to switch the pump LED you need <code>pinMode(PUMP_PIN, OUTPUT)</code> once in setup, then <code>digitalWrite(PUMP_PIN, HIGH)</code> for on and <code>LOW</code> for off. (Lesson 2.2 covers these properly; here they're just a switch.)</p>
+  <div class="code" data-file="Plant_Waterer.ino" id="projStart"><pre>
+// Plant-watering pin plan: starter (fill in every TODO)
+// TODO 1: finish the pin table (part | GPIO | why this pin?)
+//   Soil sensor (pot)   | 34 | why?
+//   Pump (LED on 4)     | 4  | why?
+//   "Water now" touch   | 32 | why?
+const int SOIL_PIN  = 34;
+const int PUMP_PIN  = 4;
+const int TOUCH_PIN = 32;
+const int DRY_PERCENT = 30;          // below this the soil counts as dry
+
+int touchThreshold;                  // worked out in setup
+int ticks = 0;                       // counts 100 ms passes between readings
+bool wasTouched = false;             // touch state on the previous pass
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  // TODO 2: make PUMP_PIN an output and switch the pump off
+  int idle = touchRead(TOUCH_PIN);   // hands off the wire at power-up!
+  touchThreshold = idle * 2 / 3;
+  Serial.printf("Plant waterer ready (touch idle=%d, threshold=%d)\n", idle, touchThreshold);
+}
+
+void loop() {
+  bool touched = touchRead(TOUCH_PIN) &lt; touchThreshold;   // smaller = touched
+  bool readNow = (ticks == 0);                             // time for a reading?
+
+  // TODO 3: if the finger has JUST arrived (touched now, not touched before),
+  //         set readNow to true and print "[touch] "
+  wasTouched = touched;
+
+  if (readNow) {
+    // TODO 4: read SOIL_PIN and turn it into a percentage (0 to 100)
+    // TODO 5: below DRY_PERCENT: pump on and print "... DRY, pump ON";
+    //         otherwise: pump off and print "... OK, pump OFF"
+    ticks = 0;                                             // restart the count
+  }
+
+  ticks = ticks + 1;
+  if (ticks &gt;= 50) {                                       // 50 x 100 ms = 5 s
+    ticks = 0;
+  }
+  delay(100);
+}
+</pre></div>
+  <ol class="walk" data-for="projStart">
+    <li data-lines="2-5"><b class="what">TODO 1: the pin table.</b> Replace every "why?" with a reason.
+      <span class="why">This is the coach's "pin table" habit from the checklist section, written where you'll find it again in six months.</span></li>
+    <li data-lines="11-13"><b class="what">Three helper variables.</b> The touch threshold, a pass counter and the touch state of the previous pass.
+      <span class="why">They are global so they keep their values from one pass of loop to the next.</span></li>
+    <li data-lines="25-26"><b class="what">Two questions every pass.</b> "Is the wire touched?" and "Is it time for a reading?" (when the counter is 0).
+      <span class="why">Answering them at the top keeps the rest of loop simple.</span></li>
+    <li data-lines="39-44"><b class="what">The 5-second rhythm, already done.</b> One pass takes about 100 ms, so 50 passes are about 5 seconds; then the counter goes back to 0.
+      <span class="why">A plain <code>delay(5000)</code> would make the board deaf to your touch for five seconds; short steps keep it listening.</span></li>
+  </ol>
+  <div class="wokwi" data-board="esp32" data-code-from="projStart">
+  <p>Wokwi can simulate the potentiometer and the LED (turn the knob with the mouse). It can't simulate a finger on a touch pin, so try requirement 5 on a real board. The same three steps as in <a href="1-1.html#firmware">lesson 1.1</a>.</p>
+  <script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": 20, "left": -170, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "blue" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+  </div>
+  <details class="hint"><summary>Hint 1</summary><p>For the "why" column, walk through the 8-step checklist: which step talks about analog inputs and Wi-Fi? Which one about outputs that must stay off at boot? Which pins are touch-capable <b>and</b> green?</p></details>
+  <details class="hint"><summary>Hint 2</summary><p>"The finger just arrived" means: touched now <b>and</b> not touched on the previous pass: <code>if (touched &amp;&amp; !wasTouched)</code>. That's what stops a held finger from firing ten readings a second.</p></details>
+  <details class="hint"><summary>Hint 3</summary><p>Percentage: <code>raw * 100 / 4095</code>. Multiply first: <code>raw / 4095 * 100</code> is 0 for every raw value below 4095 in whole-number maths. In printf, <code>%%</code> prints a single <code>%</code> sign.</p></details>
+  <details class="expect"><summary>What should you see?</summary>
+  <p>Knob in the middle at start, then turned down, then a touch (your touch numbers will differ; in Wokwi they have no meaning):</p>
+  <pre class="serial">Plant waterer ready (touch idle=58, threshold=38)
+soil raw=2047 (49 %) -> OK, pump OFF
+soil raw=2047 (49 %) -> OK, pump OFF
+soil raw=900 (21 %) -> DRY, pump ON
+[touch] soil raw=905 (22 %) -> DRY, pump ON
+soil raw=905 (22 %) -> DRY, pump ON</pre>
+  <ul>
+    <li>Your pin table names these rules: 34 = input-only + ADC1 (works with Wi-Fi); 4 = green, no boot glitch; 32 = touch channel T9 and green.</li>
+    <li>Readings come about every 5 seconds (turn on timestamps in the Serial Monitor to check).</li>
+    <li>The LED is on exactly when the line says <code>pump ON</code>: turn the knob below about 30 % and wait for the next reading.</li>
+    <li>Keep your finger on the foil for 3 seconds: exactly one <code>[touch]</code> line. The next normal reading comes 5 seconds after it.</li>
+  </ul></details>
+  <details class="answer"><summary>Full answer with explanation</summary>
+  <p><b>The pin table</b> (also the first lines of the sketch):</p>
+  <div class="table-wrap"><table>
+  <tr><th>Part</th><th>GPIO</th><th>Why this pin?</th></tr>
+  <tr><td>Soil sensor (potentiometer)</td><td>34</td><td>Input-only, so no output pin is wasted, and ADC1, so it keeps working when Wi-Fi is added to send you a message</td></tr>
+  <tr><td>Pump (LED)</td><td>4</td><td>Green pin with no boot glitch: a real pump won't twitch on at power-up. A digital output, so ADC2 doesn't matter</td></tr>
+  <tr><td>"Water now" touch</td><td>32</td><td>Touch channel T9 and a green pin; the lesson's first choice for touch</td></tr>
+  </table></div>
+  <div class="code" data-file="Plant_Waterer.ino" id="projAns"><pre>
+// Plant-watering pin plan: soil check every 5 s, touch = "check now"
+// Pin table (part | GPIO | why this pin?)
+//   Soil sensor (pot)   | 34 | input-only + ADC1: still works when Wi-Fi is added
+//   Pump (LED on 4)     | 4  | green pin, no boot glitch: pump stays off at power-up
+//   "Water now" touch   | 32 | touch channel T9 and a safe green pin
+const int SOIL_PIN  = 34;
+const int PUMP_PIN  = 4;
+const int TOUCH_PIN = 32;
+const int DRY_PERCENT = 30;          // below this the soil counts as dry
+
+int touchThreshold;                  // worked out in setup
+int ticks = 0;                       // counts 100 ms passes between readings
+bool wasTouched = false;             // touch state on the previous pass
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  pinMode(PUMP_PIN, OUTPUT);         // GPIO4 drives the "pump"
+  digitalWrite(PUMP_PIN, LOW);       // pump off until the first reading
+  int idle = touchRead(TOUCH_PIN);   // hands off the wire at power-up!
+  touchThreshold = idle * 2 / 3;
+  Serial.printf("Plant waterer ready (touch idle=%d, threshold=%d)\n", idle, touchThreshold);
+}
+
+void loop() {
+  bool touched = touchRead(TOUCH_PIN) &lt; touchThreshold;   // smaller = touched
+  bool readNow = (ticks == 0);                             // time for a reading?
+
+  if (touched &amp;&amp; !wasTouched) {                            // the finger just arrived
+    readNow = true;
+    Serial.print("[touch] ");
+  }
+  wasTouched = touched;
+
+  if (readNow) {
+    int raw = analogRead(SOIL_PIN);                        // 0 to 4095
+    int percent = raw * 100 / 4095;                        // 0 to 100
+    if (percent &lt; DRY_PERCENT) {
+      digitalWrite(PUMP_PIN, HIGH);                        // dry: pump on
+      Serial.printf("soil raw=%d (%d %%) -&gt; DRY, pump ON\n", raw, percent);
+    } else {
+      digitalWrite(PUMP_PIN, LOW);                         // moist: pump off
+      Serial.printf("soil raw=%d (%d %%) -&gt; OK, pump OFF\n", raw, percent);
+    }
+    ticks = 0;                                             // restart the count
+  }
+
+  ticks = ticks + 1;
+  if (ticks &gt;= 50) {                                       // 50 x 100 ms = 5 s
+    ticks = 0;
+  }
+  delay(100);
+}
+</pre></div>
+  <ol class="walk" data-for="projAns">
+    <li data-lines="2-5"><b class="what">The pin table as a comment.</b> Part, GPIO and reason.
+      <span class="why">The reasons are rules from this lesson; if a pin ever has to move, you know which rule the new pin must also meet.</span></li>
+    <li data-lines="6-9"><b class="what">Names for pins and the dry limit.</b> Three pin constants and <code>DRY_PERCENT</code>.
+      <span class="why">Change 30 to 40 in one place if your plant likes wetter soil.</span></li>
+    <li data-lines="18-19"><b class="what">The pump as an output, off.</b> <code>pinMode</code> makes GPIO4 an output; <code>digitalWrite(…, LOW)</code> switches it off.
+      <span class="why">Never leave a pump's state to chance at power-up; switch it off on purpose before anything else happens.</span></li>
+    <li data-lines="20-22"><b class="what">Touch calibration.</b> The same two-thirds rule as the lesson's experiment.
+      <span class="why">A fixed number would work on one board and fail on another.</span></li>
+    <li data-lines="26-27"><b class="what">Touched? Time to read?</b> The touch comparison and the counter check.
+      <span class="why">The counter starts at 0, so the very first pass reads at once: you don't wait 5 seconds for the first number.</span></li>
+    <li data-lines="29-33"><b class="what">The touch edge.</b> Only when the finger has just arrived do we ask for a reading and print <code>[touch]</code>; then we remember the state for the next pass.
+      <span class="why">This "compare with last time" trick turns a state (finger is on) into an event (finger arrived). You'll use it for every button in lesson 2.3.</span></li>
+    <li data-lines="36-37"><b class="what">Reading and percentage.</b> <code>analogRead</code> gives 0 to 4095; multiplying by 100 first and then dividing gives 0 to 100.
+      <span class="why">People understand "22 %" faster than "905".</span></li>
+    <li data-lines="38-44"><b class="what">The decision.</b> Below the limit: pump on and <code>DRY</code>; otherwise pump off and <code>OK</code>. <code>%%</code> prints a percent sign.
+      <span class="why">The LED and the text change in the same branch, so they can never disagree.</span></li>
+    <li data-lines="45"><b class="what">Restart the count after every reading.</b>
+      <span class="why">After a touch reading, the next automatic one comes a full 5 seconds later instead of a moment after.</span></li>
+    <li data-lines="48-52"><b class="what">The rhythm.</b> Count passes of 100 ms, back to 0 after 50.
+      <span class="why">The board checks the touch wire ten times a second and still reads the soil only every 5 seconds.</span></li>
+  </ol>
+  <div class="wokwi" data-board="esp32" data-code-from="projAns">
+  <p>The finished waterer: turn the knob below 30 % and watch the blue "pump" LED at the next reading. Touch can only be tested on a real board.</p>
+  <script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": 20, "left": -170, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "blue" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+  </div>
+  </details>
+</div>
+
 <div class="callout info"><div class="ct">The lesson in three lines</div>
 <p>In code, always work with <b>GPIO numbers</b> and match your board's printed labels against the pinout; never touch 6 to 11, keep 1 and 3 free for Serial, and never give any pin more than 3.3 V or more than 20 mA. Analog inputs go on ADC1 (32 to 39), because ADC2 stops working with Wi-Fi; 34 to 39 are input-only and have no pull-up. Leave the strapping pins (0, 2, 5, 12, 15) free at boot, put power parts on green pins with no boot glitch, and run the 8-step checklist on paper before every project.</p></div>
 

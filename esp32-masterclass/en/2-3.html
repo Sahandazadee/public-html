@@ -720,6 +720,539 @@ Pressed</pre>
 <p>Step by step: (1) the code still reads GPIO27, but in the first case the button is connected to GPIO26; GPIO27 only has its internal pull-up and stays HIGH. <code>lastState</code> also starts as HIGH, so no "change" ever happens and no line is printed. (2) In the second case, the <code>1.l</code> leg (connected to GPIO27) and the <code>1.r</code> leg (now connected to GND) are always joined inside the button; so GPIO27 is always LOW. On the first pass of loop the state differs from <code>lastState</code> (HIGH), so Pressed is printed once; after that nothing ever changes. Pressing the button only joins the 1 legs to the 2 legs, which are now connected to nothing.</p></details>
 </div>
 
+<h2 id="practice-project">Practice project: a two-button doorbell</h2>
+<div class="project">
+  <p class="lede-ish">A front door needs two controls: a doorbell for visitors and a switch for the porch light. Build both on one board, with the course's two buttons. Button 1 behaves like the button in this lesson (the LED shines only while it's held), button 2 behaves like a light switch (every press flips the light). Test the whole thing in Wokwi before you touch hardware, and use the Serial Monitor as your doorbell log.</p>
+  <h3 id="project-req">Requirements</h3>
+  <ol>
+    <li>Button 1 on GPIO27 and button 2 on GPIO33, each between its pin and GND, with <code>INPUT_PULLUP</code>. The status LED on GPIO4, a second LED (the porch light) on GPIO32, each with its own 220 Ω resistor.</li>
+    <li>The status LED is on exactly while button 1 is held.</li>
+    <li>Every press of button 1 prints <code>Ding-dong! Ring #n</code> with a counter; every release prints <code>Bell released</code>.</li>
+    <li>Every press of button 2 flips the porch light and prints <code>Porch light ON</code> or <code>Porch light OFF</code>. Releasing button 2 does nothing.</li>
+    <li>One press gives exactly one line, even with button bounce, and the two buttons work independently (hold one, press the other).</li>
+  </ol>
+  <h3 id="project-parts">Parts</h3>
+  <ul>
+    <li>ESP32 board, breadboard, jumper wires (or only Wokwi).</li>
+    <li>Two push buttons, on GPIO27 and GPIO33 (the course's button 1 and button 2).</li>
+    <li>Two LEDs (red and yellow) and two 220 Ω resistors, on GPIO4 and GPIO32. GPIO32 is a swappable pin; the LED leaves it when a servo arrives in chapter 3.</li>
+  </ul>
+  <div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"BTN1","name":"Button 1 (doorbell)","img":"button.svg","pins":[["1","first contact"],["2","diagonal contact"]]},
+    {"id":"BTN2","name":"Button 2 (porch light)","img":"button.svg","pins":[["1","first contact"],["2","diagonal contact"]]},
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO4 side"],["2","LED side"]]},
+    {"id":"LED1","name":"Red LED (bell)","img":"led.svg","pins":[["A","anode (+)"],["K","cathode (−)"]]},
+    {"id":"R2","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO32 side"],["2","LED side"]]},
+    {"id":"LED2","name":"Yellow LED (porch light)","img":"led.svg","pins":[["A","anode (+)"],["K","cathode (−)"]]}
+  ],
+  "wires":[["GPIO27","BTN1.1","blue","input"],["BTN1.2","GND","black"],["GPIO33","BTN2.1","blue","input"],["BTN2.2","GND","black"],["GPIO4","R1.1","orange","output"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"],["GPIO32","R2.1","orange","output"],["R2.2","LED2.A","orange"],["LED2.K","GND","black"]]
+}</script><figcaption>Both buttons go from their GPIO to GND (no resistors: the pull-ups are internal). Each LED has its own 220 Ω resistor. The first button and LED are exactly the circuit of this lesson's project.</figcaption></div>
+  <h3 id="project-start">Starter code</h3>
+  <p>Everything in this project is from this lesson and exercise 2: <code>INPUT_PULLUP</code>, "print only on a change" with a <code>last…</code> variable, a <code>bool</code> that remembers a state, and <code>delay(50)</code> after a change against bounce. The new part is doing all of it twice, side by side.</p>
+  <div class="code" data-file="Doorbell.ino" id="projStart"><pre>
+// Two-button doorbell: starter (fill in every TODO)
+const int BELL_BTN  = 27;   // button 1 (to GND): the doorbell
+const int LIGHT_BTN = 33;   // button 2 (to GND): the porch-light switch
+const int BELL_LED  = 4;    // status LED: lit while the bell button is held
+const int PORCH_LED = 32;   // second LED: the porch light
+
+int lastBell  = HIGH;       // previous button states (released)
+int lastLight = HIGH;
+bool porchOn  = false;      // is the porch light on?
+int rings = 0;              // how many times the bell has rung
+
+void setup() {
+  Serial.begin(115200);
+  // TODO 1: both buttons INPUT_PULLUP, both LEDs OUTPUT
+  Serial.println("Doorbell ready. Button 1 = bell, button 2 = porch light.");
+}
+
+void loop() {
+  int bell  = digitalRead(BELL_BTN);    // LOW = pressed
+  int light = digitalRead(LIGHT_BTN);
+
+  // TODO 2: BELL_LED on while the bell button is held, off otherwise
+
+  if (bell != lastBell) {               // the bell button changed
+    // TODO 3: on the press: rings + 1 and print "Ding-dong! Ring #n";
+    //         on the release: print "Bell released"
+    delay(50);                          // let the bounce settle
+    lastBell = bell;
+  }
+
+  if (light != lastLight) {             // the light button changed
+    // TODO 4: on the press only: flip porchOn, set PORCH_LED,
+    //         print "Porch light ON" or "Porch light OFF"
+    delay(50);
+    lastLight = light;
+  }
+}
+</pre></div>
+  <ol class="walk" data-for="projStart">
+    <li data-lines="2-10"><b class="what">Pins and memory.</b> Two buttons, two LEDs, two "previous state" variables, the porch-light state and the ring counter.
+      <span class="why">Each button needs its <b>own</b> <code>last…</code> variable; sharing one would mix up their changes.</span></li>
+    <li data-lines="19-20"><b class="what">Read both buttons.</b> Once per pass, at the top.
+      <span class="why">Reading each pin once and using the variable afterwards means both decisions in this pass see the same state.</span></li>
+    <li data-lines="24-36"><b class="what">Two change detectors, already built.</b> Each one waits 50 ms and remembers the new state; you fill in what happens on the change.
+      <span class="why">This skeleton is the reusable part; TODO 3 and 4 are the part that makes a doorbell different from a light switch.</span></li>
+  </ol>
+  <div class="wokwi" data-board="esp32" data-code-from="projStart">
+  <p>Paste this diagram.json and the starter, press ▶. The green button is button 1 (key <kbd>1</kbd>), the blue one is button 2 (key <kbd>2</kbd>). With the starter, only the ready line appears; the LEDs stay dark until you write the TODOs.</p>
+  <script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 185, "left": 190, "attrs": { "color": "green", "key": "1" } },
+    { "type": "wokwi-pushbutton", "id": "btn2", "top": 260, "left": -170, "attrs": { "color": "blue", "key": "2" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "red" } },
+    { "type": "wokwi-resistor", "id": "r2", "top": 110, "left": -130, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led2", "top": 30, "left": -100, "attrs": { "color": "yellow" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:27", "btn1:1.l", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.3", "black", [] ],
+    [ "esp:33", "btn2:1.r", "blue", [] ],
+    [ "btn2:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ],
+    [ "esp:32", "r2:2", "orange", [] ],
+    [ "r2:1", "led2:A", "orange", [] ],
+    [ "led2:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+  </div>
+  <details class="hint"><summary>Hint 1</summary><p>TODO 2 is one line with the ternary operator: <code>digitalWrite(BELL_LED, bell == LOW ? HIGH : LOW);</code>. It runs on every pass, not only on a change, so the LED follows the button exactly.</p></details>
+  <details class="hint"><summary>Hint 2</summary><p>Inside a change block, <code>if (bell == LOW)</code> means "this change was a press"; the <code>else</code> is the release. The light button only needs the press branch: exactly exercise 2's toggle.</p></details>
+  <details class="expect"><summary>What should you see?</summary>
+  <p>Press and release button 1 twice, then press button 2 three times:</p>
+  <pre class="serial">Doorbell ready. Button 1 = bell, button 2 = porch light.
+Ding-dong! Ring #1
+Bell released
+Ding-dong! Ring #2
+Bell released
+Porch light ON
+Porch light OFF
+Porch light ON</pre>
+  <ul>
+    <li>Hold button 1 for 3 seconds: the red LED stays on for all 3 seconds, and only <b>one</b> Ding-dong line is printed.</li>
+    <li>Button 2 changes the yellow LED at the moment of pressing; letting go prints nothing.</li>
+    <li>Hold button 1 (in Wokwi: <kbd>Ctrl</kbd>+click to make it sticky) and press button 2: the porch light still switches.</li>
+    <li>The ring number never jumps by 2 for one press; if it does, the bounce delay is missing.</li>
+  </ul></details>
+  <details class="answer"><summary>Full answer with explanation</summary>
+  <div class="code" data-file="Doorbell.ino" id="projAns"><pre>
+// Two-button doorbell: button 1 rings, button 2 switches the porch light
+const int BELL_BTN  = 27;   // button 1 (to GND): the doorbell
+const int LIGHT_BTN = 33;   // button 2 (to GND): the porch-light switch
+const int BELL_LED  = 4;    // status LED: lit while the bell button is held
+const int PORCH_LED = 32;   // second LED: the porch light
+
+int lastBell  = HIGH;       // previous button states (released)
+int lastLight = HIGH;
+bool porchOn  = false;      // is the porch light on?
+int rings = 0;              // how many times the bell has rung
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(BELL_BTN, INPUT_PULLUP);
+  pinMode(LIGHT_BTN, INPUT_PULLUP);
+  pinMode(BELL_LED, OUTPUT);
+  pinMode(PORCH_LED, OUTPUT);
+  Serial.println("Doorbell ready. Button 1 = bell, button 2 = porch light.");
+}
+
+void loop() {
+  int bell  = digitalRead(BELL_BTN);    // LOW = pressed
+  int light = digitalRead(LIGHT_BTN);
+
+  digitalWrite(BELL_LED, bell == LOW ? HIGH : LOW);   // lit while held
+
+  if (bell != lastBell) {               // the bell button changed
+    if (bell == LOW) {
+      rings = rings + 1;
+      Serial.print("Ding-dong! Ring #");
+      Serial.println(rings);
+    } else {
+      Serial.println("Bell released");
+    }
+    delay(50);                          // let the bounce settle
+    lastBell = bell;
+  }
+
+  if (light != lastLight) {             // the light button changed
+    if (light == LOW) {                 // only on the press
+      porchOn = !porchOn;
+      digitalWrite(PORCH_LED, porchOn ? HIGH : LOW);
+      Serial.println(porchOn ? "Porch light ON" : "Porch light OFF");
+    }
+    delay(50);
+    lastLight = light;
+  }
+}
+</pre></div>
+  <ol class="walk" data-for="projAns">
+    <li data-lines="2-5"><b class="what">Four pins from the course plan.</b> Buttons on 27 and 33, LEDs on 4 and 32.
+      <span class="why">27 and 33 are green, have internal pull-ups and are RTC pins; the course keeps them for button 1 and 2 so later lessons (deep sleep, chapter 6) can reuse this exact wiring.</span></li>
+    <li data-lines="7-10"><b class="what">Memory.</b> Two previous states (both start "released"), the light state and the counter.
+      <span class="why">Globals keep their values from one pass of loop to the next.</span></li>
+    <li data-lines="14-17"><b class="what">Pin modes.</b> Two inputs with pull-ups, two outputs.
+      <span class="why">Forget one <code>INPUT_PULLUP</code> and that button floats on a real board (Wokwi may hide this).</span></li>
+    <li data-lines="22-25"><b class="what">Read, then drive the bell LED.</b> The LED copies button 1 on every pass.
+      <span class="why">The LED is a <b>state</b> ("is it held?"), so it's updated every time, outside the change check.</span></li>
+    <li data-lines="27-37"><b class="what">Bell: press and release.</b> Press: count and print; release: print. Then 50 ms and remember.
+      <span class="why">The messages are <b>events</b>, so they live inside the change check: one line per press, however long you hold.</span></li>
+    <li data-lines="39-47"><b class="what">Porch light: toggle on the press only.</b> <code>!porchOn</code> flips the state; the LED and the message follow it.
+      <span class="why">The release is still recorded (<code>lastLight = light</code>) and still debounced, otherwise its bounce would look like a new press.</span></li>
+  </ol>
+  <div class="wokwi" data-board="esp32" data-code-from="projAns">
+  <p>The finished doorbell in Wokwi: keys <kbd>1</kbd> and <kbd>2</kbd>, or click the buttons.</p>
+  <script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 185, "left": 190, "attrs": { "color": "green", "key": "1" } },
+    { "type": "wokwi-pushbutton", "id": "btn2", "top": 260, "left": -170, "attrs": { "color": "blue", "key": "2" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "red" } },
+    { "type": "wokwi-resistor", "id": "r2", "top": 110, "left": -130, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led2", "top": 30, "left": -100, "attrs": { "color": "yellow" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:27", "btn1:1.l", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.3", "black", [] ],
+    [ "esp:33", "btn2:1.r", "blue", [] ],
+    [ "btn2:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ],
+    [ "esp:32", "r2:2", "orange", [] ],
+    [ "r2:1", "led2:A", "orange", [] ],
+    [ "led2:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+  </div>
+  </details>
+</div>
+
+<h2 id="capstone">Chapter 2 capstone project: a Morse messenger</h2>
+<div class="project">
+  <p class="lede-ish">Before radios could carry voices, telegraph operators sent messages with a single key: short presses and long presses. Turn button 1 into a Morse key. The ESP32 times every press with <code>millis()</code>, turns it into a dot or a dash, recognises the letter when you pause, and collects the letters into a message that button 2 displays. It uses everything from chapter 2: the tools, the LED, the Serial Monitor, the buttons, and Wokwi to test it all before any hardware.</p>
+  <h3 id="capstone-req">Requirements</h3>
+  <ol>
+    <li>Button 1 on GPIO27 is the Morse key; the status LED on GPIO4 shines while the key is held.</li>
+    <li>When the key is released, a press shorter than 250 ms counts as a dot, 250 to 1000 ms as a dash, and the symbol (<code>.</code> or <code>-</code>) is printed at once.</li>
+    <li>Wrong timing is handled: a press longer than 1 second cancels the letter being typed, and so does a fifth symbol (no letter has more than four). Each prints a short note.</li>
+    <li>After 800 ms without a press, the symbols are decoded into a letter from A to Z and printed as <code>  = S</code>; a pattern that isn't a letter gives <code>?</code>.</li>
+    <li>Decoded letters are added to a message. Button 2 on GPIO33 prints <code>Message: …</code> and starts a new, empty message.</li>
+    <li>One press gives exactly one symbol, even with bounce, and no long <code>delay()</code> can make the program miss a press.</li>
+  </ol>
+  <h3 id="capstone-parts">Parts</h3>
+  <ul>
+    <li>ESP32 board, breadboard, jumper wires (or only Wokwi).</li>
+    <li>Two push buttons on GPIO27 and GPIO33, the status LED with its 220 Ω resistor on GPIO4: the doorbell circuit above without the porch light.</li>
+    <li>A printed Morse chart (search "Morse code chart"), or the table in the code.</li>
+  </ul>
+  <div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"BTN1","name":"Button 1 (Morse key)","img":"button.svg","pins":[["1","first contact"],["2","diagonal contact"]]},
+    {"id":"BTN2","name":"Button 2 (show message)","img":"button.svg","pins":[["1","first contact"],["2","diagonal contact"]]},
+    {"id":"R1","name":"220 Ω resistor","img":"resistor.svg","pins":[["1","GPIO4 side"],["2","LED side"]]},
+    {"id":"LED1","name":"Red LED (status)","img":"led.svg","pins":[["A","anode (+)"],["K","cathode (−)"]]}
+  ],
+  "wires":[["GPIO27","BTN1.1","blue","input"],["BTN1.2","GND","black"],["GPIO33","BTN2.1","blue","input"],["BTN2.2","GND","black"],["GPIO4","R1.1","orange","output"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"]]
+}</script><figcaption>The course's two buttons and the status LED. If you built the doorbell, just leave the yellow LED on GPIO32 unused.</figcaption></div>
+  <h3 id="capstone-start">Starter code</h3>
+  <p>Three things are new, and the starter already contains them so you can focus on the timing logic:</p>
+  <ul>
+    <li><b>An array:</b> <code>MORSE[26]</code> is a numbered list of 26 texts; <code>MORSE[0]</code> is the code for A, <code>MORSE[18]</code> for S.</li>
+    <li><b>A for loop:</b> <code>for (int i = 0; i &lt; 26; i++)</code> repeats its block with <code>i</code> = 0, 1, 2 … 25, so <code>decode()</code> can compare your code with every letter.</li>
+    <li><b>String:</b> a piece of text that can grow: <code>symbols += '.';</code> adds a dot to the end, <code>symbols.length()</code> counts the characters, <code>symbols = "";</code> empties it.</li>
+  </ul>
+  <p>The stopwatch is <code>millis()</code> from lesson 2.1: the time since power-up in milliseconds. Remember it when the key goes down, subtract when it comes up, and you have the length of the press.</p>
+  <div class="code" data-file="Morse_Messenger.ino" id="capStart"><pre>
+// Morse messenger: starter (fill in every TODO)
+const int KEY_PIN  = 27;               // button 1 (to GND): the Morse key
+const int SHOW_PIN = 33;               // button 2 (to GND): show and clear
+const int LED_PIN  = 4;                // status LED: lit while the key is held
+
+const unsigned long DASH_MS    = 250;  // shorter press = dot, longer = dash
+const unsigned long TOO_LONG   = 1000; // longer press = mistake: cancel letter
+const unsigned long LETTER_GAP = 800;  // this much silence ends a letter
+
+// Morse code for A to Z: MORSE[0] is A, MORSE[25] is Z
+const char* MORSE[26] = {
+  ".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", "..", ".---",
+  "-.-", ".-..", "--", "-.", "---", ".--.", "--.-", ".-.", "...", "-",
+  "..-", "...-", ".--", "-..-", "-.--", "--.."
+};
+
+int lastKey  = HIGH;                   // previous button states (released)
+int lastShow = HIGH;
+unsigned long pressStart  = 0;         // when the key went down
+unsigned long lastRelease = 0;         // when the key last came up
+String symbols = "";                   // dots and dashes of the current letter
+String message = "";                   // every decoded letter so far
+
+char decode(String code) {             // ".-" gives 'A'; an unknown code gives '?'
+  for (int i = 0; i &lt; 26; i++) {
+    if (code == MORSE[i]) {
+      return 'A' + i;
+    }
+  }
+  return '?';
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(KEY_PIN, INPUT_PULLUP);
+  pinMode(SHOW_PIN, INPUT_PULLUP);
+  pinMode(LED_PIN, OUTPUT);
+  Serial.println("Morse messenger ready. Short press = dot, long press = dash.");
+}
+
+void loop() {
+  unsigned long now = millis();
+  int key = digitalRead(KEY_PIN);
+
+  if (key != lastKey) {                          // the key changed
+    if (key == LOW) {
+      // TODO 1: pressed: remember the time in pressStart, LED on
+    } else {
+      // TODO 2: released: LED off, held = now - pressStart, then:
+      //   longer than TOO_LONG      -&gt; print a "too long" note, clear symbols
+      //   symbols already has 4     -&gt; print a "more than 4" note, clear symbols
+      //   otherwise                 -&gt; add '.' (under DASH_MS) or '-', print it
+      // and remember the release time in lastRelease
+    }
+    delay(20);                                   // let the bounce settle
+    lastKey = key;
+  }
+
+  // TODO 3: if the key is up, symbols is not empty and more than LETTER_GAP
+  //         has passed since lastRelease: decode, add the letter to message,
+  //         print "  = X" and clear symbols
+
+  // TODO 4: button 2 (press edge only): print "Message: ..." and clear it
+}
+</pre></div>
+  <ol class="walk" data-for="capStart">
+    <li data-lines="2-8"><b class="what">Pins and the three timing rules.</b> <code>unsigned long</code> is the type <code>millis()</code> returns.
+      <span class="why">All the timing limits are named constants: to make dashes easier for slow fingers, change 250 to 300 in one place.</span></li>
+    <li data-lines="10-31"><b class="what">The Morse table, the state variables and decode(), all ready.</b>
+      <span class="why">These are the new C++ tools; you can use decode() without writing it yet, and read its explanation in the answer.</span></li>
+    <li data-lines="45-57"><b class="what">The change detector for the key.</b> The same shape as the doorbell; TODO 1 and 2 fill the press and release branches.
+      <span class="why">The press starts the stopwatch; the release reads it. That's the whole idea of Morse timing.</span></li>
+    <li data-lines="59-63"><b class="what">TODO 3 and 4.</b> End of a letter, and button 2.
+      <span class="why">They sit outside the key's change check on purpose: a letter ends when <b>nothing</b> happens for 800 ms.</span></li>
+  </ol>
+  <div class="wokwi" data-board="esp32" data-code-from="capStart">
+  <p>Paste this diagram.json and the starter, press ▶. The green button (key <kbd>1</kbd>) is the Morse key, the blue one (key <kbd>2</kbd>) shows the message. Wokwi also simulates button bounce, which makes it a fair test of requirement 6.</p>
+  <script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 185, "left": 190, "attrs": { "color": "green", "key": "1" } },
+    { "type": "wokwi-pushbutton", "id": "btn2", "top": 260, "left": -170, "attrs": { "color": "blue", "key": "2" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:27", "btn1:1.l", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.3", "black", [] ],
+    [ "esp:33", "btn2:1.r", "blue", [] ],
+    [ "btn2:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+  </div>
+  <details class="hint"><summary>Hint 1</summary><p>In the release branch: <code>unsigned long held = now - pressStart;</code>. Then an <code>if</code> / <code>else if</code> / <code>else</code> chain: too long first, then "already 4 symbols", then the normal case.</p></details>
+  <details class="hint"><summary>Hint 2</summary><p>Dot or dash in one line: <code>char s = (held &lt; DASH_MS) ? '.' : '-';</code>. Add it with <code>symbols += s;</code> and print it with <code>Serial.print(s);</code> (no new line, so a letter's symbols stay together).</p></details>
+  <details class="hint"><summary>Hint 3</summary><p>The end-of-letter test has three parts joined with <code>&amp;&amp;</code>: the key is up, <code>symbols.length() &gt; 0</code>, and <code>now - lastRelease &gt; LETTER_GAP</code>. Clear <code>symbols</code> afterwards, or the same letter would be decoded again on the next pass.</p></details>
+  <details class="expect"><summary>What should you see?</summary>
+  <p>Type S (three short), O (three long), S (three short), pausing about a second after each letter, then press button 2:</p>
+  <pre class="serial">Morse messenger ready. Short press = dot, long press = dash.
+...  = S
+---  = O
+...  = S
+Message: SOS</pre>
+  <p>Then try the mistakes: a dot and a 2-second press; the pattern <code>..--</code>; five dots in a row:</p>
+  <pre class="serial">. (too long: letter cancelled)
+..--  = ?
+.... (more than 4 symbols: letter cancelled)</pre>
+  <ul>
+    <li>The LED is on exactly while you hold the key.</li>
+    <li>Each symbol appears the moment you let go; the letter appears about 0.8 s after your last release.</li>
+    <li>Holding the key between 0.25 and 1 s always gives <code>-</code>, never two symbols.</li>
+    <li>After <code>Message: …</code>, pressing button 2 again prints <code>Message: </code> with nothing after it: the message was cleared.</li>
+  </ul></details>
+  <details class="answer"><summary>Full answer with explanation</summary>
+  <div class="code" data-file="Morse_Messenger.ino" id="capAns"><pre>
+// Morse messenger: button 1 is the Morse key, button 2 shows the message
+const int KEY_PIN  = 27;               // button 1 (to GND): the Morse key
+const int SHOW_PIN = 33;               // button 2 (to GND): show and clear
+const int LED_PIN  = 4;                // status LED: lit while the key is held
+
+const unsigned long DASH_MS    = 250;  // shorter press = dot, longer = dash
+const unsigned long TOO_LONG   = 1000; // longer press = mistake: cancel letter
+const unsigned long LETTER_GAP = 800;  // this much silence ends a letter
+
+// Morse code for A to Z: MORSE[0] is A, MORSE[25] is Z
+const char* MORSE[26] = {
+  ".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", "..", ".---",
+  "-.-", ".-..", "--", "-.", "---", ".--.", "--.-", ".-.", "...", "-",
+  "..-", "...-", ".--", "-..-", "-.--", "--.."
+};
+
+int lastKey  = HIGH;                   // previous button states (released)
+int lastShow = HIGH;
+unsigned long pressStart  = 0;         // when the key went down
+unsigned long lastRelease = 0;         // when the key last came up
+String symbols = "";                   // dots and dashes of the current letter
+String message = "";                   // every decoded letter so far
+
+char decode(String code) {             // ".-" gives 'A'; an unknown code gives '?'
+  for (int i = 0; i &lt; 26; i++) {
+    if (code == MORSE[i]) {
+      return 'A' + i;
+    }
+  }
+  return '?';
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(KEY_PIN, INPUT_PULLUP);
+  pinMode(SHOW_PIN, INPUT_PULLUP);
+  pinMode(LED_PIN, OUTPUT);
+  Serial.println("Morse messenger ready. Short press = dot, long press = dash.");
+}
+
+void loop() {
+  unsigned long now = millis();
+  int key = digitalRead(KEY_PIN);
+
+  if (key != lastKey) {                          // the key changed
+    if (key == LOW) {                            // pressed: start the stopwatch
+      pressStart = now;
+      digitalWrite(LED_PIN, HIGH);
+    } else {                                     // released: how long was it?
+      digitalWrite(LED_PIN, LOW);
+      unsigned long held = now - pressStart;
+      if (held &gt; TOO_LONG) {
+        Serial.println(" (too long: letter cancelled)");
+        symbols = "";
+      } else if (symbols.length() == 4) {
+        Serial.println(" (more than 4 symbols: letter cancelled)");
+        symbols = "";
+      } else {
+        char s = (held &lt; DASH_MS) ? '.' : '-';
+        symbols += s;
+        Serial.print(s);
+      }
+      lastRelease = now;
+    }
+    delay(20);                                   // let the bounce settle
+    lastKey = key;
+  }
+
+  if (key == HIGH &amp;&amp; symbols.length() &gt; 0 &amp;&amp; now - lastRelease &gt; LETTER_GAP) {
+    char letter = decode(symbols);               // enough silence: letter done
+    message += letter;
+    Serial.print("  = ");
+    Serial.println(letter);
+    symbols = "";
+  }
+
+  int show = digitalRead(SHOW_PIN);
+  if (show != lastShow) {
+    if (show == LOW) {                           // button 2 pressed
+      Serial.print("Message: ");
+      Serial.println(message);
+      message = "";
+    }
+    delay(20);
+    lastShow = show;
+  }
+}
+</pre></div>
+  <ol class="walk" data-for="capAns">
+    <li data-lines="2-8"><b class="what">Pins and timing rules.</b> Key on 27, "show" on 33, LED on 4; 250 ms, 1000 ms and 800 ms limits.
+      <span class="why">Real Morse uses "a dash is three dots long"; for a beginner's thumb, a single 250 ms border is easier and forgiving.</span></li>
+    <li data-lines="10-15"><b class="what">The Morse table.</b> 26 codes in alphabetical order.
+      <span class="why">The position in the list <b>is</b> the letter: the 19th entry (index 18) is S. No need for 26 separate <code>if</code>s.</span></li>
+    <li data-lines="17-22"><b class="what">State.</b> The previous button states, two time stamps and two Strings.
+      <span class="why">The program has to remember <b>when</b> things happened, not only what; that's what the time stamps are for.</span></li>
+    <li data-lines="24-31"><b class="what">decode().</b> Compares the code with every table entry; on a match returns <code>'A' + i</code>, otherwise <code>'?'</code>.
+      <span class="why">Letters are stored as numbers, one after another: 'A' + 18 is 'S'. <code>return</code> leaves the function at once with that answer.</span></li>
+    <li data-lines="33-39"><b class="what">setup.</b> Two pull-up inputs, one output, a ready line.
+      <span class="why">The same pin setup as the doorbell.</span></li>
+    <li data-lines="42-48"><b class="what">Key pressed: start the stopwatch.</b> <code>now</code> is read once per pass; on the press edge it's stored and the LED goes on.
+      <span class="why">Using one <code>now</code> for the whole pass keeps all the time sums in this pass consistent.</span></li>
+    <li data-lines="49-51"><b class="what">Key released: measure.</b> <code>held = now - pressStart</code>.
+      <span class="why">This subtraction stays correct even when <code>millis()</code> rolls over after 49 days, because both are <code>unsigned long</code>.</span></li>
+    <li data-lines="52-57"><b class="what">The two mistakes.</b> Too long, or a fifth symbol: print a note and empty <code>symbols</code>.
+      <span class="why">A long press becomes a handy "delete this letter" key; without the second rule a slip of the thumb would give an endless code.</span></li>
+    <li data-lines="58-63"><b class="what">A good press.</b> Dot or dash, added and printed; the release time is stored in every case.
+      <span class="why">The letter gap is measured from the last release, cancelled or not.</span></li>
+    <li data-lines="65-66"><b class="what">Debounce and remember.</b> 20 ms after every change.
+      <span class="why">Enough to skip the bounce, short enough not to spoil a 100 ms dot. Every other moment, loop runs freely and checks the time.</span></li>
+    <li data-lines="69-75"><b class="what">End of a letter.</b> Key up, symbols waiting, more than 800 ms of silence: decode, add to the message, print, clear.
+      <span class="why">This check runs on every pass, so the letter appears on time without any <code>delay(800)</code> that would block a new press.</span></li>
+    <li data-lines="77-86"><b class="what">Button 2.</b> On its press edge, print the message and empty it.
+      <span class="why">The same change-detect pattern once more: by now it's a building block you can drop into any project.</span></li>
+  </ol>
+  <div class="wokwi" data-board="esp32" data-code-from="capAns">
+  <p>The finished messenger in Wokwi. Tap <kbd>1</kbd> for dots, hold it for dashes, press <kbd>2</kbd> to read your message.</p>
+  <script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 185, "left": 190, "attrs": { "color": "green", "key": "1" } },
+    { "type": "wokwi-pushbutton", "id": "btn2", "top": 260, "left": -170, "attrs": { "color": "blue", "key": "2" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "red" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:27", "btn1:1.l", "blue", [] ],
+    [ "btn1:2.l", "esp:GND.3", "black", [] ],
+    [ "esp:33", "btn2:1.r", "blue", [] ],
+    [ "btn2:2.r", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+  </div>
+  </details>
+</div>
+
 <div class="callout info"><div class="ct">The lesson in three lines</div>
 <p>Wokwi runs real ESP32 code in your browser, and diagram.json (parts + connections) holds the whole circuit as text. A button between a GPIO and GND with <code>INPUT_PULLUP</code>: pressed = LOW, released = HIGH. The simulator tests logic, not physics; before moving to hardware, check resistors, pin labels and part orientation with the checklist.</p></div>
 

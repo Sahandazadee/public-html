@@ -523,6 +523,247 @@ void loop() {
 <p>روش پیدا کردن: برای هر قطعه دو سؤال بپرس. (الف) این پین از پس کاری که قطعه می‌خواهد برمی‌آید؟ (آنالوگ با Wi-Fi ← ADC1، خروجی ← نه 34 تا 39، دکمه با INPUT_PULLUP ← نه 34 تا 39.) (ب) این پین هنگام بوت دردسر دارد؟ (Strapping یا پرش بوت، به‌خصوص وقتی قطعه یک بار واقعی مثل پمپ را روشن می‌کند یا خودش پین را بالا می‌کشد.)</p></details>
 </div>
 
+<h2 id="project">پروژه تمرینی: نقشه پین یک آبیاری خودکار گلدان</h2>
+<div class="project">
+  <p class="lede-ish">یک هفته به سفر می‌روی و ریحانت دوام نمی‌آورد. یک آبیاری خودکار کوچک سه چیز لازم دارد: سنسور رطوبت خاک، پمپ، و دکمه «همین الان آب بده» برای آزمایش. روی میز کار، یک پتانسیومتر جای سنسور خاک و یک LED جای پمپ را می‌گیرد. کار اصلی این پروژه همان چیزی است که این درس درباره‌اش است: <b>انتخاب هر پین با دلیل، روی کاغذ، قبل از هر کدی</b>.</p>
+  <h3 id="project-req">نیازمندی‌ها</h3>
+  <ol>
+    <li>اول یک جدول پین (قطعه، GPIO، چرا این پین؟) برای سنسور خاک روی ۳۴، پمپ روی ۴ و سیم لمسی روی ۳۲ بنویس و آن را به صورت کامنت بالای اسکچ کپی کن. هر «چرا» باید یک قاعده از این درس را نام ببرد؛ «چون آزاد بود» قبول نیست.</li>
+    <li>در شروع، پمپ (LED روی GPIO4) خاموش است، آستانه لمس کالیبره می‌شود (دو سوم مقدار بی‌لمس) و یک خط «آماده» چاپ می‌شود.</li>
+    <li>بلافاصله بعد از شروع و بعد تقریبا هر ۵ ثانیه، برنامه سنسور خاک را می‌خواند و مقدار خام و یک درصد از ۰ تا ۱۰۰ چاپ می‌کند.</li>
+    <li>اگر خاک زیر ۳۰٪ باشد، LED پمپ روشن می‌شود و خط با <code>DRY, pump ON</code> تمام می‌شود؛ وگرنه خاموش می‌شود و خط با <code>OK, pump OFF</code> تمام می‌شود.</li>
+    <li>لمس سیم روی GPIO32 فورا یک خواندن اضافه با علامت <code>[touch]</code> انجام می‌دهد. نگه داشتن انگشت فقط یک خواندن می‌دهد، نه سیلی از خط‌ها.</li>
+  </ol>
+  <h3 id="project-parts">قطعه‌ها</h3>
+  <ul>
+    <li>برد ESP32، بردبورد و سیم جامپر.</li>
+    <li>پتانسیومتر ۱۰ کیلواهم (جانشین سنسور خاک)، روی GPIO34.</li>
+    <li>یک LED و یک مقاومت ۲۲۰ اهم (جانشین پمپ)، روی GPIO4. این LED وضعیت دوره است، پس بعدا روی بردبورد بماند.</li>
+    <li>یک سیم جامپر با یک تکه فویل آلومینیومی (پد لمسی)، روی GPIO32، فقط برای این پروژه.</li>
+  </ul>
+  <div class="wiring"><script type="application/json">{
+  "board":"ESP32 DevKitC",
+  "parts":[
+    {"id":"POT","name":"پتانسیومتر ۱۰ کیلواهم (سنسور خاک)","img":"pot.svg","pins":[["VCC","پایه کناری: به ۳٫۳ ولت"],["SIG","پایه وسط: مقدار خوانده‌شده"],["GND","پایه کناری دیگر"]]},
+    {"id":"R1","name":"مقاومت ۲۲۰ اهم","img":"resistor.svg","pins":[["1","سمت GPIO"],["2","سمت LED"]]},
+    {"id":"LED1","name":"LED (پمپ)","img":"led.svg","pins":[["A","آند (+)، پایه بلند"],["K","کاتد (−)، پایه کوتاه"]]},
+    {"id":"PAD","name":"پد لمسی (سیم + فویل)","pins":[["1","سر آزاد، به فویل"]]}
+  ],
+  "wires":[["3V3","POT.VCC","red"],["GPIO34","POT.SIG","blue"],["GND","POT.GND","black"],["GPIO4","R1.1","orange","pump"],["R1.2","LED1.A","orange"],["LED1.K","GND","black"],["GPIO32","PAD.1","purple","T9"]]
+}</script><figcaption>پتانسیومتر بین 3V3 و GND و پایه وسطش روی GPIO34 (به 3V3، نه 5V!)، LED «پمپ» با مقاومت ۲۲۰ اهمش روی GPIO4، و یک سیم تنها از GPIO32 به یک تکه فویل.</figcaption></div>
+  <h3 id="project-start">کد شروع</h3>
+  <p>این اسکلت کامپایل می‌شود و کالیبره کردن لمس و شمردن ریتم ۵ ثانیه‌ای را از قبل انجام می‌دهد. یک چیز کوچک تازه است: برای روشن و خاموش کردن LED پمپ یک بار در setup به <code>pinMode(PUMP_PIN, OUTPUT)</code> نیاز داری، بعد <code>digitalWrite(PUMP_PIN, HIGH)</code> برای روشن و <code>LOW</code> برای خاموش. (درس ۲.۲ این‌ها را کامل توضیح می‌دهد؛ اینجا فقط یک کلیدند.)</p>
+  <div class="code" data-file="Plant_Waterer.ino" id="projStart"><pre>
+// نقشه پین آبیاری گلدان: کد شروع (همه TODOها را کامل کن)
+// TODO 1: جدول پین را کامل کن (قطعه | GPIO | چرا این پین؟)
+//   سنسور خاک (پتانسیومتر) | 34 | چرا؟
+//   پمپ (LED روی 4)        | 4  | چرا؟
+//   لمس «الان آب بده»      | 32 | چرا؟
+const int SOIL_PIN  = 34;
+const int PUMP_PIN  = 4;
+const int TOUCH_PIN = 32;
+const int DRY_PERCENT = 30;          // کمتر از این یعنی خاک خشک است
+
+int touchThreshold;                  // در setup حساب می‌شود
+int ticks = 0;                       // دورهای ۱۰۰ میلی‌ثانیه‌ای بین دو خواندن را می‌شمارد
+bool wasTouched = false;             // وضعیت لمس در دور قبلی
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  // TODO 2: PUMP_PIN را خروجی کن و پمپ را خاموش کن
+  int idle = touchRead(TOUCH_PIN);   // موقع روشن شدن به سیم دست نزن!
+  touchThreshold = idle * 2 / 3;
+  Serial.printf("Plant waterer ready (touch idle=%d, threshold=%d)\n", idle, touchThreshold);
+}
+
+void loop() {
+  bool touched = touchRead(TOUCH_PIN) &lt; touchThreshold;   // کوچک‌تر = لمس شده
+  bool readNow = (ticks == 0);                             // وقت خواندن است؟
+
+  // TODO 3: اگر انگشت همین الان رسید (الان لمس، دور قبل نه)،
+  //         readNow را true کن و "[touch] " را چاپ کن
+  wasTouched = touched;
+
+  if (readNow) {
+    // TODO 4: SOIL_PIN را بخوان و به درصد (0 تا 100) تبدیل کن
+    // TODO 5: کمتر از DRY_PERCENT: پمپ روشن و چاپ "... DRY, pump ON"؛
+    //         وگرنه: پمپ خاموش و چاپ "... OK, pump OFF"
+    ticks = 0;                                             // شمارش از نو
+  }
+
+  ticks = ticks + 1;
+  if (ticks &gt;= 50) {                                       // 50 x 100 ms = 5 s
+    ticks = 0;
+  }
+  delay(100);
+}
+</pre></div>
+  <ol class="walk" data-for="projStart">
+    <li data-lines="2-5"><b class="what">TODO 1: جدول پین.</b> هر «چرا؟» را با یک دلیل عوض کن.
+      <span class="why">این همان عادت «جدول پین» مربی در بخش چک‌لیست است، جایی نوشته شده که شش ماه بعد دوباره پیدایش کنی.</span></li>
+    <li data-lines="11-13"><b class="what">سه متغیر کمکی.</b> آستانه لمس، شمارنده دورها و وضعیت لمس در دور قبل.
+      <span class="why">سراسری‌اند تا مقدارشان از یک دور loop به دور بعد بماند.</span></li>
+    <li data-lines="25-26"><b class="what">دو سؤال در هر دور.</b> «سیم لمس شده؟» و «وقت خواندن است؟» (وقتی شمارنده ۰ است).
+      <span class="why">جواب دادن به آن‌ها در بالای loop بقیه کد را ساده نگه می‌دارد.</span></li>
+    <li data-lines="39-44"><b class="what">ریتم ۵ ثانیه‌ای، از قبل آماده.</b> هر دور حدود ۱۰۰ میلی‌ثانیه است، پس ۵۰ دور حدود ۵ ثانیه؛ بعد شمارنده به ۰ برمی‌گردد.
+      <span class="why">یک <code>delay(5000)</code> ساده برد را پنج ثانیه در برابر لمس تو کر می‌کرد؛ قدم‌های کوتاه آن را گوش‌به‌زنگ نگه می‌دارند.</span></li>
+  </ol>
+  <div class="wokwi" data-board="esp32" data-code-from="projStart">
+  <p>Wokwi پتانسیومتر و LED را شبیه‌سازی می‌کند (پیچ را با ماوس بچرخان). انگشت روی پین لمسی را نمی‌تواند شبیه‌سازی کند، پس نیازمندی ۵ را روی برد واقعی امتحان کن. همان سه قدم <a href="1-1.html#firmware">درس ۱.۱</a>.</p>
+  <script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": 20, "left": -170, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "blue" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+  </div>
+  <details class="hint"><summary>راهنمایی ۱</summary><p>برای ستون «چرا»، چک‌لیست ۸ قدمی را مرور کن: کدام قدم درباره ورودی آنالوگ و Wi-Fi است؟ کدام درباره خروجی‌هایی که باید هنگام بوت خاموش بمانند؟ کدام پین‌ها هم لمسی‌اند <b>و</b> هم سبز؟</p></details>
+  <details class="hint"><summary>راهنمایی ۲</summary><p>«انگشت همین الان رسید» یعنی: الان لمس شده <b>و</b> در دور قبل لمس نشده بود: <code>if (touched &amp;&amp; !wasTouched)</code>. همین جلوی ده خواندن در ثانیه با انگشتِ نگه‌داشته را می‌گیرد.</p></details>
+  <details class="hint"><summary>راهنمایی ۳</summary><p>درصد: <code>raw * 100 / 4095</code>. اول ضرب کن: در حساب اعداد صحیح، <code>raw / 4095 * 100</code> برای هر مقدار کمتر از ۴۰۹۵ صفر می‌شود. در printf، ‏<code>%%</code> یک علامت <code>%</code> چاپ می‌کند.</p></details>
+  <details class="expect"><summary>چه باید ببینی؟</summary>
+  <p>پیچ اول وسط، بعد پایین چرخانده شده، بعد یک لمس (عددهای لمس تو فرق دارند؛ در Wokwi معنایی ندارند):</p>
+  <pre class="serial">Plant waterer ready (touch idle=58, threshold=38)
+soil raw=2047 (49 %) -> OK, pump OFF
+soil raw=2047 (49 %) -> OK, pump OFF
+soil raw=900 (21 %) -> DRY, pump ON
+[touch] soil raw=905 (22 %) -> DRY, pump ON
+soil raw=905 (22 %) -> DRY, pump ON</pre>
+  <ul>
+    <li>جدول پین تو این قاعده‌ها را نام می‌برد: ۳۴ = فقط-ورودی + ADC1 (با Wi-Fi کار می‌کند)؛ ۴ = سبز، بدون پرش بوت؛ ۳۲ = کانال لمسی T9 و سبز.</li>
+    <li>خواندن‌ها تقریبا هر ۵ ثانیه می‌آیند (برای بررسی، زمان‌نما را در Serial Monitor روشن کن).</li>
+    <li>LED دقیقا وقتی روشن است که خط می‌گوید <code>pump ON</code>: پیچ را زیر حدود ۳۰٪ ببر و منتظر خواندن بعدی بمان.</li>
+    <li>انگشتت را ۳ ثانیه روی فویل نگه دار: دقیقا یک خط <code>[touch]</code>. خواندن عادی بعدی ۵ ثانیه بعد از آن می‌آید.</li>
+  </ul></details>
+  <details class="answer"><summary>جواب کامل با توضیح</summary>
+  <p><b>جدول پین</b> (که خط‌های اول اسکچ هم هست):</p>
+  <div class="table-wrap"><table>
+  <tr><th>قطعه</th><th>GPIO</th><th>چرا این پین؟</th></tr>
+  <tr><td>سنسور خاک (پتانسیومتر)</td><td>34</td><td>فقط-ورودی است، پس هیچ پین خروجی هدر نمی‌رود، و روی ADC1 است، پس وقتی Wi-Fi را برای فرستادن پیام اضافه کنی هم کار می‌کند</td></tr>
+  <tr><td>پمپ (LED)</td><td>4</td><td>پین سبز بدون پرش بوت: پمپ واقعی هنگام روشن شدن ناگهان کار نمی‌افتد. خروجی دیجیتال است، پس ADC2 بودنش مهم نیست</td></tr>
+  <tr><td>لمس «الان آب بده»</td><td>32</td><td>کانال لمسی T9 و پین سبز؛ انتخاب اول درس برای لمس</td></tr>
+  </table></div>
+  <div class="code" data-file="Plant_Waterer.ino" id="projAns"><pre>
+// نقشه پین آبیاری گلدان: بررسی خاک هر ۵ ثانیه، لمس = «همین الان بررسی کن»
+// جدول پین (قطعه | GPIO | چرا این پین؟)
+//   سنسور خاک (پتانسیومتر) | 34 | فقط-ورودی + ADC1: با اضافه شدن Wi-Fi هم کار می‌کند
+//   پمپ (LED روی 4)        | 4  | پین سبز بدون پرش بوت: پمپ هنگام روشن شدن خاموش می‌ماند
+//   لمس «الان آب بده»      | 32 | کانال لمسی T9 و یک پین سبز امن
+const int SOIL_PIN  = 34;
+const int PUMP_PIN  = 4;
+const int TOUCH_PIN = 32;
+const int DRY_PERCENT = 30;          // کمتر از این یعنی خاک خشک است
+
+int touchThreshold;                  // در setup حساب می‌شود
+int ticks = 0;                       // دورهای ۱۰۰ میلی‌ثانیه‌ای بین دو خواندن را می‌شمارد
+bool wasTouched = false;             // وضعیت لمس در دور قبلی
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  pinMode(PUMP_PIN, OUTPUT);         // GPIO4 «پمپ» را می‌راند
+  digitalWrite(PUMP_PIN, LOW);       // پمپ تا اولین خواندن خاموش
+  int idle = touchRead(TOUCH_PIN);   // موقع روشن شدن به سیم دست نزن!
+  touchThreshold = idle * 2 / 3;
+  Serial.printf("Plant waterer ready (touch idle=%d, threshold=%d)\n", idle, touchThreshold);
+}
+
+void loop() {
+  bool touched = touchRead(TOUCH_PIN) &lt; touchThreshold;   // کوچک‌تر = لمس شده
+  bool readNow = (ticks == 0);                             // وقت خواندن است؟
+
+  if (touched &amp;&amp; !wasTouched) {                            // انگشت همین الان رسید
+    readNow = true;
+    Serial.print("[touch] ");
+  }
+  wasTouched = touched;
+
+  if (readNow) {
+    int raw = analogRead(SOIL_PIN);                        // 0 تا 4095
+    int percent = raw * 100 / 4095;                        // 0 تا 100
+    if (percent &lt; DRY_PERCENT) {
+      digitalWrite(PUMP_PIN, HIGH);                        // خشک: پمپ روشن
+      Serial.printf("soil raw=%d (%d %%) -&gt; DRY, pump ON\n", raw, percent);
+    } else {
+      digitalWrite(PUMP_PIN, LOW);                         // مرطوب: پمپ خاموش
+      Serial.printf("soil raw=%d (%d %%) -&gt; OK, pump OFF\n", raw, percent);
+    }
+    ticks = 0;                                             // شمارش از نو
+  }
+
+  ticks = ticks + 1;
+  if (ticks &gt;= 50) {                                       // 50 x 100 ms = 5 s
+    ticks = 0;
+  }
+  delay(100);
+}
+</pre></div>
+  <ol class="walk" data-for="projAns">
+    <li data-lines="2-5"><b class="what">جدول پین به صورت کامنت.</b> قطعه، GPIO و دلیل.
+      <span class="why">دلیل‌ها قاعده‌های همین درس‌اند؛ اگر روزی پینی مجبور به جابه‌جایی شد، می‌دانی پین جدید باید کدام قاعده را رعایت کند.</span></li>
+    <li data-lines="6-9"><b class="what">اسم برای پین‌ها و حد خشکی.</b> سه ثابت پین و <code>DRY_PERCENT</code>.
+      <span class="why">اگر گیاهت خاک مرطوب‌تر دوست دارد، ۳۰ را فقط در یک جا ۴۰ کن.</span></li>
+    <li data-lines="18-19"><b class="what">پمپ به عنوان خروجی، خاموش.</b> <code>pinMode</code> پین GPIO4 را خروجی می‌کند؛ <code>digitalWrite(…, LOW)</code> خاموشش می‌کند.
+      <span class="why">وضعیت پمپ را هنگام روشن شدن هیچ‌وقت به شانس نسپار؛ قبل از هر اتفاق دیگری عمدا خاموشش کن.</span></li>
+    <li data-lines="20-22"><b class="what">کالیبره کردن لمس.</b> همان قاعده دو سوم آزمایش درس.
+      <span class="why">یک عدد ثابت روی یک برد کار می‌کرد و روی برد دیگر نه.</span></li>
+    <li data-lines="26-27"><b class="what">لمس شده؟ وقت خواندن است؟</b> مقایسه لمس و بررسی شمارنده.
+      <span class="why">شمارنده از ۰ شروع می‌شود، پس همان دور اول فورا می‌خواند: برای اولین عدد ۵ ثانیه منتظر نمی‌مانی.</span></li>
+    <li data-lines="29-33"><b class="what">لبه لمس.</b> فقط وقتی انگشت همین الان رسیده، خواندن می‌خواهیم و <code>[touch]</code> چاپ می‌کنیم؛ بعد وضعیت را برای دور بعد نگه می‌داریم.
+      <span class="why">این ترفند «مقایسه با دفعه قبل» یک وضعیت (انگشت روی سیم است) را به یک رویداد (انگشت رسید) تبدیل می‌کند. در درس ۲.۳ برای هر دکمه از آن استفاده می‌کنی.</span></li>
+    <li data-lines="36-37"><b class="what">خواندن و درصد.</b> <code>analogRead</code> عددی از ۰ تا ۴۰۹۵ می‌دهد؛ اول ضرب در ۱۰۰ و بعد تقسیم، عددی از ۰ تا ۱۰۰ می‌دهد.
+      <span class="why">آدم‌ها «۲۲٪» را زودتر از «۹۰۵» می‌فهمند.</span></li>
+    <li data-lines="38-44"><b class="what">تصمیم.</b> زیر حد: پمپ روشن و <code>DRY</code>؛ وگرنه پمپ خاموش و <code>OK</code>. ‏<code>%%</code> یک علامت درصد چاپ می‌کند.
+      <span class="why">LED و متن در یک شاخه عوض می‌شوند، پس هیچ‌وقت با هم ناسازگار نمی‌شوند.</span></li>
+    <li data-lines="45"><b class="what">بعد از هر خواندن، شمارش از نو.</b>
+      <span class="why">بعد از خواندن لمسی، خواندن خودکار بعدی ۵ ثانیه کامل بعد می‌آید، نه یک لحظه بعد.</span></li>
+    <li data-lines="48-52"><b class="what">ریتم.</b> دورهای ۱۰۰ میلی‌ثانیه‌ای را بشمار و بعد از ۵۰ به ۰ برگرد.
+      <span class="why">برد سیم لمسی را ده بار در ثانیه بررسی می‌کند و باز هم خاک را فقط هر ۵ ثانیه می‌خواند.</span></li>
+  </ol>
+  <div class="wokwi" data-board="esp32" data-code-from="projAns">
+  <p>آبیاری کامل: پیچ را زیر ۳۰٪ بچرخان و در خواندن بعدی LED آبی «پمپ» را نگاه کن. لمس فقط روی برد واقعی قابل آزمایش است.</p>
+  <script type="application/json">{
+  "version": 1,
+  "author": "ESP32 Persian Masterclass",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": 20, "left": -170, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r1", "top": 110, "left": 170, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led1", "top": 30, "left": 200, "attrs": { "color": "blue" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:SIG", "esp:34", "blue", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "esp:4", "r1:2", "orange", [] ],
+    [ "r1:1", "led1:A", "orange", [] ],
+    [ "led1:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}</script>
+  </div>
+  </details>
+</div>
+
 <div class="callout info"><div class="ct">خلاصه درس در سه خط</div>
 <p>در کد همیشه با <b>شماره GPIO</b> کار کن و اسم چاپی برد را با نقشه تطبیق بده؛ به ۶ تا ۱۱ هرگز دست نزن، ۱ و ۳ را برای Serial آزاد بگذار و به هیچ پینی بیش از ۳٫۳ ولت و بیش از ۲۰ میلی‌آمپر نده. ورودی آنالوگ روی ADC1 (۳۲ تا ۳۹)، چون ADC2 با Wi-Fi از کار می‌افتد؛ ۳۴ تا ۳۹ فقط ورودی و بدون Pull-up‌اند. Strappingها (۰، ۲، ۵، ۱۲، ۱۵) را هنگام بوت آزاد بگذار، قطعه‌های قدرتی را روی سبزهای بدون پرش بوت بنشان و قبل از هر پروژه چک‌لیست ۸ قدمی را روی کاغذ اجرا کن.</p></div>
 
