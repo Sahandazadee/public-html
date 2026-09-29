@@ -29,7 +29,7 @@
       doneBtnYes: "✓ تمام شد (برداشتن تیک)", doneBtnNo: "این درس را تمام کردم",
       prev: "→ درس قبلی", back: "→ بازگشت", home: "خانه و نقشه راه", next: "درس بعدی ←", end: "پایان دوره ←", backHome: "بازگشت به خانه",
       footer: 'مستر کلاس ESP32 فارسی · آموزش رایگان · <a href="credits.html">منابع و مجوز تصاویر</a>',
-      copy: "کپی کد", copied: "✓ کپی شد", letters: ["الف", "ب", "ج", "د"],
+      copy: "کپی کد", copied: "✓ کپی شد", notesAll: "💬 همه توضیح‌ها", noStore: "⚠️ این مرورگر اجازه ذخیره نمی‌دهد (مثلا حالت خصوصی یا «پاک کردن داده‌ها هنگام خروج»). جواب‌ها و پیشرفتت با بستن صفحه از دست می‌رود. در حالت عادی مرورگر باز کن یا از «فایل پیشرفت» در صفحه اول استفاده کن.", notesNone: "بستن توضیح‌ها", noteHint: "💬 روی خط‌های نارنجی کلیک کن تا توضیحش همان زیر باز شود. دکمه «کپی کد» فقط خود کد را کپی می‌کند.", noteAria: "توضیح خط", letters: ["الف", "ب", "ج", "د"],
       right: "✅ درست است!", wrong: "❌ نه، دوباره فکر کن.", hint: "راهنما: متن بالای این آزمون را دوباره بخوان.",
       score: "امتیاز:", perfect: " — عالی! 🎉",
       wokwiTitle: "همین مدار را در شبیه‌ساز Wokwi بساز", wokwiOpen: "باز کردن Wokwi ↗", copyDiagram: "کپی diagram.json", copySketch: "کپی کد sketch.ino",
@@ -68,7 +68,7 @@
       doneBtnYes: "✓ Done (click to undo)", doneBtnNo: "I finished this lesson",
       prev: "← Previous lesson", back: "← Back", home: "Home & roadmap", next: "Next lesson →", end: "End of course →", backHome: "Back to home",
       footer: 'ESP32 Masterclass · free course · <a href="credits.html">Sources and image licenses</a>',
-      copy: "Copy code", copied: "✓ Copied", letters: ["A", "B", "C", "D"],
+      copy: "Copy code", copied: "✓ Copied", notesAll: "💬 All notes", noStore: "⚠️ This browser is not allowing the site to save (for example private mode or “clear data on exit”). Your answers and progress will be lost when you close the page. Use a normal window, or the progress file on the home page.", notesNone: "Hide notes", noteHint: "💬 Click an orange-marked line to open its explanation right below it. “Copy code” copies only the code.", noteAria: "Explain line", letters: ["A", "B", "C", "D"],
       right: "✅ Correct!", wrong: "❌ Not quite, think again.", hint: "Hint: reread the text above this quiz.",
       score: "Score:", perfect: " — perfect! 🎉",
       wokwiTitle: "Build this circuit in the Wokwi simulator", wokwiOpen: "Open Wokwi ↗", copyDiagram: "Copy diagram.json", copySketch: "Copy sketch.ino",
@@ -292,7 +292,7 @@
     var anchorEl = document.getElementById("chapters");
     if (anchorEl && article.contains(anchorEl)) anchorEl.parentNode.insertBefore(pp, anchorEl.nextSibling); else article.appendChild(pp);
     pp.querySelector('[data-pp="save"]').addEventListener("click", function () {
-      var data = { app: "esp32mc", v: 1, saved: new Date().toISOString(), done: store("esp32mc-done") || [], quiz: store("esp32mc-quiz") || {}, lang: store("esp32mc-lang"), theme: store("esp32mc-theme") };
+      var data = { app: "esp32mc", v: 1, saved: new Date().toISOString(), done: store("esp32mc-done") || [], quiz: store("esp32mc-quiz") || {}, pick: store("esp32mc-quizpick") || {}, lang: store("esp32mc-lang"), theme: store("esp32mc-theme") };
       download("esp32-masterclass-progress-" + new Date().toISOString().slice(0, 10) + ".json", JSON.stringify(data, null, 2), "application/json");
     });
     pp.querySelector("input[type=file]").addEventListener("change", function () {
@@ -310,6 +310,7 @@
           if (ids.indexOf(k) < 0 || !Array.isArray(d.quiz[k])) return;
           q[k] = (q[k] || []).concat(d.quiz[k].filter(function (n) { return typeof n === "number" && (q[k] || []).indexOf(n) < 0; }));
         });
+        if (d.pick && typeof d.pick === "object") { var pk = store("esp32mc-quizpick") || {}; Object.keys(d.pick).forEach(function (k) { if (ids.indexOf(k) > -1 && !pk[k]) pk[k] = d.pick[k]; }); store("esp32mc-quizpick", pk); }
         store("esp32mc-done", done); store("esp32mc-quiz", q);
         if (d.lang === "fa" || d.lang === "en") store("esp32mc-lang", d.lang);
         if (d.theme === "light" || d.theme === "dark") store("esp32mc-theme", d.theme);
@@ -418,6 +419,7 @@
     var bar = el("div", { "class": "bar" }, '<span class="dots"><i></i><i></i><i></i></span><span class="fname">' + esc(df || lang) + '</span>' +
       (full ? '<button type="button" class="dl" aria-label="' + esc(t("dlIno") + ": " + ino) + '">⬇ ' + t("dlIno") + '</button>' : '') + '<button type="button" class="cp">' + t("copy") + '</button>');
     block.insertBefore(bar, pre);
+    block._raw = raw;
     if (full) bar.querySelector(".dl").addEventListener("click", function () { download(ino, raw + "\n"); });
     bar.querySelector(".cp").addEventListener("click", function () {
       var b = this;
@@ -429,31 +431,68 @@
   function fallbackCopy(t) { var ta = el("textarea"); ta.value = t; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); } catch (e) {} ta.remove(); }
   article.querySelectorAll(".code").forEach(renderCode);
 
-  /* توضیح تکه‌تکه: کلیک روی هر مرحله، خط‌های مربوط را در کد پررنگ می‌کند */
+  /* توضیح تکه‌تکه، درست زیر همان خط: خط‌هایی که توضیح دارند علامت نارنجی می‌گیرند؛
+     با کلیک روی خط، توضیحش همان زیر باز می‌شود و خط‌های مربوط پررنگ می‌شوند.
+     فهرست قدیمی زیر کد پنهان می‌ماند (برای چاپ و موتور جستجو). دکمه «کپی» فقط خود کد را کپی می‌کند. */
   article.querySelectorAll("ol.walk").forEach(function (ol) {
     var code = ol.getAttribute("data-for") ? document.getElementById(ol.getAttribute("data-for")) : null;
     if (!code) { var p = ol.previousElementSibling; while (p && !p.classList.contains("code")) p = p.previousElementSibling; code = p; }
+    if (!code || !code.querySelector("pre")) return;
+    var pre = code.querySelector("pre"), lns = pre.querySelectorAll(".ln"), items = [];
     ol.querySelectorAll("li[data-lines]").forEach(function (li) {
-      var r = li.getAttribute("data-lines");
-      li.insertAdjacentHTML("afterbegin", '<span class="lines">L' + r + '</span>');
-      /* مثل گزینه‌های آزمون با صفحه‌کلید هم کار می‌کند: Tab، سپس Enter یا فاصله */
-      li.setAttribute("tabindex", "0"); li.setAttribute("role", "button"); li.setAttribute("aria-pressed", "false");
-      li.addEventListener("keydown", function (e) { if ((e.key === "Enter" || e.key === " ") && e.target === li) { e.preventDefault(); li.click(); } });
-      li.addEventListener("click", function (e) {
-        if (!code || (e.target.closest && e.target.closest("a"))) return;
-        var lns = code.querySelectorAll(".ln"), on = !li.classList.contains("on");
-        ol.querySelectorAll("li").forEach(function (x) { x.classList.remove("on"); if (x.hasAttribute("aria-pressed")) x.setAttribute("aria-pressed", "false"); });
-        lns.forEach(function (x) { x.classList.remove("hl"); });
-        if (!on) return;
-        li.classList.add("on"); li.setAttribute("aria-pressed", "true");
-        r.split(",").forEach(function (seg) {
-          var ab = seg.split("-"), a = +ab[0], b = +(ab[1] || ab[0]);
-          for (var i = a; i <= b; i++) if (lns[i - 1]) lns[i - 1].classList.add("hl");
-        });
-        var first = code.querySelector(".ln.hl");
-        if (first) { var rect = code.getBoundingClientRect(); if (rect.top < 60 || rect.bottom > innerHeight) code.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
+      var set = [];
+      li.getAttribute("data-lines").split(",").forEach(function (seg) {
+        var ab = seg.split("-"), x = +ab[0], y = +(ab[1] || ab[0]);
+        for (var i = x; i <= y; i++) if (lns[i - 1]) set.push(i);
       });
+      if (set.length) items.push({ li: li, set: set, last: Math.max.apply(null, set), note: null });
     });
+    if (!items.length) return;
+    ol.classList.add("walk-inline");
+    /* هر خط به کوچک‌ترین توضیحی که آن را پوشش می‌دهد وصل می‌شود */
+    var byLine = {};
+    items.forEach(function (it) { it.set.forEach(function (n) { if (!byLine[n] || byLine[n].set.length > it.set.length) byLine[n] = it; }); });
+    function makeNote(it) {
+      var n = el("span", { "class": "ln-note", dir: EN ? "ltr" : "rtl" });
+      var tmp = it.li.cloneNode(true); tmp.querySelectorAll(".lines").forEach(function (x) { x.remove(); });
+      n.innerHTML = tmp.innerHTML;
+      var after = lns[it.last - 1];
+      while (after.nextSibling && after.nextSibling.classList && after.nextSibling.classList.contains("ln-note")) after = after.nextSibling;
+      after.parentNode.insertBefore(n, after.nextSibling);
+      return n;
+    }
+    function show(it, on) {
+      if (on && !it.note) it.note = makeNote(it);
+      if (it.note) it.note.hidden = !on;
+      it.open = on;
+      it.set.forEach(function (n) { lns[n - 1].classList.toggle("hl", on || items.some(function (o) { return o !== it && o.open && o.set.indexOf(n) > -1; })); });
+      var head = lns[it.set[0] - 1]; head.setAttribute("aria-expanded", on ? "true" : "false");
+    }
+    Object.keys(byLine).forEach(function (n) {
+      var ln = lns[n - 1], it = byLine[n];
+      ln.classList.add("has-note");
+      if (it.set[0] === +n) { ln.setAttribute("tabindex", "0"); ln.setAttribute("role", "button"); ln.setAttribute("aria-expanded", "false"); ln.setAttribute("aria-label", t("noteAria") + " " + it.li.getAttribute("data-lines")); }
+      ln.addEventListener("click", function () {
+        if (getSelection && String(getSelection()).length > 2) return; /* کاربر دارد متن را انتخاب می‌کند */
+        var on = !it.open;
+        items.forEach(function (o) { if (o !== it && o.open && !code.classList.contains("notes-all")) show(o, false); });
+        show(it, on);
+      });
+      ln.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); ln.click(); } });
+    });
+    /* دکمه «همه توضیح‌ها» در نوار بالای کد */
+    var bar = code.querySelector(".bar");
+    if (bar) {
+      var allBtn = el("button", { type: "button", "class": "notes-btn", "aria-pressed": "false" }, t("notesAll"));
+      bar.insertBefore(allBtn, bar.querySelector(".dl") || bar.querySelector(".cp"));
+      allBtn.addEventListener("click", function () {
+        var on = !code.classList.contains("notes-all");
+        code.classList.toggle("notes-all", on); allBtn.setAttribute("aria-pressed", on ? "true" : "false");
+        allBtn.textContent = on ? t("notesNone") : t("notesAll");
+        items.forEach(function (o) { show(o, on); });
+      });
+      if (!code.querySelector(".tap-hint")) code.insertBefore(el("div", { "class": "tap-hint", dir: EN ? "ltr" : "rtl" }, t("noteHint")), pre);
+    }
   });
 
   /* ---------- آزمون چهارگزینه‌ای ---------- */
@@ -464,12 +503,13 @@
     var fb = q.querySelector(".fb");
     if (fb) fb.setAttribute("data-orig", fb.innerHTML);
     items.forEach(function (li, i) {
-      li.insertAdjacentHTML("afterbegin", "<b>" + t("letters")[i] + ") </b>");
+      li.insertAdjacentHTML("afterbegin", "<b aria-hidden=\"true\">" + t("letters")[i] + "</b>");
       /* با صفحه‌کلید هم بشود جواب داد: Tab برای رفتن، Enter یا فاصله برای انتخاب */
       li.setAttribute("tabindex", "0"); li.setAttribute("role", "button");
       li.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); li.click(); } });
       li.addEventListener("click", function () {
         if (q.classList.contains("solved")) return;
+        recordPick(q, i);
         if (i + 1 === ans) { li.classList.add("right"); q.classList.add("solved"); saveQuiz(); }
         else li.classList.add("wrong");
         q.classList.add("answered");
@@ -489,11 +529,27 @@
     quizzes.forEach(function (q, k) { if (q.classList.contains("solved")) qStore[lesson.id].push(k); });
     store(QKEY, qStore);
   }
-  if (lesson && qStore[lesson.id]) qStore[lesson.id].forEach(function (k) {
-    var q = quizzes[k]; if (!q) return;
-    var li = q.querySelectorAll("ol > li")[+q.getAttribute("data-answer") - 1];
-    if (li) { q.classList.remove("solved"); li.click(); }
-  });
+  /* هر گزینه‌ای که انتخاب شود (درست یا غلط) هم جدا ذخیره می‌شود تا با برگشتن، آزمون همان‌طور که رها شده بود دیده شود */
+  var PKEY = "esp32mc-quizpick", pStore = store(PKEY) || {}, restoring = false;
+  function recordPick(q, i) {
+    if (!lesson || restoring) return;
+    var k = String(Array.prototype.indexOf.call(quizzes, q)), m = pStore[lesson.id] || (pStore[lesson.id] = {});
+    m[k] = (m[k] || []).filter(function (x) { return x !== i; }).concat([i]);
+    store(PKEY, pStore);
+  }
+  if (lesson) {
+    restoring = true;
+    var picks = pStore[lesson.id] || {};
+    quizzes.forEach(function (q, k) {
+      var lis = q.querySelectorAll("ol > li"), list = picks[String(k)];
+      if (!list && (qStore[lesson.id] || []).indexOf(k) > -1) list = [+q.getAttribute("data-answer") - 1];
+      (list || []).forEach(function (i) { if (lis[i] && !q.classList.contains("solved")) lis[i].click(); });
+    });
+    restoring = false;
+  }
+  /* اگر مرورگر اجازه ذخیره ندهد (حالت خصوصی یا تنظیمات پاک‌کردن داده‌ها)، به شاگرد صریح می‌گوییم */
+  var canStore = (function () { try { localStorage.setItem("esp32mc-test", "1"); localStorage.removeItem("esp32mc-test"); return true; } catch (e) { return false; } })();
+  if (!canStore && quizzes.length) quizzes[0].parentNode.insertBefore(el("div", { "class": "callout warn store-warn" }, "<p>" + t("noStore") + "</p>"), quizzes[0]);
   function updateScore() {
     document.dispatchEvent(new CustomEvent("esp32mc-quiz"));
     var s = article.querySelector(".quiz-score");
@@ -521,7 +577,7 @@
     if (dlb) dlb.addEventListener("click", function () { download("diagram.json", diagram + "\n", "application/json"); });
     w.querySelectorAll("[data-copy]").forEach(function (b) {
       b.addEventListener("click", function () {
-        var txt = b.getAttribute("data-copy") === "d" ? diagram : code.querySelector("pre").innerText;
+        var txt = b.getAttribute("data-copy") === "d" ? diagram : (code._raw || code.querySelector("pre").innerText);
         (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).catch(function () { fallbackCopy(txt); });
         var o = b.textContent; b.textContent = t("copied"); setTimeout(function () { b.textContent = o; }, 1500);
       });
