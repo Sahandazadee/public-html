@@ -1,0 +1,1059 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>اشاره‌گر به تابع و callback · C برای میکروکنترلر</title>
+<meta name="description" content="اشاره‌گر به تابع در C از صفر: اعلان و typedef، callback، جدول فرمان، ساختار عملیات درایور، qsort، vector table میکروکنترلر Cortex-M و تابع weak در HAL؛ با کد وارسی‌شده، آزمون و تمرین.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="4-3">
+
+<p class="lede">تا اینجا هر کاری که در C کردی، روی <b>داده</b> بود: عدد، آرایه، ساختار. ولی یک سؤال عجیب هست: خود <b>تابع</b> هم جایی در حافظه نشسته است؛ پس آدرس هم دارد. آیا می‌شود آدرس یک تابع را در یک متغیر نگه داشت و بعدا گفت «هر چه در این متغیر است را اجرا کن»؟ جواب «بله» است و همین ترفند ساده پشت <b>وقفه‌ها</b>، <b>درایورها</b>، <b>جدول فرمان‌ها</b> و <b>task های FreeRTOS</b> است. در این درس یاد می‌گیری اشاره‌گر به تابع را بنویسی، بخوانی و درست به کار ببری.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>اشاره‌گر به تابع را اعلان کنی و اعلان‌های عجیبش را «از داخل به بیرون» بخوانی</li>
+    <li>با <code>typedef</code> برایش یک اسم خوانا بسازی</li>
+    <li>تابعی بنویسی که تابع دیگری را به‌عنوان آرگومان می‌گیرد (callback)</li>
+    <li>جدول فرمان (dispatch table) و ساختار «عملیات درایور» بسازی</li>
+    <li>با <code>qsort</code> مرتب‌سازی سفارشی انجام بدهی</li>
+    <li>توضیح بدهی چرا vector table میکروکنترلر «آرایه‌ای از اشاره‌گر به تابع» است</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="3-2.html">۳.۲</a> و <a href="3-3.html">۳.۳</a>: اشاره‌گر، <code>*</code> و <code>&amp;</code>، <code>void *</code></li>
+    <li>درس <a href="2-6.html">۲.۶</a>: تابع و پروتوتایپ</li>
+    <li>درس <a href="3-4.html">۳.۴</a>: <code>struct</code> و <code>typedef</code></li>
+    <li>کامپایلر روی PC. برای یک قطعهٔ کوتاه STM32 هم <code>arm-none-eabi-gcc</code> (اختیاری)</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: «شمارهٔ تلفن» به‌جای «خود کار»</h2>
+<p>فرض کن مدیر رستوران هستی و می‌خواهی وقتی غذای مشتری آماده شد، یکی خبرش کند. دو راه داری. راه اول: خودت کنار پنجرهٔ آشپزخانه بایستی و مدام نگاه کنی (کار دیگری نمی‌کنی). راه دوم: به آشپز یک <b>شمارهٔ تلفن</b> بدهی و بگویی «آماده شد، به این شماره زنگ بزن». آشپز نمی‌داند پشت آن شماره چه کسی است؛ فقط زنگ می‌زند. فردا می‌توانی شماره را عوض کنی و آشپز بدون هیچ تغییری کارش را ادامه می‌دهد.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>تابع = یک آدم با یک کار مشخص. <b>آدرس تابع</b> = شمارهٔ تلفن او. <b>اشاره‌گر به تابع</b> = یک دفترچه‌ای که یک شماره در آن نوشته‌اند. کسی که دفترچه را دارد، لازم نیست بداند طرف مقابل کیست؛ فقط «زنگ می‌زند». تنها چیزی که لازم است بداند این است که <b>طرف مقابل چه ورودی می‌گیرد و چه چیزی برمی‌گرداند</b> (مثل اینکه بدانی طرف فارسی حرف می‌زند). این شرط را در C <span class="term" data-t="signature">«امضای تابع»</span> می‌نامند.</p></div>
+
+<p>در C این ایده دقیقا همین است. وقتی برنامه کامپایل شود، بدنهٔ هر تابع به چند دستور ماشین تبدیل می‌شود و آن دستورها <b>در Flash</b> (درس <a href="3-5.html">۳.۵</a>) از یک آدرس مشخص شروع می‌شوند. آن آدرس، «شمارهٔ تلفن» تابع است. <span class="term" data-t="funcptr">اشاره‌گر به تابع</span> متغیری است که همین آدرس را در RAM نگه می‌دارد.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="دو تابع add و sub در Flash با آدرس‌های مشخص و متغیر op در RAM که آدرس add را نگه می‌دارد و با پیکان به آن اشاره می‌کند">
+  <defs><marker id="f1a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">تابع هم آدرس دارد؛ اشاره‌گر به تابع همان آدرس را نگه می‌دارد</text>
+  <text x="600" y="58" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="800">Flash (کد برنامه)</text>
+  <text x="130" y="58" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="800">RAM (متغیرها)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="450" y="72" width="300" height="70" rx="10" fill="#ffd60a"/>
+    <rect x="450" y="164" width="300" height="70" rx="10" fill="#7ea3ff"/>
+    <rect x="30" y="102" width="200" height="70" rx="10" fill="#ff86b3"/>
+  </g>
+  <g class="mono" fill="#15120a" text-anchor="middle" font-size="20" font-weight="800">
+    <text x="600" y="104">add(a, b)</text><text x="600" y="196">sub(a, b)</text><text x="130" y="128">op</text>
+  </g>
+  <g class="mono" fill="#15120a" text-anchor="middle" font-size="13">
+    <text x="600" y="126">0x08000120</text><text x="600" y="218">0x08000148</text><text x="130" y="154">0x08000120</text>
+  </g>
+  <path d="M232 137H446" stroke="#15120a" stroke-width="3.5" fill="none" marker-end="url(#f1a)"/>
+  <text x="340" y="126" text-anchor="middle" class="s-tx" font-size="14" font-weight="700">اشاره می‌کند</text>
+  <text x="380" y="272" text-anchor="middle" class="s-tx" font-size="13.5">آدرس‌ها نمونه‌اند؛ Flash در STM32F411 از <tspan class="mono">0x08000000</tspan> شروع می‌شود</text>
+  <text x="380" y="292" text-anchor="middle" class="s-tx" font-size="13.5">تابع در Flash می‌ماند؛ فقط متغیر <tspan class="mono">op</tspan> در RAM است و ۴ بایت جا می‌گیرد</text>
+</svg></div>
+<figcaption>مقدار <span class="en">op</span> یک آدرس در Flash است، نه یک عدد معمولی. اگر مقدارش را عوض کنی، «شمارهٔ تلفن» عوض می‌شود و همان متغیر به تابع دیگری زنگ می‌زند.</figcaption></figure>
+
+<h2 id="syntax">اعلان: اولین اشاره‌گر به تابع</h2>
+<p>سخت‌ترین بخش این درس فقط <b>شکل نوشتن</b> است. اعلان اشاره‌گر به تابع اولش عجیب به‌نظر می‌رسد. ولی قاعدهٔ ساده‌ای دارد: <b>اعلان را مثل خودِ تابع بنویس، فقط اسم را با <code>(*اسم)</code> عوض کن</b>. اگر تابع این‌طور نوشته می‌شود:</p>
+<pre class="term" data-kind="cmd">
+int  add(int a, int b);        // یک تابع
+int (*op)(int, int);           // اشاره‌گر به تابعی با همین امضا
+</pre>
+<p>پرانتز دور <code>*op</code> <b>حیاتی است</b>. بدونش، <code>int *op(int, int)</code> یعنی «تابعی به اسم op که یک اشاره‌گر به int برمی‌گرداند»؛ چیز کاملا متفاوتی. علت: در C پرانتز <code>( )</code> تقدم بالاتری از <code>*</code> دارد. پرانتز به کامپایلر می‌گوید «اول <code>*op</code> را ببین».</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 250" role="img" aria-label="اجزای اعلان int (*op)(int, int); نوع برگشتی، ستاره و اسم داخل پرانتز، و نوع پارامترها">
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="40" y="62" width="110" height="60" rx="12" fill="#ff86b3"/>
+    <rect x="180" y="62" width="200" height="60" rx="12" fill="#ffd60a"/>
+    <rect x="410" y="62" width="210" height="60" rx="12" fill="#7ea3ff"/>
+    <rect x="650" y="62" width="70" height="60" rx="12" fill="#fff"/>
+  </g>
+  <g class="mono" font-size="27" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="95" y="102">int</text><text x="280" y="102">(*op)</text><text x="515" y="102">(int, int)</text><text x="685" y="102">;</text>
+  </g>
+  <g stroke="#15120a" stroke-width="2.5" fill="none"><path d="M95 128v26"/><path d="M280 128v26"/><path d="M515 128v26"/></g>
+  <g class="s-tx" font-size="15" font-weight="800" text-anchor="middle">
+    <text x="95" y="176">۳. چه برمی‌گرداند</text><text x="280" y="176">۱. op یک اشاره‌گر است</text><text x="515" y="176">۲. به تابعی با این ورودی‌ها</text>
+  </g>
+  <text x="380" y="34" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">از داخل به بیرون بخوان: اول پرانتز، بعد راست، بعد چپ</text>
+  <text x="380" y="218" text-anchor="middle" class="s-tx" font-size="14.5">«op اشاره‌گری است به تابعی که دو int می‌گیرد و یک int برمی‌گرداند»</text>
+</svg></div>
+<figcaption>روش خواندن: از اسم شروع کن، پرانتز داخلی را بخوان (اشاره‌گر)، بعد برو به راست (پارامترها)، آخر به چپ (نوع برگشتی).</figcaption></figure>
+
+<p>حالا اولین برنامه. دو تابع ساده داریم و یک اشاره‌گر که هر بار به یکی‌شان اشاره می‌کند.</p>
+
+<div class="code" data-file="fp_basic.c" data-lang="c" data-verify="host" id="code1">
+<pre>
+#include &lt;stdio.h&gt;
+
+static int add(int a, int b) { return a + b; }
+static int sub(int a, int b) { return a - b; }
+
+int main(void)
+{
+    int (*op)(int, int);        // اشاره‌گر به تابع (هنوز مقدار ندارد)
+
+    op = add;                   // آدرس add را بگذار
+    printf("op = add: %d\n", op(7, 3));
+
+    op = sub;                   // حالا آدرس sub
+    printf("op = sub: %d\n", op(7, 3));
+
+    printf("op == add ? %d\n", op == add);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code1">
+  <li data-lines="3-4"><b class="what">دو تابع با امضای یکسان.</b> هر دو دو <code>int</code> می‌گیرند و یک <code>int</code> برمی‌گردانند. <code>static</code> یعنی فقط داخل همین فایل دیده می‌شوند (درس <a href="4-2.html">۴.۲</a>).
+    <span class="why">امضای یکسان شرط لازم است. اشاره‌گر فقط به تابعی اشاره می‌کند که ورودی و خروجی‌اش با اعلان اشاره‌گر بخواند.</span></li>
+  <li data-lines="8"><b class="what">اعلان اشاره‌گر.</b> <code>op</code> ساخته می‌شود ولی هنوز مقدار معتبر ندارد؛ مثل هر متغیر مقدارنداده (درس <a href="2-1.html">۲.۱</a>) آشغال دارد.
+    <span class="why">در کد واقعی همان لحظهٔ ساخت مقدار بده (یا <code>NULL</code>). فراخوانی اشاره‌گر بدون مقدار، برنامه را به جایی تصادفی می‌پراند.</span></li>
+  <li data-lines="10"><b class="what">مقدار دادن.</b> نام تابع بدون پرانتز، یعنی «آدرس تابع». پس <code>op = add</code> آدرس <code>add</code> را در <code>op</code> می‌گذارد. (نوشتن <code>&amp;add</code> هم یکی است.)
+    <span class="why">اگر بنویسی <code>add(1, 2)</code> تابع <b>اجرا</b> می‌شود و <b>نتیجه‌اش</b> (عدد ۳) داده می‌شود. پرانتز یعنی «زنگ بزن»؛ بدون پرانتز یعنی «فقط شماره را بده».</span></li>
+  <li data-lines="11"><b class="what">فراخوانی از راه اشاره‌گر.</b> <code>op(7, 3)</code> همان تابعی را اجرا می‌کند که آدرسش در <code>op</code> است. (شکل رسمی‌تر: <code>(*op)(7, 3)</code>؛ نتیجه یکی است.)
+    <span class="why">C هر دو شکل را می‌پذیرد. شکل کوتاه‌تر خواناتر است و در کد حرفه‌ای رایج‌تر.</span></li>
+  <li data-lines="13-14"><b class="what">عوض کردن مقصد.</b> همان <code>op(7, 3)</code>، این بار <code>sub</code> را اجرا می‌کند. خطِ صدا زدن تغییری نکرده؛ فقط «شماره» عوض شده.
+    <span class="why">قدرت اشاره‌گر به تابع همین است: رفتار را می‌شود در زمان اجرا عوض کرد، بدون دست‌زدن به کدی که صدا می‌زند.</span></li>
+  <li data-lines="16"><b class="what">مقایسه.</b> دو اشاره‌گر به تابع با <code>==</code> مقایسه می‌شوند. الان <code>op</code> به <code>sub</code> اشاره می‌کند، پس جواب <code>0</code> است.</li>
+</ol>
+
+<pre class="term" data-from="fp_basic.c">
+$ gcc -std=c11 -Wall -Wextra -o fp_basic fp_basic.c
+$ ./fp_basic
+op = add: 10
+op = sub: 4
+op == add ? 0
+</pre>
+
+<div class="widget" data-w="mem" data-config='{"title":"op کدام تابع را صدا می‌زند؟","code":["int (*op)(int, int);","op = add;","r = op(7, 3);","op = sub;","r = op(7, 3);"],"intro":"add و sub در Flash هستند (آدرس‌ها نمونه). op و r دو قفسهٔ RAM. روی بعدی بزن.","cells":[{"addr":"Flash","name":"add","val":"0x08000120","kind":"var"},{"addr":"Flash","name":"sub","val":"0x08000148","kind":"var"},{"addr":"0x20000000","name":"op","val":null,"kind":"ptr"},{"addr":"0x20000004","name":"r","val":null,"kind":"var"}],"steps":[{"line":0,"set":{},"hot":[2],"say":"قفسهٔ op ساخته شد؛ هنوز چیز معتبری داخلش نیست."},{"line":1,"set":{"2":"0x08000120"},"hot":[2],"say":"آدرس add داخل op نشست. تابع add جابه‌جا نشد؛ فقط شمارهٔ تلفنش در op نوشته شد."},{"line":2,"set":{"3":10},"hot":[3],"say":"op(7, 3): پردازنده به آدرس 0x08000120 می‌پرد، add اجرا می‌شود و ۱۰ برمی‌گردد."},{"line":3,"set":{"2":"0x08000148"},"hot":[2],"say":"حالا آدرس sub در op است. کدی که op را صدا می‌زند هنوز همان است."},{"line":4,"set":{"3":4},"hot":[3],"say":"همان op(7, 3) این بار به sub می‌پرد و ۴ برمی‌گردد."}]}'></div>
+
+<h2 id="typedef">اسم خوانا با <code>typedef</code></h2>
+<p>اگر بخواهی پارامتر تابع یا عضو struct را «اشاره‌گر به تابع» کنی، نوشتنِ <code>int (*)(int, int)</code> هر بار خسته‌کننده و پر از خطاست. راه‌حل استاندارد: با <code>typedef</code> (درس <a href="3-4.html">۳.۴</a>) یک بار برایش اسم بساز. قالب: <b>اعلانِ متغیر را بنویس و جلویش <code>typedef</code> بگذار؛ اسمِ متغیر تبدیل به اسم نوع می‌شود.</b></p>
+<pre class="term" data-kind="cmd">
+int (*op)(int, int);                  // op یک متغیر است
+typedef int (*binop_t)(int, int);     // binop_t یک نوع است
+binop_t op;                           // همان اعلان بالا، ولی خوانا
+</pre>
+<p>پسوند <code>_t</code> رسم رایج برای اسم نوع‌هاست. از این به بعد در این درس همیشه با <code>typedef</code> کار می‌کنیم.</p>
+
+<h2 id="callback">تابعی که تابع می‌گیرد: <span class="en">callback</span></h2>
+<p>حالا مثال رستوران را به کد ببریم. <span class="term" data-t="callback">callback</span> (به معنی «تماس برگشتی») تابعی است که <b>تو می‌نویسی</b> ولی <b>دیگری صدایش می‌زند</b>، هر وقت خودش لازم دید. تو فقط شمارهٔ تلفن را (آدرس تابع) به او می‌دهی.</p>
+<p>ساده‌ترین نمونه: تابعی به اسم <code>for_each</code> که روی همهٔ عضوهای آرایه می‌گردد، ولی «با هر عضو چه کنم؟» را نمی‌داند و از بیرون می‌گیرد.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 270" role="img" aria-label="main تابع for_each را با آرایه و آدرس print_value صدا می‌زند؛ for_each برای هر عضو print_value را صدا می‌زند">
+  <defs><marker id="f2a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="30" y="60" width="170" height="120" rx="12" fill="#ffd60a"/>
+    <rect x="300" y="60" width="200" height="120" rx="12" fill="#7ea3ff"/>
+    <rect x="570" y="60" width="160" height="120" rx="12" fill="#3ddc97"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle">
+    <text x="115" y="96" class="mono" font-size="22" font-weight="800">main</text>
+    <text x="115" y="126" font-size="14">آرایه و «شماره» را می‌دهد</text>
+    <text x="400" y="96" class="mono" font-size="22" font-weight="800">for_each</text>
+    <text x="400" y="126" font-size="14">می‌چرخد و برای هر عضو</text>
+    <text x="400" y="148" font-size="14">زنگ می‌زند (fn)</text>
+    <text x="650" y="96" class="mono" font-size="19" font-weight="800">print_value</text>
+    <text x="650" y="126" font-size="14">کار واقعی را</text>
+    <text x="650" y="148" font-size="14">اینجا انجام می‌دهد</text>
+  </g>
+  <path d="M202 100H296" stroke="#15120a" stroke-width="3.5" fill="none" marker-end="url(#f2a)"/>
+  <text x="250" y="88" text-anchor="middle" class="s-tx" font-size="13">۱. صدا زدن</text>
+  <path d="M502 100H566" stroke="#15120a" stroke-width="3.5" fill="none" marker-end="url(#f2a)"/>
+  <text x="534" y="88" text-anchor="middle" class="s-tx" font-size="13">۲. callback</text>
+  <path d="M650 184V228H400V184" stroke="#15120a" stroke-width="3" stroke-dasharray="7 5" fill="none" marker-end="url(#f2a)"/>
+  <text x="525" y="222" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">۳. برمی‌گردد؛ حلقه عضو بعدی</text>
+  <text x="380" y="30" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">for_each از print_value خبر ندارد؛ فقط یک «شماره» دارد</text>
+  <text x="380" y="256" text-anchor="middle" class="s-tx" font-size="13.5">for_each عوض نمی‌شود؛ هر بار شمارهٔ دیگری بدهی، کار دیگری انجام می‌شود</text>
+</svg></div>
+<figcaption>جریان یک callback. جهت پیکان‌ها «چه کسی صدا می‌زند» را نشان می‌دهد.</figcaption></figure>
+
+<div class="code" data-file="callback.c" data-lang="c" data-verify="host" id="code2">
+<pre>
+#include &lt;stdio.h&gt;
+
+typedef void (*visit_fn)(int value);    // نوع: تابعی که int می‌گیرد و چیزی برنمی‌گرداند
+
+static void print_value(int value)  { printf("[%d] ", value); }
+static void print_double(int value) { printf("[%d] ", value * 2); }
+
+static void for_each(const int *items, int count, visit_fn fn)
+{
+    for (int i = 0; i &lt; count; i++) {
+        fn(items[i]);               // callback: هر عضو را به fn بده
+    }
+}
+
+int main(void)
+{
+    const int data[4] = {3, 8, 1, 6};
+
+    for_each(data, 4, print_value);
+    printf("\n");
+    for_each(data, 4, print_double);
+    printf("\n");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code2">
+  <li data-lines="3"><b class="what">نوع callback.</b> <code>visit_fn</code> یعنی «تابعی که یک <code>int</code> می‌گیرد و چیزی برنمی‌گرداند».
+    <span class="why">با این اسم، امضای مورد انتظار یک‌جا نوشته شده. اگر فردا بخواهی پارامتر دومی اضافه کنی، فقط همین یک خط عوض می‌شود و کامپایلر بقیهٔ جاهای ناسازگار را نشانت می‌دهد.</span></li>
+  <li data-lines="5-6"><b class="what">دو رفتار مختلف.</b> هر دو با <code>visit_fn</code> سازگارند: <code>print_value</code> عدد را چاپ می‌کند، <code>print_double</code> دو برابرش را.</li>
+  <li data-lines="8-13"><b class="what">for_each.</b> آرایه، تعداد و یک callback می‌گیرد. برای هر عضو <code>fn(items[i])</code> را صدا می‌زند. خودش نمی‌داند <code>fn</code> چه می‌کند.
+    <span class="why">این جداسازی «پیمایش» از «کار روی هر عضو» است. یک بار پیمایش را می‌نویسی و با callback های مختلف بارها استفاده می‌کنی.</span></li>
+  <li data-lines="17"><b class="what">داده.</b> آرایهٔ <code>const</code>: <code>for_each</code> فقط می‌خواند، پس <code>const int *</code> می‌گیرد (درس <a href="3-3.html">۳.۳</a>).</li>
+  <li data-lines="19,21"><b class="what">دادن شماره.</b> فقط نام تابع، بدون پرانتز. اگر <code>print_value(...)</code> بنویسی، تابع همین‌جا اجرا می‌شود و نتیجه‌اش (که <code>void</code> است) به <code>for_each</code> می‌رسد؛ کامپایل نمی‌شود.</li>
+</ol>
+<pre class="term" data-from="callback.c">
+$ gcc -std=c11 -Wall -Wextra -o callback callback.c
+$ ./callback
+[3] [8] [1] [6]
+[6] [16] [2] [12]
+</pre>
+
+<h3 id="ctx">callback بدون سراسری: پارامتر <span class="en">context</span></h3>
+<p>یک مشکل: <code>print_value</code> فقط با ورودی‌اش کار می‌کند. اگر callback بخواهد چیزی را «به یاد بسپارد» (مثلا جمع را)، کجا نگه دارد؟ راه بد: متغیر سراسری. راه خوب: یک اشاره‌گر <code>void *</code> به‌عنوان پارامتر اضافه (اغلب <span class="term" data-t="userdata">context</span> یا <code>user_data</code> نامیده می‌شود). <code>for_each</code> فقط آن را عیناً به callback برمی‌گرداند و خودش نمی‌داند داخلش چیست.</p>
+
+<div class="code" data-file="context.c" data-lang="c" data-verify="host" id="code3">
+<pre>
+#include &lt;stdio.h&gt;
+
+typedef void (*visit_fn)(int value, void *ctx);
+
+typedef struct {
+    int sum;
+    int max;
+} stats_t;
+
+static void update_stats(int value, void *ctx)
+{
+    stats_t *s = ctx;               // برگرداندن void * به نوع واقعی
+    s-&gt;sum += value;
+    if (value &gt; s-&gt;max) {
+        s-&gt;max = value;
+    }
+}
+
+static void for_each(const int *items, int count, visit_fn fn, void *ctx)
+{
+    for (int i = 0; i &lt; count; i++) {
+        fn(items[i], ctx);
+    }
+}
+
+int main(void)
+{
+    const int data[5] = {3, 8, 1, 6, 4};
+    stats_t stats = {0, data[0]};
+
+    for_each(data, 5, update_stats, &amp;stats);
+    printf("sum=%d max=%d\n", stats.sum, stats.max);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code3">
+  <li data-lines="3"><b class="what">امضای جدید.</b> callback حالا دو ورودی دارد: مقدار عضو، و <code>void *ctx</code> که «جعبهٔ دلخواه» تو است.
+    <span class="why">هر تابعی با <code>void *</code> می‌تواند اشاره‌گر به هر نوعی را نگه دارد (درس <a href="3-3.html">۳.۳</a>)؛ پس یک <code>for_each</code> با همهٔ کاربردها کار می‌کند.</span></li>
+  <li data-lines="5-8"><b class="what">جعبهٔ آمار.</b> ساختاری که جمع و بیشینه را نگه می‌دارد.</li>
+  <li data-lines="10-16"><b class="what">callback.</b> اول <code>ctx</code> را به <code>stats_t *</code> برمی‌گرداند، بعد جمع و بیشینه را به‌روز می‌کند.
+    <span class="why">برگرداندن <code>void *</code> به اشاره‌گر واقعی در C بدون <code>cast</code> مجاز است. مسئولیت درست‌بودن نوع با توست؛ کامپایلر نمی‌تواند بررسی کند.</span></li>
+  <li data-lines="18-24"><b class="what">for_each.</b> <code>ctx</code> را بدون دست‌زدن رد می‌کند.</li>
+  <li data-lines="28-29,31-32"><b class="what">جعبه را بساز و بده.</b> <code>&amp;stats</code> آدرس جعبه است. <code>stats</code> مقدار اولیهٔ بیشینه را عضو اول می‌گیرد تا مقایسه درست باشد.
+    <span class="why">هیچ متغیر سراسری لازم نشد. هر فراخوانی جعبهٔ مخصوص خودش را دارد؛ پس امن‌تر و قابل‌تست‌تر است.</span></li>
+</ol>
+<pre class="term" data-from="context.c">
+$ ./context
+sum=22 max=8
+</pre>
+
+<h2 id="table">جدول فرمان: <span class="en">dispatch table</span></h2>
+<p>فرض کن دستگاهت از UART متن می‌گیرد: <code>on</code>، <code>off</code> یا <code>status</code>. ساده‌ترین راه یک زنجیرهٔ طولانی <code>if (strcmp(...)) ... else if (...)</code> است. هر فرمان جدید یعنی یک <code>else if</code> دیگر و کد کم‌کم به هم می‌ریزد. راه بهتر: یک <b>جدول</b> بساز که هر ردیفش «اسم فرمان + تابعی که اجرایش می‌کند» است، و برای پیدا کردن فرمان فقط جدول را بگردی. به این کار <span class="term" data-t="dispatch">dispatch</span> (یعنی «توزیع کردن به تابع مناسب») می‌گویند.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 290" role="img" aria-label="جدول سه‌ردیفه: نام فرمان و اشاره‌گر به تابع؛ هر اشاره‌گر با پیکان به تابع مربوطه اشاره می‌کند">
+  <defs><marker id="f3a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">هر ردیف جدول: یک اسم و یک «شماره تلفن»</text>
+  <g class="s-tx" font-size="14" font-weight="800" text-anchor="middle">
+    <text x="120" y="60">name</text><text x="290" y="60">run</text><text x="640" y="60">تابع‌ها در Flash</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="30" y="72" width="180" height="50" fill="#ffd60a"/><rect x="210" y="72" width="160" height="50" fill="#ff86b3"/>
+    <rect x="30" y="122" width="180" height="50" fill="#ffd60a"/><rect x="210" y="122" width="160" height="50" fill="#ff86b3"/>
+    <rect x="30" y="172" width="180" height="50" fill="#ffd60a"/><rect x="210" y="172" width="160" height="50" fill="#ff86b3"/>
+    <rect x="510" y="72" width="230" height="50" rx="10" fill="#3ddc97"/>
+    <rect x="510" y="122" width="230" height="50" rx="10" fill="#3ddc97"/>
+    <rect x="510" y="172" width="230" height="50" rx="10" fill="#3ddc97"/>
+  </g>
+  <g class="mono" fill="#15120a" text-anchor="middle" font-size="19" font-weight="800">
+    <text x="120" y="105">"on"</text><text x="120" y="155">"off"</text><text x="120" y="205">"status"</text>
+    <text x="290" y="105">•</text><text x="290" y="155">•</text><text x="290" y="205">•</text>
+    <text x="625" y="105">cmd_led_on</text><text x="625" y="155">cmd_led_off</text><text x="625" y="205">cmd_status</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M290 97H506" marker-end="url(#f3a)"/><path d="M290 147H506" marker-end="url(#f3a)"/><path d="M290 197H506" marker-end="url(#f3a)"/>
+  </g>
+  <text x="380" y="256" text-anchor="middle" class="s-tx" font-size="14">جست‌وجو: اسم را در ستون اول پیدا کن، پیکان همان ردیف را دنبال کن و تابع را صدا بزن</text>
+  <text x="380" y="277" text-anchor="middle" class="s-tx" font-size="13.5">فرمان تازه = یک ردیف تازه در جدول؛ کد جست‌وجو دست نمی‌خورد</text>
+</svg></div>
+<figcaption>جدول فرمان. ستون دوم اشاره‌گر به تابع است، نه خود تابع.</figcaption></figure>
+
+<div class="code" data-file="cmd_table.c" data-lang="c" data-verify="host" id="code4">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+static void cmd_led_on(void)  { printf("LED is now ON\n"); }
+static void cmd_led_off(void) { printf("LED is now OFF\n"); }
+static void cmd_status(void)  { printf("status: all good\n"); }
+
+typedef struct {
+    const char *name;           // اسم فرمان
+    void (*run)(void);          // تابعی که اجرایش می‌کند
+} command_t;
+
+static const command_t commands[] = {
+    { "on",     cmd_led_on  },
+    { "off",    cmd_led_off },
+    { "status", cmd_status  },
+};
+
+#define COMMAND_COUNT (sizeof(commands) / sizeof(commands[0]))
+
+static void dispatch(const char *word)
+{
+    for (size_t i = 0; i &lt; COMMAND_COUNT; i++) {
+        if (strcmp(word, commands[i].name) == 0) {
+            commands[i].run();
+            return;
+        }
+    }
+    printf("unknown command: %s\n", word);
+}
+
+int main(void)
+{
+    const char *input[] = { "on", "status", "blink", "off" };
+
+    for (size_t i = 0; i &lt; sizeof(input) / sizeof(input[0]); i++) {
+        dispatch(input[i]);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code4">
+  <li data-lines="4-6"><b class="what">سه کار.</b> هر فرمان یک تابع کوچک با امضای یکسان <code>void f(void)</code>.</li>
+  <li data-lines="8-11"><b class="what">ردیف جدول.</b> یک struct با دو عضو: اسم و اشاره‌گر به تابع. اعلان اشاره‌گر داخل struct دقیقا همان شکل قبلی است.
+    <span class="why">عضو struct را می‌شود به‌صورت <code>typedef</code> هم نوشت؛ اینجا یک‌بار مصرف است و مستقیم نوشتنش خواناتر است.</span></li>
+  <li data-lines="13-17"><b class="what">خود جدول.</b> آرایهٔ <code>static const</code>؛ هر ردیف با <code>{ اسم, تابع }</code> پر شده. اسم تابع بدون پرانتز.
+    <span class="why"><code>const</code> باعث می‌شود جدول روی میکروکنترلر در Flash بماند و RAM را اشغال نکند (درس <a href="3-5.html">۳.۵</a>). اشاره‌گر داخل جدول عوض‌شدنی نیست و این عیب نیست؛ مزیت است.</span></li>
+  <li data-lines="19"><b class="what">تعداد ردیف‌ها.</b> ماکرو، اندازهٔ کل آرایه را بر اندازهٔ یک عضو تقسیم می‌کند (درس <a href="2-7.html">۲.۷</a>). با اضافه‌کردن ردیف، خودش به‌روز می‌شود.</li>
+  <li data-lines="21-30"><b class="what">dispatch.</b> ردیف‌ها را می‌گردد، اسم را با <code>strcmp</code> مقایسه می‌کند و وقتی پیدا شد، <code>commands[i].run()</code> را صدا می‌زند. اگر هیچ ردیفی نخورد، پیام «ناشناخته» می‌دهد.
+    <span class="why">فراموش‌شدن حالت «پیدا نشد» یکی از رایج‌ترین باگ‌هاست. کاربر همیشه چیزی می‌نویسد که تو انتظارش را نداری.</span></li>
+  <li data-lines="34-37"><b class="what">تست.</b> چهار ورودی؛ سومی (<code>blink</code>) در جدول نیست.</li>
+</ol>
+<pre class="term" data-from="cmd_table.c">
+$ ./cmd_table
+LED is now ON
+status: all good
+unknown command: blink
+LED is now OFF
+</pre>
+
+<h2 id="qsort">مرتب‌سازی سفارشی با <code>qsort</code></h2>
+<p>کتابخانهٔ استاندارد C خودش یک تابع مرتب‌سازی دارد: <code>qsort</code> در <code>stdlib.h</code>. مشکل: <code>qsort</code> نمی‌داند عضوها چه نوعی‌اند (int؟ struct؟ رشته؟) و نمی‌داند «کوچک‌تر» یعنی چه. پس <b><span class="term" data-t="comparator">تابع مقایسه</span></b> را از تو می‌گیرد؛ یک callback. امضایش ثابت است: دو اشاره‌گر <code>const void *</code> می‌گیرد و <code>int</code> برمی‌گرداند: منفی اگر اولی باید جلوتر باشد، صفر اگر برابرند، مثبت اگر دومی جلوتر باشد.</p>
+
+<div class="code" data-file="sort.c" data-lang="c" data-verify="host" id="code5">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+
+typedef struct {
+    const char *name;
+    int mv;
+} reading_t;
+
+static int cmp_int(const void *a, const void *b)
+{
+    int x = *(const int *)a;
+    int y = *(const int *)b;
+    return (x &gt; y) - (x &lt; y);
+}
+
+static int cmp_reading_desc(const void *a, const void *b)
+{
+    const reading_t *x = a;
+    const reading_t *y = b;
+    return (y-&gt;mv &gt; x-&gt;mv) - (y-&gt;mv &lt; x-&gt;mv);
+}
+
+int main(void)
+{
+    int v[6] = {42, 7, 19, 3, 25, 11};
+    reading_t r[4] = {{"ch0", 3120}, {"ch1", 2980}, {"ch2", 3300}, {"ch3", 3050}};
+
+    qsort(v, 6, sizeof v[0], cmp_int);
+    for (int i = 0; i &lt; 6; i++) {
+        printf("%d ", v[i]);
+    }
+    printf("\n");
+
+    qsort(r, 4, sizeof r[0], cmp_reading_desc);
+    for (int i = 0; i &lt; 4; i++) {
+        printf("%s=%d ", r[i].name, r[i].mv);
+    }
+    printf("\n");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code5">
+  <li data-lines="9-14"><b class="what">مقایسهٔ عددها.</b> <code>qsort</code> آدرس دو عضو را به‌صورت <code>const void *</code> می‌دهد. اول به <code>const int *</code> تبدیل می‌کنیم، بعد با <code>*</code> مقدار را برمی‌داریم. عبارت <code>(x &gt; y) - (x &lt; y)</code> می‌شود <code>-1</code>، <code>0</code> یا <code>1</code>.
+    <span class="why">نوشتن <code>return x - y;</code> وسوسه‌انگیز است ولی اگر <code>x</code> خیلی بزرگ و <code>y</code> خیلی منفی باشد، <b>سرریز int</b> می‌شود (رفتار تعریف‌نشده، درس <a href="2-2.html">۲.۲</a>). این فرمول همیشه امن است.</span></li>
+  <li data-lines="16-21"><b class="what">مقایسهٔ struct ها، نزولی.</b> همان الگو ولی <code>y</code> و <code>x</code> جابه‌جا شده‌اند تا بزرگ‌ترین اول بیاید. <code>const reading_t *x = a;</code> بدون cast نوشته می‌شود چون <code>void *</code> در C خودکار تبدیل می‌شود.</li>
+  <li data-lines="28"><b class="what">صدا زدن qsort.</b> آرایه، تعداد عضو، اندازهٔ هر عضو (با <code>sizeof v[0]</code>) و شمارهٔ تابع مقایسه. خود <code>qsort</code> هر جا لازم دید مقایسه را صدا می‌زند.
+    <span class="why">اندازهٔ هر عضو لازم است چون <code>qsort</code> نوع را نمی‌شناسد و فقط بایت جابه‌جا می‌کند.</span></li>
+  <li data-lines="34"><b class="what">مرتب‌سازی struct ها.</b> همان <code>qsort</code>، فقط با تابع مقایسهٔ دیگر. <code>qsort</code> هیچ تغییری نکرده است.</li>
+</ol>
+<pre class="term" data-from="sort.c">
+$ ./sort
+3 7 11 19 25 42
+ch2=3300 ch0=3120 ch3=3050 ch1=2980
+</pre>
+
+<div class="callout info"><div class="ct">در میکروکنترلر</div>
+<p><code>qsort</code> روی MCU هم کار می‌کند ولی کد کتابخانه فضا می‌گیرد، و اگر آرایه خیلی کوچک است (مثلا ۸ نمونهٔ سنسور) یک مرتب‌سازی ساده خودت کافی است. اهمیت این مثال الگوی آن است: <b>الگوریتم ثابت، رفتار از بیرون</b>.</p></div>
+
+<h2 id="ops">ساختار عملیات درایور: شبه <span class="en">vtable</span></h2>
+<p>اگر چند اشاره‌گر به تابع را در یک struct جمع کنی، به چیزی می‌رسی که <b>یک «واسط» (interface)</b> را نشان می‌دهد: مجموعه‌ای از کارها که هر پیاده‌سازی باید بلد باشد. مثلا یک LED چیزی است که <code>init</code> و <code>set</code> دارد؛ اینکه واقعا روی پایهٔ GPIO باشد یا فقط یک چاپ روی صفحه، برای کسی که آن را استفاده می‌کند مهم نیست.</p>
+<p>وقتی می‌خواهی کدت را روی PC تست کنی (درس ۶.۴) یا یک برنامه را روی دو میکروکنترلر مختلف ببری، همین الگو نجاتت می‌دهد: منطق برنامه فقط با «واسط» حرف می‌زند و پشتش هر پیاده‌سازی را می‌شود گذاشت. در زبان‌های شیءگرا به اسم <span class="en">virtual table</span> شناخته می‌شود؛ در C خودت با دست می‌سازی.</p>
+
+<div class="code" data-file="led_ops.c" data-lang="c" data-verify="host" id="code6">
+<pre>
+#include &lt;stdio.h&gt;
+
+typedef struct {
+    void (*init)(void);
+    void (*set)(int on);
+} led_ops_t;
+
+static void console_init(void)  { printf("console: ready\n"); }
+static void console_set(int on) { printf("console: LED %s\n", on ? "ON" : "OFF"); }
+
+static void quiet_init(void)    { }
+static void quiet_set(int on)   { (void)on; }
+
+static const led_ops_t console_ops = { console_init, console_set };
+static const led_ops_t quiet_ops   = { quiet_init,   quiet_set };
+
+static void blink_twice(const led_ops_t *ops)
+{
+    ops-&gt;init();
+    for (int i = 0; i &lt; 2; i++) {
+        ops-&gt;set(1);
+        ops-&gt;set(0);
+    }
+}
+
+int main(void)
+{
+    blink_twice(&amp;console_ops);
+    blink_twice(&amp;quiet_ops);
+    printf("done\n");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code6">
+  <li data-lines="3-6"><b class="what">واسط.</b> هر «LED» باید <code>init</code> و <code>set</code> داشته باشد. این struct فقط دو اشاره‌گر است، پس روی MCU هشت بایت جا می‌گیرد.</li>
+  <li data-lines="8-9"><b class="what">پیاده‌سازی اول.</b> به‌جای LED واقعی، روی صفحه می‌نویسد. برای تست روی PC ایده‌آل است.</li>
+  <li data-lines="11-12"><b class="what">پیاده‌سازی دوم.</b> هیچ کاری نمی‌کند (مثل یک «LED خاموش»). گاهی برای غیرفعال کردن یک قابلیت لازم می‌شود.
+    <span class="why"><code>(void)on;</code> به کامپایلر می‌گوید «پارامتر را عمدا استفاده نکردم»؛ بدون آن <code>-Wextra</code> هشدار می‌دهد.</span></li>
+  <li data-lines="14-15"><b class="what">دو شیء ثابت.</b> هر کدام یک بستهٔ آدرس‌ها. چون <code>const</code> هستند، روی MCU در Flash می‌مانند.</li>
+  <li data-lines="17-24"><b class="what">منطق برنامه.</b> <code>blink_twice</code> نمی‌داند LED چیست؛ فقط از بستهٔ <code>ops</code> استفاده می‌کند.
+    <span class="why">هر پیاده‌سازی جدید (مثلا GPIO واقعی) بدون دست‌زدن به <code>blink_twice</code> اضافه می‌شود. این ایده در درس <a href="5-7.html">۵.۷</a> (لایهٔ HAL) کامل می‌شود.</span></li>
+  <li data-lines="28-29"><b class="what">استفاده.</b> یک بار با <code>console_ops</code>، یک بار با <code>quiet_ops</code>.</li>
+</ol>
+<pre class="term" data-from="led_ops.c">
+$ ./led_ops
+console: ready
+console: LED ON
+console: LED OFF
+console: LED ON
+console: LED OFF
+done
+</pre>
+
+<h2 id="traps">اگر خراب شد چه می‌شود؟ سه تلهٔ اصلی</h2>
+
+<h3 id="trap-sig">تله ۱: امضای ناسازگار</h3>
+<p>اگر اشاره‌گری که برای <code>int f(int)</code> ساخته‌ای، به تابعی با امضای دیگر اشاره کند، کامپایلر باید هشدار بدهد. ببین:</p>
+<div class="code" data-file="sig_mismatch.c" data-lang="c" data-verify="host-fail" data-cflags="-Werror=incompatible-pointer-types" id="code7">
+<pre>
+#include &lt;stdio.h&gt;
+
+static int add(int a, int b) { return a + b; }
+
+int main(void)
+{
+    int (*op)(int) = add;       // op یک ورودی می‌گیرد، add دو ورودی
+    printf("%d\n", op(1));
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-from="sig_mismatch.c">
+sig_mismatch.c: In function 'main':
+sig_mismatch.c:7:22: error: initialization of 'int (*)(int)' from incompatible pointer type 'int (*)(int,  int)' [-Werror=incompatible-pointer-types]
+</pre>
+<p>ما هشدار را به‌عمد به خطا تبدیل کردیم (<code>-Werror=incompatible-pointer-types</code>)؛ بدون آن، بسته به نسخهٔ gcc فقط هشدار می‌گیری و برنامه ساخته می‌شود. پیام می‌گوید «اشاره‌گر <code>int (*)(int)</code> را از نوع ناسازگار <code>int (*)(int, int)</code> مقداردهی کردی». (فاصلهٔ اضافه در پیام از خود gcc است.)</p>
+<div class="callout warn"><div class="ct">با <code>cast</code> ساکتش نکن</div>
+<p>اگر از سر تنبلی بنویسی <code>op = (int (*)(int))add;</code>، هشدار ساکت می‌شود ولی مشکل سر جایش است: <code>op(1)</code> تابعی را صدا می‌زند که دو ورودی انتظار دارد و ورودی دوم را از جای خالی می‌خواند. این «رفتار تعریف‌نشده» است (درس ۶.۲): ممکن است هزار بار درست کار کند و روز تحویل پروژه خراب شود. <b>هر cast روی اشاره‌گر به تابع باید دلیل مشخص داشته باشد.</b></p></div>
+
+<h3 id="trap-null">تله ۲: صدا زدن اشاره‌گر <span class="en">NULL</span> یا مقدارنداده</h3>
+<p>اگر اشاره‌گر به تابع <code>NULL</code> باشد و صدایش بزنی، پردازنده به آدرس ۰ می‌پرد. روی PC برنامه با <code>Segmentation fault</code> می‌میرد. روی میکروکنترلر Cortex-M آدرس ۰ معمولا محتوای معتبری دارد (جدول وقفه یا Flash) و برنامه خودش را <b>بی‌صدا خراب می‌کند</b> یا به HardFault می‌رود؛ پیدا کردنش سخت است. راه‌حل: قبل از صدا زدنِ callback اختیاری، <code>NULL</code> بودنش را بررسی کن.</p>
+
+<div class="code" data-file="button_cb.c" data-lang="c" data-verify="host" id="code8">
+<pre>
+#include &lt;stdio.h&gt;
+
+typedef void (*button_cb_t)(int pin);
+
+static button_cb_t on_press = NULL;     // در ابتدا هیچ‌کس ثبت‌نام نکرده
+
+static void button_register(button_cb_t cb)
+{
+    on_press = cb;
+}
+
+static void button_event(int pin)
+{
+    if (on_press != NULL) {
+        on_press(pin);
+    } else {
+        printf("no handler for pin %d\n", pin);
+    }
+}
+
+static void my_handler(int pin)
+{
+    printf("pressed: pin %d\n", pin);
+}
+
+int main(void)
+{
+    button_event(13);
+    button_register(my_handler);
+    button_event(13);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code8">
+  <li data-lines="3"><b class="what">نوع callback دکمه.</b> تابعی که شمارهٔ پایه را می‌گیرد.</li>
+  <li data-lines="5"><b class="what">ثبت‌نام‌شده‌ای وجود ندارد.</b> اشاره‌گر سراسری‌ایستا با مقدار اولیهٔ <code>NULL</code>.
+    <span class="why">صریح <code>NULL</code> نوشتن نشان می‌دهد «خالی بودن» یک حالت مجاز طراحی است، نه فراموشی. (سراسری‌ها به‌هر حال صفر می‌شوند؛ درس <a href="3-5.html">۳.۵</a>.)</span></li>
+  <li data-lines="7-10"><b class="what">ثبت‌نام.</b> فقط آدرس تابع کاربر را ذخیره می‌کند. همین الگو در HAL و درایورها هست: «هر وقت اتفاقی افتاد، این را صدا بزن».</li>
+  <li data-lines="12-19"><b class="what">رویداد.</b> اول بررسی می‌کند کسی ثبت‌نام کرده یا نه. فقط اگر کرده، صدایش می‌زند.
+    <span class="why">بدون <code>if</code> فراخوانیِ <code>NULL</code> رخ می‌دهد و برنامه خراب می‌شود. هزینهٔ این <code>if</code> چند سیکل است؛ هزینهٔ حذفش یک ساعت دیباگ.</span></li>
+  <li data-lines="28-30"><b class="what">دو بار رویداد.</b> بار اول هیچ‌کس گوش نمی‌دهد؛ بار دوم <code>my_handler</code> اجرا می‌شود.</li>
+</ol>
+<pre class="term" data-from="button_cb.c">
+$ ./button_cb
+no handler for pin 13
+pressed: pin 13
+</pre>
+
+<h3 id="trap-life">تله ۳: callback را ثبت کردی، ولی جعبه‌اش مرد</h3>
+<p>در بخش <a href="#ctx">context</a> دیدی که یک <code>void *</code> می‌فرستیم. اگر callback فقط <b>همان لحظه</b> صدا زده شود (مثل <code>for_each</code>)، اشکالی ندارد که context یک متغیر محلی باشد. ولی اگر callback را <b>ثبت</b> کنی تا بعدا صدا زده شود (دکمه، تایمر، UART)، آدرسی که می‌دهی باید تا آن زمان زنده بماند. اگر آدرس متغیر محلیِ تابعی را بدهی که تمام شده، اشاره‌گر «آویزان» می‌شود (درس <a href="3-2.html">۳.۲</a> و <a href="3-5.html">۳.۵</a>). برای callback های ثبت‌شده، context را <code>static</code> یا سراسری یا از یک ساختار بلندعمر بساز.</p>
+
+<h2 id="vector">اشاره‌گر به تابع در قلب میکروکنترلر: <span class="en">vector table</span></h2>
+<p>تا اینجا هر چه دیدی روی PC هم کار می‌کرد. ولی جالب اینجاست که همین ایده، ستون فقرات هر میکروکنترلر ARM Cortex-M است. وقتی پردازنده روشن می‌شود یا یک وقفه می‌رسد (مثلا «دکمه فشرده شد»)، باید بداند به کدام تابع بپرد. جواب در <span class="term" data-t="vectortable">vector table</span> است: <b>آرایه‌ای از آدرس‌ها که در ابتدای Flash قرار دارد</b>. یعنی دقیقا «آرایه‌ای از اشاره‌گر به تابع».</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 320" role="img" aria-label="vector table در ابتدای Flash: کلمه صفر مقدار اولیه SP، کلمه یک آدرس Reset_Handler، کلمه دو NMI_Handler و کلمه سه HardFault_Handler؛ پیکان‌ها به تابع‌ها می‌روند">
+  <defs><marker id="f4a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">ابتدای Flash در STM32: هر خانه یک «کلمه» ۴ بایتی</text>
+  <g class="mono s-tx" font-size="13" text-anchor="end">
+    <text x="176" y="82">0x08000000</text><text x="176" y="132">0x08000004</text><text x="176" y="182">0x08000008</text><text x="176" y="232">0x0800000C</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="190" y="56" width="230" height="50" fill="#b394ff"/>
+    <rect x="190" y="106" width="230" height="50" fill="#ffd60a"/>
+    <rect x="190" y="156" width="230" height="50" fill="#ffd60a"/>
+    <rect x="190" y="206" width="230" height="50" fill="#ffd60a"/>
+    <rect x="540" y="106" width="200" height="50" rx="10" fill="#3ddc97"/>
+    <rect x="540" y="156" width="200" height="50" rx="10" fill="#3ddc97"/>
+    <rect x="540" y="206" width="200" height="50" rx="10" fill="#3ddc97"/>
+  </g>
+  <g class="mono" fill="#15120a" text-anchor="middle" font-size="16" font-weight="800">
+    <text x="305" y="88">0x20020000</text><text x="305" y="138">0x08000201</text><text x="305" y="188">0x08000305</text><text x="305" y="238">0x08000305</text>
+    <text x="640" y="138" font-size="15">Reset_Handler</text><text x="640" y="188" font-size="15">Default_Handler</text><text x="640" y="238" font-size="15">Default_Handler</text>
+  </g>
+  <g class="s-tx" font-size="13.5" text-anchor="start">
+    <text x="196" y="280">کلمهٔ ۰: مقدار اولیهٔ SP (پایان RAM)، نه تابع</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M422 131H536" marker-end="url(#f4a)"/><path d="M422 181H536" marker-end="url(#f4a)"/><path d="M422 231H536" marker-end="url(#f4a)"/>
+  </g>
+  <g class="s-tx" font-size="13.5" font-weight="700" text-anchor="middle">
+    <text x="479" y="122">reset</text><text x="479" y="172">NMI</text><text x="479" y="222">HardFault</text>
+  </g>
+  <text x="380" y="304" text-anchor="middle" class="s-tx" font-size="13">آدرس‌ها نمونه‌اند. آخر آدرس‌ها ۱ است (بیت Thumb): پردازندهٔ Cortex-M فقط دستور Thumb اجرا می‌کند</text>
+</svg></div>
+<figcaption>چند ردیف اول جدول وقفهٔ STM32F411. کلمهٔ اول مقدار <span class="en">SP</span> است و بقیه آدرس تابع‌اند.</figcaption></figure>
+
+<p>پردازنده هنگام Reset دو کار ساده انجام می‌دهد: کلمهٔ اول را در <span class="en">SP</span> (اشاره‌گر پشته) می‌گذارد و به آدرس کلمهٔ دوم می‌پرد. هنگام وقفه هم شمارهٔ وقفه را به عنوان اندیس در همین جدول به کار می‌برد و به آدرس آن ردیف می‌پرد. کسی «صدایش نمی‌زند»؛ خود سخت‌افزار جدول را می‌خواند و می‌پرد. جزئیات ساختن کامل این جدول در درس <a href="5-1.html">۵.۱</a>، و وقفه‌ها در <a href="5-3.html">۵.۳</a> می‌آید. اینجا فقط ببین چقدر شبیه دانسته‌هایت است:</p>
+
+<div class="code" data-file="vectors.c" data-lang="c" data-verify="arm" id="code9">
+<pre>
+#include &lt;stdint.h&gt;
+
+typedef void (*isr_t)(void);
+
+extern uint32_t _estack;                // آدرس پایان RAM؛ linker script می‌سازد
+
+void Reset_Handler(void);
+void Default_Handler(void);
+void NMI_Handler(void)       __attribute__((weak, alias("Default_Handler")));
+void HardFault_Handler(void) __attribute__((weak, alias("Default_Handler")));
+
+__attribute__((section(".isr_vector"), used))
+const isr_t vector_table[] = {
+    (isr_t)(uintptr_t)&amp;_estack,         // کلمهٔ ۰: SP اولیه
+    Reset_Handler,                      // کلمهٔ ۱
+    NMI_Handler,                        // کلمهٔ ۲
+    HardFault_Handler,                  // کلمهٔ ۳
+};
+
+void Default_Handler(void)
+{
+    for (;;) { }                        // وقفهٔ بی‌صاحب: همین‌جا بمان
+}
+</pre></div>
+<ol class="walk" data-for="code9">
+  <li data-lines="3"><b class="what">نوع ISR.</b> هر تابع وقفه <code>void f(void)</code> است؛ ISR یعنی «تابع سرویس وقفه» (درس <a href="5-3.html">۵.۳</a>).</li>
+  <li data-lines="5"><b class="what">نماد از بیرون.</b> <code>_estack</code> را linker script (درس <a href="5-1.html">۵.۱</a>) تعریف می‌کند؛ ما فقط آدرسش را می‌خواهیم، با <code>&amp;</code>.</li>
+  <li data-lines="7-10"><b class="what">تابع‌ها و اسم مستعار ضعیف.</b> <code>Reset_Handler</code> را خودمان جایی می‌نویسیم. <code>NMI_Handler</code> و <code>HardFault_Handler</code> «ضعیف» و مستعار <code>Default_Handler</code> هستند: اگر کسی تابع همنامی بنویسد، آن جایگزین می‌شود؛ وگرنه <code>Default_Handler</code> اجرا می‌شود.
+    <span class="why">این‌طوری وقفه‌ای که هنوز برایش تابعی ننوشته‌ای، به جای پرش به آدرس تصادفی به یک حلقهٔ امن می‌رود. جزئیات <code>weak</code> در بخش بعد.</span></li>
+  <li data-lines="12-13"><b class="what">مکان جدول.</b> <code>section(".isr_vector")</code> به لینکر می‌گوید این آرایه را در ابتدای Flash بگذار. <code>const</code> یعنی در Flash بماند. <code>used</code> یعنی «حذفش نکن، حتی اگر کسی صدایش نزند».
+    <span class="why">لینکر فقط چیزی را نگه می‌دارد که کسی به آن ارجاع بدهد. جدول وقفه را هیچ تابعی ارجاع نمی‌دهد؛ سخت‌افزار می‌خواندش. بدون <code>used</code> ممکن است بهینه‌ساز آن را دور بیندازد.</span></li>
+  <li data-lines="13-18"><b class="what">خود جدول.</b> یک آرایهٔ <code>isr_t</code>؛ همان الگوی جدول فرمان. کلمهٔ اول یک آدرس داده (SP) است؛ برای اینکه در آرایهٔ اشاره‌گر به تابع بنشیند، از <code>uintptr_t</code> (درس <a href="2-2.html">۲.۲</a>) عبور داده و cast شده.
+    <span class="why">این cast به‌صورت مشخص لازم است چون در سخت‌افزار همهٔ کلمه‌ها یک جنس (۳۲ بیت) هستند، ولی C بین آدرس داده و آدرس تابع فرق می‌گذارد.</span></li>
+  <li data-lines="20-23"><b class="what">تابع پیش‌فرض.</b> یک حلقهٔ بی‌نهایت خالی. اگر برنامه اینجا گیر کرد، دیباگر می‌بینی کدام وقفه فراموش شده.</li>
+</ol>
+<div class="callout deep"><div class="ct">زیر کاپوت: چرا آدرس‌ها فرد هستند؟</div>
+<p>Cortex-M4 فقط دستورهای Thumb را اجرا می‌کند. در آدرسی که برای پرش می‌دهی، کمترین بیت (بیت ۰) نشان می‌دهد «حالت Thumb». اگر ۰ باشد، پردازنده فکر می‌کند حالت ARM قدیمی است که در Cortex-M وجود ندارد و HardFault می‌دهد. خوشبختانه لینکر خودش بیت ۰ را برای تابع‌های Thumb روشن می‌کند؛ برای همین در جدول آدرس‌های فرد می‌بینی (مثل <code>0x08000201</code>). در درس <a href="5-1.html">۵.۱</a> این را عمل می‌کنیم.</p></div>
+
+<h2 id="weak">تابع «ضعیف»: callback های آمادهٔ HAL</h2>
+<p>کتابخانهٔ HAL شرکت ST را دیده‌ای که تابع‌هایی مثل <code>HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)</code> دارد؟ کاربر بدون دست‌زدن به کد HAL، همین تابع را در برنامهٔ خودش <b>دوباره می‌نویسد</b> و لینکر نسخهٔ او را انتخاب می‌کند. مکانیزمش <span class="term" data-t="weaksym">weak</span> (ضعیف) است: تابعی که با <code>__attribute__((weak))</code> علامت خورده، یعنی «من نسخهٔ پیش‌فرض‌ام؛ اگر کسی نسخهٔ جدی‌تری بسازد، او را ترجیح بده». ببین روی PC (gcc/Linux) هم کار می‌کند:</p>
+
+<div class="code" data-file="hal.h" data-lang="c" data-verify="host" data-project="weak_demo" id="w1">
+<pre>
+#ifndef HAL_H
+#define HAL_H
+
+void hal_button_callback(int pin);      // callback: کاربر می‌تواند جایگزین کند
+void hal_irq(int pin);                  // از سخت‌افزار (ISR) صدا زده می‌شود
+
+#endif
+</pre></div>
+<div class="code" data-file="hal.c" data-lang="c" data-verify="host" data-project="weak_demo" id="w2">
+<pre>
+#include &lt;stdio.h&gt;
+#include "hal.h"
+
+__attribute__((weak)) void hal_button_callback(int pin)
+{
+    printf("default: pin %d ignored\n", pin);
+}
+
+void hal_irq(int pin)
+{
+    hal_button_callback(pin);
+}
+</pre></div>
+<div class="code" data-file="main.c" data-lang="c" data-verify="host" data-project="weak_demo" id="w3">
+<pre>
+#include &lt;stdio.h&gt;
+#include "hal.h"
+
+void hal_button_callback(int pin)       // نسخهٔ کاربر
+{
+    printf("user: pin %d handled\n", pin);
+}
+
+int main(void)
+{
+    hal_irq(13);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="w2">
+  <li data-lines="4-7"><b class="what">نسخهٔ ضعیف.</b> پیش‌فرضِ بی‌اثر؛ فقط چیزی چاپ می‌کند.</li>
+  <li data-lines="9-12"><b class="what">کد HAL.</b> هر وقت رویدادی رسید، <code>hal_button_callback</code> را با نامش صدا می‌زند. HAL نمی‌داند کدام نسخه اجرا می‌شود؛ لینکر تصمیم می‌گیرد.</li>
+</ol>
+<ol class="walk" data-for="w3">
+  <li data-lines="4-7"><b class="what">نسخهٔ قوی.</b> تابعی هم‌نام و هم‌امضا بدون <code>weak</code>. لینکر این را ترجیح می‌دهد.
+    <span class="why">اگر دو تعریف «قوی» هم‌نام وجود داشته باشد، لینکر <code>multiple definition</code> می‌دهد (درس <a href="4-2.html">۴.۲</a>). «ضعیف» فقط در برابر «قوی» کوتاه می‌آید.</span></li>
+  <li data-lines="11"><b class="what">صدا زدن HAL.</b> تابع کاربر اجرا می‌شود، نه پیش‌فرض.</li>
+</ol>
+<pre class="term" data-from="main.c">
+$ gcc -std=c11 -Wall -Wextra -o app main.c hal.c
+$ ./app
+user: pin 13 handled
+</pre>
+<p>اگر <code>main.c</code> فقط <code>hal_irq(13)</code> را صدا می‌زد و نسخهٔ خودش را نمی‌نوشت، خروجی <code>default: pin 13 ignored</code> می‌شد.</p>
+
+<div class="callout tip"><div class="ct">قاعدهٔ اسم‌گذاری</div>
+<p>در STM32 HAL تقریبا همهٔ callback ها <code>HAL_..._Callback</code> نام دارند و <code>__weak</code> هستند (<code>__weak</code> در ARM همان <code>__attribute__((weak))</code> است). اگر اسم را دقیقا مثل هدر ننویسی (یک حرف اشتباه)، کامپایلر اعتراض نمی‌کند و تابع تو <b>هیچ‌وقت صدا زده نمی‌شود</b>، چون نسخهٔ ضعیف جایش را می‌گیرد. اولین جایی که باید نگاه کنی: املای اسم.</p></div>
+
+<h2 id="mcu">در STM32 و ESP32: اشاره‌گر به تابع کجاست؟</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>جا</th><th>«شمارهٔ تلفن» کدام است</th><th>کی صدا زده می‌شود</th></tr></thead>
+<tbody>
+<tr><td>vector table (ARM)</td><td>ردیف آرایه در Flash</td><td>سخت‌افزار هنگام Reset و وقفه</td></tr>
+<tr><td>STM32 HAL</td><td>تابع <code>__weak</code> یا اشاره‌گر داخل struct handle</td><td>پایان انتقال، فشرده شدن دکمه...</td></tr>
+<tr><td>FreeRTOS (هر دو MCU)</td><td>اولین آرگومان <code>xTaskCreate</code></td><td>وقتی زمان‌بند task را اجرا می‌کند</td></tr>
+<tr><td>ESP-IDF</td><td>آرگومان <code>gpio_isr_handler_add</code> و مشابه‌ها (درس <a href="5-3.html">۵.۳</a>)</td><td>هنگام وقفه یا رویداد</td></tr>
+<tr><td>کد خودت</td><td>جدول فرمان، ساختار عملیات درایور</td><td>هر وقت خودت بخواهی</td></tr>
+</tbody></table></div>
+
+<p>یک نمونهٔ ESP32 که نشان می‌دهد task در FreeRTOS فقط یک تابع با امضای <code>void f(void *)</code> است و آدرسش را به <code>xTaskCreate</code> می‌دهی. (این قطعه در محیط ما ساخته نمی‌شود؛ مطابق ESP-IDF نسخهٔ ۵ نوشته شده است.)</p>
+<div class="code" data-file="blink_task.c" data-lang="c" data-verify="frag" id="code10">
+<pre>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "driver/gpio.h"
+
+#define LED_GPIO GPIO_NUM_2
+
+static void blink_task(void *arg)
+{
+    (void)arg;                                  // این task پارامتر نمی‌خواهد
+    gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
+    int level = 0;
+
+    for (;;) {                                  // task هرگز تمام نمی‌شود
+        level = !level;
+        gpio_set_level(LED_GPIO, level);
+        vTaskDelay(pdMS_TO_TICKS(500));         // نیم ثانیه صبر
+    }
+}
+
+void app_main(void)
+{
+    xTaskCreate(blink_task, "blink", 2048, NULL, 5, NULL);
+}
+</pre></div>
+<ol class="walk" data-for="code10">
+  <li data-lines="7-9"><b class="what">امضای task.</b> در FreeRTOS هر task یک تابع با شکل <code>void f(void *)</code> است. پارامتر همان «context» این درس است.</li>
+  <li data-lines="10-11"><b class="what">راه‌اندازی.</b> پایهٔ LED را خروجی می‌کند. (روی بسیاری از بردهای DevKit ارزان LED به GPIO2 وصل است؛ برد تو ممکن است فرق کند.)</li>
+  <li data-lines="13-18"><b class="what">حلقهٔ بی‌پایان.</b> هر ۵۰۰ میلی‌ثانیه LED را برعکس می‌کند. <code>vTaskDelay</code> به زمان‌بند اجازه می‌دهد تا وقتی این task منتظر است، task های دیگر اجرا شوند.
+    <span class="why">task نباید <code>return</code> کند؛ حلقهٔ <code>for (;;)</code> همان «super loop» درس <a href="1-4.html">۱.۴</a> است.</span></li>
+  <li data-lines="22"><b class="what">ساخت task.</b> اولین آرگومان، <b>اسم تابع بدون پرانتز</b> است؛ یعنی «شمارهٔ تلفن». بعد نام (برای دیباگ)، اندازهٔ پشته (بایت)، پارامتر (<code>NULL</code>)، اولویت و دستگیره (که اینجا نمی‌خواهیم).</li>
+</ol>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">فرق <code>op = add;</code> و <code>op = add(1, 2);</code> (با فرض اینکه <code>op</code> اشاره‌گر به تابع است) چیست؟</p>
+  <ol>
+    <li data-why="نه؛ هر دو یکی نیستند. پرانتز و آرگومان یعنی «تابع را اجرا کن».">هیچ فرقی ندارند؛ هر دو آدرس add را می‌گذارند</li>
+    <li>اولی آدرس تابع را می‌گذارد؛ دومی تابع را اجرا می‌کند و <b>نتیجه</b> (یک عدد) را می‌خواهد بگذارد که با نوع <code>op</code> نمی‌خواند</li>
+    <li data-why="برعکس است. نام بدون پرانتز یعنی آدرس؛ پرانتز یعنی اجرا.">اولی تابع را اجرا می‌کند و دومی فقط آدرس را می‌گیرد</li>
+    <li data-why="هر دو معتبر نیستند؛ اولی معتبر است و دومی از نوع ناسازگار.">هر دو خطای کامپایل می‌دهند</li>
+  </ol>
+  <div class="fb">پرانتز یعنی «زنگ بزن». <code>add(1, 2)</code> یک <code>int</code> است (عدد ۳)، نه آدرس؛ گذاشتن عدد در اشاره‌گر به تابع هشدار یا خطا می‌دهد.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">کدام اعلان، <code>f</code> را «اشاره‌گر به تابعی که یک <code>int</code> می‌گیرد و <code>int</code> برمی‌گرداند» می‌کند؟</p>
+  <ol>
+    <li data-why="این تابعی به اسم f است که یک اشاره‌گر به int برمی‌گرداند. پرانتز دور *f نیست.">int *f(int);</li>
+    <li data-why="این اعلان معتبر نیست؛ * باید کنار اسم و داخل پرانتز باشد.">int (*f) int;</li>
+    <li>int (*f)(int);</li>
+    <li data-why="این عبارت شکل معتبری در C ندارد؛ نوع پارامتر باید بعد از پرانتز اسم بیاید.">(int *f)(int);</li>
+  </ol>
+  <div class="fb">پرانتز دور <code>*f</code> نشان می‌دهد «ابتدا f اشاره‌گر است»؛ بعدش <code>(int)</code> می‌گوید به تابعی با یک ورودی <code>int</code> و نوع برگشتی سمت چپ (<code>int</code>).</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">خروجی این کد چیست؟<br><code>int (*p)(int) = twice; int (*q)(int) = p; p = thrice; printf("%d", q(5));</code><br>(<code>twice(x)</code> برابر <code>2x</code> و <code>thrice(x)</code> برابر <code>3x</code> است.)</p>
+  <ol>
+    <li data-why="۱۵ می‌شد اگر q همیشه همراه p می‌ماند؛ ولی q کپی مقدارِ p در آن لحظه است، نه لینک به آن.">۱۵</li>
+    <li data-why="۵ خود آرگومان است؛ هیچ تابعی آن را بدون تغییر برنمی‌گرداند.">۵</li>
+    <li data-why="کد کاملا معتبر است و ایرادی ندارد.">کامپایل نمی‌شود</li>
+    <li>۱۰</li>
+  </ol>
+  <div class="fb">مثل متغیرهای <code>int</code> (درس <a href="2-1.html">۲.۱</a>)، <code>q = p</code> فقط یک‌بار آدرس فعلی را کپی می‌کند. q هنوز به <code>twice</code> اشاره می‌کند: <code>2×5 = 10</code>.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">کدام کد در زمان اجرا خطرناک است (حتی اگر بی‌هشدار کامپایل شود)؟</p>
+  <ol>
+    <li>
+      <code>void (*cb)(int);</code> و بعد بلافاصله <code>cb(3);</code>
+    </li>
+    <li data-why="این کد امن است: اشاره‌گر مقدار دارد و به تابع معتبر اشاره می‌کند.">
+      <code>void (*cb)(int) = handler;</code> و بعد <code>cb(3);</code>
+    </li>
+    <li data-why="امن است؛ قبل از فراخوانی NULL بودن بررسی شده.">
+      <code>if (cb != NULL) { cb(3); }</code>
+    </li>
+    <li data-why="امن است؛ یک اعلان ساده است و هنوز چیزی صدا زده نشده.">
+      <code>void (*cb)(int) = NULL;</code>
+    </li>
+  </ol>
+  <div class="fb">اشاره‌گر بدون مقدار اولیه آشغال دارد؛ فراخوانی‌اش پردازنده را به آدرس تصادفی می‌پراند. همیشه مقدار اولیه بده (تابع معتبر یا <code>NULL</code>) و قبل از صدا زدنِ callback اختیاری، <code>NULL</code> را بررسی کن.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">در Cortex-M هنگام Reset، پردازنده با «کلمهٔ اول» و «کلمهٔ دوم» vector table چه می‌کند؟</p>
+  <ol>
+    <li data-why="کلمهٔ اول تابع نیست؛ مقدار اولیهٔ SP است.">به هر دو کلمه می‌پرد، اول و بعد دوم</li>
+    <li data-why="جدول در Flash فقط خوانده می‌شود؛ پردازنده رویش نمی‌نویسد و کلمه‌ها را به رجیستر می‌برد.">هر دو کلمه را با مقدار تازه بازنویسی می‌کند</li>
+    <li>کلمهٔ اول را در SP می‌گذارد و به آدرسی که در کلمهٔ دوم است می‌پرد (Reset_Handler)</li>
+    <li data-why="کد ما (main) بعدا و از طریق Reset_Handler اجرا می‌شود، نه مستقیم از جدول.">مستقیم به <code>main</code> می‌پرد</li>
+  </ol>
+  <div class="fb">کلمهٔ ۰ = SP اولیه، کلمهٔ ۱ = آدرس <code>Reset_Handler</code>. این تابع (که در درس ۵.۱ می‌نویسیم) آماده‌سازی‌ها را انجام می‌دهد و بعد <code>main</code> را صدا می‌زند.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">تابعی در کتابخانهٔ HAL با <code>__weak</code> اعلان شده و تو نسخهٔ خودت را با <b>همان اسم</b> در <code>main.c</code> نوشته‌ای. چه می‌شود؟</p>
+  <ol>
+    <li data-why="خطای multiple definition فقط وقتی است که هر دو «قوی» باشند. weak دقیقا برای این اجازه ساخته شده.">لینکر <code>multiple definition</code> می‌دهد</li>
+    <li>لینکر نسخهٔ قوی (تو) را نگه می‌دارد و نسخهٔ ضعیف را کنار می‌گذارد</li>
+    <li data-why="لینکر ترتیب فایل‌ها را ملاک نمی‌گذارد؛ قوی همیشه بر ضعیف برتری دارد.">هر کدام زودتر لینک شد برنده است</li>
+    <li data-why="هیچ‌کدام حذف نمی‌شود و هر دو اجرا نمی‌شوند؛ فقط یکی انتخاب می‌شود.">هر دو نسخه یکی‌یکی اجرا می‌شوند</li>
+  </ol>
+  <div class="fb">«ضعیف» یعنی «پیش‌فرض». لینکر نسخهٔ قوی را ترجیح می‌دهد. همین مکانیزم اجازه می‌دهد callback های HAL را بدون تغییر دادن کد کتابخانه جایگزین کنی.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: ماشین‌حساب با جدول اشاره‌گر</div>
+<p>یک تابع <code>find_op</code> می‌خواهیم که یک نماد (<code>'+'</code>، <code>'-'</code>، <code>'*'</code>، <code>'/'</code>) بگیرد و اشاره‌گر به تابع مناسب را برگرداند؛ برای نماد ناشناخته <code>NULL</code>.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> برای ورودی‌های <code>+ - * / %</code> با <code>8</code> و <code>2</code> چه خروجی‌ای انتظار داری؟ (<code>%</code> پشتیبانی نمی‌شود.)</li>
+  <li><b>حل:</b> چهار تابع <code>add</code>، <code>sub</code>، <code>mul</code>، <code>divide</code> با یک <code>typedef</code> مشترک بنویس. <code>divide</code> اگر مقسوم‌علیه صفر بود، <code>0</code> برگرداند.</li>
+  <li><b>تغییر:</b> اگر <code>find_op</code> نتیجه را <code>NULL</code> برگرداند و بدون بررسی صدایش بزنی چه می‌شود؟ کد را طوری بنویس که این اتفاق نیفتد.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>از <code>switch</code> استفاده کن که به‌جای عدد، اشاره‌گر <code>return</code> می‌کند. اعلان نوع برگشتی را با <code>binop_t</code> بنویس تا خوانا بماند.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="calc.c">
+$ ./calc
+8 + 2 = 10
+8 - 2 = 6
+8 * 2 = 16
+8 / 2 = 4
+8 % 2 : unsupported
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="calc.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stdio.h&gt;
+
+typedef int (*binop_t)(int, int);
+
+static int add(int a, int b)    { return a + b; }
+static int sub(int a, int b)    { return a - b; }
+static int mul(int a, int b)    { return a * b; }
+static int divide(int a, int b) { return b == 0 ? 0 : a / b; }
+
+static binop_t find_op(char symbol)
+{
+    switch (symbol) {
+    case '+': return add;
+    case '-': return sub;
+    case '*': return mul;
+    case '/': return divide;
+    default:  return NULL;
+    }
+}
+
+int main(void)
+{
+    const char symbols[] = {'+', '-', '*', '/', '%'};
+
+    for (int i = 0; i &lt; 5; i++) {
+        binop_t op = find_op(symbols[i]);
+        if (op == NULL) {
+            printf("8 %c 2 : unsupported\n", symbols[i]);
+        } else {
+            printf("8 %c 2 = %d\n", symbols[i], op(8, 2));
+        }
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="3"><b class="what">نوع مشترک.</b> همهٔ عمل‌ها این امضا را دارند.</li>
+  <li data-lines="5-8"><b class="what">چهار تابع.</b> <code>divide</code> اسمش عمدا <code>div</code> نیست، چون <code>div</code> در <code>stdlib.h</code> تعریف شده و تداخل ایجاد می‌کند.
+    <span class="why">اسم کوتاه و عمومی برای تابع بگذاری، با کتابخانهٔ استاندارد یا درایور دیگران برخورد می‌کند. اگر <code>divide</code> هم هنوز مشکل داشت، پیشوند ماژول بگذار (<code>calc_divide</code>).</span></li>
+  <li data-lines="10-19"><b class="what">find_op.</b> نوع برگشتی <code>binop_t</code> است. هر <code>case</code> اشاره‌گر را برمی‌گرداند. <code>default</code> یعنی «نماد ناشناخته»: <code>NULL</code>.</li>
+  <li data-lines="25-31"><b class="what">بررسی NULL.</b> فقط اگر اشاره‌گر معتبر بود صدایش می‌زنیم.
+    <span class="why">در برنامهٔ واقعی نمادها را کاربر می‌دهد. فرض کردن اینکه همیشه معتبر است، همان باگی است که در تله ۲ دیدی.</span></li>
+</ol>
+<pre class="term" data-from="calc.c">
+$ ./calc
+8 + 2 = 10
+8 - 2 = 6
+8 * 2 = 16
+8 / 2 = 4
+8 % 2 : unsupported
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: باگ‌ها را پیدا کن</div>
+<p>هر کدام از این سه خط اعلان یا استفاده‌ای از اشاره‌گر به تابع است که غلط نوشته شده. فرض کن <code>static int square(int x)</code> قبلا تعریف شده است.</p>
+<div class="code" data-lang="c" id="ex2bad"><pre>
+int *fp(int) = square;
+int (*fp)(int) = square(3);
+int r = *fp(5);
+</pre></div>
+<ol class="parts">
+  <li><code>int *fp(int) = square;</code></li>
+  <li><code>int (*fp)(int) = square(3);</code></li>
+  <li><code>int r = *fp(5);</code> (فرض: <code>fp</code> به‌درستی تعریف شده است)</li>
+</ol>
+<details><summary>راهنمایی</summary><p>الف: پرانتز را کجا گذاشته‌اند؟ ب: «پرانتز یعنی زنگ بزن». پ: <code>*</code> و <code>( )</code> کدام تقدم بیشتری دارد؟</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary><p>نسخهٔ الف را gcc با پیام «function 'fp' is initialized like a variable» رد می‌کند (چون <code>int *fp(int)</code> یعنی <b>تابع</b>). نسخهٔ ب یک <b>عدد</b> را در اشاره‌گر می‌گذارد؛ gcc 13 هشدار <code>-Wint-conversion</code> می‌دهد (در نسخه‌های جدیدتر خطا). نسخهٔ پ خطای «invalid type argument of unary '*'» می‌دهد چون ابتدا <code>fp(5)</code> صدا زده می‌شود و نتیجه‌اش یک <code>int</code> است که نمی‌شود <code>*</code> رویش زد. نسخهٔ درست:</p>
+<pre class="term" data-from="square.c">
+$ ./square
+square(5) = 25
+fp is set
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="table-wrap"><table><thead><tr><th>خط</th><th>مشکل</th><th>اصلاح</th></tr></thead><tbody>
+<tr><td>الف</td><td>پرانتز دور <code>*fp</code> نیست؛ این اعلان یک <b>تابع</b> است که <code>int *</code> برمی‌گرداند</td><td><code>int (*fp)(int) = square;</code></td></tr>
+<tr><td>ب</td><td><code>square(3)</code> تابع را اجرا می‌کند و <code>9</code> را می‌دهد؛ ما آدرس می‌خواستیم</td><td><code>... = square;</code> (بدون پرانتز)</td></tr>
+<tr><td>پ</td><td>پرانتز فراخوانی تقدم بیشتری از <code>*</code> دارد؛ ابتدا <code>fp(5)</code> اجرا می‌شود و بعد <code>*</code> روی <code>int</code> زده می‌شود</td><td><code>int r = fp(5);</code> یا <code>(*fp)(5)</code></td></tr>
+</tbody></table></div>
+<div class="code" data-file="square.c" data-lang="c" data-verify="host" id="ex2">
+<pre>
+#include &lt;stdio.h&gt;
+
+static int square(int x) { return x * x; }
+
+int main(void)
+{
+    int (*fp)(int) = square;
+    int r = fp(5);
+
+    printf("square(5) = %d\n", r);
+    printf("fp is %s\n", fp != NULL ? "set" : "NULL");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="7"><b class="what">اعلان درست.</b> پرانتز دور <code>*fp</code>، مقدار اولیه: نام تابع بدون پرانتز.</li>
+  <li data-lines="8"><b class="what">فراخوانی.</b> <code>fp(5)</code> یا <code>(*fp)(5)</code>؛ هر دو درست‌اند.</li>
+  <li data-lines="11"><b class="what">بررسی مقدار.</b> نشان می‌دهد اشاره‌گر خالی نیست؛ نوعی بازرسی قبل از استفاده.</li>
+</ol>
+<pre class="term" data-from="square.c">
+$ ./square
+square(5) = 25
+fp is set
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: جدول وقفهٔ شبیه‌سازی‌شده روی PC</div>
+<p>می‌خواهیم رفتار vector table را روی PC شبیه‌سازی کنیم. آرایه‌ای از ۴ اشاره‌گر به تابع بساز: ردیف ۱ = <code>button_handler</code>، ردیف ۲ = <code>timer_handler</code>؛ ردیف‌های ۰ و ۳ را پر نکن (<code>NULL</code> می‌مانند). تابع <code>irq_fire(unsigned n)</code> باید ردیف <code>n</code> را صدا بزند، ولی اگر ردیف <code>NULL</code> بود یا <code>n</code> خارج از جدول بود، <code>default_handler</code> را صدا بزند.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> برای دنبالهٔ <code>1, 2, 1, 3, 7</code> چه چاپ می‌شود؟</li>
+  <li><b>حل:</b> برنامه را با مقداردهی نامزد (designated initializer، مثل <code>[1] = ...</code>) بنویس.</li>
+  <li><b>سخت‌افزار:</b> روی یک STM32 واقعی، چرا جدول <code>const</code> است و چرا نباید ردیف <code>NULL</code> بماند؟ به‌جای <code>NULL</code> چه بگذاریم؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>الف: هر <code>1</code> شمارنده را زیاد می‌کند. ب: مقداردهی نامزد را در درس <a href="2-7.html">۲.۷</a> دیدی. پ: به «پرش به آدرس ۰» در تله ۲ فکر کن.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="irq_sim.c">
+$ ./irq_sim
+button pressed (1)
+timer tick
+button pressed (2)
+unexpected interrupt
+unexpected interrupt
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="irq_sim.c" data-lang="c" data-verify="host" id="ex3">
+<pre>
+#include &lt;stdio.h&gt;
+
+#define IRQ_COUNT 4u
+
+typedef void (*handler_t)(void);
+
+static int button_count = 0;
+
+static void default_handler(void) { printf("unexpected interrupt\n"); }
+static void timer_handler(void)   { printf("timer tick\n"); }
+static void button_handler(void)
+{
+    button_count++;
+    printf("button pressed (%d)\n", button_count);
+}
+
+static const handler_t vector_table[IRQ_COUNT] = {
+    [1] = button_handler,
+    [2] = timer_handler,
+};
+
+static void irq_fire(unsigned n)
+{
+    handler_t h = default_handler;
+
+    if (n &lt; IRQ_COUNT &amp;&amp; vector_table[n] != NULL) {
+        h = vector_table[n];
+    }
+    h();
+}
+
+int main(void)
+{
+    const unsigned events[] = {1, 2, 1, 3, 7};
+
+    for (unsigned i = 0; i &lt; sizeof(events) / sizeof(events[0]); i++) {
+        irq_fire(events[i]);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="3-5"><b class="what">اندازه و نوع.</b> ۴ ردیف؛ <code>4u</code> بی‌علامت است تا با <code>n</code> از یک جنس مقایسه شود (درس <a href="2-2.html">۲.۲</a>).</li>
+  <li data-lines="7"><b class="what">شمارندهٔ دکمه.</b> فقط برای اینکه ببینیم handler حالت نگه می‌دارد.</li>
+  <li data-lines="17-20"><b class="what">جدول.</b> فقط ردیف‌های ۱ و ۲ پر شده‌اند؛ بقیه به‌صورت خودکار صفر (<code>NULL</code>) می‌شوند.
+    <span class="why">اگر ردیف‌ها را با مقداردهی نامزد پر کنی، ردیف‌های نانوشته صفر می‌شوند (درس <a href="2-7.html">۲.۷</a>). در MCU واقعی «صفر» یعنی پرش به آدرس ۰؛ پس باید <code>Default_Handler</code> بگذاری.</span></li>
+  <li data-lines="22-30"><b class="what">irq_fire.</b> اول <code>h</code> را به <code>default_handler</code> می‌گذارد؛ فقط اگر <code>n</code> در محدوده بود <b>و</b> ردیف خالی نبود، جایگزین می‌شود. ترتیب شرط مهم است: اول بازه، بعد دسترسی به آرایه.
+    <span class="why">عملگر <code>&amp;&amp;</code> اگر سمت چپ نادرست باشد، سمت راست را اجرا نمی‌کند (short-circuit، درس <a href="2-3.html">۲.۳</a>). پس برای <code>n = 7</code> هرگز به <code>vector_table[7]</code> نمی‌رسد که خارج آرایه است.</span></li>
+</ol>
+<pre class="term" data-from="irq_sim.c">
+$ ./irq_sim
+button pressed (1)
+timer tick
+button pressed (2)
+unexpected interrupt
+unexpected interrupt
+</pre>
+<p>جواب قسمت پ: جدول <code>const</code> است تا در Flash بماند و RAM نگیرد و کسی (باگ) رویش ننویسد. ردیف <code>NULL</code> یعنی اگر آن وقفه فعال شود، پردازنده به آدرس ۰ می‌پرد و برنامه خراب می‌شود. به‌جای <code>NULL</code> باید <code>Default_Handler</code> بگذاری (مثل بخش vector table). در C استاندارد <code>const</code> برای <code>vector_table</code> با مقداردهی نامزد و <code>NULL</code> هیچ مشکلی ندارد؛ فقط تصمیم طراحی است.</p></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>تقریبا همه در همین درس دو جا گیر می‌کنند: <b>نوشتن اعلان</b> (پرانتز دور <code>*name</code> را فراموش می‌کنند) و <b>فرق «نام تابع» با «صدا زدن تابع»</b> (پرانتز). اگر اعلان‌ها را خسته‌کننده یافتی، از <code>typedef</code> استفاده کن و هیچ‌وقت شرمنده نباش؛ متخصص‌ها هم همین را می‌کنند. اگر می‌خواهی مطمئن شوی درس را فهمیده‌ای، ببین می‌توانی برای دوستت توضیح بدهی «چرا vector table فقط یک آرایه است». اگر توانستی، بقیهٔ فصل ۵ برایت روان می‌شود.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li>تابع در Flash آدرس دارد. <b>اشاره‌گر به تابع</b> این آدرس را در RAM نگه می‌دارد (روی MCU: ۴ بایت).</li>
+  <li>اعلان: <code>int (*op)(int, int);</code>. پرانتز دور <code>*op</code> ضروری است. با <code>typedef</code> خوانا کن.</li>
+  <li>نام تابع بدون پرانتز = آدرس؛ با پرانتز = اجرا. فراخوانی: <code>op(7, 3)</code>.</li>
+  <li><b>callback</b>: تابعی که تو می‌نویسی و دیگری صدایش می‌زند. برای حالت نگه‌داشتن از پارامتر <code>void *ctx</code> استفاده کن.</li>
+  <li>الگوهای رایج: <b>جدول فرمان</b> (ردیف = اسم + تابع)، <b>ساختار عملیات درایور</b> (شبه‌vtable)، <code>qsort</code>.</li>
+  <li>تله‌ها: امضای ناسازگار (با cast ساکتش نکن)، صدا زدن <code>NULL</code> یا مقدارنداده، آویزان‌شدن context ثبت‌شده.</li>
+  <li><b>vector table</b> در Cortex-M آرایه‌ای از آدرس‌هاست: کلمهٔ ۰ = SP اولیه، کلمهٔ ۱ = <code>Reset_Handler</code>. تابع <code>weak</code> را نسخهٔ قوی‌تر جایگزین می‌کند (callback های HAL).</li>
+  <li>در FreeRTOS هر task یک تابع <code>void f(void *)</code> است و آدرسش را به <code>xTaskCreate</code> می‌دهی.</li>
+</ul></div>
+
+</article>
+</body>
+</html>
