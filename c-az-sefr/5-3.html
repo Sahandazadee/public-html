@@ -1,0 +1,1206 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>وقفه و ISR · C برای میکروکنترلر</title>
+<meta name="description" content="وقفه چطور کار می‌کند؛ جدول برداری، NVIC، EXTI برای دکمهٔ PC13، قواعد ISR، رقابت و بخش بحرانی، و الگوی صف در ESP32.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+
+<article class="page" data-page="5-3">
+
+<p class="lede">برنامهٔ درس قبل هر ثانیه میلیون‌ها بار می‌پرسید «دکمه فشرده شد؟». بیشترِ آن پرسش‌ها بی‌جواب بودند و در همان مدت CPU کار دیگری نمی‌کرد. راه بهتر این است که به CPU بگویی «کار خودت را بکن؛ دکمه که فشرده شد، خودم صدایت می‌زنم». این «صدا زدن» را <b>وقفه</b> می‌گویند و تقریبا هر برنامهٔ جدی روی میکروکنترلر با آن ساخته می‌شود. در این درس می‌بینی سخت‌افزار چطور صدا می‌زند، کد <span class="en">ISR</span> چطور نوشته می‌شود و چرا اشتباه‌های این بخش از سخت‌ترین باگ‌های دنیای embedded‌اند.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>بگویی هنگام وقفه، CPU قدم‌به‌قدم چه می‌کند و جدول برداری چه نقشی دارد</li>
+    <li>وقفهٔ دکمهٔ PC13 را با EXTI و NVIC راه بیندازی</li>
+    <li>ISR درست بنویسی: کوتاه، بدون انتظار، با پرچم <code>volatile</code></li>
+    <li>«رقابت» (race) را بشناسی و با بخش بحرانی جلویش را بگیری</li>
+    <li>اشتباه‌های رایج (پرچم پاک‌نشده، نام غلط ISR) را از علامتشان تشخیص بدهی</li>
+    <li>همین الگو را روی ESP32 با <code>gpio_isr_handler_add</code> و صف ببینی</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="5-2.html">۵.۲</a> (GPIO با رجیستر و دکمهٔ PC13؛ همان هدر و startup را گسترش می‌دهیم)</li>
+    <li>درس <a href="3-6.html">۳.۶</a> (<code>volatile</code>، خواندن-تغییر-نوشتن، رجیستر write-1-to-clear)</li>
+    <li>درس <a href="4-3.html">۴.۳</a> (اشاره‌گر به تابع؛ جدول برداری یک آرایه از آن‌هاست) و <a href="5-1.html">۵.۱</a> (بوت)</li>
+    <li>برد Nucleo-F411RE، یا فقط کامپایلر برای ساختن و خواندن خروجی</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: زنگ در آشپزخانه</h2>
+<p>غذایی روی اجاق داری و می‌خواهی وقتی آماده شد بیرونش بیاوری. دو راه هست. راه اول: هر ده ثانیه سر بزنی و در ظرف نگاه کنی؛ کارِ دیگری نمی‌توانی بکنی و گاهی چند ثانیه دیر می‌فهمی. راه دوم: تایمر (زنگ) را بگذاری و بروی سراغ کارت. وقتی زنگ خورد، کار را رها می‌کنی، غذا را برمی‌داری و برمی‌گردی همان‌جا که بودی.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>راه اول <span class="term" data-t="polling">پولینگ</span> است (درس <a href="5-2.html">۵.۲</a>) و راه دوم <span class="term" data-t="interrupt_irq">وقفه</span> (interrupt). زنگ آشپزخانه رویداد است، «رفتن سراغ غذا» همان <span class="term" data-t="isr_fn">ISR</span> (Interrupt Service Routine، تابع رسیدگی به وقفه) و «برگشتن دقیقا به همان‌جا که بودی» چیزی است که سخت‌افزار برایت تضمین می‌کند. مهم‌ترین قانون آشپزخانه: <b>وقتی زنگ خورد، فقط کار ضروری را بکن</b> (غذا را بردار)؛ نه اینکه وسط زنگ شروع کنی سفرهٔ شام بچینی.</p></div>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 320" role="img" aria-label="مقایسه پولینگ و وقفه روی محور زمان: در پولینگ CPU مدام نگاه می‌کند، در وقفه فقط وقتی رویداد رسید ISR اجرا می‌شود">
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">پولینگ در برابر وقفه: یک رویداد در لحظهٔ مشخص می‌رسد</text>
+  <text x="752" y="72" text-anchor="start" class="s-tx" font-size="14" font-weight="800">پولینگ</text>
+  <g stroke="#15120a" stroke-width="2.5"><rect x="40" y="86" width="48" height="34" fill="#7ea3ff"/><rect x="88" y="86" width="12" height="34" fill="#ffd60a"/><rect x="100" y="86" width="48" height="34" fill="#7ea3ff"/><rect x="148" y="86" width="12" height="34" fill="#ffd60a"/><rect x="160" y="86" width="48" height="34" fill="#7ea3ff"/><rect x="208" y="86" width="12" height="34" fill="#ffd60a"/><rect x="220" y="86" width="48" height="34" fill="#7ea3ff"/><rect x="268" y="86" width="12" height="34" fill="#ffd60a"/><rect x="280" y="86" width="48" height="34" fill="#7ea3ff"/><rect x="328" y="86" width="12" height="34" fill="#ffd60a"/><rect x="340" y="86" width="48" height="34" fill="#7ea3ff"/><rect x="388" y="86" width="12" height="34" fill="#ffd60a"/><rect x="400" y="86" width="48" height="34" fill="#7ea3ff"/><rect x="448" y="86" width="12" height="34" fill="#ffd60a"/><rect x="460" y="86" width="48" height="34" fill="#7ea3ff"/><rect x="508" y="86" width="12" height="34" fill="#ffd60a"/><rect x="520" y="86" width="48" height="34" fill="#7ea3ff"/><rect x="568" y="86" width="12" height="34" fill="#ffd60a"/><rect x="580" y="86" width="48" height="34" fill="#7ea3ff"/><rect x="628" y="86" width="12" height="34" fill="#ffd60a"/><rect x="640" y="86" width="48" height="34" fill="#7ea3ff"/><rect x="688" y="86" width="12" height="34" fill="#ffd60a"/></g>
+  <text x="752" y="186" text-anchor="start" class="s-tx" font-size="14" font-weight="800">وقفه</text>
+  <g stroke="#15120a" stroke-width="2.5">
+    <rect x="40" y="200" width="330" height="34" fill="#7ea3ff"/><rect x="370" y="200" width="44" height="34" fill="#ff86b3"/><rect x="414" y="200" width="286" height="34" fill="#7ea3ff"/>
+  </g>
+  <path d="M370 52V252" stroke="#e5484d" stroke-width="3" stroke-dasharray="7 5"/>
+  <text x="370" y="46" text-anchor="middle" class="s-tx" font-size="13" font-weight="800">رویداد می‌رسد (دکمه فشرده شد)</text>
+  <g fill="#15120a" text-anchor="middle" font-size="12.5" font-weight="700">
+    <text x="394" y="140">اولین نگاه بعد از رویداد</text>
+    <text x="392" y="255">ISR بلافاصله</text>
+  </g>
+  <path d="M370 130H394" stroke="#15120a" stroke-width="2.5"/>
+  <g class="s-tx" font-size="13" text-anchor="middle">
+    <text x="380" y="282">آبی = کار اصلی برنامه؛ زرد = «نگاه کردن به دکمه»؛ صورتی = ISR</text>
+    <text x="380" y="304">در پولینگ CPU بخشی از وقت را فقط صرف نگاه‌کردن می‌کند و دیر هم می‌فهمد</text>
+  </g>
+</svg>
+</div>
+<figcaption>محور زمان. خط قرمز لحظهٔ رسیدن رویداد است. در پولینگ تا نگاه بعدی صبر داریم؛ در وقفه ISR بلافاصله اجرا می‌شود و کار اصلی دوباره ادامه پیدا می‌کند.</figcaption></figure>
+
+<h2 id="mechanism">داخل CPU: چه اتفاقی می‌افتد؟</h2>
+<p>وقتی یک منبع (مثلا دکمه) وقفه بدهد و اجازهٔ وقفه فعال باشد، Cortex-M چند کار را <b>خودکار و با سخت‌افزار</b> انجام می‌دهد؛ هیچ کدی از تو لازم نیست:</p>
+<ol class="steps">
+  <li><b>دستور جاری تمام می‌شود.</b> CPU وسط یک دستور رها نمی‌کند (برای بیشتر دستورها).</li>
+  <li><b>هشت کلمه روی پشته ذخیره می‌شود</b> (<span class="en">stacking</span>): <code>R0</code>، <code>R1</code>، <code>R2</code>، <code>R3</code>، <code>R12</code>، <code>LR</code>، <code>PC</code> (جایی که باید برگردیم) و <code>xPSR</code> (پرچم‌ها). این «قاب» یادداشت «کجا بودیم» است.</li>
+  <li><b>آدرس ISR از جدول خوانده می‌شود.</b> CPU از <span class="term" data-t="irq_vector">جدول برداری</span> کلمهٔ شمارهٔ <code>16 + n</code> را برمی‌دارد (<code>n</code> = شمارهٔ وقفه) و به آن می‌پرد.</li>
+  <li><b>ISR اجرا می‌شود</b>، مثل یک تابع معمولی C.</li>
+  <li><b>بازگشت.</b> وقتی ISR تمام شد (دستور <code>bx lr</code>)، سخت‌افزار مقدار ویژهٔ <code>LR</code> (به نام <code>EXC_RETURN</code>، مثلا <code>0xFFFFFFF9</code>) را می‌شناسد، قاب را برمی‌دارد و برنامه دقیقا از همان‌جا ادامه می‌یابد.</li>
+</ol>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 380" role="img" aria-label="سمت راست جدول برداری در Flash با درایه شماره ۵۶ برای EXTI15_10، سمت چپ قاب هشت‌کلمه‌ای که هنگام وقفه روی پشته ذخیره می‌شود">
+  <defs><marker id="f53b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="560" y="26" text-anchor="middle" class="s-tx" font-size="15" font-weight="800">جدول برداری (Flash، از 0x08000000)</text>
+  <text x="170" y="26" text-anchor="middle" class="s-tx" font-size="15" font-weight="800">قاب روی پشته (RAM)</text>
+  <g stroke="#15120a" stroke-width="2.5">
+    <rect x="410" y="42" width="300" height="34" fill="#ffd60a"/>
+    <rect x="410" y="76" width="300" height="34" fill="#ffd60a"/>
+    <rect x="410" y="110" width="300" height="34" fill="#fff"/>
+    <rect x="410" y="144" width="300" height="34" fill="#7ea3ff"/>
+    <rect x="410" y="178" width="300" height="34" fill="#fff"/>
+    <rect x="410" y="212" width="300" height="34" fill="#fff"/>
+    <rect x="410" y="246" width="300" height="34" fill="#ff86b3" stroke-width="4"/>
+  </g>
+  <g class="mono" fill="#15120a" font-size="12.5" font-weight="700" text-anchor="start">
+    <text x="418" y="64">+0x00  SP اولیه</text><text x="418" y="98">+0x04  Reset_Handler</text><text x="418" y="132">+0x08  NMI, HardFault ...</text>
+    <text x="418" y="166">+0x3C  SysTick (15)</text><text x="418" y="200">+0x40  IRQ 0 (16)</text><text x="418" y="234">...</text>
+    <text x="418" y="268">+0xE0  EXTI15_10 (56)</text>
+  </g>
+  <g stroke="#15120a" stroke-width="2.5">
+    <rect x="80" y="42" width="180" height="30" fill="#ffd60a"/><rect x="80" y="72" width="180" height="30" fill="#ffd60a"/>
+    <rect x="80" y="102" width="180" height="30" fill="#ffd60a"/><rect x="80" y="132" width="180" height="30" fill="#ffd60a"/>
+    <rect x="80" y="162" width="180" height="30" fill="#ffd60a"/><rect x="80" y="192" width="180" height="30" fill="#7ea3ff"/>
+    <rect x="80" y="222" width="180" height="30" fill="#ff86b3"/><rect x="80" y="252" width="180" height="30" fill="#3ddc97"/>
+  </g>
+  <g class="mono" fill="#15120a" font-size="13" font-weight="700" text-anchor="middle">
+    <text x="170" y="62">R0</text><text x="170" y="92">R1</text><text x="170" y="122">R2</text><text x="170" y="152">R3</text><text x="170" y="182">R12</text>
+    <text x="170" y="212">LR</text><text x="170" y="242">PC (بازگشت)</text><text x="170" y="272">xPSR</text>
+  </g>
+  <g class="mono s-tx" font-size="12.5" font-weight="700" text-anchor="end">
+    <text x="72" y="62">SP+0</text><text x="72" y="92">+4</text><text x="72" y="122">+8</text><text x="72" y="152">+12</text><text x="72" y="182">+16</text><text x="72" y="212">+20</text><text x="72" y="242">+24</text><text x="72" y="272">+28</text>
+  </g>
+  <path d="M408 263H330V330H172V300" fill="none" stroke="#15120a" stroke-width="3" marker-end="url(#f53b)"/>
+  <rect x="80" y="304" width="180" height="42" rx="8" fill="#3fd3e6" stroke="#15120a" stroke-width="3"/>
+  <text x="170" y="330" text-anchor="middle" fill="#15120a" font-size="13.5" font-weight="800">CPU به handler می‌پرد</text>
+  <g class="s-tx" font-size="13" text-anchor="middle" font-weight="700">
+    <text x="560" y="304">آدرس درایه = 4 × (16 + شمارهٔ IRQ)</text>
+    <text x="560" y="326">برای IRQ 40: 4 × 56 = 0xE0</text>
+    <text x="560" y="358" font-weight="400" font-size="12.5">(کارهای ۲ و ۳ با سخت‌افزار؛ حدود ۱۲ چرخهٔ ساعت در Cortex-M4)</text>
+  </g>
+</svg></div>
+<figcaption>سمت راست: جدول برداری، هر درایه یک آدرس ۴ بایتی. سمت چپ: قاب هشت‌کلمه‌ای که سخت‌افزار خودش روی پشته می‌گذارد. اگر برنامه از FPU استفاده کرده باشد، قاب بزرگ‌تر است.</figcaption></figure>
+
+<div class="callout deep"><div class="ct">چرا ISR فقط یک تابع C معمولی است؟</div>
+<p>در Cortex-M، سخت‌افزار خودش ثبات‌هایی را ذخیره می‌کند که طبق قرارداد فراخوانی (AAPCS) هر تابع C آزاد است خراب کند (<code>R0</code> تا <code>R3</code>، <code>R12</code>، <code>LR</code>). ثبات‌های دیگر را هر تابع C خودش نگه می‌دارد. پس تابعی مثل <code>void f(void)</code> که به‌طور عادی کامپایل شده، بدون هیچ صفت ویژه‌ای می‌تواند ISR باشد. در معماری‌هایی مثل AVR، ISR باید با ماکرو یا صفت ویژهٔ کامپایلر (مثل <code>ISR()</code>) نوشته شود. روی Cortex-M فقط نام و جایگاه در جدول مهم است.</p></div>
+
+<h3 id="table">جدول برداری و نام handler</h3>
+<p>جدول برداری همان آرایهٔ اشاره‌گر تابع است که در درس <a href="5-2.html">۵.۲</a> در startup دیدی. ۱۶ درایهٔ اول برای رویدادهای خود هسته‌اند (مثل ریست و <span class="en">SysTick</span>) و از درایهٔ ۱۶ به بعد، وقفهٔ شمارهٔ <code>n</code> همان درایهٔ <code>16 + n</code> است:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>درایه</th><th>آفست</th><th>معنی</th></tr></thead>
+<tbody>
+<tr><td>۰</td><td><code>0x00</code></td><td>مقدار اولیهٔ <code>SP</code></td></tr>
+<tr><td>۱</td><td><code>0x04</code></td><td><code>Reset_Handler</code></td></tr>
+<tr><td>۲ و ۳</td><td><code>0x08</code>، <code>0x0C</code></td><td><code>NMI</code> و <code>HardFault</code></td></tr>
+<tr><td>۱۵</td><td><code>0x3C</code></td><td><code>SysTick</code> (درس <a href="5-4.html">۵.۴</a>)</td></tr>
+<tr><td><code>16 + n</code></td><td><code>4 × (16 + n)</code></td><td>وقفهٔ پریفرال شمارهٔ n. مثلا <code>EXTI15_10</code> = IRQ ۴۰ = درایهٔ ۵۶ = آفست <code>0xE0</code></td></tr>
+</tbody></table></div>
+<p>شمارهٔ هر IRQ را باید از <span class="en">RM0383</span> (جدول Vector table) بخوانی. ما در این درس فقط این‌ها را لازم داریم: <code>EXTI15_10</code> = ۴۰. نام‌های handler (مثل <code>EXTI15_10_IRQHandler</code>) در فایل startup رسمی ST ثابت‌اند و اگر همان را بنویسی، تعریف تو بر <code>weak</code> ی startup غلبه می‌کند (درس <a href="5-2.html">۵.۲</a>).</p>
+
+<h2 id="nvic">NVIC: مدیر وقفه‌ها</h2>
+<p>وقفه‌های پریفرال‌ها به یک واحد داخل هسته می‌رسند: <span class="term" data-t="nvic_ctrl">NVIC</span> (Nested Vectored Interrupt Controller). NVIC برای هر وقفه سه چیز نگه می‌دارد: <b>فعال است؟</b>، <b>معلق (pending) است؟</b> و <b>اولویتش چند است؟</b> این رجیسترها جزو هستهٔ Cortex-M‌اند و آدرسشان روی همهٔ تراشه‌ها یکی است:</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>رجیستر</th><th>آدرس</th><th>کار</th></tr></thead>
+<tbody>
+<tr><td><code>NVIC_ISER0</code>، <code>ISER1</code></td><td><code>0xE000E100</code>، <code>0xE000E104</code></td><td>فعال‌کردن: نوشتن ۱ در بیت، وقفهٔ همان بیت را فعال می‌کند (IRQ 0..31 در ISER0، IRQ 32..63 در ISER1)</td></tr>
+<tr><td><code>NVIC_ICER0</code>، <code>ICER1</code></td><td><code>0xE000E180</code>، <code>0xE000E184</code></td><td>غیرفعال‌کردن (نوشتن ۱ در بیت)</td></tr>
+<tr><td><code>NVIC_ISPR0</code>، <code>ICPR0</code></td><td><code>0xE000E200</code>، <code>0xE000E280</code></td><td>معلق‌کردن دستی / پاک‌کردن معلق‌بودن</td></tr>
+<tr><td><code>NVIC_IPR0..</code></td><td><code>0xE000E400 + n</code></td><td>اولویت وقفهٔ n: <b>یک بایت برای هر وقفه</b></td></tr>
+</tbody></table></div>
+
+<p>دو نکتهٔ مهم. یک: رجیسترهای <code>ISER</code>/<code>ICER</code> «نوشتن ۱ = اثر، نوشتن ۰ = هیچ» هستند؛ پس فعال‌کردن یک وقفه را <b>بدون خواندن-تغییر-نوشتن</b> انجام می‌دهی: <code>ISER[n &gt;&gt; 5] = 1u &lt;&lt; (n &amp; 31)</code>. (این همان فکر BSRR در درس ۳.۶ است.) دو: <b>اولویت عدد کمتر = مهم‌تر.</b> در STM32F4 فقط ۴ بیت بالای بایت اولویت پیاده شده؛ پس مقدار اولویت ۰ تا ۱۵ است و باید ۴ بیت به چپ شیفت داده شود.</p>
+
+<p>در ابزارک، <code>NVIC_ISER1</code> را ببین. برای فعال‌کردن EXTI15_10 (IRQ 40) کدام بیت را باید یک کنی؟ (راهنمایی: <code>40 - 32</code>.)</p>
+<div class="widget" data-w="bits" data-width="16" data-reg="NVIC_ISER1" data-value="0" data-title="NVIC_ISER1 (۱۶ بیت پایین): IRQ 32 تا IRQ 47" data-fields='[{"name":"IRQ 38 (USART2)","hi":6,"lo":6,"map":["غیرفعال","فعال"]},{"name":"IRQ 40 (EXTI15_10)","hi":8,"lo":8,"map":["غیرفعال","فعال"]}]'></div>
+
+<h2 id="chain">از دکمه تا ISR: زنجیرهٔ EXTI</h2>
+<p>پایهٔ PC13 خودش وقفه نمی‌دهد. بین پایه و NVIC یک واحد به نام <span class="term" data-t="exti_unit">EXTI</span> (External Interrupt controller) هست. EXTI چند «خط» دارد؛ خط‌های ۰ تا ۱۵ مخصوص پایه‌های GPIO‌اند. خط <code>n</code> می‌تواند به پایهٔ <code>n</code> از <b>یکی</b> از پورت‌ها وصل شود. پس PA13، PB13 و PC13 همه به خط ۱۳ می‌رسند و فقط یکی را انتخاب می‌کنیم. این انتخاب را رجیستر <code>SYSCFG_EXTICR</code> انجام می‌دهد.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 320" role="img" aria-label="زنجیره وقفه دکمه: دکمه B1 به PC13، SYSCFG انتخاب پورت، EXTI خط ۱۳ با لبه و ماسک و رجیستر معلق، NVIC، CPU و ISR">
+  <defs><marker id="f53c" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">زنجیرهٔ یک وقفه: هرکدام از حلقه‌ها باید درست تنظیم شود</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="620" y="52" width="120" height="76" rx="12" fill="#ffd60a"/>
+    <rect x="475" y="52" width="120" height="76" rx="12" fill="#7ea3ff"/>
+    <rect x="330" y="52" width="120" height="76" rx="12" fill="#ff86b3"/>
+    <rect x="185" y="52" width="120" height="76" rx="12" fill="#3ddc97"/>
+    <rect x="40" y="52" width="120" height="76" rx="12" fill="#ff9a4d"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-weight="800">
+    <text x="680" y="82" font-size="14">دکمهٔ B1</text><text x="680" y="104" font-size="12.5">پایهٔ PC13</text>
+    <text x="535" y="82" font-size="14">SYSCFG</text><text x="535" y="104" font-size="12.5">پورت را انتخاب</text>
+    <text x="390" y="82" font-size="14">EXTI خط ۱۳</text><text x="390" y="104" font-size="12.5">لبه، ماسک، معلق</text>
+    <text x="245" y="82" font-size="14">NVIC</text><text x="245" y="104" font-size="12.5">فعال، اولویت</text>
+    <text x="100" y="82" font-size="14">CPU</text><text x="100" y="104" font-size="12.5">اجرای ISR</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#f53c)">
+    <path d="M618 90H597"/><path d="M473 90H452"/><path d="M328 90H307"/><path d="M183 90H162"/>
+  </g>
+  <g class="mono s-tx" font-size="12.5" font-weight="700" text-anchor="middle">
+    <text x="680" y="150">GPIOC_MODER = 00</text><text x="680" y="170">PUPDR = 01</text>
+    <text x="535" y="150">RCC_APB2ENR[14]</text><text x="535" y="170">EXTICR4[7:4] = 2</text>
+    <text x="390" y="150">FTSR[13] = 1</text><text x="390" y="170">IMR[13] = 1</text><text x="390" y="190">PR[13] (w1c)</text>
+    <text x="245" y="150">ISER1[8] = 1</text><text x="245" y="170">IPR[40]</text>
+    <text x="100" y="150">EXTI15_10_</text><text x="100" y="170">IRQHandler</text>
+  </g>
+  <g stroke="#15120a" stroke-width="2.5" fill="#fff">
+    <rect x="130" y="222" width="500" height="64" rx="10"/>
+  </g>
+  <g class="s-tx" font-size="13.5" text-anchor="middle" font-weight="700">
+    <text x="380" y="246">در ISR باید بیت ۱۳ از <tspan class="mono" direction="ltr">EXTI_PR</tspan> با نوشتن ۱ پاک شود</text>
+    <text x="380" y="268" font-weight="400" font-size="12.5">وگرنه پس از برگشت، CPU همان لحظه دوباره وارد ISR می‌شود (بخش «اگر خراب شد»)</text>
+  </g>
+  <text x="380" y="310" text-anchor="middle" class="s-tx" font-size="13">همهٔ این حلقه‌ها را قبل از فعال‌کردن NVIC بچین؛ فعال‌کردن آخرین کار است</text>
+</svg></div>
+<figcaption>پنج حلقه. اگر یکی از آن‌ها تنظیم نشود، وقفه هرگز نمی‌رسد؛ و اگر ISR پرچم را پاک نکند، وقفه هیچ‌وقت تمام نمی‌شود.</figcaption></figure>
+
+<p>رجیسترهای لازم (همه از <span class="en">RM0383</span>؛ مقدارها با اجرای وارسی‌شدهٔ ساخت در انتهای بخش بعد چک شده‌اند):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>رجیستر</th><th>آدرس</th><th>بیت‌ها و معنی</th></tr></thead>
+<tbody>
+<tr><td><code>RCC_APB2ENR</code></td><td><code>0x40023844</code></td><td>بیت ۱۴ = <code>SYSCFGEN</code> (ساعت SYSCFG). بدون آن، نوشتن روی SYSCFG بی‌اثر است</td></tr>
+<tr><td><code>SYSCFG_EXTICR4</code></td><td><code>0x40013814</code></td><td>چهار فیلد ۴ بیتی برای خط‌های ۱۲..۱۵. خط ۱۳ = بیت‌های ۷..۴. مقدار: ۰=A، ۱=B، ۲=C</td></tr>
+<tr><td><code>EXTI_IMR</code></td><td><code>0x40013C00</code></td><td>ماسک وقفه؛ بیت ۱۳ = ۱ یعنی خط ۱۳ اجازهٔ وقفه دارد</td></tr>
+<tr><td><code>EXTI_RTSR</code>، <code>FTSR</code></td><td><code>0x40013C08</code>، <code>0x40013C0C</code></td><td>وقفه روی لبهٔ بالارونده (Rising) / پایین‌رونده (Falling)</td></tr>
+<tr><td><code>EXTI_PR</code></td><td><code>0x40013C14</code></td><td>پرچم معلق. با آمدن لبه ۱ می‌شود. <b>پاک‌کردن: نوشتن ۱ در همان بیت</b> (write-1-to-clear)</td></tr>
+</tbody></table></div>
+
+<p>ابزارک زیر <code>SYSCFG_EXTICR4</code> است. فیلد <code>EXTI13</code> را روی <code>2</code> بگذار (بیت ۵ را یک و بیت‌های ۴ و ۶ و ۷ را صفر کن) تا خط ۱۳ به پورت C وصل شود:</p>
+<div class="widget" data-w="bits" data-width="16" data-reg="SYSCFG_EXTICR4" data-value="0" data-title="SYSCFG_EXTICR4: انتخاب پورت برای خط‌های ۱۲ تا ۱۵" data-fields='[{"name":"EXTI13","hi":7,"lo":4,"map":["PA","PB","PC","PD","PE","—","—","PH"]},{"name":"EXTI12","hi":3,"lo":0,"map":["PA","PB","PC","PD","PE","—","—","PH"]}]'></div>
+
+<h2 id="code">برنامهٔ کامل: دکمه ← وقفه ← LED</h2>
+<p>پروژه را از ۵.۲ گسترش می‌دهیم. چون این درس باید خودش تنها بایستد، همهٔ فایل‌ها اینجاست: <code>board.h</code> (هدر بزرگ‌تر)، <code>startup.c</code> (جدول برداری با درایهٔ ۵۶)، <code>main.c</code>، و دو فایل بی‌تغییر (<code>link.ld</code> و <code>Makefile</code>).</p>
+
+<div class="code" data-file="board.h" data-lang="c" data-verify="make" data-project="irq" id="brd">
+<pre>
+#ifndef BOARD_H
+#define BOARD_H
+
+#include &lt;stdint.h&gt;
+#include &lt;stddef.h&gt;
+
+typedef struct {
+    volatile uint32_t MODER, OTYPER, OSPEEDR, PUPDR;   // +0x00..+0x0C
+    volatile uint32_t IDR, ODR, BSRR, LCKR;            // +0x10..+0x1C
+    volatile uint32_t AFR[2];                          // +0x20, +0x24
+} GPIO_TypeDef;
+
+typedef struct {
+    volatile uint32_t CR, PLLCFGR, CFGR, CIR;          // +0x00..+0x0C
+    volatile uint32_t AHB1RSTR, AHB2RSTR;              // +0x10, +0x14
+    uint32_t RESERVED0[2];                             // +0x18, +0x1C
+    volatile uint32_t APB1RSTR, APB2RSTR;              // +0x20, +0x24
+    uint32_t RESERVED1[2];                             // +0x28, +0x2C
+    volatile uint32_t AHB1ENR, AHB2ENR;                // +0x30, +0x34
+    uint32_t RESERVED2[2];                             // +0x38, +0x3C
+    volatile uint32_t APB1ENR, APB2ENR;                // +0x40, +0x44
+} RCC_TypeDef;
+
+typedef struct {
+    volatile uint32_t MEMRMP, PMC;                     // +0x00, +0x04
+    volatile uint32_t EXTICR[4];                       // +0x08..+0x14
+} SYSCFG_TypeDef;
+
+typedef struct {
+    volatile uint32_t IMR, EMR, RTSR, FTSR, SWIER, PR; // +0x00..+0x14
+} EXTI_TypeDef;
+
+#define RCC    ((RCC_TypeDef *)0x40023800u)
+#define GPIOA  ((GPIO_TypeDef *)0x40020000u)
+#define GPIOC  ((GPIO_TypeDef *)0x40020800u)
+#define SYSCFG ((SYSCFG_TypeDef *)0x40013800u)
+#define EXTI   ((EXTI_TypeDef *)0x40013C00u)
+
+#define NVIC_ISER ((volatile uint32_t *)0xE000E100u)   /* فعال‌سازی */
+#define NVIC_IPR  ((volatile uint8_t *)0xE000E400u)    /* اولویت، یک بایت برای هر وقفه */
+
+#define RCC_AHB1ENR_GPIOAEN (1u &lt;&lt; 0)
+#define RCC_AHB1ENR_GPIOCEN (1u &lt;&lt; 2)
+#define RCC_APB2ENR_SYSCFGEN (1u &lt;&lt; 14)
+
+#define EXTI15_10_IRQn 40u
+
+_Static_assert(offsetof(RCC_TypeDef, APB2ENR) == 0x44, "APB2ENR offset");
+_Static_assert(offsetof(SYSCFG_TypeDef, EXTICR) == 0x08, "EXTICR offset");
+_Static_assert(offsetof(EXTI_TypeDef, PR) == 0x14, "PR offset");
+
+static inline void nvic_enable(uint32_t irq)
+{
+    NVIC_ISER[irq &gt;&gt; 5] = 1u &lt;&lt; (irq &amp; 31u);
+}
+
+static inline void nvic_set_priority(uint32_t irq, uint8_t prio)
+{
+    NVIC_IPR[irq] = (uint8_t)(prio &lt;&lt; 4);
+}
+
+static inline void irq_disable(void) { __asm volatile ("cpsid i" ::: "memory"); }
+static inline void irq_enable(void)  { __asm volatile ("cpsie i" ::: "memory"); }
+static inline void wait_for_irq(void) { __asm volatile ("wfi"); }
+
+#endif /* BOARD_H */
+</pre></div>
+<ol class="walk" data-for="brd">
+  <li data-lines="1-2,66"><b class="what">نگهبان include.</b></li>
+  <li data-lines="4-5"><b class="what">هدرهای استاندارد.</b> <code>stdint.h</code> و <code>stddef.h</code> (برای <code>offsetof</code>).</li>
+  <li data-lines="7-11"><b class="what">GPIO.</b> همان روکش ۵.۲، فقط چند فیلد در یک خط تا هدر کوتاه بماند. <code>volatile</code> روی همه.</li>
+  <li data-lines="13-22"><b class="what">RCC.</b> حالا تا <code>APB2ENR</code> ادامه دارد (<code>AHB1ENR</code> در <code>+0x30</code>، <code>APB1ENR</code> در <code>+0x40</code>، <code>APB2ENR</code> در <code>+0x44</code>). آرایه‌های <code>RESERVED</code> شکاف‌ها را پر می‌کنند.</li>
+  <li data-lines="24-27"><b class="what">SYSCFG.</b> <code>EXTICR[4]</code> از <code>+0x08</code>؛ پس <code>EXTICR[3]</code> (همان EXTICR4) در <code>+0x14</code> است.</li>
+  <li data-lines="29-31"><b class="what">EXTI.</b> شش رجیستر پشت هم: <code>IMR</code>، <code>EMR</code>، <code>RTSR</code>، <code>FTSR</code>، <code>SWIER</code>، <code>PR</code>؛ <code>PR</code> در <code>+0x14</code>.</li>
+  <li data-lines="33-37"><b class="what">آدرس‌های پایه.</b> SYSCFG در <code>0x40013800</code> و EXTI در <code>0x40013C00</code> (روی گذرگاه APB2).</li>
+  <li data-lines="39-40"><b class="what">رجیسترهای NVIC.</b> <code>ISER</code> را آرایه‌ای از کلمهٔ ۳۲ بیتی می‌گیریم و <code>IPR</code> را آرایه‌ای از بایت. پس <code>NVIC_IPR[40]</code> یعنی «اولویت وقفهٔ ۴۰».
+    <span class="why">در مستندات ARM اولویت‌ها بایتی‌اند؛ همین نوع نوشتن ساده‌ترین است.</span></li>
+  <li data-lines="42-44"><b class="what">نام بیت‌ها.</b> ساعت پورت A و C و SYSCFG.</li>
+  <li data-lines="46"><b class="what">شمارهٔ IRQ.</b> <code>EXTI15_10</code> = ۴۰.</li>
+  <li data-lines="48-50"><b class="what">بازرس آفست.</b> سه آفست کلیدی را زمان کامپایل می‌سنجد.</li>
+  <li data-lines="52-55"><b class="what">nvic_enable.</b> <code>irq &gt;&gt; 5</code> رجیستر (۳۲ وقفه در هر رجیستر) و <code>irq &amp; 31</code> بیت را می‌دهد. یک نوشتن، بدون خواندن.
+    <span class="why">چون «نوشتن ۰ اثری ندارد»، لازم نیست وضعیت بقیهٔ وقفه‌ها را بخوانی؛ به همین دلیل خطر خواندن-تغییر-نوشتن اینجا نیست.</span></li>
+  <li data-lines="57-60"><b class="what">nvic_set_priority.</b> <code>prio &lt;&lt; 4</code>: چون فقط ۴ بیت بالای بایت پیاده شده. اولویت ۵ می‌شود <code>0x50</code>.</li>
+  <li data-lines="62-64"><b class="what">سه دستور ویژهٔ CPU.</b> <code>cpsid i</code> = همهٔ وقفه‌های قابل‌ماسک را غیرفعال کن (<code>PRIMASK = 1</code>)، <code>cpsie i</code> = دوباره فعال، <code>wfi</code> = بخواب تا وقفه بیاید. با <code>__asm volatile</code> نوشته می‌شوند؛ <code>"memory"</code> به کامپایلر می‌گوید «حافظه را از این طرف به آن طرف جابه‌جا نکن».
+    <span class="why">این‌ها در CMSIS با نام‌های <code>__disable_irq()</code>، <code>__enable_irq()</code> و <code>__WFI()</code> هم هستند.</span></li>
+</ol>
+
+<div class="code" data-file="startup.c" data-lang="c" data-verify="make" data-project="irq" id="stu">
+<pre>
+#include &lt;stdint.h&gt;
+
+extern uint32_t _estack, _sidata, _sdata, _edata, _sbss, _ebss;
+int main(void);
+
+void Reset_Handler(void);
+void Default_Handler(void);
+void NMI_Handler(void)           __attribute__((weak, alias("Default_Handler")));
+void HardFault_Handler(void)     __attribute__((weak, alias("Default_Handler")));
+void EXTI15_10_IRQHandler(void)  __attribute__((weak, alias("Default_Handler")));
+
+/* درایه n وقفهٔ IRQ شمارهٔ n-16 است */
+__attribute__((section(".isr_vector"), used))
+void (*const vector_table[16 + 41])(void) = {
+    [0]  = (void (*)(void))&amp;_estack,
+    [1]  = Reset_Handler,
+    [2]  = NMI_Handler,
+    [3]  = HardFault_Handler,
+    [16 + 40] = EXTI15_10_IRQHandler,
+};
+
+void Reset_Handler(void)
+{
+    uint32_t *src = &amp;_sidata;
+    for (uint32_t *dst = &amp;_sdata; dst &lt; &amp;_edata; ) {
+        *dst++ = *src++;
+    }
+    for (uint32_t *dst = &amp;_sbss; dst &lt; &amp;_ebss; ) {
+        *dst++ = 0u;
+    }
+    main();
+    for (;;) {
+    }
+}
+
+void Default_Handler(void)
+{
+    for (;;) {
+    }
+}
+</pre></div>
+<ol class="walk" data-for="stu">
+  <li data-lines="3-4"><b class="what">مرزهای حافظه و main.</b> مثل ۵.۲.</li>
+  <li data-lines="8-10"><b class="what">نام‌های ضعیف.</b> سه handler به <code>Default_Handler</code> اشاره می‌کنند؛ هرکدام را در جای دیگر تعریف کنی، جایگزین می‌شود.
+    <span class="why">اگر نام handler را در <code>main.c</code> غلط بنویسی، این خط ساکت می‌ماند و وقفه به <code>Default_Handler</code> (حلقهٔ بی‌نهایت) می‌رود. بخش «اگر خراب شد» را ببین.</span></li>
+  <li data-lines="12-20"><b class="what">جدول برداری.</b> با <span class="en">designated initializer</span> (درس <a href="3-4.html">۳.۴</a>) فقط درایه‌های لازم را پر می‌کنیم و بقیه صفر می‌مانند. آرایه <code>16 + 41</code> درایه دارد (تا IRQ 40).
+    <span class="why">درایه‌ای که صفر باشد اگر وقفه‌اش فعال شود، CPU را به آدرس صفر می‌فرستد و HardFault می‌شود. ما فقط وقفه‌ای را فعال می‌کنیم که handler‌اش را نوشته‌ایم. (فایل رسمی ST همهٔ درایه‌ها را با <code>Default_Handler</code> پر می‌کند.)</span></li>
+  <li data-lines="15-18"><b class="what">چهار درایهٔ اول.</b> <code>SP</code>، <code>Reset_Handler</code>، <code>NMI</code>، <code>HardFault</code>.</li>
+  <li data-lines="19"><b class="what">درایهٔ ۵۶.</b> <code>[16 + 40]</code> = <code>EXTI15_10_IRQHandler</code>. آفستش در Flash: <code>4 × 56 = 0xE0</code>.</li>
+  <li data-lines="22-34"><b class="what">Reset_Handler.</b> کپی <code>.data</code>، صفر کردن <code>.bss</code>، صدا زدن <code>main</code> (مثل ۵.۲).</li>
+  <li data-lines="36-40"><b class="what">Default_Handler.</b> جای امن برای وقفهٔ ناخواسته.</li>
+</ol>
+
+<div class="code" data-file="main.c" data-lang="c" data-verify="make" data-project="irq" id="mn">
+<pre>
+#include "board.h"
+
+#define LED_PIN    5u
+#define BUTTON_PIN 13u
+
+static volatile uint32_t button_event;   /* ISR می‌نویسد، main می‌خواند */
+static uint32_t press_count;             /* فقط main به آن دست می‌زند */
+
+void EXTI15_10_IRQHandler(void)
+{
+    if (EXTI-&gt;PR &amp; (1u &lt;&lt; BUTTON_PIN)) {
+        EXTI-&gt;PR = 1u &lt;&lt; BUTTON_PIN;        /* پرچم را با نوشتن ۱ پاک کن */
+        EXTI-&gt;IMR &amp;= ~(1u &lt;&lt; BUTTON_PIN);   /* تا پایان پرش‌ها ساکت */
+        button_event = 1u;
+    }
+}
+
+static void delay(volatile uint32_t n)
+{
+    while (n--) {
+    }
+}
+
+static void wait_until_released(void)
+{
+    delay(30000u);                                       /* پرش‌های فشردن */
+    while ((GPIOC-&gt;IDR &amp; (1u &lt;&lt; BUTTON_PIN)) == 0u) {
+    }
+    delay(30000u);                                       /* پرش‌های رها کردن */
+}
+
+int main(void)
+{
+    RCC-&gt;AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOCEN;
+    RCC-&gt;APB2ENR |= RCC_APB2ENR_SYSCFGEN;
+    (void)RCC-&gt;APB2ENR;
+
+    GPIOA-&gt;MODER = (GPIOA-&gt;MODER &amp; ~(3u &lt;&lt; (LED_PIN * 2u)))
+                 | (1u &lt;&lt; (LED_PIN * 2u));
+    GPIOC-&gt;MODER &amp;= ~(3u &lt;&lt; (BUTTON_PIN * 2u));
+    GPIOC-&gt;PUPDR = (GPIOC-&gt;PUPDR &amp; ~(3u &lt;&lt; (BUTTON_PIN * 2u)))
+                 | (1u &lt;&lt; (BUTTON_PIN * 2u));
+
+    SYSCFG-&gt;EXTICR[3] = (SYSCFG-&gt;EXTICR[3] &amp; ~(0xFu &lt;&lt; 4)) | (0x2u &lt;&lt; 4);
+    EXTI-&gt;FTSR |= 1u &lt;&lt; BUTTON_PIN;
+    EXTI-&gt;RTSR &amp;= ~(1u &lt;&lt; BUTTON_PIN);
+    EXTI-&gt;PR = 1u &lt;&lt; BUTTON_PIN;
+    EXTI-&gt;IMR |= 1u &lt;&lt; BUTTON_PIN;
+    nvic_set_priority(EXTI15_10_IRQn, 5u);
+    nvic_enable(EXTI15_10_IRQn);
+
+    for (;;) {
+        irq_disable();
+        if (button_event == 0u) {
+            wait_for_irq();
+        }
+        irq_enable();
+
+        if (button_event != 0u) {
+            button_event = 0u;
+            press_count++;
+            GPIOA-&gt;BSRR = (press_count &amp; 1u) ? (1u &lt;&lt; LED_PIN)
+                                              : (1u &lt;&lt; (LED_PIN + 16u));
+            wait_until_released();
+            EXTI-&gt;PR = 1u &lt;&lt; BUTTON_PIN;
+            EXTI-&gt;IMR |= 1u &lt;&lt; BUTTON_PIN;
+        }
+    }
+}
+</pre></div>
+<ol class="walk" data-for="mn">
+  <li data-lines="3-4"><b class="what">شماره‌ها.</b> LED روی PA5، دکمه روی PC13.</li>
+  <li data-lines="6"><b class="what">پرچم مشترک.</b> ISR آن را می‌نویسد و <code>main</code> می‌خواند. <code>volatile</code> است تا کامپایلر مقدارش را در ثبات نگه ندارد و همیشه از حافظه بخواند.
+    <span class="why">کامپایلر نمی‌داند ISR وجود دارد؛ چون هیچ‌جا در main صدایش زده نشده. بدون volatile حلقهٔ انتظار در main ممکن است برای همیشه بماند (تمرین ۲).</span></li>
+  <li data-lines="7"><b class="what">شمارنده.</b> فقط <code>main</code> به آن دست می‌زند (ISR نه)؛ پس <code>volatile</code> نمی‌خواهد و اتمی‌بودن هم مسئله‌ای ندارد.
+    <span class="why">قاعدهٔ «تک‌نویسنده»: هر متغیر مشترک را فقط یک طرف بنویسد؛ بخش بحرانی کمتر لازم می‌شود.</span></li>
+  <li data-lines="9-10,16"><b class="what">ISR.</b> نام باید دقیقا <code>EXTI15_10_IRQHandler</code> باشد (هماهنگ با جدول). بدون آرگومان و بدون مقدار برگشتی.</li>
+  <li data-lines="11"><b class="what">کدام خط؟</b> این handler برای خط‌های ۱۰ تا ۱۵ مشترک است؛ پس اول ببین بیت ۱۳ معلق است.</li>
+  <li data-lines="12"><b class="what">پاک‌کردن پرچم.</b> نوشتن <b>۱</b> در <code>PR</code>؛ نه <code>|=</code>. (نوشتن ۱ اثر می‌کند، صفر هیچ.)
+    <span class="why">اگر پاک نکنی، وقفه هنوز معلق است و بلافاصله بعد از برگشت دوباره صدا زده می‌شود؛ CPU در ISR قفل می‌شود. اگر <code>PR |= …</code> بنویسی، هر خط معلق دیگر هم به‌طور ناخواسته پاک می‌شود.</span></li>
+  <li data-lines="13"><b class="what">ساکت‌کردن خط.</b> بیت ۱۳ از <code>IMR</code> صفر می‌شود تا پرش‌های تماس دکمه وقفهٔ تازه نسازند. main بعدا دوباره فعالش می‌کند.
+    <span class="why">این خواندن-تغییر-نوشتن روی IMR در ISR امن است، چون فقط ISR (وقتی خط فعال است) و main (وقتی خط ساکت است) به آن می‌نویسند و هیچ‌وقت هم‌زمان نیستند. اگر ISRهای دیگری هم روی IMR می‌نوشتند، اینجا خطر می‌ماند.</span></li>
+  <li data-lines="14"><b class="what">خبر دادن.</b> فقط <code>button_event = 1</code>. کار سنگین در main.</li>
+  <li data-lines="18-22"><b class="what">delay.</b> همان تأخیر volatile قبلی.</li>
+  <li data-lines="24-30"><b class="what">صبر تا رها شدن.</b> اول ۳۰ هزار دور (پرش‌های فشردن)، سپس تا زمانی که دکمه فشرده است صبر می‌کنیم، و دوباره ۳۰ هزار دور (پرش‌های رها کردن).
+    <span class="why">چرا؟ در نمودار درس قبل دیدی رها کردن هم پرش دارد و لبهٔ پایین‌رونده می‌سازد. بدون این انتظار، رها کردن دکمه هم LED را عوض می‌کرد. راه بهتر (بدون قفل‌کردن main) در درس <a href="5-4.html">۵.۴</a> با SysTick است.</span></li>
+  <li data-lines="32-33,69"><b class="what">main.</b></li>
+  <li data-lines="34-36"><b class="what">ساعت‌ها.</b> GPIOA (LED)، GPIOC (دکمه)، و SYSCFG. خواندن بی‌مصرف بعدش، مثل قبل.</li>
+  <li data-lines="38-42"><b class="what">GPIO.</b> LED خروجی، دکمه ورودی با بالاکش؛ همان ۵.۲.</li>
+  <li data-lines="44"><b class="what">انتخاب پورت.</b> فیلد ۴ بیتی EXTI13 (بیت‌های ۷..۴ از <code>EXTICR4</code>) را پاک و ۲ (=C) می‌گذاریم. <code>EXTICR[3]</code> چون EXTICR4 چهارمین رجیستر است.</li>
+  <li data-lines="45-46"><b class="what">لبهٔ پایین‌رونده.</b> فشردن یعنی ۱ به ۰؛ پس FTSR روشن و RTSR خاموش.</li>
+  <li data-lines="47"><b class="what">پاک‌کردن معلق قدیمی.</b> شاید قبل از تنظیمات لبه‌ای دیده شده باشد؛ اول پاکش می‌کنیم.</li>
+  <li data-lines="48"><b class="what">باز کردن ماسک.</b> <code>IMR</code> بیت ۱۳ = ۱: خط ۱۳ اجازهٔ وقفه پیدا می‌کند.</li>
+  <li data-lines="49"><b class="what">اولویت.</b> ۵ (از ۰ تا ۱۵).</li>
+  <li data-lines="50"><b class="what">فعال‌کردن در NVIC.</b> آخرین قدم؛ از این لحظه وقفه می‌تواند بیاید.
+    <span class="why">اگر NVIC را زودتر فعال کنی و وقفهٔ معلق قدیمی باشد، ISR قبل از تمام‌شدن تنظیمات اجرا می‌شود.</span></li>
+  <li data-lines="52,68"><b class="what">حلقهٔ بی‌نهایت.</b></li>
+  <li data-lines="53-57"><b class="what">خوابیدن بی‌خطر.</b> وقفه‌ها را می‌بندیم، پرچم را نگاه می‌کنیم؛ اگر خبری نیست، <code>wfi</code> (بخواب)؛ بعد وقفه‌ها را باز می‌کنیم.
+    <span class="why">اگر بدون بستن وقفه بنویسی «if (!flag) wfi»، ممکن است وقفه دقیقا بین <code>if</code> و <code>wfi</code> بیاید: ISR پرچم را می‌گذارد، ولی CPU حالا می‌خوابد و تا وقفهٔ بعدی بیدار نمی‌شود، پس رویداد «گم» می‌شود. اگر وقفه‌ای معلق باشد، <code>wfi</code> حتی وقتی PRIMASK یک است بیدار می‌شود؛ ISR بعد از <code>cpsie</code> اجرا می‌شود و پرچم را می‌گذارد.</span></li>
+  <li data-lines="59-61"><b class="what">رسیدگی به رویداد.</b> پرچم را پاک و شمارنده را زیاد می‌کنیم.</li>
+  <li data-lines="62-63"><b class="what">LED.</b> فرد = روشن (BSRR بیت ۵)، زوج = خاموش (بیت ۲۱).</li>
+  <li data-lines="64"><b class="what">منتظر رها شدن.</b> (تابع بالا.)</li>
+  <li data-lines="65-66"><b class="what">دوباره مسلح کن.</b> پرچم معلق (پرش‌های احتمالی) پاک می‌شود و ماسک باز می‌شود تا فشردن بعدی بیاید.</li>
+</ol>
+
+<details><summary>دو فایل بی‌تغییر: <code>link.ld</code> و <code>Makefile</code></summary>
+<div class="code" data-file="link.ld" data-lang="ld" data-verify="make" data-project="irq" id="lk">
+<pre>
+ENTRY(Reset_Handler)
+
+MEMORY
+{
+    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 512K
+    RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
+}
+
+_estack = ORIGIN(RAM) + LENGTH(RAM);
+
+SECTIONS
+{
+    .isr_vector : {
+        KEEP(*(.isr_vector))
+    } &gt; FLASH
+
+    .text : {
+        *(.text*)
+        *(.rodata*)
+        . = ALIGN(4);
+    } &gt; FLASH
+
+    _sidata = LOADADDR(.data);
+
+    .data : {
+        _sdata = .;
+        *(.data*)
+        . = ALIGN(4);
+        _edata = .;
+    } &gt; RAM AT &gt; FLASH
+
+    .bss : {
+        _sbss = .;
+        *(.bss*)
+        *(COMMON)
+        . = ALIGN(4);
+        _ebss = .;
+    } &gt; RAM
+}
+</pre></div>
+<p>همان <code>link.ld</code> درس ۵.۲؛ نقشهٔ Flash و RAM و بخش‌های <code>.isr_vector</code>، <code>.text</code>، <code>.data</code>، <code>.bss</code>.</p>
+<div class="code" data-file="Makefile" data-lang="make" data-verify="make" data-project="irq" id="mk2">
+<pre>
+CC      = arm-none-eabi-gcc
+CFLAGS  = -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -Og
+LDFLAGS = -nostdlib -T link.ld
+
+all: button_irq.bin
+
+button_irq.elf: main.o startup.o link.ld
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ main.o startup.o
+
+button_irq.bin: button_irq.elf
+	arm-none-eabi-objcopy -O binary $&lt; $@
+
+%.o: %.c board.h
+	$(CC) $(CFLAGS) -c -o $@ $&lt;
+
+clean:
+	rm -f *.o *.elf *.bin
+</pre></div>
+<p>مثل ۵.۲ ولی برای یک برنامه: <code>button_irq.elf</code> از <code>main.o</code> و <code>startup.o</code> ساخته می‌شود و <code>objcopy</code> آن را به <code>.bin</code> برای Flash درمی‌آورد. جلوی دستورها Tab است.</p>
+</details>
+
+<p>ساخت و بازرسی (خروجی واقعی، <span class="en">arm-none-eabi-gcc 13.2.1</span>). به آدرس <code>0xE0</code> و مقدار آن دقت کن:</p>
+<pre class="term" data-nocheck>
+$ make
+$ arm-none-eabi-size button_irq.elf
+   text	   data	    bss	    dec	    hex	filename
+    616	      0	      8	    624	    270	button_irq.elf
+$ arm-none-eabi-nm button_irq.elf | sort | grep -E 'vector|EXTI|main'
+08000000 R vector_table
+08000118 T EXTI15_10_IRQHandler
+08000144 T main
+$ arm-none-eabi-objdump -h button_irq.elf
+Sections:
+Idx Name          Size      VMA       LMA       File off  Algn
+  0 .isr_vector   000000e4  08000000  08000000  00001000  2**2
+  1 .text         00000184  080000e4  080000e4  000010e4  2**2
+  3 .bss          00000008  20000000  08000268  00002000  2**2
+$ arm-none-eabi-objdump -s -j .isr_vector button_irq.elf | tail -1
+ 80000e0 19010008                             ....
+</pre>
+<p>جدول برداری <code>0xE4</code> = ۲۲۸ بایت = ۵۷ کلمه است (درایه‌های ۰ تا ۵۶). آخرین کلمه (<code>0x080000e0</code>) بایت‌های <code>19 01 00 08</code> است. little-endian: <code>0x08000119</code>. آدرس <code>EXTI15_10_IRQHandler</code> <code>0x08000118</code> است و بیت ۰ آن برای حالت Thumb یک شده. یعنی همان چیزی که CPU در وقفه می‌خواند. متغیرهای <code>button_event</code> و <code>press_count</code> در <code>.bss</code> (۸ بایت) هستند و <code>Reset_Handler</code> صفرشان می‌کند.</p>
+
+<div class="callout warn"><div class="ct">این‌ها فقط ساخته شده‌اند، نه اجرا</div>
+<p>کدهای این درس با <code>arm-none-eabi-gcc</code> کامپایل و لینک شده و جدول و آدرس‌ها بازرسی شده‌اند؛ ولی ما در این محیط برد نداریم. روی Nucleo خودت امتحان کن؛ اگر LED واکنش نشان نداد، از فهرست بخش «اگر خراب شد» شروع کن.</p></div>
+
+<h2 id="rules">قانون‌های طلایی ISR</h2>
+<p>ISR روی هرچه در حال اجراست «سوار می‌شود». هر میکروثانیه که در ISR بمانی، برنامهٔ اصلی و وقفه‌های دیگر همان‌قدر عقب می‌افتند. پس قانون‌ها ساده‌اند:</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>قانون</th><th>چرا؟</th></tr></thead>
+<tbody>
+<tr><td><b>کوتاه باش.</b> پرچم بگذار، عدد ذخیره کن، برگرد.</td><td>ISR طولانی وقفه‌های دیگر را دیر می‌کند و زمان‌بندی کل سیستم می‌شکند.</td></tr>
+<tr><td><b>هرگز منتظر نمان.</b> بدون <code>delay</code>، بدون حلقهٔ انتظار.</td><td>CPU تا پایان ISR کار دیگری نمی‌کند. اگر منتظر رویدادی باشی که خودش وقفه لازم دارد، برای همیشه قفل می‌شود.</td></tr>
+<tr><td><b>بدون <code>printf</code> و <code>malloc</code>.</b></td><td>کند و معمولا غیر reentrant هستند (اگر main وسط آن‌ها باشد، ISR حالت داخلی را خراب می‌کند).</td></tr>
+<tr><td><b>پرچم را پاک کن</b> (مثل <code>EXTI_PR</code>).</td><td>وگرنه ISR بی‌پایان تکرار می‌شود.</td></tr>
+<tr><td><b>متغیر مشترک = <code>volatile</code>.</b></td><td>کامپایلر ISR را نمی‌بیند و ممکن است مقدار را در ثبات نگه دارد.</td></tr>
+<tr><td><b>کار سنگین را به main بسپار.</b></td><td>الگوی «ISR پرچم می‌گذارد، main کار می‌کند» ساده‌ترین و امن‌ترین ترکیب است.</td></tr>
+</tbody></table></div>
+
+<p>رایج‌ترین باگ این الگو: یک <b>پرچم ساده</b> رویدادهای نزدیک به هم را گم می‌کند. اگر ISR سه بار پشت‌سرهم صدا زده شود قبل از اینکه main نگاه کند، پرچم فقط «۱» می‌ماند. راه‌حل: شمارنده. این را با شبیه‌سازی روی PC ببین (<code>fake_isr</code> همان نقش ISR را دارد و با یک زمان‌بندی شبیه‌سازی‌شده صدا زده می‌شود):</p>
+
+<div class="code" data-file="lost.c" data-lang="c" data-verify="host" id="lst">
+<pre>
+#include &lt;stdio.h&gt;
+
+static volatile int pending_flag;         /* نسخهٔ ۱: فقط یک پرچم */
+static volatile unsigned pending_count;   /* نسخهٔ ۲: شمارنده */
+
+static void fake_isr(void)
+{
+    pending_flag = 1;
+    pending_count++;
+}
+
+int main(void)
+{
+    /* در هر «دور main» چند وقفه پیش از رسیدگی می‌رسد */
+    const int irqs_per_round[] = {0, 1, 3, 0, 2, 0};
+    const int rounds = (int)(sizeof irqs_per_round / sizeof irqs_per_round[0]);
+    int total = 0, by_flag = 0;
+    unsigned by_count = 0;
+
+    for (int r = 0; r &lt; rounds; r++) {
+        for (int k = 0; k &lt; irqs_per_round[r]; k++) {
+            fake_isr();
+            total++;
+        }
+        if (pending_flag) {               /* main فقط می‌فهمد «اتفاقی افتاد» */
+            pending_flag = 0;
+            by_flag++;
+        }
+        while (by_count &lt; pending_count) {/* main همهٔ رویدادها را می‌شمارد */
+            by_count++;
+        }
+    }
+    printf("interrupts fired : %d\n", total);
+    printf("seen with a flag : %d\n", by_flag);
+    printf("seen with counter: %u\n", by_count);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="lst">
+  <li data-lines="3-4"><b class="what">دو راه خبر دادن.</b> یک پرچم (۰ یا ۱) و یک شمارنده.</li>
+  <li data-lines="6-10"><b class="what">ISR شبیه‌سازی‌شده.</b> هر بار که صدا زده شود هر دو را به‌روز می‌کند.</li>
+  <li data-lines="14-16"><b class="what">زمان‌بندی.</b> در هر «دور main» چند وقفه پیش از رسیدگی رسیده باشد: در دور دوم ۱، در دور سوم ۳، در دور پنجم ۲.</li>
+  <li data-lines="17-18"><b class="what">شمارنده‌ها.</b> کل وقفه‌ها و آنچه هر روش دیده.</li>
+  <li data-lines="20-24"><b class="what">وقفه‌ها.</b> در هر دور، تعداد وقفه‌های تعیین‌شده را اجرا می‌کنیم.</li>
+  <li data-lines="25-28"><b class="what">main با پرچم.</b> اگر پرچم ۱ بود، یک رویداد ثبت می‌کند (و پرچم را پاک).</li>
+  <li data-lines="29-31"><b class="what">main با شمارنده.</b> تا وقتی شمارنده از آنچه دیده بزرگ‌تر است، رویداد ثبت می‌کند.</li>
+  <li data-lines="33-35"><b class="what">چاپ.</b> کل وقفه‌ها و آنچه هر روش دید.</li>
+</ol>
+<pre class="term" data-from="lost.c">
+$ gcc -std=c11 -Wall -Wextra -o lost lost.c
+$ ./lost
+interrupts fired : 6
+seen with a flag : 3
+seen with counter: 6
+</pre>
+<p>شش وقفه آمد؛ پرچم فقط سه بار «یک اتفاق» دید و سه رویداد را گم کرد. شمارنده هر شش را شمرد. اگر «هر رویداد مهم است» (مثل بایت‌های رسیده از UART)، پرچم ساده کافی نیست؛ شمارنده یا صف (درس ۴.۵) لازم داری. اگر فقط «یک بار اتفاق افتاد» مهم است (مثل فشردن دکمه)، پرچم کافی است.</p>
+
+<h2 id="race">رقابت و بخش بحرانی</h2>
+<p>ISR در هر لحظه‌ای می‌تواند بین دو دستور <code>main</code> بیاید. اگر هر دو به یک متغیر دست بزنند، ممکن است <code>main</code> نصفه‌کاره دیده شود. به این وضعیت <span class="term" data-t="race_cond">رقابت</span> (race condition) می‌گویند. در درس <a href="3-6.html">۳.۶</a> یک نمونه دیدی (خواندن-تغییر-نوشتن). نمونهٔ دوم ظریف‌تر است: <b>خواندن یک مقدار ۶۴ بیتی روی CPU ۳۲ بیتی.</b></p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>شمارهٔ تلفن دوستت را در دو تکه از او می‌پرسی: «چهار رقم اول؟ ... چهار رقم آخر؟». وسط جواب‌هایش او شمارهٔ جدیدی می‌گیرد و هر دو تکه را عوض می‌کند. تو حالا نیمی از شمارهٔ قدیم و نیمی از شمارهٔ جدید را داری: شماره‌ای که هرگز وجود نداشته. یک شمارندهٔ ۶۴ بیتی دو کلمهٔ ۳۲ بیتی است و همین ماجرا برایش می‌افتد.</p></div>
+
+<p>ببین روی حالت واقعی: شمارنده <code>0x00000000FFFFFFFF</code> است و وقفه دقیقا وسط خواندن دو نیمه می‌رسد. (وقفه را با تابع <code>fake_irq</code> در همان نقطه شبیه‌سازی می‌کنیم؛ روی برد واقعی نقطه تصادفی است و باگ «گاهی» رخ می‌دهد.)</p>
+
+<div class="code" data-file="torn.c" data-lang="c" data-verify="host" id="trn">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+static uint32_t ticks_lo = 0xFFFFFFFFu;   // نیمهٔ پایین شمارنده
+static uint32_t ticks_hi = 0x00000000u;   // نیمهٔ بالا
+
+static void fake_irq(void)                // وقفه: شمارنده را یکی زیاد می‌کند
+{
+    ticks_lo++;
+    if (ticks_lo == 0u) {
+        ticks_hi++;
+    }
+}
+
+int main(void)
+{
+    uint32_t lo = ticks_lo;               // main نیمهٔ پایین را می‌خواند
+    fake_irq();                           // وقفه دقیقا همین‌جا می‌آید
+    uint32_t hi = ticks_hi;               // main نیمهٔ بالا را می‌خواند
+
+    printf("torn read : 0x%08x%08x\n", (unsigned)hi, (unsigned)lo);
+    printf("real value: 0x%08x%08x\n", (unsigned)ticks_hi, (unsigned)ticks_lo);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="trn">
+  <li data-lines="4-5"><b class="what">شمارندهٔ ۶۴ بیتی در دو نیمه.</b> مقدار کامل: <code>(hi &lt;&lt; 32) | lo</code>.</li>
+  <li data-lines="7-13"><b class="what">وقفهٔ شبیه‌سازی‌شده.</b> شمارنده را یکی زیاد می‌کند؛ اگر نیمهٔ پایین سرریز شد (صفر شد)، نیمهٔ بالا را هم یکی زیاد می‌کند.</li>
+  <li data-lines="17"><b class="what">main نیمهٔ پایین را می‌خواند.</b> <code>0xFFFFFFFF</code>.</li>
+  <li data-lines="18"><b class="what">وقفه می‌رسد.</b> حالا مقدار واقعی <code>0x0000000100000000</code> است.</li>
+  <li data-lines="19"><b class="what">main نیمهٔ بالا را می‌خواند.</b> <code>1</code>، یعنی نیمهٔ بالای مقدار <b>جدید</b>.</li>
+  <li data-lines="21-22"><b class="what">مقایسه.</b> مقدار خوانده‌شده و مقدار واقعی.</li>
+</ol>
+<pre class="term" data-from="torn.c">
+$ gcc -std=c11 -Wall -Wextra -o torn torn.c
+$ ./torn
+torn read : 0x00000001ffffffff
+real value: 0x0000000100000000
+</pre>
+<p>main عدد <code>0x00000001FFFFFFFF</code> را دیده: نزدیک چهار میلیارد تیک جلوتر از واقعیت! این عدد هرگز وجود نداشته است. همین را با ابزارک مرحله‌به‌مرحله ببین:</p>
+
+<div class="widget" data-w="mem" data-config='{"title":"خواندن شمارندهٔ ۶۴ بیتی وسط وقفه","code":["lo = ticks_lo;   // main","// --- وقفه: ticks++ ---","hi = ticks_hi;   // main","result = (hi &lt;&lt; 32) | lo;"],"intro":"شمارنده 0x00000000_FFFFFFFF است. روی بعدی بزن.","cells":[{"addr":"RAM","name":"ticks_lo","val":"0xFFFFFFFF","kind":"var"},{"addr":"RAM","name":"ticks_hi","val":"0x00000000","kind":"var"},{"addr":"ثبات","name":"lo (main)","val":null,"kind":"var"},{"addr":"ثبات","name":"hi (main)","val":null,"kind":"var"}],"steps":[{"line":0,"set":{"2":"0xFFFFFFFF"},"hot":[2],"say":"main نیمهٔ پایین را خواند: 0xFFFFFFFF."},{"line":1,"set":{"0":"0x00000000","1":"0x00000001"},"hot":[0,1],"say":"<b>وقفه رسید</b> و شمارنده را یکی زیاد کرد: نیمهٔ پایین صفر شد و نیمهٔ بالا ۱. مقدار واقعی حالا 0x00000001_00000000 است."},{"line":2,"set":{"3":"0x00000001"},"hot":[3],"say":"main نیمهٔ بالا را خواند: 0x00000001 (از مقدار جدید)."},{"line":3,"set":{},"hot":[2,3],"say":"نتیجه 0x00000001_FFFFFFFF: ترکیب نیمهٔ قدیم با نیمهٔ جدید. مقدار غلط و بسیار بزرگ!"}]}'></div>
+
+<p>حتی وقتی کامپایلر یک دستور برای خواندن ۶۴ بیت می‌گذارد، از آن دلگرم نشو. این همان کدی است که برای Cortex-M4 با <code>-O2</code> ساخته شد:</p>
+<div class="code" data-file="c64.c" data-lang="c" data-verify="arm" data-cflags="-O2" id="c64">
+<pre>
+#include &lt;stdint.h&gt;
+
+volatile uint64_t ticks;   // ISR هر بار یکی اضافه می‌کند
+
+uint64_t read_ticks(void)
+{
+    return ticks;
+}
+</pre></div>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -O2 -ffreestanding -c c64.c
+$ arm-none-eabi-objdump -d c64.o
+00000000 &lt;read_ticks&gt;:
+   0:	4b01      	ldr	r3, [pc, #4]
+   2:	e9d3 0100 	ldrd	r0, r1, [r3]
+   6:	4770      	bx	lr
+</pre>
+<p>کامپایلر از <code>ldrd</code> (خواندن دو کلمه) استفاده کرده. ولی معماری Arm برای این دستور «اتمی‌بودن» تضمین نمی‌کند: نباید فرض کرد یک دسترسی تقسیم‌ناپذیر است. قاعدهٔ عملی: <b>هر متغیر مشترک بزرگ‌تر از ۳۲ بیت</b> (یا ساختاری که چند فیلدش باید هم‌زمان معتبر باشد) را فقط داخل «بخش بحرانی» بخوان.</p>
+
+<h3 id="critical">بخش بحرانی: وقفه‌ها را برای لحظه‌ای ببند</h3>
+<p><span class="term" data-t="crit_section">بخش بحرانی</span> (critical section) قطعه‌کدی است که نباید وسطش وقفه بیاید. ساده‌ترین راه: <code>cpsid i</code> (بستن وقفه‌ها)، کار، سپس بازگرداندن حالت قبلی. مهم: «حالت قبلی» را ذخیره و برگردان، نه بی‌قید <code>cpsie i</code>؛ شاید کسی که تو را صدا زده خودش وقفه‌ها را بسته بوده.</p>
+
+<div class="code" data-file="crit.c" data-lang="c" data-verify="arm" data-cflags="-O2" id="crit">
+<pre>
+#include &lt;stdint.h&gt;
+
+volatile uint64_t ticks;
+
+static inline uint32_t irq_save(void)
+{
+    uint32_t primask;
+    __asm volatile ("mrs %0, primask\n\tcpsid i" : "=r" (primask) : : "memory");
+    return primask;
+}
+
+static inline void irq_restore(uint32_t primask)
+{
+    __asm volatile ("msr primask, %0" : : "r" (primask) : "memory");
+}
+
+uint64_t read_ticks(void)
+{
+    uint32_t saved = irq_save();
+    uint64_t copy = ticks;
+    irq_restore(saved);
+    return copy;
+}
+</pre></div>
+<ol class="walk" data-for="crit">
+  <li data-lines="3"><b class="what">شمارندهٔ مشترک.</b> ۶۴ بیتی و <code>volatile</code>؛ ISR آن را افزایش می‌دهد.</li>
+  <li data-lines="5-10"><b class="what">ذخیره و بستن.</b> <code>mrs</code> رجیستر <code>PRIMASK</code> را در متغیر می‌خواند و <code>cpsid i</code> وقفه‌ها را می‌بندد؛ دو دستور در یک <code>asm</code> تا کامپایلر بینشان دستوری نگذارد. مقدار قبلی برگردانده می‌شود.
+    <span class="why"><code>PRIMASK</code> رجیستر ویژهٔ CPU است: ۱ یعنی «وقفه‌های قابل‌ماسک بسته‌اند».</span></li>
+  <li data-lines="12-15"><b class="what">بازگرداندن.</b> <code>msr</code> مقدار قبلی را برمی‌گرداند؛ اگر وقفه‌ها قبلا باز بودند باز می‌شوند، وگرنه بسته می‌مانند.</li>
+  <li data-lines="17-23"><b class="what">خواندن امن.</b> در لحظه‌ای که وقفه‌ها بسته‌اند، نسخه‌ای کامل کپی می‌کنیم و بعد بازمی‌گردیم.
+    <span class="why">هر وقفه‌ای که در این چند دستور برسد، معلق می‌ماند و بعد از <code>irq_restore</code> اجرا می‌شود. بنابراین دیر می‌شود ولی گم نمی‌شود.</span></li>
+</ol>
+
+<div class="callout warn"><div class="ct">بخش بحرانی را کوتاه نگه دار</div>
+<p>وقتی وقفه‌ها بسته‌اند، ساعت‌ها و ارتباط‌ها هم صبر می‌کنند. بخش بحرانی باید چند دستور باشد، نه یک حلقه. اگر نیاز به کار بلند داری، معماری را عوض کن: ISR داده را در یک بافر حلقوی (درس <a href="4-5.html">۴.۵</a>) بگذارد و main آن را بردارد؛ آنجا هیچ بخش بحرانی لازم نمی‌شود چون هر طرف فقط یک انتهای بافر را می‌نویسد.</p></div>
+
+<h2 id="priority">اولویت و وقفهٔ تو در تو</h2>
+<p>اگر هنگام اجرای یک ISR وقفهٔ دیگری بیاید چه می‌شود؟ NVIC اولویت‌ها را مقایسه می‌کند:</p>
+<ul>
+  <li>وقفهٔ تازه <b>مهم‌تر</b> (عدد اولویت کمتر) است ← ISR فعلی را <b>قطع می‌کند</b> (<span class="term" data-t="irq_preempt">preemption</span>). وقتی تمام شد، ISR اول ادامه می‌یابد.</li>
+  <li>وقفهٔ تازه هم‌اولویت یا کم‌اهمیت‌تر است ← <b>معلق می‌ماند</b> تا ISR فعلی تمام شود.</li>
+</ul>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="نمودار زمانی سه ردیف: main، ISR کم‌اولویت و ISR پراولویت؛ ISR پراولویت هنگام اجرای ISR کم‌اولویت می‌رسد و آن را قطع می‌کند">
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">پیشی‌گرفتن: وقفهٔ مهم‌تر ISR فعلی را قطع می‌کند</text>
+  <text x="752" y="86" text-anchor="start" class="s-tx" font-size="13.5" font-weight="800">main</text>
+  <text x="752" y="146" text-anchor="start" class="s-tx" font-size="13" font-weight="800">ISR A (اولویت ۵)</text>
+  <text x="752" y="206" text-anchor="start" class="s-tx" font-size="13" font-weight="800">ISR B (اولویت ۱)</text>
+  <g stroke="#15120a" stroke-width="2.5">
+    <rect x="40" y="66" width="140" height="30" fill="#7ea3ff"/><rect x="180" y="66" width="220" height="30" fill="#fff" stroke-dasharray="6 4"/><rect x="400" y="66" width="300" height="30" fill="#7ea3ff"/>
+    <rect x="180" y="126" width="100" height="30" fill="#ff86b3"/><rect x="280" y="126" width="80" height="30" fill="#fff" stroke-dasharray="6 4"/><rect x="360" y="126" width="40" height="30" fill="#ff86b3"/>
+    <rect x="280" y="186" width="80" height="30" fill="#3ddc97"/>
+  </g>
+  <g stroke="#e5484d" stroke-width="3" stroke-dasharray="7 5"><path d="M180 50V232"/><path d="M280 50V232"/></g>
+  <g fill="#e5484d" font-size="13" font-weight="800" text-anchor="middle"><text x="180" y="44">رسیدن A</text><text x="280" y="44">رسیدن B</text></g>
+  <g fill="#15120a" text-anchor="middle" font-size="12.5" font-weight="700">
+    <text x="110" y="86">کار اصلی</text><text x="550" y="86">کار اصلی</text>
+    <text x="230" y="146">A</text><text x="380" y="146">A</text><text x="320" y="206">B</text>
+  </g>
+  <g class="s-tx" font-size="13" text-anchor="middle">
+    <text x="320" y="258">ISR A وسط کار قطع می‌شود؛ B که مهم‌تر است اجرا می‌شود؛ بعد A ادامه می‌یابد</text>
+    <text x="380" y="282" font-size="12.5">خط‌چین‌ها: منتظر ماندن. هر دو قاب (فریم) روی پشته می‌روند؛ پشته باید جای هر دو را داشته باشد</text>
+  </g>
+</svg></div>
+<figcaption>ISR B (اولویت ۱) مهم‌تر از A (اولویت ۵) است. پس هنگام اجرای A می‌رسد و آن را قطع می‌کند. پشته هر بار یک قاب جدید می‌گیرد.</figcaption></figure>
+
+<p>پیش‌فرض همهٔ وقفه‌ها اولویت ۰ است (بالاترین)؛ پس بدون تنظیم اولویت، وقفه‌ها هم‌اولویت‌اند و همدیگر را قطع نمی‌کنند. برای شروع، همین را نگه دار و فقط وقتی اولویت بگذار که دلیل داری: مثلا وقفهٔ ارتباطی با محدودیت زمانی سخت را بالاتر از وقفهٔ دکمه بگذار. هر سطح تودرتو بیشتر پشته می‌خورد؛ در سیستم‌های حرفه‌ای عمق را حساب می‌کنند.</p>
+
+<h2 id="broken">اگر خراب شد چه می‌شود؟</h2>
+<p><b>باگ اول: پرچم را پاک نکردی.</b> ISR می‌پرد، کار می‌کند، برمی‌گردد؛ و چون <code>EXTI_PR</code> هنوز یک است، NVIC همان لحظه دوباره صدایش می‌زند. برنامهٔ اصلی هرگز نوبت نمی‌گیرد. شبیه‌سازی ساده روی PC:</p>
+
+<div class="code" data-file="storm.c" data-lang="c" data-verify="host" id="stm">
+<pre>
+#include &lt;stdio.h&gt;
+
+static unsigned pending;                  /* مثل بیت ۱۳ از EXTI_PR */
+
+static void run(int isr_clears)
+{
+    unsigned isr_calls = 0, main_steps = 0;
+
+    pending = 1;                          /* یک لبه آمده */
+    for (int tick = 0; tick &lt; 1000; tick++) {
+        if (pending) {                    /* تا پاک نشود، CPU دوباره وارد ISR می‌شود */
+            isr_calls++;
+            if (isr_clears) {
+                pending = 0;
+            }
+        } else {
+            main_steps++;
+        }
+    }
+    printf("clears PR: %-3s -&gt; ISR ran %4u times, main ran %3u steps\n",
+           isr_clears ? "yes" : "no", isr_calls, main_steps);
+}
+
+int main(void)
+{
+    run(1);
+    run(0);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="stm">
+  <li data-lines="3"><b class="what">پرچم معلق.</b> جای بیت ۱۳ از <code>EXTI_PR</code>.</li>
+  <li data-lines="5-8"><b class="what">تابع اجرا.</b> پارامتر می‌گوید ISR پرچم را پاک می‌کند یا نه. دو شمارنده: چند بار ISR و چند قدم main.</li>
+  <li data-lines="9"><b class="what">یک لبه آمده.</b> پرچم ۱ است.</li>
+  <li data-lines="10-19"><b class="what">هر «تیک» CPU.</b> اگر پرچم معلق است، وارد ISR می‌شود (مثل NVIC واقعی). اگر ISR پرچم را پاک کند، بار بعد main نوبت می‌گیرد؛ وگرنه نه.</li>
+  <li data-lines="20-22"><b class="what">گزارش.</b> چند بار ISR اجرا شد و main چند قدم رفت.</li>
+  <li data-lines="24-29"><b class="what">دو حالت.</b> با پاک‌کردن و بدون آن.</li>
+</ol>
+<pre class="term" data-from="storm.c">
+$ gcc -std=c11 -Wall -Wextra -o storm storm.c
+$ ./storm
+clears PR: yes -> ISR ran    1 times, main ran 999 steps
+clears PR: no  -> ISR ran 1000 times, main ran   0 steps
+</pre>
+<p>علامتش روی برد: «برنامه یک بار دکمه را دید و بعد قفل شد». LED عوض می‌شود ولی هیچ چیز دیگری (حتی چشمک دوم) اجرا نمی‌شود.</p>
+
+<p><b>باگ دوم: نام handler را غلط نوشتی.</b> مثلا <code>EXTI15_10_IRQHandle</code> یا <code>EXTI15_10_IRQHander</code>. کامپایلر خطا نمی‌دهد (تابع دیگری با نام دیگر تعریف کردی)، ولی جدول همچنان به <code>Default_Handler</code> اشاره می‌کند. علامت: دکمه را می‌زنی و برنامه <b>می‌ایستد</b>؛ با دیباگر می‌بینی در <code>Default_Handler</code> در حلقه‌ای هستی. راه مطمئن: اسم را از فایل startup رسمی (یا از خروجی <code>nm</code>) کپی کن.</p>
+
+<p><b>فهرست وارسی</b> وقتی وقفه نمی‌آید:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>علامت</th><th>علت رایج</th></tr></thead>
+<tbody>
+<tr><td>ISR هرگز اجرا نمی‌شود</td><td>ساعت SYSCFG خاموش؛ <code>EXTICR</code> اشتباه (پورت غلط)؛ <code>IMR</code> صفر؛ لبه (RTSR/FTSR) اشتباه؛ NVIC فعال نشده؛ بیت اشتباه در ISER (IRQ 40 = ISER1 بیت ۸)</td></tr>
+<tr><td>برنامه با یک فشردن قفل می‌شود</td><td>پرچم <code>PR</code> پاک نشده، یا نام handler غلط است (<code>Default_Handler</code>)</td></tr>
+<tr><td>حلقهٔ انتظار در main هرگز تمام نمی‌شود (با <code>-O2</code>)</td><td>پرچم مشترک <code>volatile</code> نیست</td></tr>
+<tr><td>یک فشردن = چند رویداد</td><td>پرش تماس. ماسک کردن خط یا بازه‌گذاری زمانی</td></tr>
+<tr><td>مقدار مشترک گاهی «عجیب» است</td><td>رقابت: خواندن چندبخشی بدون بخش بحرانی</td></tr>
+<tr><td>HardFault هنگام وقفه</td><td>درایهٔ جدول صفر است (وقفه‌ای فعال شده که handler ندارد) یا پشته پر شده</td></tr>
+</tbody></table></div>
+
+<h2 id="esp32">در ESP32 چه؟</h2>
+<p>ESP32 (Xtensa) کنترلر NVIC ندارد؛ وقفه‌ها از یک «ماتریس وقفه» عبور می‌کنند و درایور ESP-IDF کارهای سخت را (تخصیص وقفه، ثبت handler) برایت می‌کند. تو فقط می‌گویی «روی این پایه، با این لبه، این تابع را صدا بزن». خود <b>قواعد ISR</b> عینا همان است: کوتاه، بدون انتظار، بدون <code>printf</code>، و رساندن کار به یک task. الگوی معمول در FreeRTOS: ISR یک پیام در <b>صف</b> می‌گذارد و یک task (که بلاک شده منتظر صف است) بیدار می‌شود و کار سنگین را می‌کند. (کد زیر برای ESP-IDF نسخهٔ ۵ است؛ در این محیط ساخته نمی‌شود، پس فقط <code>frag</code> است. نام‌ها از مستندات رسمی ESP-IDF هستند.)</p>
+
+<div class="code" data-file="button_isr.c" data-lang="c" data-verify="frag" id="esp">
+<pre>
+#include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+#include "esp_log.h"
+
+#define BUTTON_GPIO GPIO_NUM_0          // معمولا دکمهٔ BOOT روی DevKit
+
+static const char *TAG = "button";
+static QueueHandle_t button_queue;
+
+static void IRAM_ATTR button_isr(void *arg)
+{
+    uint32_t gpio_num = (uint32_t)arg;
+    xQueueSendFromISR(button_queue, &amp;gpio_num, NULL);
+}
+
+static void button_task(void *arg)
+{
+    uint32_t gpio_num;
+    for (;;) {
+        if (xQueueReceive(button_queue, &amp;gpio_num, portMAX_DELAY)) {
+            ESP_LOGI(TAG, "button on GPIO %lu", (unsigned long)gpio_num);
+        }
+    }
+}
+
+void app_main(void)
+{
+    gpio_config_t io = {
+        .pin_bit_mask = 1ULL &lt;&lt; BUTTON_GPIO,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_NEGEDGE,
+    };
+    gpio_config(&amp;io);
+
+    button_queue = xQueueCreate(10, sizeof(uint32_t));
+    xTaskCreate(button_task, "button_task", 2048, NULL, 10, NULL);
+
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(BUTTON_GPIO, button_isr, (void *)BUTTON_GPIO);
+}
+</pre></div>
+<ol class="walk" data-for="esp">
+  <li data-lines="1-5"><b class="what">هدرها.</b> درایور GPIO، هستهٔ FreeRTOS، task، صف و لاگ.</li>
+  <li data-lines="7"><b class="what">پایهٔ دکمه.</b> GPIO0 روی بسیاری از بردهای DevKit به دکمهٔ BOOT وصل است (برد خودت را ببین).</li>
+  <li data-lines="9-10"><b class="what">تگ و صف.</b> <code>TAG</code> برای لاگ. صف را ISR می‌نویسد و task می‌خواند.</li>
+  <li data-lines="12-16"><b class="what">ISR.</b> <code>IRAM_ATTR</code> کد را در RAM داخلی می‌گذارد. ISR باید هنگام نوشتن روی Flash هم قابل اجرا باشد، و در آن لحظه Flash در دسترس نیست. <code>xQueueSendFromISR</code> نسخهٔ مخصوص ISR است: پیام را در صف می‌گذارد و هرگز بلاک نمی‌شود.
+    <span class="why">در ISR فقط توابع «FromISR» مجازند؛ نسخهٔ عادی (مثل <code>xQueueSend</code>) ممکن است بلاک شود و در ISR غیرمجاز است.</span></li>
+  <li data-lines="18-26"><b class="what">task.</b> بلاک می‌شود تا پیامی برسد (<code>portMAX_DELAY</code> = بی‌نهایت). وقتی رسید، <b>در یک task</b> (نه ISR) لاگ می‌کند؛ <code>ESP_LOGI</code> در ISR ممنوع است.</li>
+  <li data-lines="28-36"><b class="what">پیکربندی پایه.</b> ورودی با بالاکش و وقفه روی لبهٔ پایین‌رونده (<code>GPIO_INTR_NEGEDGE</code>). همان کارِ ما با EXTI و SYSCFG، در یک struct.</li>
+  <li data-lines="38-39"><b class="what">صف و task.</b> صفی با ۱۰ جا برای <code>uint32_t</code>؛ taskی با ۲۰۴۸ بایت پشته و اولویت ۱۰.</li>
+  <li data-lines="41-42"><b class="what">ثبت ISR.</b> <code>gpio_install_isr_service</code> یک بار سرویس وقفهٔ GPIO را نصب می‌کند و <code>gpio_isr_handler_add</code> تابع را به یک پایه گره می‌زند و آرگومان می‌دهد.</li>
+</ol>
+
+<div class="callout tip"><div class="ct">مقایسهٔ دو دنیا</div>
+<p><b>STM32:</b> EXTI ← NVIC ← جدول برداری ← ISR ← پرچم <code>volatile</code> ← main. <b>ESP32 + FreeRTOS:</b> درایور ← ISR ← صف (<code>xQueueSendFromISR</code>) ← task. در هر دو، ISR فقط «اطلاع می‌دهد» و کار در جای دیگر انجام می‌شود. درس <a href="5-6.html">۵.۶</a> صف‌ها و task ها را کامل می‌آورد.</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="3">
+  <p class="q">هنگام وقفه، کدام کار را خود <b>سخت‌افزار</b> انجام می‌دهد (بدون هیچ کدی از تو)؟</p>
+  <ol>
+    <li data-why="پاک‌کردن پرچم پریفرال (مثل EXTI_PR) کار خود ISR است. سخت‌افزار آن را نمی‌داند که کی پاک شود.">پاک‌کردن پرچم EXTI_PR</li>
+    <li data-why="volatile یک ویژگی نوع C است که تو می‌نویسی؛ سخت‌افزار چیزی به نام volatile نمی‌شناسد.">علامت‌گذاری متغیرهای مشترک با volatile</li>
+    <li>ذخیرهٔ هشت ثبات روی پشته، خواندن آدرس handler از جدول و پرش به آن</li>
+    <li data-why="فعال‌کردن وقفه در NVIC (ISER) کار برنامهٔ توست و پیش از آمدن وقفه انجام می‌شود.">فعال‌کردن وقفه در NVIC</li>
+  </ol>
+  <div class="fb">ذخیرهٔ <code>R0..R3، R12، LR، PC، xPSR</code>، خواندن جدول و پرش در سخت‌افزار Cortex-M خودکار است. بقیه، از جمله پاک‌کردن پرچم پریفرال، با توست.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">وقفهٔ <code>EXTI15_10</code> شمارهٔ ۴۰ دارد. کدام بیت از کدام رجیستر NVIC آن را فعال می‌کند؟</p>
+  <ol>
+    <li>بیت ۸ از <code>NVIC_ISER1</code> (چون ۴۰ − ۳۲ = ۸)</li>
+    <li data-why="ISER0 فقط IRQ 0 تا 31 را پوشش می‌دهد؛ ۴۰ در ISER1 است.">بیت ۴۰ از <code>NVIC_ISER0</code></li>
+    <li data-why="بیت ۴۰ در یک رجیستر ۳۲ بیتی وجود ندارد. باید ۳۲ کم کرد و رجیستر بعدی را برداشت.">بیت ۴۰ از <code>NVIC_ISER1</code></li>
+    <li data-why="این آدرس ISER1 است ولی بیت ۴۰ نداریم؛ و ICER کار غیرفعال‌کردن را می‌کند نه فعال‌کردن.">بیت ۸ از <code>NVIC_ICER1</code></li>
+  </ol>
+  <div class="fb"><code>irq &gt;&gt; 5</code> = ۱ (ISER1) و <code>irq &amp; 31</code> = ۸ (بیت ۸). آدرس <code>0xE000E104</code>.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">کدام خط در این ISR خطای طراحی دارد؟</p>
+  <div class="code" data-lang="c" id="q3code"><pre>
+void EXTI15_10_IRQHandler(void)
+{
+    EXTI-&gt;PR = 1u &lt;&lt; 13;
+    printf("button!\n");
+    button_event = 1u;
+}
+</pre></div>
+  <ol>
+    <li data-why="پاک‌کردن پرچم با نوشتن ۱ درست است.">پاک‌کردن <code>PR</code> با نوشتن ۱</li>
+    <li data-why="گذاشتن پرچم خوب و لازم است.">گذاشتن <code>button_event = 1u</code></li>
+    <li data-why="نام باید دقیقا همین باشد تا با جدول برداری هماهنگ شود.">نام تابع <code>EXTI15_10_IRQHandler</code></li>
+    <li>صدا زدن <code>printf</code> داخل ISR</li>
+  </ol>
+  <div class="fb"><code>printf</code> کند است، ممکن است بلاک شود و معمولا reentrant نیست. در ISR فقط پرچم بگذار و چاپ را به main بسپار.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">در <code>main</code> منتظری تا ISR پرچم <code>done</code> را یک کند: <code>while (done == 0) { }</code>. برنامه با <code>-O2</code> هرگز جلو نمی‌رود، ولی با <code>-O0</code> درست کار می‌کند. علت محتمل چیست؟</p>
+  <ol>
+    <li data-why="نوع uint32_t روی Cortex-M طبیعی و مشکلی ندارد. مشکل نبودن volatile است.">نوع <code>uint32_t</code> برای پرچم کوچک است</li>
+    <li><code>done</code> غیر <code>volatile</code> است و کامپایلر آن را یک‌بار می‌خواند و حلقه را بی‌پایان می‌کند</li>
+    <li data-why="-O2 قواعد C را شکسته نمی‌کند؛ کد بدون volatile از نظر C «اجازه» دارد این‌طور بهینه شود.">کامپایلر -O2 باگ دارد</li>
+    <li data-why="بستن وقفه‌ها ربطی به این ندارد؛ مسئله این است که کامپایلر ISR را نمی‌بیند.">وقفه‌ها به‌طور پیش‌فرض بسته‌اند</li>
+  </ol>
+  <div class="fb">از دید کامپایلر، در حلقه هیچ‌چیز <code>done</code> را عوض نمی‌کند، پس خواندنش را تکرار نمی‌کند. <code>volatile</code> این را ممنوع می‌کند (تمرین ۲).</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">ISR A با اولویت ۵ در حال اجراست و وقفهٔ B با اولویت ۱ می‌رسد. چه می‌شود؟</p>
+  <ol>
+    <li data-why="این وقتی می‌شد که B اولویت مساوی یا عدد بزرگ‌تر (کم‌اهمیت‌تر) داشت.">B معلق می‌ماند تا A تمام شود</li>
+    <li data-why="A رها نمی‌شود؛ بعد از B ادامه می‌یابد.">A برای همیشه کنار گذاشته می‌شود</li>
+    <li>A قطع می‌شود، B اجرا می‌شود، سپس A ادامه می‌یابد</li>
+    <li data-why="NVIC همیشه اولویت را مقایسه می‌کند؛ نتیجه قطعی است.">هر بار تصادفی است</li>
+  </ol>
+  <div class="fb">عدد کمتر یعنی مهم‌تر. B (۱) بر A (۵) پیشی می‌گیرد (preemption).</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">چرا خواندن شمارندهٔ <code>volatile uint64_t</code> که ISR افزایشش می‌دهد، روی Cortex-M4 باید در بخش بحرانی باشد؟</p>
+  <ol>
+    <li>چون خواندن دو کلمهٔ ۳۲ بیتی اتمی نیست؛ وقفه بین آن‌ها می‌تواند نیمی از مقدار قدیم و نیمی از جدید را ترکیب کند</li>
+    <li data-why="volatile فقط جلوی بهینه‌سازی کامپایلر را می‌گیرد؛ اتمی‌بودن نمی‌دهد. (درس ۳.۶)">چون volatile اتمی‌بودن را تضمین می‌کند ولی کند است</li>
+    <li data-why="پردازندهٔ ۳۲ بیتی به‌راحتی ۶۴ بیتی را با دو دستور می‌خواند؛ مشکل نصفه‌بودن است، نه ناتوانی.">چون CPU ۳۲ بیتی نمی‌تواند عدد ۶۴ بیتی بخواند</li>
+    <li data-why="مسئله سرعت نیست؛ نتیجهٔ غلط است.">چون خواندن ۶۴ بیت کند است</li>
+  </ol>
+  <div class="fb">نتیجهٔ غلط از ترکیب دو نیمه می‌آید (مثل <code>0x00000001FFFFFFFF</code>). بخش بحرانی یا نسخه‌برداری امن آن را حل می‌کند.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: شمارهٔ وقفه تا آدرس‌ها</div>
+<p>برای هر IRQ، رجیستر و بیت در ISER، آدرس بایت اولویت (IPR) و آفست جدول برداری را حساب می‌کنیم. شماره‌ها از RM0383: <code>EXTI0</code> = ۶، <code>TIM2</code> = ۲۸، <code>USART2</code> = ۳۸، <code>EXTI15_10</code> = ۴۰.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> برای <code>TIM2</code> کدام ISER و کدام بیت؟ آفست جدول برداری‌اش چند است؟</li>
+  <li><b>حل:</b> برنامهٔ کوچک PC بنویس که این چهار مقدار را چاپ کند.</li>
+  <li><b>تغییر:</b> <code>USART2</code> در کدام رجیستر ISER می‌نشیند؟ چرا بیتش ۶ است؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>رجیستر = <code>irq &gt;&gt; 5</code>، بیت = <code>irq &amp; 31</code>. آدرس ISER = <code>0xE000E100 + 4 × رجیستر</code>. آدرس IPR = <code>0xE000E400 + irq</code>. آفست جدول = <code>4 × (16 + irq)</code>.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="nvicmath.c">
+$ ./nvicmath
+EXTI0      irq= 6  ISER0 bit  6 @ 0xE000E100  IPR @ 0xE000E406  vector @ +0x058
+TIM2       irq=28  ISER0 bit 28 @ 0xE000E100  IPR @ 0xE000E41C  vector @ +0x0B0
+USART2     irq=38  ISER1 bit  6 @ 0xE000E104  IPR @ 0xE000E426  vector @ +0x0D8
+EXTI15_10  irq=40  ISER1 bit  8 @ 0xE000E104  IPR @ 0xE000E428  vector @ +0x0E0
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="nvicmath.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stdio.h&gt;
+
+static void show(const char *name, unsigned irq)
+{
+    printf("%-10s irq=%2u  ISER%u bit %2u @ 0x%08X  IPR @ 0x%08X  vector @ +0x%03X\n",
+           name, irq, irq &gt;&gt; 5, irq &amp; 31u,
+           0xE000E100u + 4u * (irq &gt;&gt; 5), 0xE000E400u + irq, 4u * (16u + irq));
+}
+
+int main(void)
+{
+    show("EXTI0", 6);
+    show("TIM2", 28);
+    show("USART2", 38);
+    show("EXTI15_10", 40);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="3-8"><b class="what">تابع show.</b> با یک شمارهٔ IRQ چهار مقدار را حساب و چاپ می‌کند: <code>irq &gt;&gt; 5</code> رجیستر است و <code>irq &amp; 31u</code> بیت. <code>%-10s</code> نام را به عرض ۱۰ ستون چپ‌چین می‌کند.</li>
+  <li data-lines="6-7"><b class="what">آدرس‌ها.</b> ISER پایه <code>0xE000E100</code> و به‌ازای هر رجیستر ۴ بایت جلو می‌رود. IPR بایتی است: <code>0xE000E400 + irq</code>. جدول: <code>4 × (16 + irq)</code>.</li>
+  <li data-lines="10-17"><b class="what">چهار وقفه.</b> TIM2 = ۲۸ پس <code>ISER0</code> بیت ۲۸ است. USART2 = ۳۸ = ۳۲ + ۶ پس <code>ISER1</code> بیت ۶ است.</li>
+</ol>
+<p>پاسخ الف: TIM2 در <code>ISER0</code> بیت ۲۸ و آفست <code>0xB0</code> است. پاسخ ج: ۳۸ از ۳۱ بزرگ‌تر است، پس در رجیستر دوم (<code>ISER1</code>) می‌نشیند؛ بیت = ۳۸ − ۳۲ = ۶.</p></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: سه باگ در یک ISR</div>
+<p>این برنامه (برای STM32F411) کامپایل می‌شود ولی هرگز LED را روشن نمی‌کند. سه باگ دارد. فرض کن ساعت‌ها، SYSCFG و EXTI درست تنظیم شده‌اند.</p>
+<div class="code" data-file="ex2_bug3.c" data-lang="c" data-verify="arm" data-cflags="-O2" id="ex2bug">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define EXTI_PR    (*(volatile uint32_t *)0x40013C14u)
+#define NVIC_ISER1 (*(volatile uint32_t *)0xE000E104u)
+#define GPIOA_BSRR (*(volatile uint32_t *)0x40020018u)
+
+static uint32_t pressed;
+
+void EXTI15_10_IRQHandler(void)
+{
+    pressed = 1u;
+}
+
+int main(void)
+{
+    /* فرض کن ساعت‌ها، SYSCFG و EXTI درست تنظیم شده‌اند */
+    NVIC_ISER1 = 1u &lt;&lt; 7;
+
+    while (pressed == 0u) {
+    }
+    GPIOA_BSRR = 1u &lt;&lt; 5;
+    for (;;) {
+    }
+}
+</pre></div>
+<ol class="parts">
+  <li><b>پیدا کردن:</b> سه باگ را با شمارهٔ خط بنویس.</li>
+  <li><b>تحلیل:</b> با <code>-O2</code>، اسمبلی <code>main</code> فقط یک بار <code>pressed</code> را می‌خواند و بعد حلقهٔ بی‌نهایت است. کدام باگ این را می‌سازد؟</li>
+  <li><b>اصلاح:</b> برنامهٔ درست را بنویس.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>یک: پرچم مشترک چه ویژگی‌ای لازم دارد؟ دو: بعد از رسیدگی به EXTI باید چه چیزی را پاک کرد؟ سه: IRQ 40 کدام بیت از ISER1 است؟</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -O2 -ffreestanding -c ex2_bug3.c
+$ arm-none-eabi-objdump -d ex2_bug3.o
+00000000 &lt;main&gt;:
+   0:	f04f 22e0 	mov.w	r2, #3758153728	@ 0xe000e000
+   4:	4b05      	ldr	r3, [pc, #20]
+   6:	2180      	movs	r1, #128	@ 0x80
+   8:	f8c2 1104 	str.w	r1, [r2, #260]	@ 0x104
+   c:	681b      	ldr	r3, [r3, #0]
+   e:	b903      	cbnz	r3, 12 &lt;main+0x12&gt;
+  10:	e7fe      	b.n	10 &lt;main+0x10&gt;
+</pre>
+<p>خط <code>ldr r3, [r3, #0]</code> فقط یک بار اجرا می‌شود؛ اگر صفر بود به <code>b.n 10</code> (پرش به خودش) می‌رود و برای همیشه می‌ماند. مقدار <code>0x80</code> = بیت ۷ که در ISER1 IRQ 39 را فعال می‌کند نه ۴۰.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="table-wrap"><table><thead><tr><th>خط</th><th>باگ</th><th>اثر</th></tr></thead><tbody>
+<tr><td>۷</td><td><code>pressed</code> بدون <code>volatile</code></td><td>حلقهٔ انتظار در main بی‌پایان می‌شود (کامپایلر ISR را نمی‌بیند)</td></tr>
+<tr><td>۹ تا ۱۲</td><td><code>EXTI_PR</code> پاک نمی‌شود</td><td>ISR بی‌پایان دوباره صدا زده می‌شود (طوفان وقفه)</td></tr>
+<tr><td>۱۷</td><td><code>1u &lt;&lt; 7</code> به‌جای <code>1u &lt;&lt; 8</code></td><td>IRQ 39 فعال شد، نه IRQ 40؛ ISR ما هرگز صدا زده نمی‌شود</td></tr>
+</tbody></table></div>
+<div class="code" data-file="ex2_fix3.c" data-lang="c" data-verify="arm" data-cflags="-O2" id="ex2">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define EXTI_PR    (*(volatile uint32_t *)0x40013C14u)
+#define NVIC_ISER1 (*(volatile uint32_t *)0xE000E104u)
+#define GPIOA_BSRR (*(volatile uint32_t *)0x40020018u)
+
+static volatile uint32_t pressed;
+
+void EXTI15_10_IRQHandler(void)
+{
+    EXTI_PR = 1u &lt;&lt; 13;
+    pressed = 1u;
+}
+
+int main(void)
+{
+    /* فرض کن ساعت‌ها، SYSCFG و EXTI درست تنظیم شده‌اند */
+    NVIC_ISER1 = 1u &lt;&lt; 8;
+
+    while (pressed == 0u) {
+    }
+    GPIOA_BSRR = 1u &lt;&lt; 5;
+    for (;;) {
+    }
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="7"><b class="what">volatile.</b> پرچم مشترک حالا همیشه از حافظه خوانده می‌شود.</li>
+  <li data-lines="9-13"><b class="what">ISR درست.</b> اول پرچم را با نوشتن ۱ پاک می‌کنیم، بعد خبر می‌دهیم.</li>
+  <li data-lines="18"><b class="what">بیت درست.</b> <code>1u &lt;&lt; 8</code> = IRQ 40.</li>
+  <li data-lines="20-21"><b class="what">حلقهٔ انتظار.</b> حالا با هر دور مقدار تازه خوانده می‌شود.</li>
+</ol>
+<p>نکتهٔ مهم: کامپایلر برای هیچ‌کدام از سه باگ خطا یا هشدار نمی‌دهد. سخت‌ترین باگ‌های embedded همین‌ها هستند: کد «درست» به نظر می‌رسد.</p></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: LED هم‌قدم با دکمه (چالش سخت‌افزاری)</div>
+<p>می‌خواهیم LED تا وقتی دکمه فشرده است روشن باشد و با رها کردن خاموش شود، این بار <b>با وقفه</b>. (در درس ۵.۲ با پولینگ ساختیم.)</p>
+<ol class="parts">
+  <li><b>طرح:</b> کدام لبه‌ها لازم است؟ کدام رجیستر تغییر می‌کند نسبت به برنامهٔ toggle؟</li>
+  <li><b>حل:</b> برنامه را بنویس. ISR باید سطح واقعی پایه را بخواند و LED را همان‌جا تنظیم کند.</li>
+  <li><b>فکر کن:</b> پرش تماس اینجا مشکلی می‌سازد؟ (راهنمایی: ISR هر بار سطح واقعی را می‌خواند.)</li>
+</ol>
+<details><summary>راهنمایی</summary><p>هر دو لبه لازم است: <code>FTSR</code> و <code>RTSR</code> هر دو بیت ۱۳. در ISR اگر <code>IDR</code> بیت ۱۳ یک است دکمه رها شده (LED خاموش)، وگرنه فشرده (LED روشن). فقط یک نوشتن BSRR؛ پس ISR کوتاه می‌ماند.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary><p>روی برد: LED تا وقتی B1 را نگه داری روشن است و با رها کردن خاموش می‌شود؛ بدون تأخیر محسوس. پاسخ ج: پرش‌ها ISR را چند بار صدا می‌زنند، ولی هر بار <b>سطح فعلی</b> را می‌خواند و LED را با آن هم‌قدم می‌کند. آخرین ISR وضعیت نهایی را می‌گذارد؛ پس برنامه «خودترمیم» است و پرش زیانی ندارد. (نکته: این برای «هم‌قدمی وضعیت» درست است؛ برای «شمردن فشردن‌ها» نه.)</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="ex3i.c" data-lang="c" data-verify="arm" id="ex3">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define RCC_AHB1ENR   (*(volatile uint32_t *)0x40023830u)
+#define RCC_APB2ENR   (*(volatile uint32_t *)0x40023844u)
+#define GPIOA_MODER   (*(volatile uint32_t *)0x40020000u)
+#define GPIOA_BSRR    (*(volatile uint32_t *)0x40020018u)
+#define GPIOC_PUPDR   (*(volatile uint32_t *)0x4002080Cu)
+#define GPIOC_IDR     (*(volatile uint32_t *)0x40020810u)
+#define SYSCFG_EXTICR4 (*(volatile uint32_t *)0x40013814u)
+#define EXTI_IMR      (*(volatile uint32_t *)0x40013C00u)
+#define EXTI_RTSR     (*(volatile uint32_t *)0x40013C08u)
+#define EXTI_FTSR     (*(volatile uint32_t *)0x40013C0Cu)
+#define EXTI_PR       (*(volatile uint32_t *)0x40013C14u)
+#define NVIC_ISER1    (*(volatile uint32_t *)0xE000E104u)
+
+void EXTI15_10_IRQHandler(void)
+{
+    if (EXTI_PR &amp; (1u &lt;&lt; 13)) {
+        EXTI_PR = 1u &lt;&lt; 13;
+        if (GPIOC_IDR &amp; (1u &lt;&lt; 13)) {
+            GPIOA_BSRR = 1u &lt;&lt; 21;
+        } else {
+            GPIOA_BSRR = 1u &lt;&lt; 5;
+        }
+    }
+}
+
+int main(void)
+{
+    RCC_AHB1ENR |= (1u &lt;&lt; 0) | (1u &lt;&lt; 2);
+    RCC_APB2ENR |= 1u &lt;&lt; 14;
+    (void)RCC_APB2ENR;
+
+    GPIOA_MODER = (GPIOA_MODER &amp; ~(3u &lt;&lt; 10)) | (1u &lt;&lt; 10);
+    GPIOC_PUPDR = (GPIOC_PUPDR &amp; ~(3u &lt;&lt; 26)) | (1u &lt;&lt; 26);
+
+    SYSCFG_EXTICR4 = (SYSCFG_EXTICR4 &amp; ~(0xFu &lt;&lt; 4)) | (0x2u &lt;&lt; 4);
+    EXTI_FTSR |= 1u &lt;&lt; 13;
+    EXTI_RTSR |= 1u &lt;&lt; 13;
+    EXTI_PR = 1u &lt;&lt; 13;
+    EXTI_IMR |= 1u &lt;&lt; 13;
+    NVIC_ISER1 = 1u &lt;&lt; 8;
+
+    for (;;) {
+        __asm volatile ("wfi");
+    }
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="3-14"><b class="what">رجیسترها.</b> بدون هدر: آدرس هر رجیستر با <code>#define</code> (مقادیر همان جدول‌های امروز).</li>
+  <li data-lines="16-26"><b class="what">ISR.</b> اگر خط ۱۳ معلق است: پرچم را پاک می‌کند، سپس سطح پایه را می‌خواند. ۱ = رها ← BSRR بیت ۲۱ (خاموش)؛ ۰ = فشرده ← بیت ۵ (روشن).</li>
+  <li data-lines="28-29,47"><b class="what">main.</b></li>
+  <li data-lines="30-32"><b class="what">ساعت‌ها.</b> GPIOA و GPIOC (<code>AHB1ENR</code>)، SYSCFG (<code>APB2ENR</code> بیت ۱۴).</li>
+  <li data-lines="34-35"><b class="what">GPIO.</b> LED خروجی، دکمه بالاکش.</li>
+  <li data-lines="37-42"><b class="what">EXTI.</b> پورت C برای خط ۱۳، هر دو لبه، پاک‌کردن معلق قدیمی، باز کردن ماسک، و فعال‌کردن IRQ 40.</li>
+  <li data-lines="44-46"><b class="what">حلقه.</b> <code>wfi</code> تا وقفه بیاید. کار در ISR است.
+    <span class="why">این کار با یک نوشتن BSRR ایمن است؛ اگر کار ISR پیچیده‌تر بود باید به main می‌سپردیم.</span></li>
+</ol>
+<p>این برنامه هم مثل ۵.۲ نیاز به startup و جدول برداری دارد؛ همان <code>startup.c</code>، <code>board.h</code> (یا این تعریف‌ها) و <code>link.ld</code> بخش قبل را کنارش بگذار. اینجا فقط <code>arm-none-eabi-gcc -c</code> شد (کامپایل)، نه لینک.</p></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>وقفه‌ها جایی است که بیشتر برنامه‌نویس‌ها اولین باگ «هفته‌ها» را می‌بینند: برنامه ۹۹٪ وقت درست کار می‌کند و گاهی، بدون دلیل، خراب می‌شود. علتش تقریبا همیشه یکی از این سه است: پرچم <code>volatile</code> نیست، متغیر مشترک چندبخشی بدون بخش بحرانی خوانده شده، یا ISR کار زیادی می‌کند. اگر یک قاعده را حفظ کنی: <b>ISR فقط خبر می‌دهد؛ main کار می‌کند</b>، ۹۰٪ این باگ‌ها هرگز به سراغت نمی‌آیند. و وقتی گیر کردی، دیباگر (درس ۶.۱) را روی <code>Default_Handler</code> و رجیستر <code>EXTI_PR</code> نگاه کن.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li>وقفه = سخت‌افزار برنامه را قطع می‌کند، قاب هشت‌کلمه‌ای را روی پشته می‌گذارد، آدرس ISR را از جدول برداری می‌خواند و بعد از پایان دقیقا برمی‌گردد.</li>
+  <li>وقفهٔ n در درایهٔ <code>16 + n</code> است؛ آفست <code>4 × (16 + n)</code>. ISR یک تابع C معمولی با نام دقیقِ startup است.</li>
+  <li>NVIC: <code>ISER</code> (فعال، «نوشتن ۱»)، <code>IPR</code> (اولویت، عدد کمتر = مهم‌تر، ۴ بیت بالای بایت در STM32F4).</li>
+  <li>دکمهٔ PC13: ساعت‌های GPIOC و SYSCFG، <code>EXTICR4</code> = PC، <code>FTSR</code>، پاک‌کردن <code>PR</code>، <code>IMR</code>، NVIC (IRQ 40 = ISER1 بیت ۸).</li>
+  <li>ISR کوتاه، بدون انتظار و بدون <code>printf</code>؛ پرچم <code>volatile</code>؛ <code>EXTI_PR</code> را با نوشتن ۱ پاک کن.</li>
+  <li>مقدار مشترک چندبخشی (مثلا ۶۴ بیتی) را در بخش بحرانی (<code>PRIMASK</code>) بخوان؛ پرچم ساده رویدادهای پشت‌سرهم را گم می‌کند.</li>
+  <li>ESP32: <code>gpio_isr_handler_add</code> با <code>IRAM_ATTR</code> و <code>xQueueSendFromISR</code>؛ کار سنگین در task.</li>
+  <li>بعدی: <a href="5-4.html">تایمر و SysTick</a> برای زمان‌بندی بدون قفل‌کردن main.</li>
+</ul></div>
+
+
+</article>
+</body>
+</html>

@@ -1,0 +1,1148 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>بوت شدن میکروکنترلر · C برای میکروکنترلر</title>
+<meta name="description" content="بعد از روشن‌شدن برد چه می‌شود؟ جدول وقفه، Reset_Handler، اسکریپت لینکر برای STM32F411، خواندن ELF با objdump و size، و زنجیرهٔ بوت ESP32؛ با کد کامل وارسی‌شده.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="5-1">
+
+<p class="lede">تا اینجا همیشه با <code>main</code> شروع کرده‌ایم، انگار برنامه از همان‌جا متولد می‌شود. ولی وقتی برق میکروکنترلر وصل می‌شود، <code>main</code> خیلی دیر به صحنه می‌رسد: قبلش باید پشته آماده شود، متغیرهای سراسری مقدار بگیرند و حافظه پاک شود. در این درس همهٔ آن «پشت صحنه» را می‌نویسیم: یک <b>جدول وقفه</b>، یک <b>کد استارت‌آپ</b> و یک <b>اسکریپت لینکر</b> کامل برای STM32F411. آخرش یک فایل ELF واقعی می‌سازیم و درونش را با ابزار می‌خوانیم.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>توضیح بدهی بعد از reset، CPU دقیقا چه می‌خواند و کجا می‌رود</li>
+    <li>یک جدول وقفهٔ Cortex-M در C بنویسی و بدانی چرا آدرس <code>Reset_Handler</code> فرد است</li>
+    <li>کد <code>Reset_Handler</code> را بنویسی که <code>.data</code> را کپی و <code>.bss</code> را صفر کند</li>
+    <li>یک اسکریپت لینکر بخوانی و بنویسی (<code>MEMORY</code>، <code>SECTIONS</code>، <code>AT ></code>)</li>
+    <li>ELF ساخته‌شده را با <code>objdump</code>، <code>size</code> و <code>nm</code> بخوانی</li>
+    <li>وقفه‌های weak را با تعریف خودت جایگزین کنی</li>
+    <li>زنجیرهٔ بوت ESP32 را در حد مفهوم بگویی</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="3-5.html">۳.۵</a> (بخش‌های <code>.data</code> و <code>.bss</code>، نقشهٔ حافظه)</li>
+    <li>درس <a href="3-6.html">۳.۶</a> (رجیستر و <code>volatile</code>) و <a href="3-2.html">۳.۲</a> (اشاره‌گر)</li>
+    <li>درس <a href="4-2.html">۴.۲</a> (لینک، <code>extern</code>، چند فایل) و <a href="4-1.html">۴.۱</a></li>
+    <li><code>arm-none-eabi-gcc</code> و <code>arm-none-eabi-objdump/size/nm</code> (درس <a href="1-3.html">۱.۳</a>)</li>
+    <li>برد Nucleo-F411RE اختیاری است؛ همه‌چیز فقط ساخته و بررسی می‌شود</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: باز کردن مغازه</h2>
+<p>صبح یک مغازه را تصور کن. مشتری (برنامهٔ تو، یعنی <code>main</code>) ساعت ۹ می‌رسد. ولی قبل از او یک کارمند باید:</p>
+<ol class="steps">
+  <li><b>برق را وصل کند</b> و بداند لیست کارهای صبح کجاست (SP و آدرس شروع).</li>
+  <li><b>قفسه‌ها را بچیند:</b> جنس‌هایی که از انبار (Flash) باید در مغازه (RAM) باشند را ببرد (کپی <code>.data</code>).</li>
+  <li><b>پیشخوان را پاک کند:</b> جای بقیهٔ اجناس را تمیز و خالی کند (صفر کردن <code>.bss</code>).</li>
+  <li><b>در را باز کند.</b> (صدا زدن <code>main</code>)</li>
+</ol>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>در کامپیوتر معمولی سیستم‌عامل این کارمند است. روی میکروکنترلر سیستم‌عاملی نیست، پس <b>کارمند خودِ تو هستی</b>: همان کد کوچکی که به آن «استارت‌آپ» (<span class="term" data-t="startup">startup</span>) می‌گویند. خوشبختانه فقط چند خط C است.</p></div>
+
+<p>برای اینکه این کارمند کار کند، سه چیز باید درست کنار هم بنشینند:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>قطعه</th><th>کارش</th><th>کجا نوشته می‌شود</th></tr></thead>
+<tbody>
+<tr><td><b>جدول وقفه</b> (vector table)</td><td>به CPU می‌گوید SP چه باشد و از کجا شروع کند</td><td><code>vectors.c</code></td></tr>
+<tr><td><b>استارت‌آپ</b> (<code>Reset_Handler</code>)</td><td>حافظه را آماده و <code>main</code> را صدا می‌زند</td><td><code>startup.c</code></td></tr>
+<tr><td><b>اسکریپت لینکر</b></td><td>تصمیم می‌گیرد هر تکه از برنامه کجای Flash و RAM بنشیند</td><td><code>stm32f411.ld</code></td></tr>
+</tbody></table></div>
+
+<h2 id="power">روشن شدن: CPU چه می‌کند؟</h2>
+<p>وقتی reset تمام می‌شود (برق وصل شده یا دکمهٔ reset رها شده)، CPU هنوز هیچ دستور C ای اجرا نکرده. سخت‌افزار Cortex-M خودش دو کار ثابت انجام می‌دهد:</p>
+<ol class="steps">
+  <li><b>یک کلمهٔ ۳۲ بیتی از آدرس <code>0x00000000</code> می‌خواند</b> و در <span class="term" data-t="stackptr">SP</span> (اشاره‌گر پشته) می‌گذارد.</li>
+  <li><b>کلمهٔ بعدی، از آدرس <code>0x00000004</code>، را می‌خواند</b> و در PC (شمارندهٔ برنامه؛ آدرس دستور بعدی) می‌گذارد. CPU از همان‌جا شروع به اجرا می‌کند.</li>
+</ol>
+<p>یعنی هیچ‌چیز جادویی نیست: دو عدد اول حافظه به CPU می‌گویند «پشته این‌جاست» و «کد از آن‌جا شروع می‌شود». این دو عدد ابتدای <span class="term" data-t="vectortable">جدول وقفه</span> هستند.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 330" role="img" aria-label="خط زمانی بوت: برق وصل می‌شود، سخت‌افزار SP و PC را از جدول وقفه می‌خواند، سپس Reset_Handler داده‌ها را کپی و bss را صفر می‌کند و main را صدا می‌زند">
+  <defs><marker id="b1a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">از روشن‌شدن تا main: شش قدم (از راست به چپ بخوان)</text>
+  <rect x="633" y="86" width="104" height="86" rx="12" fill="#ffd60a" stroke="#15120a" stroke-width="3"/>
+  <text x="685.0" y="124" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">برق وصل شد</text>
+  <text x="685.0" y="152" text-anchor="middle" class="mono" fill="#15120a" font-size="13" font-weight="700">reset</text>
+  <circle cx="685.0" cy="64" r="13" fill="#fff" stroke="#15120a" stroke-width="2.5"/><text x="685.0" y="69" text-anchor="middle" class="mono" fill="#15120a" font-size="14" font-weight="800">1</text>
+  <rect x="511" y="86" width="104" height="86" rx="12" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/>
+  <text x="563.0" y="124" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">SP را می‌خواند</text>
+  <text x="563.0" y="152" text-anchor="middle" class="mono" fill="#15120a" font-size="13" font-weight="700">table[0]</text>
+  <circle cx="563.0" cy="64" r="13" fill="#fff" stroke="#15120a" stroke-width="2.5"/><text x="563.0" y="69" text-anchor="middle" class="mono" fill="#15120a" font-size="14" font-weight="800">2</text>
+  <path d="M631 129H618" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#b1a)"/>
+  <rect x="389" y="86" width="104" height="86" rx="12" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/>
+  <text x="441.0" y="124" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">PC را می‌خواند</text>
+  <text x="441.0" y="152" text-anchor="middle" class="mono" fill="#15120a" font-size="13" font-weight="700">table[1]</text>
+  <circle cx="441.0" cy="64" r="13" fill="#fff" stroke="#15120a" stroke-width="2.5"/><text x="441.0" y="69" text-anchor="middle" class="mono" fill="#15120a" font-size="14" font-weight="800">3</text>
+  <path d="M509 129H496" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#b1a)"/>
+  <rect x="267" y="86" width="104" height="86" rx="12" fill="#3ddc97" stroke="#15120a" stroke-width="3"/>
+  <text x="319.0" y="124" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">کپی داده‌ها</text>
+  <text x="319.0" y="152" text-anchor="middle" class="mono" fill="#15120a" font-size="13" font-weight="700">Flash → RAM</text>
+  <circle cx="319.0" cy="64" r="13" fill="#fff" stroke="#15120a" stroke-width="2.5"/><text x="319.0" y="69" text-anchor="middle" class="mono" fill="#15120a" font-size="14" font-weight="800">4</text>
+  <path d="M387 129H374" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#b1a)"/>
+  <rect x="145" y="86" width="104" height="86" rx="12" fill="#3ddc97" stroke="#15120a" stroke-width="3"/>
+  <text x="197.0" y="124" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">صفر کردن</text>
+  <text x="197.0" y="152" text-anchor="middle" class="mono" fill="#15120a" font-size="13" font-weight="700">RAM (.bss)</text>
+  <circle cx="197.0" cy="64" r="13" fill="#fff" stroke="#15120a" stroke-width="2.5"/><text x="197.0" y="69" text-anchor="middle" class="mono" fill="#15120a" font-size="14" font-weight="800">5</text>
+  <path d="M265 129H252" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#b1a)"/>
+  <rect x="23" y="86" width="104" height="86" rx="12" fill="#ff86b3" stroke="#15120a" stroke-width="3"/>
+  <text x="75.0" y="124" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">برنامهٔ تو</text>
+  <text x="75.0" y="152" text-anchor="middle" class="mono" fill="#15120a" font-size="13" font-weight="700">main()</text>
+  <circle cx="75.0" cy="64" r="13" fill="#fff" stroke="#15120a" stroke-width="2.5"/><text x="75.0" y="69" text-anchor="middle" class="mono" fill="#15120a" font-size="14" font-weight="800">6</text>
+  <path d="M143 129H130" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#b1a)"/>
+  <path d="M389 192V204H737V192" stroke="#15120a" stroke-width="3" fill="none"/>
+  <text x="563.0" y="228" text-anchor="middle" class="s-tx" font-size="14" font-weight="800">سخت‌افزار (خودکار)</text>
+  <text x="563.0" y="248" text-anchor="middle" class="s-tx" font-size="12.5">هیچ کدی از تو اجرا نشده</text>
+  <path d="M23 192V204H371V192" stroke="#15120a" stroke-width="3" fill="none"/>
+  <text x="197.0" y="228" text-anchor="middle" class="s-tx" font-size="14" font-weight="800">کد C استارت‌آپ (خودت می‌نویسی)</text>
+  <text x="197.0" y="248" text-anchor="middle" class="s-tx" font-size="12.5">Reset_Handler</text>
+  <text x="380" y="298" text-anchor="middle" class="s-tx" font-size="13.5">تا قدم ۶ هیچ متغیر سراسری‌ای معتبر نیست؛ برای همین Reset_Handler نباید به آن‌ها تکیه کند.</text>
+</svg>
+</div><figcaption>قدم‌های ۱ تا ۳ را سخت‌افزار انجام می‌دهد؛ ۴ تا ۶ کدی است که تو (یا شرکت سازنده) نوشته‌ای.</figcaption></figure>
+
+<div class="callout info"><div class="ct">پس چرا آدرس صفر؟ ما Flash را در <code>0x08000000</code> گذاشتیم</div>
+<p>در STM32F4 وقتی پایهٔ BOOT0 صفر است (حالت پیش‌فرض روی Nucleo)، حافظهٔ Flash اصلی در آدرس <code>0x00000000</code> هم <b>آینه</b> (alias) می‌شود. یعنی کلمهٔ اول جدول که در <code>0x08000000</code> نوشته‌ایم، CPU در <code>0x00000000</code> هم می‌بیند. اگر BOOT0 یک باشد (و BOOT1 صفر)، به‌جای Flash خود ST یک <b>bootloader</b> داخلی اجرا می‌شود؛ همین است که برنامه‌ریزی از راه USB/UART ممکن می‌کند (جزئیات: بخش بوت در RM0383).</p></div>
+
+<p>ابزارک زیر همین دو قدم را نشان می‌دهد. مقدارها از همین درس‌اند (بعدا می‌بینی از کجا آمده‌اند):</p>
+<div class="widget" data-w="mem" data-config='{"title":"بعد از reset: CPU دو کلمه می‌خواند","code":["// reset تمام شد","SP = table[0];","PC = table[1] &amp; ~1;   // بیت ۰ فقط پرچم Thumb است","// حالا Reset_Handler اجرا می‌شود"],"intro":"دو کلمهٔ اول Flash پر است ولی SP و PC هنوز نامعلوم‌اند. روی بعدی بزن.","cells":[{"addr":"0x08000000","name":"table[0]","val":"0x20020000","kind":"var"},{"addr":"0x08000004","name":"table[1]","val":"0x080000F9","kind":"var"},{"addr":"رجیستر","name":"SP","val":null,"kind":"var"},{"addr":"رجیستر","name":"PC","val":null,"kind":"var"}],"steps":[{"line":0,"set":{},"hot":[2,3],"say":"reset تمام شد. حافظهٔ Flash دو کلمهٔ اول را از قبل دارد، ولی SP و PC هنوز مقدار معتبری ندارند."},{"line":1,"set":{"2":"0x20020000"},"hot":[0,2],"say":"کلمهٔ اول در <b>SP</b> می‌رود: <code>0x20020000</code> یعنی «درست بعد از آخرین بایت RAM» (۱۲۸ کیلوبایت بعد از <code>0x20000000</code>). پشته از بالای RAM شروع می‌شود و به پایین رشد می‌کند."},{"line":2,"set":{"3":"0x080000F8"},"hot":[1,3],"say":"کلمهٔ دوم به <b>PC</b> می‌رود. مقدار خوانده‌شده <code>0x080000F9</code> است، ولی بیت ۰ به معنی «حالت Thumb» است و آدرس واقعی <code>0x080000F8</code> می‌شود."},{"line":3,"set":{},"hot":[3],"say":"CPU اولین دستور <code>Reset_Handler</code> را از <code>0x080000F8</code> می‌خواند. از این‌جا به بعد کد C اجرا می‌شود."}]}'></div>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: بیت Thumb</div>
+<p>Cortex-M4 فقط دستورهای <b>Thumb</b> (فشرده، ۱۶ یا ۳۲ بیتی) را اجرا می‌کند. قرارداد ARM این است که آدرس‌های تابع Thumb با بیت ۰ برابر ۱ نوشته می‌شوند (آدرس واقعی همیشه زوج است). اگر در جدول وقفه آدرسی با بیت ۰ برابر صفر بگذاری، CPU می‌فهمد می‌خواهد به حالت ARM برود که در Cortex-M وجود ندارد و خطا (fault) می‌دهد. لینکر این بیت را خودش برای توابع Thumb می‌گذارد، پس در C کاری نداری.</p></div>
+
+<h2 id="vectors">جدول وقفه: یک آرایه از اشاره‌گر تابع</h2>
+<p>در درس <a href="4-3.html">۴.۳</a> یاد می‌گیری «اشاره‌گر به تابع» چیست. جدول وقفه یعنی دقیقا یک <b>آرایهٔ ثابت از اشاره‌گر تابع</b> که ابتدای Flash می‌نشیند. ورودی صفر آدرس پشته است (که به‌شکل عدد در جدول می‌آید) و بقیه آدرس تابع‌ها.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 436" role="img" aria-label="جدول وقفه در ابتدای Flash: ورودی صفر مقدار اولیهٔ SP و ورودی یک آدرس Reset_Handler است و بقیه آدرس handler ها">
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">جدول وقفه (آرایه‌ای از ۵۷ کلمهٔ ۳۲ بیتی) از آدرس 0x08000000</text>
+  <text x="130" y="56" text-anchor="middle" class="s-tx" font-size="13" font-weight="800">آدرس</text><text x="330" y="56" text-anchor="middle" class="s-tx" font-size="13" font-weight="800">محتوا</text><text x="580" y="56" text-anchor="middle" class="s-tx" font-size="13" font-weight="800">یعنی چه</text>
+  <rect x="30" y="66" width="200" height="36" fill="#fff" stroke="#15120a" stroke-width="3"/>
+  <rect x="230" y="66" width="200" height="36" fill="#ffd60a" stroke="#15120a" stroke-width="3"/>
+  <text x="130" y="90" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="700">0x08000000</text>
+  <text x="330" y="90" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="700">0x20020000</text>
+  <text x="590" y="90" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">مقدار اولیهٔ SP (نماد _estack)</text>
+  <rect x="30" y="104" width="200" height="36" fill="#fff" stroke="#15120a" stroke-width="3"/>
+  <rect x="230" y="104" width="200" height="36" fill="#3ddc97" stroke="#15120a" stroke-width="3"/>
+  <text x="130" y="128" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="700">0x08000004</text>
+  <text x="330" y="128" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="700">0x080000F9</text>
+  <text x="590" y="128" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">Reset_Handler (بیت ۰ = ۱)</text>
+  <rect x="30" y="142" width="200" height="36" fill="#fff" stroke="#15120a" stroke-width="3"/>
+  <rect x="230" y="142" width="200" height="36" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/>
+  <text x="130" y="166" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="700">0x08000008</text>
+  <text x="330" y="166" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="700">0x080000E5</text>
+  <text x="590" y="166" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">NMI → Default_Handler</text>
+  <rect x="30" y="180" width="200" height="36" fill="#fff" stroke="#15120a" stroke-width="3"/>
+  <rect x="230" y="180" width="200" height="36" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/>
+  <text x="130" y="204" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="700">0x0800000C</text>
+  <text x="330" y="204" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="700">0x080000E5</text>
+  <text x="590" y="204" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">HardFault → Default_Handler</text>
+  <text x="380" y="240" text-anchor="middle" class="s-tx" font-size="20" font-weight="800">⋮</text>
+  <rect x="30" y="250" width="200" height="36" fill="#fff" stroke="#15120a" stroke-width="3"/>
+  <rect x="230" y="250" width="200" height="36" fill="#ff86b3" stroke="#15120a" stroke-width="3"/>
+  <text x="130" y="274" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="700">0x0800003C</text>
+  <text x="330" y="274" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="700">0x0800015D</text>
+  <text x="590" y="274" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">SysTick → تعریف قوی در main.c</text>
+  <rect x="30" y="288" width="200" height="36" fill="#fff" stroke="#15120a" stroke-width="3"/>
+  <rect x="230" y="288" width="200" height="36" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/>
+  <text x="130" y="312" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="700">0x08000040</text>
+  <text x="330" y="312" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="700">0x080000E5</text>
+  <text x="590" y="312" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">وقفهٔ ۰ تراشه → Default_Handler</text>
+  <text x="380" y="348" text-anchor="middle" class="s-tx" font-size="20" font-weight="800">⋮</text>
+  <rect x="30" y="358" width="200" height="36" fill="#fff" stroke="#15120a" stroke-width="3"/>
+  <rect x="230" y="358" width="200" height="36" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/>
+  <text x="130" y="382" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="700">0x080000E0</text>
+  <text x="330" y="382" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="700">0x080000E5</text>
+  <text x="590" y="382" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">EXTI15_10 (وقفهٔ ۴۰) → Default_Handler</text>
+  <text x="380" y="418" text-anchor="middle" class="s-tx" font-size="13.5">آدرس هر ورودی = 0x08000000 + ۴ × شمارهٔ ورودی. فقط ورودی‌های اول و آخر و نمونه‌ها نشان داده شده‌اند.</text>
+</svg>
+</div><figcaption>ورودی شمارهٔ n در آدرس <code>0x08000000 + 4n</code> است. برای وقفهٔ n ام تراشه، شمارهٔ ورودی n + ۱۶ است (۱۶ ورودی اول برای خود هسته است).</figcaption></figure>
+
+<div class="table-wrap"><table>
+<thead><tr><th>ورودی</th><th>نام</th><th>وقتی چه می‌شود</th></tr></thead>
+<tbody>
+<tr><td>۰</td><td>مقدار اولیهٔ SP</td><td>(عدد است نه تابع)</td></tr>
+<tr><td>۱</td><td><code>Reset_Handler</code></td><td>بعد از reset</td></tr>
+<tr><td>۲</td><td><code>NMI_Handler</code></td><td>وقفهٔ غیرقابل‌ماسک (خطای سخت‌افزاری مثل خرابی کلاک)</td></tr>
+<tr><td>۳</td><td><code>HardFault_Handler</code></td><td>خطای جدی CPU (دسترسی ممنوع به حافظه و ...). در درس <a href="6-1.html">۶.۱</a></td></tr>
+<tr><td>۴، ۵، ۶</td><td>MemManage، BusFault، UsageFault</td><td>خطاهای ریزتر (به HardFault ارتقا می‌یابند مگر فعال شوند)</td></tr>
+<tr><td>۱۱</td><td><code>SVC_Handler</code></td><td>دستور <code>svc</code> (سیستم‌عامل‌های بلادرنگ)</td></tr>
+<tr><td>۱۴</td><td><code>PendSV_Handler</code></td><td>تعویض task در RTOS</td></tr>
+<tr><td>۱۵</td><td><code>SysTick_Handler</code></td><td>تایمر سیستم (درس <a href="5-4.html">۵.۴</a>)</td></tr>
+<tr><td>۱۶ به بعد</td><td>وقفه‌های تراشه (<code>WWDG</code>، <code>EXTI0</code>، ...)</td><td>هر پریفرال وقفهٔ خودش را دارد (درس <a href="5-3.html">۵.۳</a>)</td></tr>
+</tbody></table></div>
+
+<p>ما جدول را در فایل <code>vectors.c</code> می‌نویسیم. برای اینکه این کد تمام پروژه را بسازد، سه فایل (به‌علاوه اسکریپت لینکر) دور هم کار می‌کنند. اول جدول:</p>
+
+<div class="code" data-file="vectors.c" data-lang="c" data-verify="arm-link" data-project="boot" id="v1">
+<pre>
+#include &lt;stdint.h&gt;
+
+extern uint32_t _estack;            /* ساخته‌شده توسط اسکریپت لینکر */
+
+typedef void (*isr_t)(void);
+
+void Reset_Handler(void);
+void Default_Handler(void);
+
+/* هر وقفه‌ای که خودت ننویسی، به Default_Handler می‌رسد */
+void NMI_Handler(void)          __attribute__((weak, alias("Default_Handler")));
+void HardFault_Handler(void)    __attribute__((weak, alias("Default_Handler")));
+void MemManage_Handler(void)    __attribute__((weak, alias("Default_Handler")));
+void BusFault_Handler(void)     __attribute__((weak, alias("Default_Handler")));
+void UsageFault_Handler(void)   __attribute__((weak, alias("Default_Handler")));
+void SVC_Handler(void)          __attribute__((weak, alias("Default_Handler")));
+void DebugMon_Handler(void)     __attribute__((weak, alias("Default_Handler")));
+void PendSV_Handler(void)       __attribute__((weak, alias("Default_Handler")));
+void SysTick_Handler(void)      __attribute__((weak, alias("Default_Handler")));
+void EXTI15_10_IRQHandler(void) __attribute__((weak, alias("Default_Handler")));
+
+/* جدول وقفه: ۱۶ ورودی هسته + ۴۱ وقفهٔ اول تراشه (تا EXTI15_10) */
+__attribute__((section(".isr_vector"), used))
+const isr_t g_vectors[57] = {
+    (isr_t)&amp;_estack,                 /* 0: مقدار اولیهٔ SP */
+    Reset_Handler,                   /* 1: کجا شروع کنم؟ */
+    NMI_Handler,                     /* 2 */
+    HardFault_Handler,               /* 3 */
+    MemManage_Handler,               /* 4 */
+    BusFault_Handler,                /* 5 */
+    UsageFault_Handler,              /* 6 */
+    0, 0, 0, 0,                      /* 7..10: رزرو */
+    SVC_Handler,                     /* 11 */
+    DebugMon_Handler,                /* 12 */
+    0,                               /* 13: رزرو */
+    PendSV_Handler,                  /* 14 */
+    SysTick_Handler,                 /* 15 */
+    [16 ... 55] = Default_Handler,   /* وقفه‌های 0 تا 39 تراشه */
+    [56] = EXTI15_10_IRQHandler,     /* وقفهٔ 40 */
+};
+
+void Default_Handler(void)
+{
+    for (;;) { }                     /* وقفهٔ پیش‌بینی‌نشده: همین‌جا می‌ایستیم */
+}
+</pre></div>
+<ol class="walk" data-for="v1">
+  <li data-lines="3"><b class="what">نماد <code>_estack</code>.</b> این نام را اسکریپت لینکر می‌سازد و آدرس بالای RAM است. اینجا فقط <b>اعلانش</b> می‌کنیم.
+    <span class="why">در درس <a href="3-5.html">۳.۵</a> دیدی <code>_sdata</code> و <code>_edata</code> هم همین‌طورند: نمادهایی که «آدرس» مهم‌شان است، نه مقدار داخلشان.</span></li>
+  <li data-lines="5"><b class="what">نوع <code>isr_t</code>.</b> «اشاره‌گر به تابعی بدون ورودی و بدون خروجی». هر handler وقفه همین امضا را دارد.</li>
+  <li data-lines="7-8"><b class="what">اعلان دو تابع.</b> <code>Reset_Handler</code> در <code>startup.c</code> تعریف می‌شود. <code>Default_Handler</code> پایین همین فایل.</li>
+  <li data-lines="10-20"><b class="what">weak alias.</b> هر handler را به‌عنوان «نام دیگر برای <code>Default_Handler</code>» اعلان می‌کنیم، ولی <b>ضعیف</b> (weak).
+    <span class="why">اگر خودت در جایی تابعی به اسم <code>SysTick_Handler</code> بنویسی، لینکر <b>نسخهٔ تو (قوی)</b> را به‌جای نسخهٔ weak می‌گذارد. اگر ننویسی، همان alias می‌ماند و به <code>Default_Handler</code> می‌رسد. پس هیچ ورودی جدول خالی یا نامعتبر نمی‌ماند.</span></li>
+  <li data-lines="22-24"><b class="what">تعریف جدول.</b> آرایهٔ ۵۷ عضوی از <code>isr_t</code>. <code>section(".isr_vector")</code> آن را در بخشی با همین نام می‌گذارد تا اسکریپت لینکر بتواند اول Flash بچیندش. <code>used</code> یعنی «حتی اگر کسی صدایش نمی‌زند، دورش نینداز».
+    <span class="why">هیچ کدی جدول را «صدا» نمی‌زند؛ سخت‌افزار آن را می‌خواند. بدون <code>used</code> و <code>KEEP</code> (در اسکریپت لینکر) ممکن است کامپایلر یا لینکر آن را حذف کنند چون هیچ‌کس ازش استفاده نمی‌کند.</span></li>
+  <li data-lines="25"><b class="what">ورودی ۰: SP.</b> آدرس <code>_estack</code> را به‌شکل عدد در جدول می‌گذاریم (تبدیل به <code>isr_t</code> فقط برای اینکه در آرایه جا شود).
+    <span class="why">جدول عملا «آرایهٔ کلمه» است. ورودی صفر تابع نیست ولی هم‌اندازهٔ اشاره‌گر تابع است (۳۲ بیت روی ARM).</span></li>
+  <li data-lines="26"><b class="what">ورودی ۱: Reset_Handler.</b> جایی که CPU شروع می‌کند.</li>
+  <li data-lines="27-31,33-34,36-37"><b class="what">ورودی‌های هسته.</b> NMI و خطاها و SVC و PendSV و SysTick را با نام‌های استاندارد می‌نویسیم.</li>
+  <li data-lines="32,35"><b class="what">رزرو.</b> ورودی‌های ۷ تا ۱۰ و ۱۳ در Cortex-M4 استفاده نمی‌شوند. صفر می‌گذاریم تا جای بقیه درست بماند.
+    <span class="why">هر ورودی دقیقا ۴ بایت است. اگر یکی را جا بیندازی، همهٔ ورودی‌های بعدی یک خانه جابه‌جا می‌شوند و SysTick به‌جای PendSV صدا زده می‌شود!</span></li>
+  <li data-lines="38-39"><b class="what">وقفه‌های تراشه.</b> ‏<code>[16 ... 55] = Default_Handler</code> یعنی «ورودی‌های ۱۶ تا ۵۵ همه Default_Handler». (این نحو، «بازهٔ دسته‌بندی‌شده»، افزونهٔ GNU است؛ فقط با <code>-std=gnu11</code> کار می‌کند.) ورودی ۵۶ یعنی وقفهٔ شمارهٔ ۴۰ (<code>EXTI15_10</code>، خط‌های ۱۰ تا ۱۵ وقفهٔ خارجی که دکمهٔ PC13 هم داخلشان است).
+    <span class="why">جدول کامل STM32F411 بلندتر است. ما تا وقفه‌ای که در درس <a href="5-3.html">۵.۳</a> لازم داریم پیش رفته‌ایم؛ فایل رسمی ST همه را دارد. وقفه‌ای که فعال نکنی هرگز صدا زده نمی‌شود، پس جدول کوتاه‌تر بی‌خطر است.</span></li>
+  <li data-lines="42-45"><b class="what">Default_Handler.</b> یک حلقهٔ بی‌نهایت. اگر وقفه‌ای رخ دهد که handler نداشته باشد، برنامه همین‌جا می‌ایستد.
+    <span class="why">ایستادن بهتر از اجرای بی‌هدف است. وقتی دیباگر وصل کنی و ببینی PC داخل <code>Default_Handler</code> است، می‌فهمی وقفهٔ فراموش‌شده‌ای داری.</span></li>
+</ol>
+
+<div class="callout warn"><div class="ct">ترتیب ورودی‌ها مقدس است</div>
+<p>موقعیت هر ورودی را سخت‌افزار تعیین می‌کند، نه تو. اگر <code>Reset_Handler</code> را جای دیگری بگذاری، CPU کلمهٔ دوم جدول را به‌عنوان آدرس شروع می‌خواند و به جای اشتباه می‌پرد، معمولا با HardFault. همیشه از فایل رسمی ST یا CMSIS کپی و مقایسه کن.</p></div>
+
+<h2 id="linker">اسکریپت لینکر: نقشهٔ چیدمان</h2>
+<p>در درس‌های <a href="1-4.html">۱.۴</a> و <a href="4-2.html">۴.۲</a> دیدی <span class="term" data-t="linker">لینکر</span> فایل‌های <code>.o</code> را به هم می‌چسباند. اما لینکر از کجا بفهمد «کد باید از <code>0x08000000</code> شروع شود»؟ یا «متغیرها در <code>0x20000000</code> بنشینند»؟ این‌ها را <b>تو</b> در یک فایل متنی می‌گویی: <span class="term" data-t="linkerscript">اسکریپت لینکر</span> (پسوند <code>.ld</code>).</p>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>تصور کن یک اسباب‌کش هستی که باید همهٔ وسایل خانه را در کامیون و انبار جدید بچیند. «نقشهٔ چیدمان» می‌گوید: یخچال کنار در، کتاب‌ها بالا، فرش پایین. اسکریپت لینکر هم همین نقشه است: <code>.text</code> در Flash، <code>.data</code> در RAM، و ...</p></div>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 470" role="img" aria-label="تصویر برنامه در Flash و RAM: در Flash جدول وقفه، کد، ثابت‌ها و تصویر مقدارهای اولیهٔ data؛ در RAM ابتدا data و bss، بعد فضای آزاد و در بالا پشته؛ پیکان کپی از Flash به RAM">
+  <defs><marker id="b3a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">برنامهٔ ما در حافظه (آدرس‌ها از همین ساخت؛ اندازه‌ها به مقیاس نیست)</text>
+  <text x="200" y="58" text-anchor="middle" class="s-tx" font-size="14" font-weight="800">Flash (فقط خواندنی در اجرا)</text>
+  <text x="540" y="58" text-anchor="middle" class="s-tx" font-size="14" font-weight="800">RAM</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="90" y="70" width="220" height="50" fill="#ffd60a"/>
+    <rect x="90" y="120" width="220" height="60" fill="#7ea3ff"/>
+    <rect x="90" y="180" width="220" height="44" fill="#3ddc97"/>
+    <rect x="90" y="224" width="220" height="44" fill="#ff9a4d"/>
+    <rect x="430" y="70" width="220" height="44" fill="#ff9a4d"/>
+    <rect x="430" y="114" width="220" height="44" fill="#b394ff"/>
+    <rect x="430" y="158" width="220" height="150" fill="#fff"/>
+    <rect x="430" y="308" width="220" height="50" fill="#ff86b3"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-size="14" font-weight="800">
+    <text x="200" y="100">.isr_vector (جدول وقفه)</text>
+    <text x="200" y="146">.text (کد)</text><text x="200" y="166" class="mono" font-size="12.5" font-weight="600">Reset_Handler, main, ...</text>
+    <text x="200" y="207">.rodata (ثابت‌ها)</text>
+    <text x="200" y="250">تصویر .data (مقدار اولیه)</text>
+    <text x="540" y="97">.data (کپی‌شده)</text>
+    <text x="540" y="141">.bss (صفر‌شده)</text>
+    <text x="540" y="228">فضای آزاد</text>
+    <text x="540" y="338">پشته (به سمت بالا رشد می‌کند)</text>
+  </g>
+  <g class="mono s-tx" font-size="12.5" font-weight="700" text-anchor="middle">
+    <text x="48" y="88">0x08000000</text>
+    <text x="48" y="140">0x080000E4</text>
+    <text x="48" y="200">0x080001B0</text>
+    <text x="48" y="238">_sidata</text><text x="48" y="256">0x080001C0</text>
+    <text x="705" y="88">_sdata</text><text x="705" y="106">0x20000000</text>
+    <text x="705" y="132">_edata/_sbss</text><text x="705" y="150">0x20000004</text>
+    <text x="705" y="176">_ebss</text><text x="705" y="194">0x2000000C</text>
+    <text x="705" y="374">_estack</text><text x="705" y="392">0x20020000</text>
+  </g>
+  <path d="M312 246C360 246 380 100 426 96" stroke="#15120a" stroke-width="3" fill="none" stroke-dasharray="8 5" marker-end="url(#b3a)"/>
+  <text x="372" y="190" text-anchor="middle" class="s-tx" font-size="13" font-weight="800">کپی در Reset_Handler</text>
+  <path d="M540 308V262" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#b3a)"/>
+  <path d="M430 340H392" stroke="#15120a" stroke-width="2" fill="none" stroke-dasharray="4 4"/>
+  <text x="372" y="332" text-anchor="middle" class="s-tx" font-size="12.5">SP اولیه = بالای RAM</text>
+  <text x="380" y="420" text-anchor="middle" class="s-tx" font-size="13.5">هر بخش دو آدرس دارد: VMA (وقتی برنامه اجرا می‌شود) و LMA (جایی که روی تراشه ذخیره شده).</text>
+  <text x="380" y="442" text-anchor="middle" class="s-tx" font-size="13.5">برای .data این دو فرق دارند: VMA در RAM و LMA در Flash. برای بقیه یکی‌اند.</text>
+</svg>
+
+</div><figcaption>نتیجهٔ اسکریپت ما روی این پروژه. توجه کن <code>.data</code> دو بار می‌آید: یک بار در RAM (جایی که متغیرها زندگی می‌کنند) و یک بار در Flash (تصویر مقدارهای اولیه که <code>Reset_Handler</code> کپی می‌کند).</figcaption></figure>
+
+<div class="code" data-file="stm32f411.ld" data-lang="ld" data-verify="arm-link" data-project="boot" id="l1">
+<pre>
+/* اسکریپت لینکر مینیمال برای STM32F411RE */
+ENTRY(Reset_Handler)
+
+/* بالای RAM: SP اولیه. پشته به سمت پایین رشد می‌کند */
+_estack = ORIGIN(RAM) + LENGTH(RAM);
+
+MEMORY
+{
+    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 512K
+    RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
+}
+
+SECTIONS
+{
+    /* جدول وقفه باید اولین چیز در Flash باشد */
+    .isr_vector :
+    {
+        . = ALIGN(4);
+        KEEP(*(.isr_vector))
+        . = ALIGN(4);
+    } &gt; FLASH
+
+    .text :
+    {
+        . = ALIGN(4);
+        *(.text*)
+        . = ALIGN(4);
+    } &gt; FLASH
+
+    .rodata :
+    {
+        . = ALIGN(4);
+        *(.rodata*)
+        . = ALIGN(4);
+    } &gt; FLASH
+
+    /* آدرس ذخیرهٔ مقدارهای اولیهٔ .data در Flash */
+    _sidata = LOADADDR(.data);
+
+    /* .data در RAM زندگی می‌کند ولی تصویرش در Flash است */
+    .data :
+    {
+        . = ALIGN(4);
+        _sdata = .;
+        *(.data*)
+        . = ALIGN(4);
+        _edata = .;
+    } &gt; RAM AT &gt; FLASH
+
+    .bss :
+    {
+        . = ALIGN(4);
+        _sbss = .;
+        *(.bss*)
+        *(COMMON)
+        . = ALIGN(4);
+        _ebss = .;
+    } &gt; RAM
+
+    /DISCARD/ : { *(.ARM.exidx*) *(.comment) }
+
+    /* بررسی زمان لینک: حداقل ۱ کیلوبایت RAM برای پشته بماند */
+    ASSERT(_ebss + 0x400 &lt;= _estack, "RAM is too full: less than 1 KiB left for the stack")
+}
+</pre></div>
+<ol class="walk" data-for="l1">
+  <li data-lines="1-2"><b class="what">نقطهٔ ورود.</b> ‏<code>ENTRY(Reset_Handler)</code> به لینکر می‌گوید نماد ورود برنامه چیست (در فایل ELF ثبت می‌شود).
+    <span class="why">روی میکروکنترلر CPU نقطهٔ ورود ELF را نمی‌خواند؛ جدول وقفه را می‌خواند. ولی ابزارها (مثل دیباگر) از ELF می‌فهمند برنامه از کجا شروع می‌شود.</span></li>
+  <li data-lines="4-5"><b class="what">نماد <code>_estack</code>.</b> بالای RAM: <code>ORIGIN(RAM) + LENGTH(RAM)</code> = <code>0x20000000 + 128K</code> = <code>0x20020000</code>.
+    <span class="why">پشته به سمت آدرس‌های کمتر رشد می‌کند. پس از بالاترین آدرس RAM شروع می‌کنیم تا حداکثر فضا برایش بماند.</span></li>
+  <li data-lines="7-11"><b class="what">MEMORY.</b> دو منطقهٔ حافظهٔ واقعی تراشه: <code>FLASH</code> از <code>0x08000000</code> با ۵۱۲ کیلوبایت و <code>RAM</code> از <code>0x20000000</code> با ۱۲۸ کیلوبایت. حروف داخل پرانتز مجوزهاست: <code>r</code> خواندن، <code>w</code> نوشتن، <code>x</code> اجرا.
+    <span class="why">این اعداد از reference manual (RM0383) و datasheet تراشه می‌آیند. اگر اندازه را بیشتر از واقعی بنویسی، لینکر بدون خطا می‌سازد ولی برنامه روی تراشه کار نمی‌کند. اگر کمتر بنویسی، لینکر زودتر از موعد «پر شد» می‌گوید.</span></li>
+  <li data-lines="13-14"><b class="what">SECTIONS.</b> اینجا می‌گوییم چه بخش‌هایی، به چه ترتیبی، در کدام منطقه بنشینند.</li>
+  <li data-lines="15-21"><b class="what">.isr_vector اول.</b> بخش <code>.isr_vector</code> از همهٔ فایل‌ها را در ابتدای FLASH می‌گذارد. <code>ALIGN(4)</code> ابتدا و انتها را ۴ بایتی تراز می‌کند. <code>KEEP</code> یعنی حتی با <code>--gc-sections</code> حذفش نکن.
+    <span class="why">چون CPU جدول را در <code>0x0</code> (و آینه‌اش <code>0x08000000</code>) می‌خواند، باید <b>دقیقا</b> اول Flash بنشیند. اگر <code>.text</code> جلوتر بیاید، CPU کد را به‌جای SP می‌خواند.</span></li>
+  <li data-lines="23-28"><b class="what">.text.</b> همهٔ کد (<code>*(.text*)</code> یعنی هر بخش با نامی که با <code>.text</code> شروع شود از هر فایل) در Flash.</li>
+  <li data-lines="30-35"><b class="what">.rodata.</b> ثابت‌های <code>const</code> و رشته‌های ثابت (درس <a href="3-5.html">۳.۵</a>). آن‌ها هم فقط در Flash می‌مانند.</li>
+  <li data-lines="37-38"><b class="what">نماد <code>_sidata</code>.</b> ‏<code>LOADADDR(.data)</code> «آدرس بارگذاری» بخش <code>.data</code> است: یعنی جایی از Flash که مقدارهای اولیه ذخیره می‌شوند.
+    <span class="why">این همان مبدأ کپی است که <code>Reset_Handler</code> لازم دارد.</span></li>
+  <li data-lines="40-48"><b class="what">.data: RAM ولی AT Flash.</b> نمادهای <code>_sdata</code> و <code>_edata</code> ابتدا و انتها را علامت می‌زنند. سطر آخر <code>&gt; RAM AT &gt; FLASH</code> می‌گوید: «این بخش <b>وقتی برنامه اجرا می‌شود</b> در RAM است (VMA)، ولی <b>محتوایش را در Flash ذخیره کن</b> (LMA)».
+    <span class="why">RAM با قطع برق پاک می‌شود. مقدار اولیهٔ <code>g_counter = 5</code> باید جایی زنده بماند؛ پس در Flash می‌نشیند و استارت‌آپ آن را کپی می‌کند.</span></li>
+  <li data-lines="50-58"><b class="what">.bss.</b> فقط در RAM. هیچ محتوایی در Flash ندارد (مقدارش صفر است و لازم نیست ذخیره شود). <code>*(COMMON)</code> برای متغیرهای «common» قدیمی است (قدیمی، ولی بعضی کدها هنوز می‌سازند).
+    <span class="why">این‌که <code>.bss</code> در فایل خروجی جا نمی‌گیرد یعنی برنامهٔ تو با ۱۰۰۰ بایت آرایهٔ سراسری صفر، در Flash ۱۰۰۰ بایت بیشتر نمی‌شود.</span></li>
+  <li data-lines="60"><b class="what">دور ریختن.</b> بخش‌هایی که به کارمان نمی‌آیند (اطلاعات استثنا و رشتهٔ نسخهٔ کامپایلر).</li>
+  <li data-lines="62-63"><b class="what">بررسی زمان لینک.</b> <code>ASSERT</code> شرط را موقع لینک می‌سنجد: انتهای <code>.bss</code> به‌اضافهٔ ۱ کیلوبایت باید از <code>_estack</code> کمتر باشد. وگرنه لینک متوقف و پیام چاپ می‌شود.
+    <span class="why">پشته و متغیرهای سراسری از دو سوی RAM به هم نزدیک می‌شوند. این بررسی خیلی زود می‌گوید جایی برای پشته نمانده، به‌جای اینکه ماه‌ها بعد برنامه بی‌دلیل خراب شود.</span></li>
+</ol>
+
+<div class="callout tip"><div class="ct">VMA و LMA در یک جمله</div>
+<p><span class="term" data-t="lma">VMA</span> = «آدرسی که برنامه هنگام اجرا برای آن بخش می‌بیند»؛ <b>LMA</b> = «جایی که محتوای بخش در فایل/Flash ذخیره است». برای <code>.text</code> و <code>.rodata</code> یکی‌اند. فقط برای <code>.data</code> با هم فرق دارند، و همین فرق دلیل وجود کد کپی در استارت‌آپ است.</p></div>
+
+<h2 id="reset">Reset_Handler: کارمند صبح</h2>
+<p>حالا خود کارمند. این کار اصلا پیچیده نیست:</p>
+
+<div class="code" data-file="startup.c" data-lang="c" data-verify="arm-link" data-project="boot" id="s1">
+<pre>
+#include &lt;stdint.h&gt;
+
+extern uint32_t _sidata;            /* شروع تصویر .data در Flash */
+extern uint32_t _sdata, _edata;     /* ابتدا و انتهای .data در RAM */
+extern uint32_t _sbss, _ebss;       /* ابتدا و انتهای .bss در RAM */
+
+int main(void);
+
+static void system_init(void)
+{
+#if defined(__VFP_FP__) &amp;&amp; !defined(__SOFTFP__)
+    /* CPACR: دسترسی کامل به FPU (CP10 و CP11) */
+    *(volatile uint32_t *)0xE000ED88u |= (0xFu &lt;&lt; 20);
+    __asm volatile ("dsb\n\tisb");
+#endif
+}
+
+void Reset_Handler(void)
+{
+    uint32_t *src = &amp;_sidata;
+    uint32_t *dst = &amp;_sdata;
+
+    while (dst &lt; &amp;_edata) {
+        *dst++ = *src++;            /* .data: از Flash به RAM */
+    }
+    for (dst = &amp;_sbss; dst &lt; &amp;_ebss; dst++) {
+        *dst = 0;                   /* .bss: صفر */
+    }
+
+    system_init();
+    main();
+    for (;;) { }                    /* اگر main برگشت: بایست */
+}
+</pre></div>
+<ol class="walk" data-for="s1">
+  <li data-lines="3-5"><b class="what">نمادهای مرزی.</b> ابتدا و انتهای <code>.data</code> و <code>.bss</code>، و آدرس تصویر <code>.data</code> در Flash. همه از اسکریپت لینکر می‌آیند.
+    <span class="why">فقط لینکر می‌داند بعد از چیدن همهٔ فایل‌ها هر بخش دقیقا کجا افتاده. پس خودش نشانه‌گذاری می‌کند و ما با <code>&amp;</code> «آدرسِ» نشانه‌ها کار می‌کنیم (درس <a href="3-5.html">۳.۵</a>).</span></li>
+  <li data-lines="7"><b class="what">پروتوتایپ main.</b> تا کامپایلر بداند <code>main</code> چیست.</li>
+  <li data-lines="9-16"><b class="what">راه‌اندازی اولیهٔ سیستم.</b> تابعی که کارهای سخت‌افزاری قبل از <code>main</code> را می‌کند. در Cortex-M4 <b>اگر</b> با <code>-mfloat-abi=hard</code> ساخته شود، دسترسی به واحد اعشاری (FPU) را باز می‌کند.
+    <span class="why">در درس <a href="4-7.html">۴.۷</a> گفتیم FPU بعد از reset خاموش است؛ نوشتن در <code>CPACR</code> (آدرس <code>0xE000ED88</code>) بیت‌های ۲۰ تا ۲۳ آن را روشن می‌کند. <code>dsb</code> و <code>isb</code> اطمینان می‌دهند نوشتن تمام شده و خط لولهٔ CPU پاک شده باشد. با ساخت پیش‌فرض ما (بدون FPU) این #if کامپایل نمی‌شود.</span></li>
+  <li data-lines="18-19,33"><b class="what">تابع اصلی.</b> ‏<code>Reset_Handler</code> اولین تابع C برنامه است. ورودی و خروجی ندارد (کسی نیست که صدایش بزند یا نتیجه‌اش را بگیرد).</li>
+  <li data-lines="20-21"><b class="what">دو اشاره‌گر.</b> ‏<code>src</code> از تصویر Flash شروع می‌کند و <code>dst</code> از ابتدای <code>.data</code> در RAM.</li>
+  <li data-lines="23-25"><b class="what">حلقهٔ کپی.</b> تا وقتی <code>dst</code> به انتهای <code>.data</code> نرسیده، یک کلمهٔ ۳۲ بیتی از Flash به RAM ببر و هر دو اشاره‌گر را یک کلمه جلو ببر.
+    <span class="why">کلمه به کلمه سریع‌تر از بایت‌به‌بایت است. به همین دلیل اسکریپت لینکر ابتدا و انتها را با <code>ALIGN(4)</code> ۴ بایتی کرده.</span></li>
+  <li data-lines="26-28"><b class="what">صفر کردن bss.</b> از <code>_sbss</code> تا <code>_ebss</code> صفر بنویس.
+    <span class="why">قانون C می‌گوید سراسری‌های بدون مقدار اولیه صفرند (درس <a href="3-5.html">۳.۵</a>). این کد آن را «واقعی» می‌کند. بدون آن <code>g_total</code> آشغال داشت.</span></li>
+  <li data-lines="30"><b class="what">راه‌اندازی سیستم.</b> صدا زدن <code>system_init</code>. (در پروژه‌های ST اینجا <code>SystemInit</code> و تنظیم کلاک است.)</li>
+  <li data-lines="31-32"><b class="what">main و بعد بی‌نهایت.</b> برنامهٔ تو اجرا می‌شود. اگر روزی برگشت، در حلقهٔ بی‌نهایت می‌مانیم.
+    <span class="why">جایی برای بازگشت نیست؛ هیچ سیستم‌عاملی نمی‌گوید «بعدش چی؟». اگر این حلقه نباشد، CPU دستورهای بعد از تابع (آشغال) را اجرا می‌کند.</span></li>
+</ol>
+
+<div class="callout warn"><div class="ct">در Reset_Handler به متغیر سراسری تکیه نکن</div>
+<p>قبل از اتمام حلقه‌ها، <code>.data</code> و <code>.bss</code> هنوز آماده نیستند. اگر در <code>Reset_Handler</code> از یک متغیر سراسری استفاده کنی، مقدارش آشغال است. حتی تابعی که از متغیر سراسری «مقدار اولیه‌دار» استفاده می‌کند (مثلا یک <code>SystemCoreClock</code> که مقدار پیش‌فرض دارد) باید بعد از کپی صدا زده شود. به همین دلیل <code>system_init</code> را بعد از هر دو حلقه گذاشتیم.</p></div>
+
+<h3 id="sim">همین حلقه‌ها را روی PC ببین</h3>
+<p>لازم نیست به برد چیزی وصل کنی تا نتیجه را ببینی. این برنامهٔ PC یک «تراشهٔ اسباب‌بازی» می‌سازد: یک آرایه نقش Flash و یک آرایه نقش RAM را دارد. دقیقا همان دو حلقه را روی آن‌ها اجرا می‌کنیم:</p>
+<div class="code" data-file="bootsim.c" data-lang="c" data-verify="host" id="sim1">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+/* «تراشهٔ اسباب‌بازی»: آرایه‌ها نقش Flash و RAM را بازی می‌کنند */
+static const uint32_t flash_image[3] = { 5, 7, 9 };   /* مقدارهای اولیهٔ .data */
+static uint32_t ram[8];      /* کلمهٔ 0..2: .data ، 3..5: .bss ، 6..7: آزاد */
+
+static void dump(const char *title)
+{
+    printf("%-12s", title);
+    for (int i = 0; i &lt; 8; i++) {
+        printf(" %08lX", (unsigned long)ram[i]);
+    }
+    printf("\n");
+}
+
+int main(void)
+{
+    uint32_t *sdata = &amp;ram[0];
+    uint32_t *edata = &amp;ram[3];
+    uint32_t *sbss  = &amp;ram[3];
+    uint32_t *ebss  = &amp;ram[6];
+
+    printf(".data = %ld words, .bss = %ld words\n",
+           (long)(edata - sdata), (long)(ebss - sbss));
+
+    for (int i = 0; i &lt; 8; i++) {
+        ram[i] = 0xDEADBEEFu;               /* برق وصل شد: آشغال */
+    }
+    dump("power on:");
+
+    const uint32_t *src = flash_image;
+    uint32_t *dst = sdata;
+    while (dst &lt; edata) {
+        *dst++ = *src++;                    /* کپی .data */
+    }
+    dump("after copy:");
+
+    for (dst = sbss; dst &lt; ebss; dst++) {
+        *dst = 0;                           /* صفر کردن .bss */
+    }
+    dump("after zero:");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="sim1">
+  <li data-lines="5-6"><b class="what">Flash و RAM ساختگی.</b> تصویر <code>.data</code> سه کلمه است: ۵ و ۷ و ۹. RAM هشت کلمه دارد.
+    <span class="why">آرایهٔ <code>const</code> شبیه Flash است (فقط‌خواندنی)؛ آرایهٔ معمولی شبیه RAM.</span></li>
+  <li data-lines="8-15"><b class="what">چاپ RAM.</b> هشت کلمهٔ RAM را با هگز چاپ می‌کند.</li>
+  <li data-lines="19-22"><b class="what">چهار نشانگر.</b> همان کاری که نمادهای لینکر می‌کنند: کلمه‌های ۰ تا ۲ برای <code>.data</code>، ۳ تا ۵ برای <code>.bss</code>.</li>
+  <li data-lines="24-25"><b class="what">اندازه‌ها.</b> تفاضل دو اشاره‌گر تعداد کلمه‌ها را می‌دهد (درس <a href="3-3.html">۳.۳</a>: حساب اشاره‌گر با مقیاس نوع).</li>
+  <li data-lines="27-30"><b class="what">برق وصل شد.</b> RAM را با <code>0xDEADBEEF</code> پر می‌کنیم تا «آشغال» دیده شود.</li>
+  <li data-lines="32-37"><b class="what">کپی.</b> همان حلقه.</li>
+  <li data-lines="39-42"><b class="what">صفر.</b> همان حلقه.</li>
+</ol>
+<pre class="term" data-from="bootsim.c">
+$ gcc -std=c11 -Wall -Wextra -o bootsim bootsim.c
+$ ./bootsim
+.data = 3 words, .bss = 3 words
+power on:    DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF
+after copy:  00000005 00000007 00000009 DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF
+after zero:  00000005 00000007 00000009 00000000 00000000 00000000 DEADBEEF DEADBEEF
+</pre>
+<p>سطر اول: همه‌چیز آشغال. سطر دوم: <code>.data</code> مقدار گرفت ولی <code>.bss</code> هنوز آشغال است. سطر سوم: <code>.bss</code> هم پاک شد و دو کلمهٔ آخر (خارج از هر بخش) دست‌نخورده ماندند.</p>
+
+<h2 id="main">برنامهٔ کوچک ما</h2>
+<p>اسکریپت و استارت‌آپ آماده‌اند. یک <code>main</code> کوچک می‌نویسیم که هر بخش را یک بار پر کند تا بعدا در فایل خروجی ببینیم:</p>
+
+<div class="code" data-file="main.c" data-lang="c" data-verify="arm-link" data-project="boot" id="m1">
+<pre>
+#include &lt;stdint.h&gt;
+
+uint32_t g_counter = 5;                         /* .data: مقدار اولیه دارد */
+uint32_t g_total;                               /* .bss: صفر */
+const uint32_t g_table[4] = { 1, 2, 4, 8 };     /* .rodata: فقط در Flash */
+volatile uint32_t g_ticks;                      /* .bss */
+
+/* تعریف «قوی»: جای نسخهٔ weak استارت‌آپ می‌نشیند */
+void SysTick_Handler(void)
+{
+    g_ticks++;
+}
+
+int main(void)
+{
+    for (;;) {
+        g_total += g_table[g_counter &amp; 3u];
+        g_counter++;
+    }
+}
+</pre></div>
+<ol class="walk" data-for="m1">
+  <li data-lines="3"><b class="what"><code>.data</code>.</b> سراسری با مقدار اولیهٔ غیرصفر. ۴ بایت در RAM و ۴ بایت در Flash (تصویر).</li>
+  <li data-lines="4"><b class="what"><code>.bss</code>.</b> سراسری بدون مقدار اولیه: فقط ۴ بایت در RAM.</li>
+  <li data-lines="5"><b class="what"><code>.rodata</code>.</b> آرایهٔ ثابت: ۱۶ بایت، فقط در Flash.</li>
+  <li data-lines="6"><b class="what">یک شمارنده.</b> متغیر <code>volatile</code> که در وقفه تغییر می‌کند (درس <a href="3-6.html">۳.۶</a>). در <code>.bss</code> می‌نشیند.</li>
+  <li data-lines="8-12"><b class="what">تعریف <code>SysTick_Handler</code>.</b> یک تابع معمولی با همان نامی که در <code>vectors.c</code> به‌صورت weak اعلان شده بود.
+    <span class="why">لینکر می‌بیند دو تعریف با یک نام دارد: یکی weak، یکی قوی. قوی برنده می‌شود. پس ورودی ۱۵ جدول به تابع ما اشاره خواهد کرد، نه <code>Default_Handler</code>. (در درس <a href="5-4.html">۵.۴</a> واقعا SysTick را روشن می‌کنیم؛ اینجا هرگز صدا زده نمی‌شود.)</span></li>
+  <li data-lines="14-20"><b class="what">حلقهٔ اصلی.</b> ‏<code>main</code> هرگز تمام نمی‌شود (super loop، درس <a href="1-4.html">۱.۴</a>). هر دور یک عنصر از جدول را با شمارنده جمع می‌کند.
+    <span class="why">این حلقه فقط برای استفادهٔ هر سه بخش است تا لینکر هیچ‌کدام را دور نیندازد.</span></li>
+</ol>
+
+<h2 id="build">ساخت و کالبدشکافی ELF</h2>
+<p>یک دستور، هر سه فایل و اسکریپت را می‌سازد:</p>
+<pre class="term" data-nocheck data-from="main.c">
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -nostdlib -T stm32f411.ld -o out.elf vectors.c startup.c main.c
+(بدون هشدار؛ out.elf ساخته شد)
+</pre>
+<ol class="steps">
+  <li><b><code>-mcpu=cortex-m4 -mthumb</code></b> کد برای هستهٔ M4 با دستورهای Thumb.</li>
+  <li><b><code>-ffreestanding</code></b> «محیط ما کتابخانهٔ C استاندارد و سیستم‌عامل ندارد».</li>
+  <li><b><code>-nostdlib</code></b> فایل‌های آمادهٔ استارت‌آپ و کتابخانهٔ C را به لینک اضافه نکن (ما همه‌چیز خودمان نوشته‌ایم).</li>
+  <li><b><code>-T stm32f411.ld</code></b> از این اسکریپت لینکر استفاده کن.</li>
+</ol>
+
+<h3 id="hdr">بخش‌ها: objdump -h</h3>
+<pre class="term" data-nocheck data-from="main.c">
+$ arm-none-eabi-objdump -h out.elf
+
+Sections:
+Idx Name          Size      VMA       LMA       File off  Algn
+  0 .isr_vector   000000e4  08000000  08000000  00001000  2**2
+                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+  1 .text         000000cc  080000e4  080000e4  000010e4  2**2
+                  CONTENTS, ALLOC, LOAD, READONLY, CODE
+  2 .rodata       00000010  080001b0  080001b0  000011b0  2**2
+                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+  3 .data         00000004  20000000  080001c0  00002000  2**2
+                  CONTENTS, ALLOC, LOAD, DATA
+  4 .bss          00000008  20000004  080001c4  00002004  2**2
+                  ALLOC
+  5 .ARM.attributes 0000002e  00000000  00000000  00002004  2**0
+                  CONTENTS, READONLY
+</pre>
+<p>خروجی را ستون به ستون بخوان (همهٔ اعداد هگز و بایت‌اند):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>بخش</th><th>اندازه</th><th>VMA</th><th>LMA</th><th>می‌گوید</th></tr></thead>
+<tbody>
+<tr><td><code>.isr_vector</code></td><td>0xE4 = ۲۲۸</td><td>0x08000000</td><td>0x08000000</td><td>۵۷ ورودی × ۴ بایت، دقیقا اول Flash</td></tr>
+<tr><td><code>.text</code></td><td>0xCC = ۲۰۴</td><td>0x080000E4</td><td>همان</td><td>کد؛ بلافاصله بعد از جدول</td></tr>
+<tr><td><code>.rodata</code></td><td>0x10 = ۱۶</td><td>0x080001B0</td><td>همان</td><td>آرایهٔ <code>g_table</code> (۴ × ۴ بایت)</td></tr>
+<tr><td><code>.data</code></td><td>4</td><td><b>0x20000000</b></td><td><b>0x080001C0</b></td><td>در RAM اجرا می‌شود، در Flash ذخیره است</td></tr>
+<tr><td><code>.bss</code></td><td>8</td><td>0x20000004</td><td>0x080001C4</td><td>در RAM. (ALLOC ولی بدون CONTENTS: چیزی در فایل نیست)</td></tr>
+</tbody></table></div>
+<p>دو نکتهٔ مهم: (۱) ستون‌های VMA و LMA فقط برای <code>.data</code> فرق دارند، و <code>_sidata</code> در اسکریپت ما همان <code>0x080001C0</code> است. (۲) کلمهٔ <code>CONTENTS</code> یعنی محتوا در فایل ذخیره شده. <code>.bss</code> این را ندارد.</p>
+
+<h3 id="size">اندازه‌ها: size</h3>
+<pre class="term" data-nocheck data-from="main.c">
+$ arm-none-eabi-size out.elf
+   text	   data	    bss	    dec	    hex	filename
+    448	      4	      8	    460	    1cc	out.elf
+</pre>
+<ul>
+  <li><b>text = 448:</b> هر چیزی که فقط در Flash می‌ماند: ۲۲۸ + ۲۰۴ + ۱۶.</li>
+  <li><b>data = 4:</b> بخش <code>.data</code>. <b>هم در RAM جا می‌گیرد هم در Flash</b> (تصویر اولیه).</li>
+  <li><b>bss = 8:</b> فقط RAM.</li>
+</ul>
+<div class="callout tip"><div class="ct">دو فرمول که همیشه لازم می‌شوند</div>
+<p><b>Flash مصرفی = text + data.</b> (۴۴۸ + ۴ = ۴۵۲ بایت از ۵۱۲ کیلوبایت).<br>
+<b>RAM مصرفی ثابت = data + bss.</b> (۴ + ۸ = ۱۲ بایت از ۱۲۸ کیلوبایت). پشته و heap جدا حساب می‌شوند.</p></div>
+
+<h3 id="nm">نمادها: nm</h3>
+<pre class="term" data-nocheck data-from="main.c">
+$ arm-none-eabi-nm -n out.elf
+08000000 R g_vectors
+080000e4 W BusFault_Handler
+080000e4 W DebugMon_Handler
+080000e4 T Default_Handler
+080000e4 W EXTI15_10_IRQHandler
+080000e4 W HardFault_Handler
+080000e4 W MemManage_Handler
+080000e4 W NMI_Handler
+080000e4 W PendSV_Handler
+080000e4 W SVC_Handler
+080000e4 W UsageFault_Handler
+080000ec t system_init
+080000f8 T Reset_Handler
+0800015c T SysTick_Handler
+08000178 T main
+080001b0 R g_table
+080001c0 A _sidata
+20000000 D _sdata
+20000000 D g_counter
+20000004 D _edata
+20000004 B _sbss
+20000004 B g_total
+20000008 B g_ticks
+2000000c B _ebss
+20020000 R _estack
+</pre>
+<p>با <code>-n</code> بر اساس آدرس مرتب شده. حرف وسط نوع نماد است: <code>T</code> کد، <code>R</code> ثابت فقط‌خواندنی، <code>D</code> داده با مقدار اولیه، <code>B</code> bss، <code>W</code> نماد weak و <code>A</code> مقدار مطلق. چند مشاهده:</p>
+<ul>
+  <li><code>_sidata</code> = <code>0x080001C0</code> (Flash)، <code>_sdata</code> = <code>0x20000000</code> و <code>_edata</code> = <code>0x20000004</code> (RAM). اختلاف <code>_edata - _sdata</code> = ۴ بایت = یک کلمهٔ <code>.data</code> (<code>g_counter</code>).</li>
+  <li><code>_sbss</code> و <code>_ebss</code>: ۸ بایت با هم فاصله دارند = <code>g_total</code> و <code>g_ticks</code>.</li>
+  <li><code>_estack</code> = <code>0x20020000</code>.</li>
+  <li>همهٔ handler های weak به یک آدرس (<code>0x080000E4</code>) اشاره می‌کنند: <code>Default_Handler</code>. ولی <code>SysTick_Handler</code> آدرس خودش را دارد، <code>0x0800015C</code> (نوع <code>T</code>، قوی)!</li>
+</ul>
+
+<h3 id="vdump">خود جدول: objdump -s</h3>
+<pre class="term" data-nocheck data-from="main.c">
+$ arm-none-eabi-objdump -s -j .isr_vector out.elf
+
+Contents of section .isr_vector:
+ 8000000 00000220 f9000008 e5000008 e5000008  ... ............
+ 8000010 e5000008 e5000008 e5000008 00000000  ................
+ 8000020 00000000 00000000 00000000 e5000008  ................
+ 8000030 e5000008 00000000 e5000008 5d010008  ............]...
+</pre>
+<p>بایت‌ها به‌صورت کلمهٔ ۳۲ بیتی <b>little-endian</b> چاپ شده‌اند (درس <a href="4-7.html">۴.۷</a>). هر کلمه را بایت‌بایت برعکس بخوان:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>آدرس</th><th>بایت‌های چاپ‌شده</th><th>کلمه (بعد از برعکس)</th><th>یعنی</th></tr></thead>
+<tbody>
+<tr><td><code>0x08000000</code></td><td><code>00 00 02 20</code></td><td><code>0x20020000</code></td><td>SP اولیه = <code>_estack</code> ✓</td></tr>
+<tr><td><code>0x08000004</code></td><td><code>f9 00 00 08</code></td><td><code>0x080000F9</code></td><td>Reset_Handler، آدرس واقعی <code>0x080000F8</code> + بیت Thumb ✓</td></tr>
+<tr><td><code>0x08000008</code></td><td><code>e5 00 00 08</code></td><td><code>0x080000E5</code></td><td>NMI → <code>Default_Handler</code> (<code>0x080000E4</code> + بیت Thumb)</td></tr>
+<tr><td><code>0x0800001C</code> تا <code>0x08000028</code></td><td><code>00 00 00 00</code></td><td><code>0</code></td><td>ورودی‌های رزرو ۷ تا ۱۰</td></tr>
+<tr><td><code>0x0800003C</code></td><td><code>5d 01 00 08</code></td><td><code>0x0800015D</code></td><td>SysTick → <code>0x0800015C</code> که <code>main.c</code> نوشته ✓</td></tr>
+</tbody></table></div>
+<p>اسکریپت لینکر، جدول وقفه، استارت‌آپ و ELF واقعی همه با هم می‌خوانند. فقط <code>Reset_Handler</code> را ببین که نماد <code>T</code> در <code>0x080000F8</code> بود و در جدول <code>0x080000F9</code> نوشته شد: همان قرارداد Thumb.</p>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: لینکر آدرس‌ها را در کد چه می‌کند؟</div>
+<p>ببین کامپایلر چطور <code>&amp;_sidata</code> و بقیه را به کد ماشین تبدیل کرده است. این بخش از <code>objdump -d</code> است (وسط‌هایش حذف شده):</p>
+<pre class="term" data-nocheck data-from="startup.c">
+$ arm-none-eabi-objdump -d out.elf
+080000f8 &lt;Reset_Handler&gt;:
+ 80000f8:	b580      	push	{r7, lr}
+ 80000fa:	b082      	sub	sp, #8
+ 80000fc:	af00      	add	r7, sp, #0
+ 80000fe:	4b12      	ldr	r3, [pc, #72]	@ (8000148 &lt;Reset_Handler+0x50&gt;)
+ 8000100:	607b      	str	r3, [r7, #4]
+ 8000102:	4b12      	ldr	r3, [pc, #72]	@ (800014c &lt;Reset_Handler+0x54&gt;)
+ 8000144:	e7fd      	b.n	8000142 &lt;Reset_Handler+0x4a&gt;
+ 8000146:	bf00      	nop
+ 8000148:	080001c0 	.word	0x080001c0
+ 800014c:	20000000 	.word	0x20000000
+ 8000150:	20000004 	.word	0x20000004
+ 8000154:	20000004 	.word	0x20000004
+ 8000158:	2000000c 	.word	0x2000000c
+
+0800015c &lt;SysTick_Handler&gt;:
+ 800015c:	b480      	push	{r7}
+ 800015e:	af00      	add	r7, sp, #0
+ 8000160:	4b04      	ldr	r3, [pc, #16]	@ (8000174 &lt;SysTick_Handler+0x18&gt;)
+ 8000162:	681b      	ldr	r3, [r3, #0]
+</pre>
+<p>چهار کلمهٔ آخر <b>ثابت‌های literal pool</b> هستند: <code>0x080001C0</code> (<code>_sidata</code>)، <code>0x20000000</code> (<code>_sdata</code>)، و <code>0x20000004</code> (<code>_edata</code> و <code>_sbss</code>). لینکر بعد از تعیین چیدمان، همین‌ها را در کد پر می‌کند. یعنی <b>نمادهای اسکریپت لینکر، مستقیم به عدد داخل کد تبدیل می‌شوند</b>؛ وقتی اسکریپت را عوض کنی، همین اعداد عوض می‌شوند و کدِ C لازم نیست تغییر کند.</p></div>
+
+<h2 id="weak">وقفهٔ weak: نام‌های آماده برای جایگزینی</h2>
+<p>یک تجربهٔ عملی: وقفه‌ای را که می‌خواهی، فقط با <b>نوشتن یک تابع هم‌نام</b> جایگزین کن. بدون تغییر در <code>vectors.c</code>. مثلا در درس <a href="5-3.html">۵.۳</a> دکمهٔ آبی روی PC13 با <code>EXTI15_10_IRQHandler</code> کار می‌کند. همین الآن هم می‌توانیم نشان بدهیم لینکر آن را جایگزین می‌کند:</p>
+<div class="code" data-file="main_exti.c" data-lang="c" data-verify="arm" data-cflags="-O2" id="w1">
+<pre>
+#include &lt;stdint.h&gt;
+
+volatile uint32_t g_button_events;
+
+/* تعریف قوی: جای نسخهٔ weak را می‌گیرد (پاک کردن پرچم EXTI در درس 5-3) */
+void EXTI15_10_IRQHandler(void)
+{
+    g_button_events++;
+}
+
+int main(void)
+{
+    for (;;) { }
+}
+</pre></div>
+<ol class="walk" data-for="w1">
+  <li data-lines="3"><b class="what">شمارندهٔ رویداد.</b> ‏<code>volatile</code> چون بعدا وقفه و <code>main</code> هر دو به آن دست می‌زنند (درس <a href="3-6.html">۳.۶</a>).</li>
+  <li data-lines="5-9"><b class="what">تعریف قوی.</b> همان نام handler که در جدول آمده. در وقفهٔ واقعی باید پرچم pending را پاک کنی (درس <a href="5-3.html">۵.۳</a>).
+    <span class="why">اگر اسم را یک حرف اشتباه بنویسی (<code>EXTI15_10_IRQhandler</code>)، هیچ خطایی نمی‌گیری. لینکر یک تابع اضافه‌ی بی‌ربط می‌بیند و جدول همچنان به <code>Default_Handler</code> اشاره می‌کند. اگر وقفهٔ تو «کار نمی‌کند» و برنامه در <code>Default_Handler</code> گیر کرده، اول املای نام را بررسی کن.</span></li>
+  <li data-lines="11-14"><b class="what">main خالی.</b> فقط برای اینکه لینک کامل شود.</li>
+</ol>
+<p>این فایل را (جای <code>main.c</code>) با همان <code>vectors.c</code> و <code>startup.c</code> و اسکریپت لینک کن و ببین:</p>
+<pre class="term" data-nocheck data-from="main_exti.c">
+$ arm-none-eabi-nm -n out.elf | grep -i 'Default\|EXTI'
+080000e4 T Default_Handler
+0800015c T EXTI15_10_IRQHandler
+</pre>
+<pre class="term" data-nocheck data-from="main_exti.c">
+$ arm-none-eabi-objdump -s -j .isr_vector out.elf | tail -2
+ 80000d0 e5000008 e5000008 e5000008 e5000008  ................
+ 80000e0 5d010008                             ]...            
+</pre>
+<p>حالا <code>EXTI15_10_IRQHandler</code> نوع <code>T</code> و آدرس خودش را دارد (<code>0x0800015C</code>)، و آخرین کلمهٔ جدول (ورودی ۵۶ در <code>0x080000E0</code>) برابر <code>0x0800015D</code> شده. ورودی قبلی که همه <code>0x080000E5</code> بود.</p>
+
+<h2 id="pitfalls">تله‌ها: چیزهایی که این‌جا خراب می‌شوند</h2>
+
+<h3 id="opt">۱. بهینه‌سازی حلقهٔ کپی را به memcpy تبدیل می‌کند</h3>
+<p>وقتی بدون <code>-ffreestanding</code> با <code>-O2</code> بسازی، GCC حلقهٔ کپی را می‌شناسد و به‌جایش <code>memcpy</code>/<code>memset</code> صدا می‌زند. ولی چون <code>-nostdlib</code> کتابخانه را نیاورده، لینک شکست می‌خورد:</p>
+<pre class="term" data-nocheck data-from="startup.c">
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -nostdlib -O2 -T stm32f411.ld -o o2.elf vectors.c startup.c main.c
+ld: startup.o: in function `Reset_Handler':
+startup.c:(.text+0x16): undefined reference to `memcpy'
+ld: startup.c:(.text+0x2e): undefined reference to `memset'
+collect2: error: ld returned 1 exit status
+</pre>
+<p>حتی خودِ کد استارت‌آپ برای صدا زدن <code>memcpy</code> آماده نیست: هنوز <code>.data</code> کپی نشده! راه‌حل: <code>-ffreestanding</code> (که ما همیشه داریم) یا پیاده‌سازی <code>memcpy</code> و <code>memset</code> کوچک خودت. (هر بار که <code>-O2</code> اضافه کنی، با همین <code>-ffreestanding</code> ساخت ما بدون مشکل لینک می‌شود.)</p>
+
+<h3 id="ram">۲. RAM پر می‌شود</h3>
+<p>یک آرایهٔ ۱۲۷ کیلوبایتی سراسری اضافه کنیم (<code>char big[127*1024];</code>):</p>
+<pre class="term" data-nocheck data-from="startup.c">
+$ arm-none-eabi-gcc ... vectors.c startup.c main.c big.c
+ld: RAM is too full: less than 1 KiB left for the stack
+collect2: error: ld returned 1 exit status
+</pre>
+<p>پیام <code>ASSERT</code> ما را می‌بینی. بدون آن بررسی، برنامه لینک می‌شد و پشته وسط <code>.bss</code> می‌افتاد؛ نتیجه: خرابی‌های مرموز.</p>
+
+<h3 id="keep">۳. جدول حذف می‌شود</h3>
+<p>اگر <code>-Wl,--gc-sections</code> (برای کوچک‌کردن برنامه؛ درس <a href="6-5.html">۶.۵</a>) بزنی و در اسکریپت <code>KEEP</code> را فراموش کنی، لینکر جدول را «بلااستفاده» می‌بیند و دور می‌ریزد. برنامه‌ات لینک می‌شود ولی روی برد هرگز اجرا نمی‌شود. <code>KEEP</code> و <code>used</code> برای همین‌اند.</p>
+
+<h3 id="order">۴. جدول اول Flash نیست</h3>
+<p>اگر در اسکریپت <code>.text</code> را قبل از <code>.isr_vector</code> بنویسی، اولین کلمهٔ Flash دستور خواهد بود، نه SP. CPU آن دستور را به‌عنوان آدرس پشته می‌خواند و برنامه بی‌دلیل خراب می‌شود. بعد از ساخت همیشه <code>objdump -h</code> را نگاه کن که <code>.isr_vector</code> در <code>0x08000000</code> باشد.</p>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: استارت‌آپ رسمی ST</div>
+<p>در پروژه‌های واقعی معمولا از فایل <code>startup_stm32f411xe.s</code> شرکت ST استفاده می‌کنی (اسمبلی، نه C) که همین کارها را می‌کند و کارهای اضافه هم دارد: صدا زدن <code>SystemInit</code> (تنظیم FPU و ...)، و صدا زدن <code>__libc_init_array</code> که سازنده‌های ایستا و ابتدایی‌سازی کتابخانهٔ C را اجرا می‌کند. اگر کتابخانهٔ C (<code>printf</code>، <code>malloc</code>) می‌خواهی، به‌جای <code>-nostdlib</code> از <code>-nostartfiles</code> استفاده می‌کنی تا فقط فایل‌های استارت‌آپ حذف شوند و خود کتابخانه بماند. جدول وقفهٔ کامل همان فایل حدود صد ورودی دارد. ایدهٔ همهٔ این‌ها همان چیزی است که این‌جا نوشتیم.</p>
+<p>جدول را هم می‌شود جابه‌جا کرد: رجیستر <code>SCB-&gt;VTOR</code> (آدرس <code>0xE000ED08</code>) آدرس شروع جدول را عوض می‌کند. bootloaderها و برنامه‌های چندتصویری از همین استفاده می‌کنند.</p></div>
+
+<h2 id="esp32">ESP32: همین داستان، با یک مقدمهٔ بیشتر</h2>
+<p>ESP32 هم «پیش از <code>app_main</code>» کارهایی می‌کند، ولی قطعه‌های زنجیره فرق دارند. تفاوت اصلی: کد برنامه روی Flash <b>بیرونی</b> است (و از طریق کش خوانده می‌شود)، و یک برنامهٔ دیگر به نام <b>bootloader</b> مسئول بوت است. زنجیره چنین است (ESP32 کلاسیک، ESP-IDF v5):</p>
+<figure><div class="frame">
+<svg viewBox="0 0 760 380" role="img" aria-label="زنجیرهٔ بوت ESP32: کد ROM داخل تراشه، سپس bootloader مرحلهٔ دوم در Flash، سپس برنامه، و در نهایت app_main؛ و چیدمان پیش‌فرض Flash با bootloader در 0x1000، جدول پارتیشن در 0x8000 و برنامه در 0x10000">
+  <defs><marker id="b4a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">بوت ESP32 (از راست به چپ)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="600" y="52" width="138" height="88" rx="12" fill="#ffd60a"/>
+    <rect x="416" y="52" width="138" height="88" rx="12" fill="#7ea3ff"/>
+    <rect x="232" y="52" width="138" height="88" rx="12" fill="#3ddc97"/>
+    <rect x="22" y="52" width="164" height="88" rx="12" fill="#ff86b3"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-size="13.5" font-weight="800">
+    <text x="669" y="84">کد ROM</text><text x="669" y="106" font-size="12" font-weight="600">داخل خود تراشه</text><text x="669" y="124" font-size="12" font-weight="600">تغییرناپذیر</text>
+    <text x="485" y="84">bootloader</text><text x="485" y="106" font-size="12" font-weight="600">مرحلهٔ دوم (در Flash)</text><text x="485" y="124" font-size="12" font-weight="600">تصویر برنامه را وارسی می‌کند</text>
+    <text x="301" y="84">شروع برنامه</text><text x="301" y="106" font-size="12" font-weight="600">راه‌اندازی سیستم،</text><text x="301" y="124" font-size="12" font-weight="600">FreeRTOS</text>
+    <text x="104" y="84" class="mono">app_main()</text><text x="104" y="106" font-size="12" font-weight="600">داخل یک task</text><text x="104" y="124" font-size="12" font-weight="600">کد تو</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M598 96H558" marker-end="url(#b4a)"/><path d="M414 96H374" marker-end="url(#b4a)"/><path d="M230 96H190" marker-end="url(#b4a)"/>
+  </g>
+  <text x="380" y="186" text-anchor="middle" class="s-tx" font-size="14" font-weight="800">چیدمان پیش‌فرض Flash در ESP32 کلاسیک (ESP-IDF، بدون OTA)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="40" y="206" width="70" height="56" fill="#fff"/>
+    <rect x="110" y="206" width="90" height="56" fill="#7ea3ff"/>
+    <rect x="200" y="206" width="70" height="56" fill="#b394ff"/>
+    <rect x="270" y="206" width="90" height="56" fill="#fff"/>
+    <rect x="360" y="206" width="60" height="56" fill="#fff"/>
+    <rect x="420" y="206" width="300" height="56" fill="#3ddc97"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-size="12.5" font-weight="700">
+    <text x="75" y="238" >خالی</text>
+    <text x="155" y="230">bootloader</text>
+    <text x="235" y="230">جدول</text><text x="235" y="248">پارتیشن</text>
+    <text x="315" y="238" class="mono">nvs</text>
+    <text x="390" y="230" class="mono" font-size="11.5">phy_</text><text x="390" y="246" class="mono" font-size="11.5">init</text>
+    <text x="570" y="238">برنامهٔ اصلی (factory app)</text>
+  </g>
+  <g class="mono s-tx" font-size="12" font-weight="700" text-anchor="middle">
+    <text x="40" y="282">0x0</text><text x="110" y="282">0x1000</text><text x="200" y="282">0x8000</text><text x="270" y="282">0x9000</text><text x="360" y="282">0xF000</text><text x="420" y="282">0x10000</text>
+  </g>
+  <text x="380" y="330" text-anchor="middle" class="s-tx" font-size="13.5">آدرس‌ها مربوط به طرح پیش‌فرض است و با تنظیم پروژه (جدول پارتیشن سفارشی) عوض می‌شود.</text>
+  <text x="380" y="352" text-anchor="middle" class="s-tx" font-size="13.5">bootloader جدول پارتیشن را می‌خواند تا بفهمد برنامه کجاست.</text>
+</svg>
+
+</div><figcaption>زنجیرهٔ بوت. آدرس‌های نشان‌داده‌شده همان طرح پیش‌فرض ESP-IDF برای ESP32 کلاسیک‌اند.</figcaption></figure>
+<ol class="steps">
+  <li><b>کد ROM.</b> بعد از reset، پردازنده اول کدی را اجرا می‌کند که در خود تراشه ثبت شده و عوض نمی‌شود. این کد بر پایهٔ پایه‌های strapping (مثلا GPIO0) تصمیم می‌گیرد آیا وارد حالت دانلود شود یا از Flash بوت کند.</li>
+  <li><b>bootloader مرحلهٔ دوم.</b> ROM آن را از Flash (آفست <code>0x1000</code> برای ESP32) در RAM بار می‌کند. bootloader <span class="term" data-t="partitiontable">جدول پارتیشن</span> را (آفست <code>0x8000</code>) می‌خواند تا بفهمد برنامه کجاست، تصویر را وارسی می‌کند و بخش‌های آن را در جای درستشان بار می‌کند.</li>
+  <li><b>شروع برنامه.</b> کد راه‌اندازی ESP-IDF: heap، FreeRTOS، و بعد شروع scheduler.</li>
+  <li><b><code>app_main()</code>.</b> در یک task به نام «main» اجرا می‌شود. <code>app_main</code> مثل <code>main</code> در STM32 نیست: می‌تواند برگردد و task تمام شود. (درس <a href="5-6.html">۵.۶</a>)</li>
+</ol>
+<p>می‌بینی؟ نقش‌ها یکی است: «چیزی باید قبل از برنامهٔ تو، حافظه را آماده کند». فرق این است که در ESP-IDF این کدها آماده‌اند و تو معمولا لازم نیست خودت بنویسی‌شان. اسکریپت لینکر و جدول پارتیشن هم در <code>menuconfig</code> (بخش Partition Table) قابل تغییرند.</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>STM32F411</th><th>ESP32</th></tr></thead>
+<tbody>
+<tr><td>اولین کد</td><td>کد تو (<code>Reset_Handler</code>) مستقیم از Flash داخلی</td><td>کد ROM، بعد bootloader</td></tr>
+<tr><td>جدول وقفه</td><td>ابتدای Flash، سخت‌افزار می‌خواند</td><td>مدیریت وقفه از طریق ESP-IDF</td></tr>
+<tr><td>کپی <code>.data</code> و صفر <code>.bss</code></td><td>تو (<code>Reset_Handler</code>)</td><td>کد شروع ESP-IDF</td></tr>
+<tr><td>نقطهٔ ورود</td><td><code>main</code></td><td><code>app_main</code> در یک task</td></tr>
+<tr><td>تنظیم چیدمان حافظه</td><td>اسکریپت لینکر خودت</td><td>اسکریپت لینکر ESP-IDF + جدول پارتیشن</td></tr>
+</tbody></table></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="3">
+  <p class="q">بعد از reset در Cortex-M4، CPU چه چیزی را از دو کلمهٔ اول جدول وقفه می‌خواند؟</p>
+  <ol>
+    <li data-why="نه. آدرس main در جدول نیست؛ CPU از Reset_Handler شروع می‌کند و آن بعدا main را صدا می‌زند.">آدرس <code>main</code> و اندازهٔ پشته</li>
+    <li data-why="طول برنامه در جدول وقفه ذخیره نمی‌شود و چیزی به اسم «شمارنده» در دو کلمهٔ اول نیست.">اندازهٔ Flash و تعداد وقفه‌ها</li>
+    <li>مقدار اولیهٔ SP و آدرس <code>Reset_Handler</code></li>
+    <li data-why="مقدار .data در Flash است، ولی مبدأش را استارت‌آپ می‌داند (نماد _sidata)، نه CPU.">آدرس <code>.data</code> و آدرس <code>.bss</code></li>
+  </ol>
+  <div class="fb">کلمهٔ اول → SP، کلمهٔ دوم → PC (آدرس <code>Reset_Handler</code>). بقیه را نرم‌افزار استارت‌آپ انجام می‌دهد.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">چرا آدرس <code>Reset_Handler</code> در جدول <code>0x080000F9</code> است، در حالی که خود تابع در <code>0x080000F8</code> قرار دارد؟</p>
+  <ol>
+    <li>بیت ۰ برابر ۱ نشان می‌دهد تابع از نوع Thumb است (قرارداد Cortex-M)</li>
+    <li data-why="نه. لینکر یک بایت اضافه نمی‌گذارد؛ فقط بیت پایین آدرس را برای نشان دادن حالت Thumb روشن می‌کند.">لینکر یک بایت فاصله بین جدول و کد می‌گذارد</li>
+    <li data-why="آدرس زوج و فرد به تراز ربطی ندارد؛ تراز ۴ بایتی است، ولی آدرس واقعی هنوز 0x...F8 است.">چون تابع باید فرد تراز شود</li>
+    <li data-why="هیچ خطایی نیست. برنامه درست کار می‌کند؛ بیت ۰ عمدی است.">اشتباه اسکریپت لینکر است و باید اصلاح شود</li>
+  </ol>
+  <div class="fb">آدرس‌های Thumb در Cortex-M با بیت ۰ = ۱ نوشته می‌شوند. CPU بیت ۰ را حذف می‌کند و از آدرس زوج اجرا می‌کند. اگر ۰ باشد fault می‌دهد.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">در C می‌نویسیم <code>uint32_t g_total;</code> (سراسری، بدون مقدار اولیه). چه چیزی تضمین می‌کند که در ابتدای <code>main</code> صفر باشد؟</p>
+  <ol>
+    <li data-why="سخت‌افزار RAM را صفر نمی‌کند؛ بعد از روشن شدن محتوایش نامعلوم است.">سخت‌افزار RAM را هنگام روشن‌شدن صفر می‌کند</li>
+    <li data-why="کامپایلر فقط بخش .bss را می‌سازد؛ کسی که واقعا صفر می‌نویسد استارت‌آپ است.">کامپایلر هنگام ترجمه صفر را در متغیر می‌گذارد</li>
+    <li data-why="لینکر هیچ کدی اجرا نمی‌کند؛ او فقط آدرس می‌دهد و نمادها را می‌سازد.">لینکر موقع لینک، RAM را صفر می‌کند</li>
+    <li>حلقهٔ صفر کردن <code>.bss</code> در <code>Reset_Handler</code></li>
+  </ol>
+  <div class="fb">قانون C «سراسری = صفر» توسط استارت‌آپ اجرا می‌شود. اگر استارت‌آپ نداشته باشی، <code>g_total</code> آشغال دارد.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">کدام خط استارت‌آپ باگ دارد؟<br><code>uint32_t *src = &amp;_sdata;<br>uint32_t *dst = &amp;_sdata;<br>while (dst &lt; &amp;_edata) { *dst++ = *src++; }</code></p>
+  <ol>
+    <li data-why="شرط حلقه درست است: تا انتهای .data.">شرط <code>dst &lt; &amp;_edata</code></li>
+    <li>مبدأ <code>src</code> که باید <code>&amp;_sidata</code> (تصویر در Flash) باشد</li>
+    <li data-why="*dst++ = *src++ همان کپی درست است.">کپی <code>*dst++ = *src++</code></li>
+    <li data-why="هر دو اشاره‌گر از نوع uint32_t* هستند و مشکلی ندارند.">نوع اشاره‌گرها</li>
+  </ol>
+  <div class="fb">اگر <code>src = &amp;_sdata</code> باشد، حلقه RAM را روی خودش کپی می‌کند و مقدارهای اولیه (مثل <code>g_counter = 5</code>) هرگز از Flash نمی‌آیند: مقدار آشغال می‌ماند.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">در <code>vectors.c</code> نوشته‌ایم <code>void SysTick_Handler(void) __attribute__((weak, alias("Default_Handler")));</code> و در <code>main.c</code> یک تابع <code>void SysTick_Handler(void) { ... }</code> تعریف کرده‌ایم. جدول به کدام اشاره می‌کند؟</p>
+  <ol>
+    <li>به تابع <code>main.c</code> (تعریف قوی، جای weak را می‌گیرد)</li>
+    <li data-why="weak یعنی «اگر نسخهٔ دیگری بود، کنار برو». پس Default_Handler انتخاب نمی‌شود.">به <code>Default_Handler</code> (چون weak زودتر آمده)</li>
+    <li data-why="لینکر برای دو تعریف هم‌نام (یکی weak و یکی قوی) خطا نمی‌دهد؛ فقط دو تعریف قوی خطا می‌دهند.">لینک با خطای «multiple definition» شکست می‌خورد</li>
+    <li data-why="جدول همیشه یک آدرس ثابت دارد؛ نامعتبر نمی‌شود.">به آدرس نامعتبر</li>
+  </ol>
+  <div class="fb">قانون: تعریف قوی بر weak برنده می‌شود. <code>nm</code> هم همین را نشان داد: <code>SysTick_Handler</code> در <code>0x0800015C</code> با نوع <code>T</code>.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">در ESP32 کلاسیک، اولین کدی که بعد از reset اجرا می‌شود چیست؟</p>
+  <ol>
+    <li data-why="app_main آخرین قدم است، بعد از بوت‌لودر و راه‌اندازی FreeRTOS.">تابع <code>app_main</code> تو</li>
+    <li data-why="bootloader مرحلهٔ دوم در Flash است و کد ROM آن را بار می‌کند؛ اول نیست.">bootloader مرحلهٔ دوم</li>
+    <li>کد ROM داخل تراشه</li>
+    <li data-why="ESP32 برخلاف STM32 مستقیم از جدول وقفه شروع نمی‌کند؛ اول کد ROM.">جدول وقفه در آدرس <code>0x08000000</code></li>
+  </ol>
+  <div class="fb">اول کد ROM (تغییرناپذیر)، بعد bootloader مرحلهٔ دوم از Flash، بعد برنامه، و آخر <code>app_main</code> داخل یک task.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: Flash و RAM چقدر شد؟</div>
+<p>خروجی <code>size</code> برنامهٔ ما این بود: <code>text=448 data=4 bss=8</code>. حالا یک آرایهٔ ۱۰۰۰ بایتی سراسری به پروژه اضافه می‌کنیم. در دو حالت: بدون مقدار اولیه (<code>uint8_t g_rx_buf[1000];</code>) و با مقدار اولیه (<code>uint8_t g_rx_buf[1000] = { 1 };</code>).</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> در هر حالت، <code>text</code> و <code>data</code> و <code>bss</code> چقدر می‌شود؟ (Flash مصرفی = text + data.)</li>
+  <li><b>حل:</b> هر دو را با همان دستور بساز و <code>size</code> را بگیر.</li>
+  <li><b>سؤال:</b> چرا حالت دوم Flash را ۱۰۰۰ بایت بیشتر می‌کند ولی اولی نه؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>بخش <code>.bss</code> فقط RAM می‌گیرد. بخش <code>.data</code> هم RAM می‌گیرد هم یک تصویر در Flash دارد. مقدار اولیهٔ <code>{ 1 }</code> بقیهٔ عنصرها را صفر می‌کند، ولی آرایه هنوز جزو <code>.data</code> است، چون <b>یک</b> عنصر غیرصفر دارد.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-nocheck data-from="buf_bss.c">
+$ arm-none-eabi-size buf_bss.elf buf_data.elf
+   text	   data	    bss	    dec	    hex	filename
+    448	      4	   1008	   1460	    5b4	buf_bss.elf
+    448	   1004	      8	   1460	    5b4	buf_data.elf
+</pre>
+<p>Flash مصرفی: <code>448 + 4 = 452</code> در حالت اول (تغییری نکرد)، و <code>448 + 1004 = 1452</code> در حالت دوم. RAM مصرفی هر دو <code>1012</code> بایت (حالت اول: ۴+۱۰۰۸، حالت دوم: ۱۰۰۴+۸).</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-lang="c" id="ex1a"><pre>
+uint8_t g_rx_buf[1000];             // حالت اول: .bss
+uint8_t g_rx_buf[1000] = { 1 };     // حالت دوم: .data
+</pre></div>
+<div class="table-wrap"><table>
+<thead><tr><th>حالت</th><th>text</th><th>data</th><th>bss</th><th>Flash (text+data)</th><th>RAM (data+bss)</th></tr></thead>
+<tbody>
+<tr><td>پایه</td><td>448</td><td>4</td><td>8</td><td>452</td><td>12</td></tr>
+<tr><td>بدون مقدار اولیه</td><td>448</td><td>4</td><td>1008</td><td>452</td><td>1012</td></tr>
+<tr><td>با مقدار اولیه</td><td>448</td><td>1004</td><td>8</td><td>1452</td><td>1012</td></tr>
+</tbody></table></div>
+<p>سؤال ج: آرایهٔ بدون مقدار اولیه به <code>.bss</code> می‌رود. مقدارش صفر است و لازم نیست در Flash ذخیره شود؛ استارت‌آپ صفرش می‌کند. آرایهٔ با <code>{ 1 }</code> عنصر اولش ۱ است، پس <code>.data</code> است و کل ۱۰۰۰ بایتش (با صفرها!) در Flash ذخیره می‌شود تا استارت‌آپ کپی کند.</p>
+<p>درس کاربردی: <b>بافرهای بزرگ را با مقدار اولیهٔ غیرصفر نساز.</b> اگر لازم است مقدار بدهی، در تابع <code>init</code> بده.</p>
+<div class="code" data-file="buf_data.c" data-lang="c" data-verify="arm" id="ex1">
+<pre>
+#include &lt;stdint.h&gt;
+
+uint8_t g_rx_buf[1000] = { 1 };     /* سراسری با مقدار اولیه */
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="3"><b class="what">آرایهٔ ۱۰۰۰ بایتی.</b> تنها یک عنصر غیرصفر (<code>{ 1 }</code>) کافی است تا کل آرایه در <code>.data</code> باشد.
+    <span class="why">کامپایلر باید بتواند «مقدار اولیه» را از Flash کپی کند؛ بنابراین تصویر کامل ۱۰۰۰ بایت ذخیره می‌شود.</span></li>
+</ol>
+</details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: باگ در استارت‌آپ</div>
+<p>دوستت استارت‌آپ را با همان «تراشهٔ اسباب‌بازی» PC امتحان کرده و نتیجه عجیب است: <code>.data</code> همان مقدار ۵ شده و <code>.bss</code> هنوز آشغال دارد. دو باگ در حلقه‌ها هست.</p>
+<div class="code" data-file="bootsim_bug.c" data-lang="c" data-verify="host" id="ex2bug">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+/* «تراشهٔ اسباب‌بازی»: آرایه‌ها نقش Flash و RAM را بازی می‌کنند */
+static const uint32_t flash_image[3] = { 5, 7, 9 };   /* مقدارهای اولیهٔ .data */
+static uint32_t ram[8];      /* کلمهٔ 0..2: .data ، 3..5: .bss ، 6..7: آزاد */
+
+static void dump(const char *title)
+{
+    printf("%-12s", title);
+    for (int i = 0; i &lt; 8; i++) {
+        printf(" %08lX", (unsigned long)ram[i]);
+    }
+    printf("\n");
+}
+
+int main(void)
+{
+    uint32_t *sdata = &amp;ram[0];
+    uint32_t *edata = &amp;ram[3];
+    uint32_t *sbss  = &amp;ram[3];
+    uint32_t *ebss  = &amp;ram[6];
+
+    printf(".data = %ld words, .bss = %ld words\n",
+           (long)(edata - sdata), (long)(ebss - sbss));
+
+    for (int i = 0; i &lt; 8; i++) {
+        ram[i] = 0xDEADBEEFu;               /* برق وصل شد: آشغال */
+    }
+    dump("power on:");
+
+    const uint32_t *src = flash_image;
+    uint32_t *dst = sdata;
+    while (dst &lt; edata) {
+        *dst++ = *src;                      /* کپی .data */
+    }
+    dump("after copy:");
+
+    for (dst = sbss; dst &lt; edata; dst++) {
+        *dst = 0;                           /* صفر کردن .bss */
+    }
+    dump("after zero:");
+    return 0;
+}
+</pre></div>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> بدون اجرا، با نگاه به دو حلقه حدس بزن چه چاپ می‌شود.</li>
+  <li><b>حل:</b> هر دو باگ را پیدا کن و اصلاح کن.</li>
+  <li><b>فکر کن:</b> اگر این باگ‌ها روی برد واقعی بودند، برنامه با چه نشانه‌ای خراب می‌شد؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>حلقهٔ اول را با دقت بخوان: اشاره‌گر <code>src</code> چه می‌شود؟ حلقهٔ دوم: تا کجا صفر می‌نویسد؟ (سه نشانگر <code>edata</code>، <code>sbss</code> و <code>ebss</code> را مقایسه کن.)</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="bootsim_bug.c">
+$ gcc -std=c11 -Wall -Wextra -o bootsim_bug bootsim_bug.c
+$ ./bootsim_bug
+.data = 3 words, .bss = 3 words
+power on:    DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF
+after copy:  00000005 00000005 00000005 DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF
+after zero:  00000005 00000005 00000005 DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF
+</pre>
+<p>پس از اصلاح باید خروجی برنامهٔ اصلی درس را ببینی (<code>5 7 9</code> و بعد سه صفر).</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<ol>
+  <li><b>باگ ۱:</b> در حلقهٔ کپی <code>*dst++ = *src;</code> نوشته‌ای: <code>src</code> جلو نمی‌رود، پس همهٔ کلمه‌ها ۵ (اولین مقدار تصویر) می‌شوند. باید <code>*src++</code> باشد.</li>
+  <li><b>باگ ۲:</b> شرط حلقهٔ صفر <code>dst &lt; edata</code> است. چون <code>edata</code> همان <code>sbss</code> است (شروع bss)، حلقه یک دور هم اجرا نمی‌شود. باید <code>dst &lt; ebss</code> باشد.</li>
+</ol>
+<p>روی برد واقعی: باگ ۱ باعث می‌شود متغیرهای <code>.data</code> مقدار اولیهٔ اشتباه بگیرند (مثلا همهٔ ثابت‌های پیکربندی برابر اولین‌شان)، و باگ ۲ باعث می‌شود متغیرهای سراسری «بدون مقدار» آشغال باشند. علامتش: هر بار که برد را reset می‌کنی رفتار فرق می‌کند، چون آشغال RAM تصادفی است. همین را «باگ گاهی‌اتفاق‌می‌افتد» می‌گویند و پیدا کردنش سخت است.</p>
+<div class="code" data-file="bootsim.c" data-lang="c" data-verify="host" id="ex2">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+/* «تراشهٔ اسباب‌بازی»: آرایه‌ها نقش Flash و RAM را بازی می‌کنند */
+static const uint32_t flash_image[3] = { 5, 7, 9 };   /* مقدارهای اولیهٔ .data */
+static uint32_t ram[8];      /* کلمهٔ 0..2: .data ، 3..5: .bss ، 6..7: آزاد */
+
+static void dump(const char *title)
+{
+    printf("%-12s", title);
+    for (int i = 0; i &lt; 8; i++) {
+        printf(" %08lX", (unsigned long)ram[i]);
+    }
+    printf("\n");
+}
+
+int main(void)
+{
+    uint32_t *sdata = &amp;ram[0];
+    uint32_t *edata = &amp;ram[3];
+    uint32_t *sbss  = &amp;ram[3];
+    uint32_t *ebss  = &amp;ram[6];
+
+    printf(".data = %ld words, .bss = %ld words\n",
+           (long)(edata - sdata), (long)(ebss - sbss));
+
+    for (int i = 0; i &lt; 8; i++) {
+        ram[i] = 0xDEADBEEFu;               /* برق وصل شد: آشغال */
+    }
+    dump("power on:");
+
+    const uint32_t *src = flash_image;
+    uint32_t *dst = sdata;
+    while (dst &lt; edata) {
+        *dst++ = *src++;                    /* کپی .data */
+    }
+    dump("after copy:");
+
+    for (dst = sbss; dst &lt; ebss; dst++) {
+        *dst = 0;                           /* صفر کردن .bss */
+    }
+    dump("after zero:");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="32-37"><b class="what">حلقهٔ کپی درست.</b> <code>src++</code> و <code>dst++</code> با هم.</li>
+  <li data-lines="39-42"><b class="what">حلقهٔ صفر درست.</b> از <code>sbss</code> تا <code>ebss</code>.
+    <span class="why">در نمونهٔ اسباب‌بازی، مقدار <code>ebss</code> را با چاپ اندازهٔ bss (خط ۲۴) هم بررسی می‌کنیم: سه کلمه.</span></li>
+</ol>
+<pre class="term" data-from="bootsim.c">
+$ gcc -std=c11 -Wall -Wextra -o bootsim bootsim.c
+$ ./bootsim
+.data = 3 words, .bss = 3 words
+power on:    DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF
+after copy:  00000005 00000007 00000009 DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF
+after zero:  00000005 00000007 00000009 00000000 00000000 00000000 DEADBEEF DEADBEEF
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: خواندن جدول و اضافه‌کردن وقفه</div>
+<p>در درس دیدیم <code>nm</code> و <code>objdump -s</code> چه نشان می‌دهند. حالا برنامهٔ <code>main_exti.c</code> (بخش «وقفهٔ weak») را ساختیم. خروجی‌های واقعی آن این است:</p>
+<pre class="term" data-nocheck data-from="main_exti.c">
+$ arm-none-eabi-nm -n ex3.elf | grep -i 'Default\|EXTI\|Reset'
+080000e4 T Default_Handler
+080000f8 T Reset_Handler
+0800015c T EXTI15_10_IRQHandler
+</pre>
+<pre class="term" data-nocheck data-from="main_exti.c">
+$ arm-none-eabi-objdump -s -j .isr_vector ex3.elf | tail -2
+ 80000d0 e5000008 e5000008 e5000008 e5000008  ................
+ 80000e0 5d010008                             ]...            
+</pre>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> آخرین کلمهٔ جدول (آدرس <code>0x080000E0</code>) چه عددی است و به چه تابعی اشاره می‌کند؟ (بایت‌ها را برعکس بخوان.)</li>
+  <li><b>حل:</b> نشان بده چرا این کلمه در <code>0x080000E0</code> است (محاسبهٔ <code>0x08000000 + 4 × شمارهٔ ورودی</code>).</li>
+  <li><b>ارتباط با سخت‌افزار:</b> در STM32F411 وقفهٔ <code>EXTI15_10</code> شمارهٔ ۴۰ است. اگر ورودی‌ها از ۰ شماره‌گذاری شوند و ۱۶ ورودی اول برای هسته باشد، شمارهٔ ورودی جدول چند است؟ چرا فایل ما ۵۷ ورودی دارد؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>هر ورودی ۴ بایت است. کلمهٔ <code>5d 01 00 08</code> را از راست به چپ می‌خوانی: <code>08 00 01 5d</code>.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>آخرین کلمه <code>0x0800015D</code> است که همان <code>EXTI15_10_IRQHandler</code> (<code>0x0800015C</code>) با بیت Thumb است. ورودی قبل‌ترها هنوز <code>0x080000E5</code> (Default_Handler) هستند.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<ol>
+  <li><b>الف)</b> بایت‌های <code>5d 01 00 08</code> در little-endian یعنی کلمهٔ <code>0x0800015D</code>. آدرس تابع <code>0x0800015C</code> است (بیت ۰ = پرچم Thumb). طبق <code>nm</code> این آدرس <code>EXTI15_10_IRQHandler</code> است.</li>
+  <li><b>ب)</b> شمارهٔ ورودی = ۵۶. آدرس = <code>0x08000000 + 4 × 56 = 0x08000000 + 224 = 0x080000E0</code> ✓ (۲۲۴ = <code>0xE0</code>).</li>
+  <li><b>پ)</b> شمارهٔ ورودی = <code>16 + 40 = 56</code>. جدول باید حداقل ۵۷ ورودی (شماره‌های ۰ تا ۵۶) باشد تا این وقفه داخلش باشد؛ برای همین ۵۷ گذاشتیم. اگر وقفه‌ای با شمارهٔ بزرگ‌تر فعال کنی، باید جدول را بلندتر کنی؛ وگرنه CPU از بیرون جدول می‌خواند و به آدرس آشغال می‌پرد.</li>
+</ol>
+<p>و کد وقفه (که دیدیم کامپایل می‌شود):</p>
+<div class="code" data-file="main_exti.c" data-lang="c" data-verify="arm" data-cflags="-O2" id="ex3">
+<pre>
+#include &lt;stdint.h&gt;
+
+volatile uint32_t g_button_events;
+
+/* تعریف قوی: جای نسخهٔ weak را می‌گیرد (پاک کردن پرچم EXTI در درس 5-3) */
+void EXTI15_10_IRQHandler(void)
+{
+    g_button_events++;
+}
+
+int main(void)
+{
+    for (;;) { }
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="6-9"><b class="what">تعریف قوی.</b> با همین نام، ورودی ۵۶ جدول را از <code>Default_Handler</code> به این تابع عوض می‌کند، بدون دست زدن به <code>vectors.c</code>.</li>
+</ol>
+</details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>بیشتر برنامه‌نویس‌های embedded عمر خود را با استارت‌آپ آمادهٔ سازنده می‌گذرانند و اسکریپت لینکر را هرگز باز نمی‌کنند... تا روزی که برنامه بی‌دلیل خراب شود: متغیر سراسری مقدار غلط می‌گیرد، RAM پر می‌شود، یا وقفه‌ای به‌جای handler خودش به <code>Default_Handler</code> می‌رود. کسی که این درس را فهمیده، آن روز اول <code>size</code> و <code>nm</code> و <code>objdump -h</code> را باز می‌کند و در پنج دقیقه علت را می‌بیند. <b>این ابزارها بعد از هر تغییر بزرگ ۵ ثانیه وقت می‌گیرند؛ عادتشان کن.</b> اگر جایی گیج شدی، به نگاره‌های درس برگرد: جدول اول Flash، <code>.data</code> دو آدرس دارد، و <code>Reset_Handler</code> قبل از <code>main</code> می‌آید.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li>بعد از reset، Cortex-M دو کلمه می‌خواند: <b>SP</b> (آدرس <code>0x0</code>، آینهٔ Flash) و <b>PC = Reset_Handler</b> (آدرس <code>0x4</code>). بیت ۰ در آدرس تابع = Thumb.</li>
+  <li><b>جدول وقفه</b> = آرایهٔ اشاره‌گر تابع در ابتدای Flash (<code>.isr_vector</code>). ورودی n در <code>0x08000000 + 4n</code>؛ وقفهٔ n ام تراشه ورودی n + ۱۶.</li>
+  <li><b>اسکریپت لینکر</b>: <code>MEMORY</code> (منطقه‌ها)، <code>SECTIONS</code> (چیدمان)، <code>.data &gt; RAM AT &gt; FLASH</code> و نمادهای <code>_sidata _sdata _edata _sbss _ebss _estack</code>.</li>
+  <li><b><code>Reset_Handler</code></b>: کپی <code>.data</code> از Flash، صفر کردن <code>.bss</code>، راه‌اندازی سیستم، <code>main</code>، و حلقهٔ بی‌نهایت. قبل از این حلقه‌ها به سراسری‌ها تکیه نکن.</li>
+  <li>وقفه‌های <b>weak</b> با <code>alias</code> به <code>Default_Handler</code>؛ تعریف هم‌نام قوی جایش را می‌گیرد.</li>
+  <li>ابزارها: <code>objdump -h</code> (بخش‌ها، VMA/LMA)، <code>size</code> (Flash = text + data؛ RAM = data + bss)، <code>nm -n</code> (نمادها)، <code>objdump -s</code> (بایت‌ها).</li>
+  <li>ESP32: کد ROM ← bootloader مرحلهٔ دوم (Flash <code>0x1000</code>) ← جدول پارتیشن (<code>0x8000</code>) ← برنامه ← <code>app_main</code> در یک task.</li>
+</ul></div>
+
+</article>
+</body>
+</html>
