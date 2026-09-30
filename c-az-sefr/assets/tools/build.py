@@ -10,6 +10,8 @@
 قواعد data-verify روی <div class="code">:
   host        gcc -std=c11 -Wall -Wextra ؛ اجرا می‌شود و خروجی با <pre class="term" data-from="فایل"> مقایسه می‌شود
   host-fail   باید کامپایل نشود؛ خط‌های <pre class="term" data-kind="err" data-from="فایل"> باید در stderr باشند
+  arm-link    ساخت و لینک کامل ELF برای Cortex-M4 (با فایل .ld در همان پروژه؛ -nostdlib)
+  make        اجرای make در پوشهٔ پروژه (Makefile هم یکی از بلاک‌های data-project باشد)
   arm         arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -ffreestanding -c (فقط کامپایل)
   frag        فقط برای مستندسازی؛ بررسی نمی‌شود
 ویژگی‌های اختیاری: data-project=نام (چند فایل با هم)، data-cflags، data-libs، data-stdin، data-exit=کد خروج مورد انتظار، data-nocheck (خروجی مقایسه نشود)
@@ -125,6 +127,11 @@ def verify(only):
                     (work / fn).write_text(clean(c["text"]) + "\n", encoding="utf-8")
                     (outdir / fn).write_text(clean(c["text"]) + "\n", encoding="utf-8")
                     if fn.endswith(".c"): srcs.append(fn)
+                if mode == "make":
+                    r = run(["make"], work, timeout=60)
+                    if r.returncode != 0 or (r.stderr.strip() and "data-warn-ok" not in cs[0]["attrs"]): print(f"[{lid}] ✗ {name}: make\n{r.stdout}{r.stderr}"); bad += 1
+                    else: print(f"[{lid}] ✓ {name} (make)")
+                    continue
                 if not srcs: continue
                 cflags = cs[0]["attrs"].get("data-cflags", "").split()
                 libs = cs[0]["attrs"].get("data-libs", "-lm").split()
@@ -150,6 +157,13 @@ def verify(only):
                                 if norm_out("\n".join(shown)) != norm_out(rr.stdout):
                                     print(f"[{lid}] ✗ {name}: خروجی نمایش‌داده‌شده با اجرای واقعی فرق دارد\n--- نمایش‌داده‌شده ---\n{norm_out(chr(10).join(shown))}\n--- واقعی ---\n{norm_out(rr.stdout)}"); bad += 1
                         print(f"[{lid}] ✓ {name}")
+                    elif mode == "arm-link":
+                        lds = [c["attrs"]["data-file"] for c in cs if c["attrs"].get("data-file", "").endswith(".ld")]
+                        asm = [c["attrs"]["data-file"] for c in cs if c["attrs"].get("data-file", "").endswith(".S")]
+                        cmd = ["arm-none-eabi-gcc", "-mcpu=cortex-m4", "-mthumb", "-std=gnu11", "-Wall", "-Wextra", "-ffreestanding", "-nostdlib", *cflags, *(["-T", lds[0]] if lds else []), "-o", "out.elf", *srcs, *asm]
+                        r = run(cmd, work)
+                        if r.returncode != 0 or (r.stderr.strip() and "data-warn-ok" not in cs[0]["attrs"]): print(f"[{lid}] ✗ {name}: (arm-link) {r.stderr}"); bad += 1
+                        else: print(f"[{lid}] ✓ {name} (arm-link)")
                     elif mode == "arm":
                         r = run(["arm-none-eabi-gcc", "-mcpu=cortex-m4", "-mthumb", "-std=gnu11", "-Wall", "-Wextra", "-ffreestanding", *cflags, "-c", *srcs], work)
                         if r.returncode != 0 or (r.stderr.strip() and "data-warn-ok" not in cs[0]["attrs"]): print(f"[{lid}] ✗ {name}: (arm) {r.stderr}"); bad += 1

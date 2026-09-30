@@ -397,6 +397,7 @@
     var zoom = function () { var z = el("div", { "class": "zoom", role: "dialog", "aria-label": "شکل بزرگ" }, "<div></div>"); z.firstChild.appendChild(s.cloneNode(true)); z.addEventListener("click", function () { z.remove(); }); document.body.appendChild(z); };
     f.addEventListener("click", zoom); f.addEventListener("keydown", function (e) { if (e.key === "Enter") zoom(); });
   });
+  article.querySelectorAll("[data-mascot]").forEach(function (m) { m.innerHTML = mascot(m.getAttribute("data-mascot")); });
   article.querySelectorAll(".callout.coach").forEach(function (c) { c.insertAdjacentHTML("afterbegin", mascot("think")); });
   article.querySelectorAll(".callout.warn").forEach(function (c) { if (!c.querySelector(".mascot")) { /* هشدار بدون شخصیت می‌ماند تا شلوغ نشود */ } });
 
