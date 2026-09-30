@@ -1,0 +1,1266 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ماشین حالت (FSM) · C برای میکروکنترلر</title>
+<meta name="description" content="ماشین حالت (FSM) چیست و چرا به‌جای چند فلگ بولی از آن استفاده می‌کنیم؟ پیاده‌سازی با switch و با جدول، عمل ورود و خروج، فیلتر پرش دکمه (debounce) و پارسر فریم سریال، با شبیه‌سازی رویداد روی PC.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="4-6">
+
+<p class="lede">تقریبا هر دستگاه واقعی «حالت» دارد: چراغ راهنما سبز است یا قرمز، ماشین لباس‌شویی در حال شست‌وشو است یا آبکشی، درِ گاراژ باز است یا در حال بسته شدن. برنامه‌ای که این حالت‌ها را با چند متغیر بولی پراکنده نگه دارد، خیلی زود به هم می‌ریزد. در این درس یاد می‌گیری چطور رفتار دستگاه را به‌صورت <b>ماشین حالت</b> بنویسی: ساختاری که کدش کوتاه است، همه‌چیزش روی یک نمودار جا می‌شود و می‌شود آن را روی PC با آرایه‌ای از رویدادها کامل آزمایش کرد.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>حالت، رویداد و گذار را تعریف کنی و یک مسئله را به نمودار حالت تبدیل کنی</li>
+    <li>ماشین حالت را با <code>enum</code> و <code>switch</code> بنویسی و با جدول و اشاره‌گر تابع هم</li>
+    <li>عمل ورود و خروج را در جای درست بگذاری</li>
+    <li>فیلتر پرش دکمه (debounce) و پارسر فریم سریال را با ماشین حالت بسازی</li>
+    <li>ماشین حالت را روی PC با آرایه‌ای از رویدادها آزمایش کنی</li>
+    <li>توضیح بدهی چرا چند فلگ بولی خطرناک‌اند</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="2-4.html">۲.۴</a> (<code>if</code> و <code>switch</code>) و <a href="3-4.html">۳.۴</a> (<code>enum</code>، <code>struct</code>)</li>
+    <li>درس <a href="4-3.html">۴.۳</a> (اشاره‌گر به تابع) و <a href="4-2.html">۴.۲</a> (پروژهٔ چندفایلی)</li>
+    <li>درس <a href="4-5.html">۴.۵</a> (بافر حلقوی) برای بخش «رویداد از کجا می‌آید؟»</li>
+    <li>فقط <code>gcc</code> روی PC</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: دروازهٔ چرخان مترو</h2>
+<p>دروازهٔ ورودی مترو را یادت بیاور. وقتی قفل است، هل بدهی هیچ اتفاقی نمی‌افتد. کارت که بزنی، قفل باز می‌شود. هل که بدهی و رد شوی، دوباره قفل می‌شود. دو نکته اینجا مهم است:</p>
+<ul>
+  <li>دروازه در هر لحظه <b>فقط در یک وضعیت</b> است: قفل یا باز.</li>
+  <li>یک کار (مثل «هل دادن») بسته به وضعیت فعلی، <b>نتیجهٔ متفاوت</b> دارد: در حالت قفل بی‌اثر است، در حالت باز یک نفر را رد می‌کند.</li>
+</ul>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>آسانسور هم همین‌طور است. دکمهٔ طبقهٔ پنجم را وقتی در ایستاده‌ای بزنی، آسانسور راه می‌افتد. همان دکمه را وقتی در حال حرکت است بزنی، فقط یادداشت می‌شود. «دکمه» ثابت است، ولی «کاری که می‌کند» به اینکه <b>الان در چه حالتی هستی</b> بستگی دارد. ماشین حالت یعنی همین را صریح در کد بنویسی.</p></div>
+
+<p>پس سه چیز لازم داریم؛ نام‌هایشان در دنیای برنامه‌نویسی:</p>
+<ul>
+  <li><span class="term" data-t="fsm_state">حالت</span> (state): وضعیتی که سیستم الان در آن است؛ مثل <code>LOCKED</code>. سیستم در هر لحظه دقیقا یک حالت دارد.</li>
+  <li><span class="term" data-t="fsm_event">رویداد</span> (event): چیزی که از بیرون یا از زمان می‌رسد؛ مثل <code>COIN</code> (سکه انداخته شد) یا <code>PUSH</code>. رویداد کاری از خودش نمی‌کند؛ فقط خبر است.</li>
+  <li><span class="term" data-t="transition">گذار</span> (transition): قاعدهٔ «در حالت الف، اگر رویداد ب رسید، برو به حالت پ و این کار را بکن». همراه گذار می‌توان یک <b>عمل</b> (action) هم اجرا کرد؛ مثل «یک سکه بشمار».</li>
+</ul>
+<p>مجموعهٔ همین سه چیز را <span class="term" data-t="fsm">ماشین حالت متناهی</span> (Finite State Machine، خلاصه FSM) می‌نامند: «متناهی» چون تعداد حالت‌ها محدود و از قبل معلوم است.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="نمودار حالت دروازهٔ چرخان: دو حالت قفل و باز؛ سکه قفل را باز می‌کند و عبور آن را می‌بندد">
+  <defs><marker id="tuA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <circle cx="44" cy="170" r="9" fill="#15120a"/>
+  <path d="M54 170H108" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#tuA)"/>
+  <text x="70" y="196" text-anchor="middle" class="s-tx" font-size="12.5">شروع</text>
+  <rect x="112" y="130" width="180" height="80" rx="16" fill="#ff86b3" stroke="#15120a" stroke-width="3"/>
+  <text x="202" y="168" text-anchor="middle" class="mono" fill="#15120a" font-size="21" font-weight="800">LOCKED</text>
+  <text x="202" y="194" text-anchor="middle" fill="#15120a" font-size="13.5" font-weight="700">قفل است</text>
+  <rect x="468" y="130" width="180" height="80" rx="16" fill="#3ddc97" stroke="#15120a" stroke-width="3"/>
+  <text x="558" y="168" text-anchor="middle" class="mono" fill="#15120a" font-size="21" font-weight="800">UNLOCKED</text>
+  <text x="558" y="194" text-anchor="middle" fill="#15120a" font-size="13.5" font-weight="700">باز است</text>
+  <path d="M294 150H464" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#tuA)"/>
+  <text x="380" y="140" text-anchor="middle" class="mono s-tx" font-size="16" font-weight="800">COIN</text>
+  <text x="380" y="170" text-anchor="middle" class="s-tx" font-size="12.5">سکه انداخته شد</text>
+  <path d="M464 196H294" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#tuA)"/>
+  <text x="380" y="222" text-anchor="middle" class="mono s-tx" font-size="16" font-weight="800">PUSH</text>
+  <text x="380" y="242" text-anchor="middle" class="s-tx" font-size="12.5">یک نفر رد شد</text>
+  <path d="M160 128C130 60 270 60 244 128" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#tuA)"/>
+  <text x="202" y="34" text-anchor="middle" class="mono s-tx" font-size="16" font-weight="800">PUSH</text>
+  <text x="202" y="54" text-anchor="middle" class="s-tx" font-size="12.5">فشار بی‌اثر است</text>
+  <path d="M516 128C486 60 626 60 600 128" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#tuA)"/>
+  <text x="558" y="34" text-anchor="middle" class="mono s-tx" font-size="16" font-weight="800">COIN</text>
+  <text x="558" y="54" text-anchor="middle" class="s-tx" font-size="12.5">سکهٔ اضافه؛ فقط شمرده می‌شود</text>
+  <text x="380" y="284" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">هر پیکان = یک گذار: «رویداد» حالت را از این به آن می‌برد</text>
+</svg>
+</div><figcaption>نمودار حالت دروازه. هر جعبه یک حالت است و هر پیکان یک گذار با نام رویدادش. پیکانی که به خودش برمی‌گردد یعنی «رویداد آمد، ولی حالت عوض نمی‌شود».</figcaption></figure>
+
+<h2 id="flags">بدون ماشین حالت: اسپاگتی فلگ‌ها</h2>
+<p>قبل از راه‌حل، خود مشکل را ببین. تازه‌کارها معمولا برای هر «وضعیت» یک متغیر <code>bool</code> می‌گذارند و هر رویداد آن‌ها را عوض می‌کند. مثلا کنترل یک موتور با سه فلگ:</p>
+
+<div class="code" data-file="flags.c" data-lang="c" data-verify="host" id="code_flags">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdbool.h&gt;
+
+static bool running = false;
+static bool paused  = false;
+static bool error   = false;
+
+static void on_start(void)  { running = true; }
+static void on_pause(void)  { paused = true; }
+static void on_error(void)  { error = true; running = false; }
+static void on_resume(void) { paused = false; running = true; }
+
+static void show(const char *ev)
+{
+    printf("%-7s running=%d paused=%d error=%d\n", ev, running, paused, error);
+}
+
+int main(void)
+{
+    on_start();  show("start");
+    on_pause();  show("pause");
+    on_error();  show("error");
+    on_resume(); show("resume");
+    if (running &amp;&amp; error) {
+        printf("BUG: motor is running while in error!\n");
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code_flags">
+  <li data-lines="4-6"><b class="what">سه فلگ.</b> «در حال کار»، «مکث» و «خطا»، هر کدام یک <code>bool</code> جدا.
+    <span class="why">سه متغیر دوحالته یعنی ۲×۲×۲ = ۸ ترکیب ممکن. ولی فقط چهار وضعیت معنی دارند (بیکار، کار، مکث، خطا). ۴ ترکیب دیگر مثل «کار و خطا هم‌زمان» بی‌معنی‌اند ولی کد جلویشان را نمی‌گیرد.</span></li>
+  <li data-lines="8-11"><b class="what">یک تابع برای هر رویداد.</b> هر تابع فقط فلگ‌هایی را عوض می‌کند که نویسنده در همان لحظه یادش بود.
+    <span class="why">در <code>on_pause</code> فراموش شد که <code>running</code> را خاموش کنیم، و در <code>on_resume</code> فراموش شد که «خطا نیست؟» را بپرسیم.</span></li>
+  <li data-lines="13-16"><b class="what">چاپ وضعیت.</b> برای دیدن همهٔ فلگ‌ها پس از هر رویداد.</li>
+  <li data-lines="20-23"><b class="what">یک سناریو.</b> شروع، مکث، خطا، ادامه.</li>
+  <li data-lines="24-26"><b class="what">تشخیص وضعیت غیرممکن.</b> اگر کار و خطا هم‌زمان باشند، هشدار می‌دهیم.</li>
+</ol>
+<pre class="term" data-from="flags.c">
+$ gcc -std=c11 -Wall -Wextra -o flags flags.c
+$ ./flags
+start   running=1 paused=0 error=0
+pause   running=1 paused=1 error=0
+error   running=0 paused=1 error=1
+resume  running=1 paused=0 error=1
+BUG: motor is running while in error!
+</pre>
+
+<p>به سطر آخر نگاه کن: موتور با <code>error=1</code> هنوز می‌چرخد. هیچ خطای کامپایلری هم نبود و هر تابع به‌تنهایی «درست» به نظر می‌رسد. اسم این وضع <span class="term" data-t="spaghetti">اسپاگتی فلگ‌ها</span> است: هر فلگ جدید تعداد ترکیب‌ها را دو برابر می‌کند و هیچ‌کس نمی‌تواند همهٔ آن‌ها را در ذهنش نگه دارد.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>تعداد فلگ</th><th>ترکیب‌های ممکن</th><th>وضعیت‌های معنی‌دار (مثلا)</th></tr></thead>
+<tbody>
+<tr><td>۳</td><td>۸</td><td>۴</td></tr>
+<tr><td>۶</td><td>۶۴</td><td>شاید ۷ یا ۸</td></tr>
+<tr><td>۱۰</td><td>۱۰۲۴</td><td>شاید ۱۰</td></tr>
+</tbody></table></div>
+<p>راه‌حل ماشین حالت: <b>یک متغیر</b> (یک <code>enum</code>) که حالت فعلی را می‌گوید. چون فقط یک مقدار می‌گیرد، «کار و خطا هم‌زمان» اصلا وجود ندارد و ترکیب غیرممکن نمی‌شود ساخت.</p>
+
+<h2 id="switch">پیاده‌سازی اول: <span class="en">enum</span> و <span class="en">switch</span></h2>
+<p>ساده‌ترین قالب: حالت‌ها یک <code>enum</code>، رویدادها یک <code>enum</code> دیگر، و یک تابع که با <code>switch</code> روی حالت و بعد شرط روی رویداد کار می‌کند. دروازهٔ چرخان را به‌صورت یک ماژول چندفایلی (درس <a href="4-2.html">۴.۲</a>) می‌سازیم. اول هدر:</p>
+
+<div class="code" data-file="turnstile.h" data-lang="c" data-verify="host" data-project="turnstile" id="tsh">
+<pre>
+#ifndef TURNSTILE_H
+#define TURNSTILE_H
+
+typedef enum {
+    ST_LOCKED,
+    ST_UNLOCKED
+} turn_state_t;
+
+typedef enum {
+    EV_COIN,
+    EV_PUSH
+} turn_event_t;
+
+typedef struct {
+    turn_state_t state;
+    unsigned coins;         /* چند سکه گرفته شده */
+    unsigned passed;        /* چند نفر رد شده‌اند */
+} turnstile_t;
+
+void turnstile_init(turnstile_t *t);
+void turnstile_handle(turnstile_t *t, turn_event_t ev);
+const char *turn_state_name(turn_state_t s);
+const char *turn_event_name(turn_event_t e);
+
+#endif /* TURNSTILE_H */
+</pre></div>
+<ol class="walk" data-for="tsh">
+  <li data-lines="1-2,25"><b class="what">include guard.</b> مثل همیشه.</li>
+  <li data-lines="4-7"><b class="what">حالت‌ها.</b> یک <code>enum</code> با نام‌های خوانا. مقدارها به‌ترتیب ۰ و ۱ هستند.
+    <span class="why">به‌جای «حالت ۰ و ۱»، نام می‌گذاریم. پیشوند <code>ST_</code> نام‌ها را از نام‌های دیگر پروژه جدا می‌کند.</span></li>
+  <li data-lines="9-12"><b class="what">رویدادها.</b> فقط دو رویداد: سکه و هل دادن.</li>
+  <li data-lines="14-18"><b class="what">وضعیت کامل ماشین.</b> علاوه بر <code>state</code> دو شمارنده هم داریم؛ به چنین داده‌های کنار حالت گفته می‌شود <b>داده‌های جانبی</b> (شمارنده‌ها، مهلت‌ها). حالت را نباید با همین‌ها یکی گرفت: حالت «کجا هستم» را می‌گوید، شمارنده «چقدر شده».</li>
+  <li data-lines="20-23"><b class="what">چهار تابع.</b> ساخت، رسیدگی به یک رویداد، و دو تابع نام برای چاپ.</li>
+</ol>
+
+<div class="code" data-file="turnstile.c" data-lang="c" data-verify="host" data-project="turnstile" id="tsc">
+<pre>
+#include "turnstile.h"
+
+void turnstile_init(turnstile_t *t)
+{
+    t-&gt;state = ST_LOCKED;
+    t-&gt;coins = 0;
+    t-&gt;passed = 0;
+}
+
+void turnstile_handle(turnstile_t *t, turn_event_t ev)
+{
+    switch (t-&gt;state) {
+    case ST_LOCKED:
+        if (ev == EV_COIN) {
+            t-&gt;coins++;
+            t-&gt;state = ST_UNLOCKED;     // سکه انداختی: قفل باز شد
+        }
+        break;                          // فشار به قفل: هیچ اتفاقی نمی‌افتد
+
+    case ST_UNLOCKED:
+        if (ev == EV_PUSH) {
+            t-&gt;passed++;
+            t-&gt;state = ST_LOCKED;       // یک نفر رد شد: دوباره قفل
+        } else if (ev == EV_COIN) {
+            t-&gt;coins++;                 // سکهٔ اضافه: می‌گیریم، حالت عوض نمی‌شود
+        }
+        break;
+    }
+}
+
+const char *turn_state_name(turn_state_t s)
+{
+    static const char *const names[] = { "LOCKED", "UNLOCKED" };
+    return names[s];
+}
+
+const char *turn_event_name(turn_event_t e)
+{
+    static const char *const names[] = { "COIN", "PUSH" };
+    return names[e];
+}
+</pre></div>
+<ol class="walk" data-for="tsc">
+  <li data-lines="3-8"><b class="what">شروع.</b> ماشین همیشه در یک حالت شروع مشخص شروع می‌کند: قفل.
+    <span class="why">حالت اولیهٔ نامعلوم همان «مقدار آشغال» درس <a href="2-1.html">۲.۱</a> است. حتما مقدار اولیه بده.</span></li>
+  <li data-lines="10-12"><b class="what">تابع رسیدگی.</b> رویداد را می‌گیرد و بسته به حالت فعلی رفتار می‌کند. هر بار که رویدادی برسد، این تابع یک‌بار صدا زده می‌شود.</li>
+  <li data-lines="13-18"><b class="what">حالت LOCKED.</b> اگر سکه آمد: یک سکه بشمار (عمل) و برو به <code>UNLOCKED</code> (گذار). هر رویداد دیگر (هل دادن) بی‌اثر است و حالت عوض نمی‌شود.
+    <span class="why">هر <code>case</code> با <code>break</code> تمام می‌شود. بدون آن اجرا به <code>case</code> بعدی می‌ریزد (fall-through) که در تمرین ۲ خرابکاری‌اش را می‌بینی.</span></li>
+  <li data-lines="20-27"><b class="what">حالت UNLOCKED.</b> هل دادن: یک نفر رد شد، بشمار و قفل کن. سکهٔ اضافه: فقط بشمار.</li>
+  <li data-lines="31-41"><b class="what">نام‌ها برای چاپ.</b> آرایه‌ای از رشته‌ها که با خود <code>enum</code> اندیس می‌خورد.
+    <span class="why">این کار به این دلیل درست است که ترتیب نام‌ها با ترتیب <code>enum</code> یکی است. اگر حالت جدیدی وسط اضافه کنی، باید نام را هم در همان جا اضافه کنی.</span></li>
+</ol>
+
+<p>حالا برنامهٔ آزمایش. نکتهٔ مهم: <b>رویدادها را از یک آرایه می‌خوانیم</b>، نه از سخت‌افزار. به این ترتیب هر سناریو، هر بار یکسان تکرار می‌شود و می‌شود خروجی را وارسی کرد.</p>
+
+<div class="code" data-file="main.c" data-lang="c" data-verify="host" data-project="turnstile" id="tsm">
+<pre>
+#include &lt;stdio.h&gt;
+#include "turnstile.h"
+
+int main(void)
+{
+    static const turn_event_t events[] = {
+        EV_PUSH, EV_COIN, EV_COIN, EV_PUSH, EV_PUSH, EV_COIN, EV_PUSH
+    };
+    turnstile_t gate;
+
+    turnstile_init(&amp;gate);
+    for (unsigned i = 0; i &lt; sizeof(events) / sizeof(events[0]); i++) {
+        turn_state_t before = gate.state;
+        turnstile_handle(&amp;gate, events[i]);
+        printf("%-4s: %-8s -&gt; %s\n", turn_event_name(events[i]),
+               turn_state_name(before), turn_state_name(gate.state));
+    }
+    printf("coins=%u passed=%u\n", gate.coins, gate.passed);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="tsm">
+  <li data-lines="6-8"><b class="what">سناریوی آزمایش.</b> آرایه‌ای ثابت از رویدادها: هل بدون سکه، سکه، سکهٔ اضافه، عبور، هل بی‌اثر، سکه، عبور.
+    <span class="why">آرایهٔ ثابت یعنی «آزمایش قابل‌تکرار». همین ایده را در فصل ۶ به تست واحد می‌رسانیم.</span></li>
+  <li data-lines="9-11"><b class="what">ساخت.</b> دروازه را می‌سازیم و در حالت قفل شروع می‌کنیم.</li>
+  <li data-lines="12-17"><b class="what">اجرای هر رویداد.</b> حالت قبل را نگه می‌داریم، رویداد را می‌دهیم، و حالت قبل و بعد را چاپ می‌کنیم.</li>
+  <li data-lines="18"><b class="what">داده‌های جانبی.</b> پایان کار: سکه‌ها و عبورها.</li>
+</ol>
+<pre class="term" data-from="turnstile">
+$ gcc -std=c11 -Wall -Wextra -o turnstile turnstile.c main.c
+$ ./turnstile
+PUSH: LOCKED   -&gt; LOCKED
+COIN: LOCKED   -&gt; UNLOCKED
+COIN: UNLOCKED -&gt; UNLOCKED
+PUSH: UNLOCKED -&gt; LOCKED
+PUSH: LOCKED   -&gt; LOCKED
+COIN: LOCKED   -&gt; UNLOCKED
+PUSH: UNLOCKED -&gt; LOCKED
+coins=3 passed=2
+</pre>
+
+<p>خروجی را با شکل بالا تطبیق بده: هل در حالت قفل، خودش را به خودش می‌فرستد (<code>LOCKED -&gt; LOCKED</code>)؛ سکهٔ دوم در حالت باز هم همین‌طور. سه سکه گرفته شد ولی فقط دو نفر رد شدند: سکهٔ دوم را وقتی قفل از قبل باز بود انداختند و هدر رفت. با دست بشمار و خودت مطمئن شو.</p>
+
+<div class="callout warn"><div class="ct">اگر <span class="en">break</span> را فراموش کنی؟</div>
+<p>کامپایلر GCC با <code>-Wextra</code> (که همیشه می‌گوییم استفاده کن) هشدار <code>this statement may fall through</code> می‌دهد. اگر می‌خواهی عمدا از یک <code>case</code> به بعدی بریزی، کنارش کامنت <code>/* fall through */</code> بگذار تا هم هشدار خاموش شود و هم خواننده بفهمد عمدی بوده. این را در تمرین ۲ می‌بینی.</p></div>
+
+<h2 id="table">پیاده‌سازی دوم: جدول گذار</h2>
+<p>وقتی حالت‌ها و رویدادها زیاد می‌شوند، <code>switch</code> تودرتو طولانی می‌شود و پیدا کردن «از حالت الف با رویداد ب به کجا می‌روم؟» سخت. راه دیگر: همهٔ گذارها را در یک <b>جدول</b> بنویس. سطرها حالت‌ها، ستون‌ها رویدادها، و هر خانه حالت بعدی. اگر خانه‌ای «همان حالت» بود، رویداد نادیده گرفته می‌شود.</p>
+<p>نمونه: چراغ راهنما با یک دکمهٔ عابر. زمان هر حالت با «شمارش tick» اندازه گرفته می‌شود. <span class="term" data-t="tick">tick</span> یعنی یک ضربهٔ منظم ساعت نرم‌افزار (مثلا هر ۱۰۰ میلی‌ثانیه)؛ روی برد واقعی تایمر آن را می‌سازد (درس <a href="5-4.html">۵.۴</a>). اینجا تیک‌ها را از آرایه می‌خوانیم.</p>
+<ul>
+  <li><b>سبز:</b> ۴ تیک، بعد زرد. اگر عابر دکمه را زد، زودتر زرد می‌شود.</li>
+  <li><b>زرد:</b> ۲ تیک، بعد قرمز. دکمه اینجا بی‌اثر است.</li>
+  <li><b>قرمز:</b> ۳ تیک (عابر رد می‌شود)، بعد سبز. دکمه بی‌اثر است.</li>
+</ul>
+
+<div class="code" data-file="traffic.h" data-lang="c" data-verify="host" data-project="traffic" id="trh">
+<pre>
+#ifndef TRAFFIC_H
+#define TRAFFIC_H
+
+typedef enum {
+    S_GREEN,
+    S_YELLOW,
+    S_RED,
+    S_COUNT             /* تعداد حالت‌ها؛ حالت واقعی نیست */
+} light_state_t;
+
+typedef enum {
+    E_TIMEOUT,          /* زمان حالت فعلی تمام شد */
+    E_PED_BUTTON,       /* عابر دکمه را زد */
+    E_COUNT
+} light_event_t;
+
+typedef struct {
+    light_state_t state;
+    unsigned remaining; /* چند tick تا پایان این حالت */
+} light_t;
+
+void light_init(light_t *l);
+void light_tick(light_t *l);                    /* یک tick زمان گذشت */
+void light_dispatch(light_t *l, light_event_t ev);
+const char *light_state_name(light_state_t s);
+
+#endif /* TRAFFIC_H */
+</pre></div>
+<ol class="walk" data-for="trh">
+  <li data-lines="4-9"><b class="what">حالت‌ها با نگهبان.</b> آخرین عضو <code>S_COUNT</code> حالت واقعی نیست؛ چون <code>enum</code> از صفر شروع می‌شود، مقدارش برابر تعداد حالت‌هاست (ترفند درس <a href="3-4.html">۳.۴</a>).
+    <span class="why">با این عدد اندازهٔ جدول‌ها را می‌نویسیم. حالت جدید که وسط اضافه کنی، اندازه‌ها خودشان بزرگ می‌شوند.</span></li>
+  <li data-lines="11-15"><b class="what">رویدادها.</b> «مهلت تمام شد» و «دکمهٔ عابر». همان ترفند <code>E_COUNT</code>.</li>
+  <li data-lines="17-20"><b class="what">وضعیت.</b> حالت فعلی و چند تیک تا پایان آن.</li>
+  <li data-lines="22-25"><b class="what">API.</b> ساخت، یک تیک، ارسال رویداد، و نام حالت برای چاپ.</li>
+</ol>
+
+<div class="code" data-file="traffic.c" data-lang="c" data-verify="host" data-project="traffic" id="trc">
+<pre>
+#include &lt;stdio.h&gt;
+#include "traffic.h"
+
+typedef void (*action_fn)(void);
+
+/* جدول گذار: سطر = حالت فعلی، ستون = رویداد، خانه = حالت بعدی */
+static const light_state_t next_state[S_COUNT][E_COUNT] = {
+    /*             E_TIMEOUT  E_PED_BUTTON */
+    /* S_GREEN  */ { S_YELLOW, S_YELLOW },
+    /* S_YELLOW */ { S_RED,    S_YELLOW },
+    /* S_RED    */ { S_GREEN,  S_RED    },
+};
+
+static const unsigned duration[S_COUNT] = { 4, 2, 3 };
+
+static void enter_green(void)  { printf("  enter GREEN\n"); }
+static void enter_yellow(void) { printf("  enter YELLOW\n"); }
+static void enter_red(void)    { printf("  enter RED (walk on)\n"); }
+static void exit_red(void)     { printf("  exit RED (walk off)\n"); }
+
+static const action_fn entry_action[S_COUNT] = { enter_green, enter_yellow, enter_red };
+static const action_fn exit_action[S_COUNT]  = { NULL, NULL, exit_red };
+
+static void go_to(light_t *l, light_state_t next)
+{
+    if (exit_action[l-&gt;state] != NULL) {
+        exit_action[l-&gt;state]();
+    }
+    l-&gt;state = next;
+    l-&gt;remaining = duration[next];
+    if (entry_action[next] != NULL) {
+        entry_action[next]();
+    }
+}
+
+void light_init(light_t *l)
+{
+    l-&gt;state = S_RED;
+    l-&gt;remaining = duration[S_RED];
+    entry_action[S_RED]();
+}
+
+void light_dispatch(light_t *l, light_event_t ev)
+{
+    light_state_t next = next_state[l-&gt;state][ev];
+    if (next != l-&gt;state) {
+        go_to(l, next);
+    }
+}
+
+void light_tick(light_t *l)
+{
+    if (l-&gt;remaining &gt; 0U) {
+        l-&gt;remaining--;
+    }
+    if (l-&gt;remaining == 0U) {
+        light_dispatch(l, E_TIMEOUT);
+    }
+}
+
+const char *light_state_name(light_state_t s)
+{
+    static const char *const names[S_COUNT] = { "GREEN", "YELLOW", "RED" };
+    return names[s];
+}
+</pre></div>
+<ol class="walk" data-for="trc">
+  <li data-lines="4"><b class="what">نوع عمل.</b> عمل‌ها تابع‌هایی بدون ورودی و خروجی‌اند. با <code>typedef</code> (درس <a href="4-3.html">۴.۳</a>) اسمی برای «اشاره‌گر به چنین تابعی» می‌سازیم.</li>
+  <li data-lines="6-12"><b class="what">جدول گذار.</b> یک آرایهٔ دوبعدی (درس <a href="2-7.html">۲.۷</a>): <code>next_state[حالت][رویداد]</code> حالت بعدی را می‌دهد. سطر سبز: هر دو رویداد به زرد. سطر زرد: مهلت به قرمز می‌رود ولی دکمه در زرد می‌ماند. سطر قرمز: مهلت به سبز، دکمه در قرمز.
+    <span class="why">کل منطق در ۳ سطر جا شد و با یک نگاه خوانده می‌شود. <code>const</code> یعنی جدول می‌تواند در Flash بماند و RAM نگیرد (درس <a href="3-5.html">۳.۵</a>).</span></li>
+  <li data-lines="14"><b class="what">مدت هر حالت.</b> بر حسب تیک؛ اندیس با نام حالت‌ها.</li>
+  <li data-lines="16-19"><b class="what">عمل‌های ورود و خروج.</b> چهار تابع کوچک؛ سه ورود و یک خروج (فقط برای قرمز). در ادامهٔ درس دلیلشان را می‌گوییم.</li>
+  <li data-lines="21-22"><b class="what">جدول اشاره‌گر تابع.</b> برای هر حالت، تابع ورودش و تابع خروجش. جایی که عمل نداریم <code>NULL</code> می‌گذاریم.
+    <span class="why">این همان «جدول اشاره‌گر به تابع» درس <a href="4-3.html">۴.۳</a> است، با ایندکس‌کردن توسط <code>enum</code>. قبل از صدا زدن باید <code>NULL</code> را چک کنیم، وگرنه برنامه از کار می‌افتد.</span></li>
+  <li data-lines="24-34"><b class="what">تابع go_to.</b> چهار قدم به این ترتیب: (۱) عمل خروج حالت فعلی، (۲) عوض کردن حالت، (۳) بار کردن مهلت حالت جدید، (۴) عمل ورود حالت جدید.
+    <span class="why">جای همهٔ گذارها فقط یکی است. اگر بخواهیم مثلا هر گذار را لاگ کنیم، فقط همین‌جا می‌نویسیم.</span></li>
+  <li data-lines="36-41"><b class="what">شروع.</b> از حالت قرمز شروع می‌کنیم و عمل ورودش را اجرا می‌کنیم.</li>
+  <li data-lines="43-49"><b class="what">ارسال رویداد.</b> حالت بعدی را از جدول می‌خوانیم و فقط اگر با حالت فعلی فرق داشت، گذار را انجام می‌دهیم. رویدادی که حالت را عوض نمی‌کند، هیچ عملی هم اجرا نمی‌کند (نه خروج و نه ورود).
+    <span class="why">اگر این شرط را نمی‌گذاشتیم، دکمهٔ عابر در حالت زرد مهلت را دوباره ۲ می‌کرد و می‌توانست زرد را برای همیشه نگه دارد.</span></li>
+  <li data-lines="51-59"><b class="what">تابع tick.</b> یک تیک از مهلت کم می‌کند و وقتی به صفر رسید، رویداد «مهلت تمام شد» را می‌فرستد.
+    <span class="why">مهلت هم یک رویداد است؛ برای همین ماشین با <code>E_TIMEOUT</code> رفتار یکسانی با بقیهٔ رویدادها دارد.</span></li>
+  <li data-lines="61-65"><b class="what">نام حالت.</b> برای چاپ.</li>
+</ol>
+
+<div class="code" data-file="main.c" data-lang="c" data-verify="host" data-project="traffic" id="trm">
+<pre>
+#include &lt;stdio.h&gt;
+#include "traffic.h"
+
+int main(void)
+{
+    /* 'T' = یک tick گذشت، 'P' = عابر دکمه را زد */
+    const char script[] = "TTTTTPTTTTT";
+    light_t light;
+
+    light_init(&amp;light);
+    for (unsigned i = 0; script[i] != '\0'; i++) {
+        printf("%c:\n", script[i]);
+        if (script[i] == 'T') {
+            light_tick(&amp;light);
+        } else {
+            light_dispatch(&amp;light, E_PED_BUTTON);
+        }
+        printf("  now %s, remaining=%u\n", light_state_name(light.state), light.remaining);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="trm">
+  <li data-lines="6-7"><b class="what">سناریو.</b> یک رشته که هر نویسه یک رویداد است: <code>T</code> یعنی یک تیک، <code>P</code> یعنی عابر دکمه را زد. رویداد <code>P</code> وسط سبز می‌آید.</li>
+  <li data-lines="10"><b class="what">شروع.</b> عمل ورود قرمز فورا چاپ می‌شود.</li>
+  <li data-lines="11-19"><b class="what">حلقه.</b> هر نویسه را چاپ می‌کنیم، رویداد را به ماشین می‌دهیم و وضعیت بعد از آن را می‌نویسیم.</li>
+</ol>
+<pre class="term" data-from="traffic">
+$ gcc -std=c11 -Wall -Wextra -o traffic traffic.c main.c
+$ ./traffic
+  enter RED (walk on)
+T:
+  now RED, remaining=2
+T:
+  now RED, remaining=1
+T:
+  exit RED (walk off)
+  enter GREEN
+  now GREEN, remaining=4
+T:
+  now GREEN, remaining=3
+T:
+  now GREEN, remaining=2
+P:
+  enter YELLOW
+  now YELLOW, remaining=2
+T:
+  now YELLOW, remaining=1
+T:
+  enter RED (walk on)
+  now RED, remaining=3
+T:
+  now RED, remaining=2
+T:
+  now RED, remaining=1
+T:
+  exit RED (walk off)
+  enter GREEN
+  now GREEN, remaining=4
+</pre>
+
+<p>ببین چه شد: بعد از سه تیک قرمز تمام شد و به‌ترتیب عمل خروج قرمز و عمل ورود سبز اجرا شد. وسط سبز (با ۲ تیک مانده)، <code>P</code> آمد و بلافاصله زرد شد. بعد از ۲ تیک زرد، قرمز شد. هیچ‌جا حالت‌ها با هم ترکیب نشدند.</p>
+
+<div class="callout tip"><div class="ct">کدام را انتخاب کنم: switch یا جدول؟</div>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th><code>switch</code></th><th>جدول</th></tr></thead>
+<tbody>
+<tr><td>مناسب برای</td><td>حالت‌های کم، رفتار هر حالت متفاوت و شرط‌دار (شمارنده، مقایسه)</td><td>حالت‌ها و رویدادهای زیاد، رفتار یکنواخت</td></tr>
+<tr><td>خواندن</td><td>باید همهٔ شرط‌ها را دنبال کنی</td><td>یک نگاه به جدول کافی است</td></tr>
+<tr><td>تغییر</td><td>چند جا را باید ویرایش کنی</td><td>یک خانه یا یک سطر</td></tr>
+<tr><td>حافظه</td><td>فقط کد</td><td>جدول <code>const</code> در Flash</td></tr>
+</tbody></table></div>
+<p>در عمل بیشتر پروژه‌ها ترکیب می‌کنند: جدول برای «حالت بعدی» و <code>switch</code> یا توابع جدا برای منطق‌های شرط‌دار. برای ماشین‌های کوچک (۲ تا ۴ حالت) همان <code>switch</code> بهتر و سرراست‌تر است.</p></div>
+
+<h2 id="actions">عمل ورود و عمل خروج</h2>
+<p>عمل‌هایی که به «رسیدن به یک حالت» یا «ترک آن» مربوط‌اند را <span class="term" data-t="entryexit">عمل ورود و خروج</span> (entry/exit action) می‌نامند. مثال چراغ راهنما: «چراغ عابر را روشن کن» دقیقا هنگام ورود به قرمز است و «خاموش کن» هنگام خروج از آن. اگر آن را روی هر گذار جدا بنویسی، باید در هر ۳ جایی که به قرمز می‌رسی و هر جایی که از آن می‌روی تکرارش کنی و یکی را فراموش می‌کنی. با عمل ورود و خروج، یک بار می‌نویسی و همیشه اجرا می‌شود؛ اینکه چطور به قرمز رسیده‌ای فرقی نمی‌کند.</p>
+<p>در <code>go_to</code> ترتیب چهار قدم مهم است: اول خروج از حالت قدیم، بعد ورود به حالت جدید؛ نه برعکس. اگر این دو جابه‌جا شوند، برای لحظه‌ای هر دو عمل هم‌زمان فعال‌اند: مثل اینکه چراغ عابر روشن شود و بعد خاموش، در حالی که باید فقط یکی باشد.</p>
+
+<h2 id="debounce">پروژهٔ واقعی ۱: فیلتر پرش دکمه (<span class="en">debounce</span>)</h2>
+<p>دکمهٔ مکانیکی وقتی می‌فشاریش، دو تیغهٔ فلزی به هم می‌خورند و مثل توپ چندبار جهش می‌کنند. برای چند میلی‌ثانیه (معمولا کمتر از ۲۰ میلی‌ثانیه) سیگنال سریع بین بالا و پایین می‌پرد. به این پدیده <span class="term" data-t="bounce">پرش تماس</span> (bounce) می‌گویند. میکروکنترلر که سریع نمونه می‌گیرد، هر جهش را «یک فشردن» می‌بیند: با یک فشار، ممکن است ده رویداد بگیری و مثلا LED ده بار عوض شود.</p>
+<p>راه‌حل <span class="term" data-t="debounce">debounce</span>: تا وقتی سیگنال چند نمونهٔ پشت‌سرهم یکسان نبوده، رویداد صادر نکن. این دقیقا کار یک ماشین حالت است:</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 320" role="img" aria-label="سیگنال خام دکمه با پرش‌های تماس و خروجی تمیز پس از فیلتر ماشین حالت: رویداد فشردن در تیک ۹ و رها شدن در تیک ۱۸">
+  <defs><marker id="dbA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">پرش تماس: سیگنال خام دکمه در برابر خروجی ماشین حالت</text>
+  <rect x="168" y="52" width="203" height="80" fill="#ff9a4d" fill-opacity="0.35"/>
+  <rect x="487" y="52" width="145" height="80" fill="#ff9a4d" fill-opacity="0.35"/>
+  <path d="M110 112H139H168V70H197V112H226V70H255H284V112H313V70H342H371H400H429H458H487V112H516V70H545H574V112H603H632H661H690H719" stroke="#15120a" stroke-width="3" fill="none"/>
+  <path d="M110 232H139H168H197H226H255H284H313H342H371V190H400H429H458H487H516H545H574H603H632V232H661H690H719" stroke="#15120a" stroke-width="3.5" fill="none"/>
+  <g class="mono s-tx" font-size="14" font-weight="800" text-anchor="end"><text x="98" y="97">raw</text><text x="98" y="217">clean</text></g>
+  <g class="mono s-tx" font-size="11.5" font-weight="700" text-anchor="middle">
+    <text x="124.5" y="146">0</text>
+    <text x="211.5" y="146">3</text>
+    <text x="298.5" y="146">6</text>
+    <text x="385.5" y="146">9</text>
+    <text x="472.5" y="146">12</text>
+    <text x="559.5" y="146">15</text>
+    <text x="646.5" y="146">18</text>
+  </g>
+  <text x="269.5" y="46" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">پرش تماس (bounce)</text>
+  <text x="559.5" y="46" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">پرش هنگام رها شدن</text>
+  <path d="M371 150V238" stroke="#15120a" stroke-width="2" stroke-dasharray="5 4" fill="none"/>
+  <rect x="333" y="256" width="76" height="26" rx="8" fill="#3ddc97" stroke="#15120a" stroke-width="2.5"/>
+  <text x="371" y="274" text-anchor="middle" class="mono" fill="#15120a" font-size="13.5" font-weight="800">PRESS</text>
+  <path d="M632 150V238" stroke="#15120a" stroke-width="2" stroke-dasharray="5 4" fill="none"/>
+  <rect x="594" y="256" width="76" height="26" rx="8" fill="#ff86b3" stroke="#15120a" stroke-width="2.5"/>
+  <text x="632" y="274" text-anchor="middle" class="mono" fill="#15120a" font-size="13.5" font-weight="800">RELEASE</text>
+  <text x="380" y="308" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">شماره‌ها: زمان بر حسب tick (هر ۱ms). رویداد فقط وقتی صادر می‌شود که ۳ نمونهٔ پشت‌سرهم یکسان باشد</text>
+</svg>
+</div><figcaption>پرش در آغاز فشردن (تیک‌های ۲ تا ۸) و در آخر رها شدن (۱۳ تا ۱۷). ماشین حالت فقط وقتی رویداد می‌دهد که ۳ نمونهٔ پشت‌سرهم یکسان دیده باشد؛ پس فشردن در تیک ۹ و رها شدن در تیک ۱۸ اعلام می‌شود.</figcaption></figure>
+
+<p>چهار حالت لازم است. دو حالت پایدار (رها، فشرده) و دو حالت «کاندید» که یعنی «یک تغییر دیدم، ولی هنوز باور نمی‌کنم»:</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 340" role="img" aria-label="ماشین حالت چهارحالتهٔ دکمه: رها، کاندید فشردن، فشرده، کاندید رها شدن؛ با گذارهای وابسته به نمونهٔ خام و شمارندهٔ پایداری">
+  <defs><marker id="dsA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <rect x="30" y="40" width="210" height="70" rx="14" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/>
+  <text x="135" y="72" text-anchor="middle" class="mono" fill="#15120a" font-size="16" font-weight="800">RELEASED</text>
+  <text x="135" y="95" text-anchor="middle" fill="#15120a" font-size="13" font-weight="700">رها و پایدار</text>
+  <rect x="520" y="40" width="210" height="70" rx="14" fill="#ffd60a" stroke="#15120a" stroke-width="3"/>
+  <text x="625" y="72" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="800">PRESS_CANDIDATE</text>
+  <text x="625" y="95" text-anchor="middle" fill="#15120a" font-size="13" font-weight="700">منتظر تأیید فشردن</text>
+  <rect x="520" y="230" width="210" height="70" rx="14" fill="#3ddc97" stroke="#15120a" stroke-width="3"/>
+  <text x="625" y="262" text-anchor="middle" class="mono" fill="#15120a" font-size="16" font-weight="800">PRESSED</text>
+  <text x="625" y="285" text-anchor="middle" fill="#15120a" font-size="13" font-weight="700">فشرده و پایدار</text>
+  <rect x="30" y="230" width="210" height="70" rx="14" fill="#ff9a4d" stroke="#15120a" stroke-width="3"/>
+  <text x="135" y="262" text-anchor="middle" class="mono" fill="#15120a" font-size="14.5" font-weight="800">RELEASE_CANDIDATE</text>
+  <text x="135" y="285" text-anchor="middle" fill="#15120a" font-size="13" font-weight="700">منتظر تأیید رها شدن</text>
+  <path d="M242 62H516" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#dsA)"/>
+  <text x="380" y="54" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">نمونه = پایین</text>
+  <path d="M516 92H242" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#dsA)"/>
+  <text x="380" y="112" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">نمونه = بالا (فقط نویز بود)</text>
+  <path d="M600 112V226" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#dsA)"/>
+  <text x="470" y="158" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">۳ نمونهٔ پایین پشت‌سرهم</text>
+  <text x="470" y="178" text-anchor="middle" class="s-tx" font-size="13" font-weight="800">صدور رویداد PRESS</text>
+  <path d="M518 268H242" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#dsA)"/>
+  <text x="380" y="260" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">نمونه = بالا</text>
+  <path d="M242 288H518" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#dsA)"/>
+  <text x="380" y="310" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">نمونه = پایین (پرش بود)</text>
+  <path d="M100 226V114" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#dsA)"/>
+  <text x="250" y="158" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">۳ نمونهٔ بالا پشت‌سرهم</text>
+  <text x="250" y="178" text-anchor="middle" class="s-tx" font-size="13" font-weight="800">صدور رویداد RELEASE</text>
+  <text x="380" y="334" text-anchor="middle" class="s-tx" font-size="12.5">شمارنده در هر «کاندید» نمونه‌های یکسان را می‌شمارد؛ هر نمونهٔ مخالف، شمارش را رها می‌کند</text>
+</svg>
+</div><figcaption>نمودار حالت فیلتر. در هر حالت کاندید یک شمارنده نمونه‌های یکسان را می‌شمارد. رسیدن به سه، گذار به حالت پایدار و صدور رویداد است. اگر نمونهٔ مخالف بیاید، همه‌چیز رها می‌شود.</figcaption></figure>
+
+<div class="code" data-file="button.h" data-lang="c" data-verify="host" data-project="debounce" id="bth">
+<pre>
+#ifndef BUTTON_H
+#define BUTTON_H
+
+#include &lt;stdbool.h&gt;
+
+#ifndef BTN_STABLE_TICKS
+#define BTN_STABLE_TICKS 3U     /* چند tick پشت‌سرهم یکسان بماند تا معتبر باشد */
+#endif
+
+typedef enum {
+    BTN_RELEASED,           /* رها و پایدار */
+    BTN_PRESS_CANDIDATE,    /* تازه پایین دیده شد؛ منتظر تأیید */
+    BTN_PRESSED,            /* پایین و پایدار */
+    BTN_RELEASE_CANDIDATE   /* تازه بالا دیده شد؛ منتظر تأیید */
+} btn_state_t;
+
+typedef enum {
+    BTN_EV_NONE,
+    BTN_EV_PRESS,           /* یک بار، لحظهٔ فشرده شدن معتبر */
+    BTN_EV_RELEASE          /* یک بار، لحظهٔ رها شدن معتبر */
+} btn_event_t;
+
+typedef struct {
+    btn_state_t state;
+    unsigned count;         /* چند نمونهٔ یکسان پشت‌سرهم دیده‌ایم */
+} button_t;
+
+void button_init(button_t *b);
+btn_event_t button_step(button_t *b, bool raw_pressed);   /* هر tick یک بار */
+const char *button_state_name(btn_state_t s);
+
+#endif /* BUTTON_H */
+</pre></div>
+<ol class="walk" data-for="bth">
+  <li data-lines="6-8"><b class="what">تعداد نمونهٔ پایدار.</b> پیش‌فرض ۳. با <code>-DBTN_STABLE_TICKS=10U</code> می‌شود عوض کرد.
+    <span class="why">عدد را به‌ازای سرعت tick انتخاب کن: با tick برابر ۱ میلی‌ثانیه، سه نمونه یعنی ۳ میلی‌ثانیه پایداری.</span></li>
+  <li data-lines="10-15"><b class="what">چهار حالت.</b> دو پایدار و دو کاندید.</li>
+  <li data-lines="17-21"><b class="what">سه نوع خروجی.</b> «هیچ»، «فشرده شد» و «رها شد». هر کدام فقط <b>یک‌بار</b> در لحظهٔ گذار.
+    <span class="why">رویداد باید «لحظه» باشد، نه «وضعیت». اگر هر tick بگوید «فشرده است»، مصرف‌کننده باید خودش تشخیص بدهد که تازه فشرده شده یا نه.</span></li>
+  <li data-lines="23-26"><b class="what">وضعیت.</b> حالت و شمارندهٔ نمونه‌های یکسان.</li>
+  <li data-lines="28-30"><b class="what">API.</b> هر tick یک بار <code>button_step</code> را با نمونهٔ خام بده؛ خروجی یکی از سه رویداد است.</li>
+</ol>
+
+<div class="code" data-file="button.c" data-lang="c" data-verify="host" data-project="debounce" id="btc">
+<pre>
+#include "button.h"
+
+void button_init(button_t *b)
+{
+    b-&gt;state = BTN_RELEASED;
+    b-&gt;count = 0;
+}
+
+btn_event_t button_step(button_t *b, bool raw_pressed)
+{
+    btn_event_t ev = BTN_EV_NONE;
+
+    switch (b-&gt;state) {
+    case BTN_RELEASED:
+        if (raw_pressed) {
+            b-&gt;state = BTN_PRESS_CANDIDATE;
+            b-&gt;count = 1;
+        }
+        break;
+
+    case BTN_PRESS_CANDIDATE:
+        if (!raw_pressed) {
+            b-&gt;state = BTN_RELEASED;            // فقط نویز بود
+        } else if (++b-&gt;count &gt;= BTN_STABLE_TICKS) {
+            b-&gt;state = BTN_PRESSED;
+            ev = BTN_EV_PRESS;                  // معتبر شد
+        }
+        break;
+
+    case BTN_PRESSED:
+        if (!raw_pressed) {
+            b-&gt;state = BTN_RELEASE_CANDIDATE;
+            b-&gt;count = 1;
+        }
+        break;
+
+    case BTN_RELEASE_CANDIDATE:
+        if (raw_pressed) {
+            b-&gt;state = BTN_PRESSED;             // پرش دکمه، هنوز پایین است
+        } else if (++b-&gt;count &gt;= BTN_STABLE_TICKS) {
+            b-&gt;state = BTN_RELEASED;
+            ev = BTN_EV_RELEASE;
+        }
+        break;
+    }
+    return ev;
+}
+
+const char *button_state_name(btn_state_t s)
+{
+    static const char *const names[] = {
+        "RELEASED", "PRESS_CANDIDATE", "PRESSED", "RELEASE_CANDIDATE"
+    };
+    return names[s];
+}
+</pre></div>
+<ol class="walk" data-for="btc">
+  <li data-lines="9-11"><b class="what">تابع اصلی.</b> ورودی: نمونهٔ خام؛ خروجی: رویداد (پیش‌فرض «هیچ»).</li>
+  <li data-lines="13-19"><b class="what">حالت RELEASED.</b> اگر نمونه «پایین» بود، به کاندید برو و شمارنده را ۱ کن. در غیر این صورت هیچ.</li>
+  <li data-lines="21-28"><b class="what">حالت PRESS_CANDIDATE.</b> اگر نمونه «بالا» بود، نویز بوده؛ برگرد. اگر پایین بود، یکی بشمار؛ رسید به آستانه؟ فشرده شد و رویداد <code>PRESS</code> صادر می‌شود.
+    <span class="why">عملگر <code>++b-&gt;count</code> اول یکی اضافه می‌کند و بعد مقایسه می‌شود؛ پس نمونهٔ اول (که در RELEASED شمرده شد) هم جزو سه‌تا حساب می‌شود.</span></li>
+  <li data-lines="30-35"><b class="what">حالت PRESSED.</b> تا وقتی «پایین» است هیچ اتفاقی نمی‌افتد. اولین نمونهٔ «بالا» شروع کاندید رها شدن است.</li>
+  <li data-lines="37-44"><b class="what">حالت RELEASE_CANDIDATE.</b> اگر دوباره پایین شد، پرش بوده و برمی‌گردیم به فشرده. اگر بالا ماند و به سه رسید، رها شد و <code>RELEASE</code> صادر می‌شود.</li>
+  <li data-lines="46"><b class="what">برگرداندن رویداد.</b> در بیشتر tick‌ها «هیچ» است.</li>
+  <li data-lines="49-55"><b class="what">نام حالت‌ها.</b> برای چاپ.</li>
+</ol>
+
+<div class="code" data-file="main.c" data-lang="c" data-verify="host" data-project="debounce" id="btm">
+<pre>
+#include &lt;stdio.h&gt;
+#include "button.h"
+
+int main(void)
+{
+    /* نمونه‌های خام هر ۱ms: ۱ = پایین. ابتدا و انتها پرش دارد */
+    static const bool raw[] = {
+        0, 0, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0
+    };
+    button_t btn;
+
+    button_init(&amp;btn);
+    for (unsigned t = 0; t &lt; sizeof(raw) / sizeof(raw[0]); t++) {
+        btn_event_t ev = button_step(&amp;btn, raw[t]);
+        printf("t=%2u raw=%d %-18s", t, raw[t], button_state_name(btn.state));
+        if (ev == BTN_EV_PRESS) {
+            printf(" &lt;== PRESS");
+        } else if (ev == BTN_EV_RELEASE) {
+            printf(" &lt;== RELEASE");
+        }
+        printf("\n");
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="btm">
+  <li data-lines="6-9"><b class="what">نمونه‌های خام.</b> ۲۱ نمونه، هر ۱ میلی‌ثانیه؛ همان نمودار شکل بالا. ابتدای فشردن و انتهای آن پرش دارند.</li>
+  <li data-lines="12"><b class="what">ساخت فیلتر.</b></li>
+  <li data-lines="13-22"><b class="what">حلقهٔ tick.</b> هر نمونه را به فیلتر می‌دهیم، حالت را چاپ می‌کنیم و اگر رویدادی صادر شد، کنار همان خط می‌نویسیم.</li>
+</ol>
+<pre class="term" data-from="debounce">
+$ gcc -std=c11 -Wall -Wextra -o debounce button.c main.c
+$ ./debounce
+t= 0 raw=0 RELEASED          
+t= 1 raw=0 RELEASED          
+t= 2 raw=1 PRESS_CANDIDATE   
+t= 3 raw=0 RELEASED          
+t= 4 raw=1 PRESS_CANDIDATE   
+t= 5 raw=1 PRESS_CANDIDATE   
+t= 6 raw=0 RELEASED          
+t= 7 raw=1 PRESS_CANDIDATE   
+t= 8 raw=1 PRESS_CANDIDATE   
+t= 9 raw=1 PRESSED            &lt;== PRESS
+t=10 raw=1 PRESSED           
+t=11 raw=1 PRESSED           
+t=12 raw=1 PRESSED           
+t=13 raw=0 RELEASE_CANDIDATE 
+t=14 raw=1 PRESSED           
+t=15 raw=1 PRESSED           
+t=16 raw=0 RELEASE_CANDIDATE 
+t=17 raw=0 RELEASE_CANDIDATE 
+t=18 raw=0 RELEASED           &lt;== RELEASE
+t=19 raw=0 RELEASED          
+t=20 raw=0 RELEASED          
+</pre>
+
+<p>ببین: در tick ۲ نمونه پایین شد و کاندید شد، ولی در tick ۳ برگشت. یعنی همان پرش اولیه نادیده ماند. در tick های ۴ و ۵ دوباره کاندید شد و باز در ۶ شکست. تا اینکه در ۷، ۸ و ۹ سه نمونهٔ پایین پشت‌سرهم آمد و رویداد <code>PRESS</code> <b>دقیقا یک‌بار</b> صادر شد. رها شدن هم همین‌طور: ۱۳ و ۱۴ پرش بودند و در ۱۶، ۱۷ و ۱۸ رها شدن تأیید شد. بهایی که می‌دهیم: رویداد سه میلی‌ثانیه دیرتر می‌رسد.</p>
+
+<h3 id="dbwidget">همین را قدم‌به‌قدم ببین</h3>
+<div class="widget" data-w="mem" data-config='{"title":"فیلتر debounce: ده tick اول","code":["button_step(0); // t=0","button_step(0); // t=1","button_step(1); // t=2","button_step(0); // t=3","button_step(1); // t=4","button_step(1); // t=5","button_step(0); // t=6","button_step(1); // t=7","button_step(1); // t=8","button_step(1); // t=9"],"intro":"حالت با عدد نشان داده می‌شود: ۰ یعنی رها، ۱ یعنی کاندید فشردن، ۲ یعنی فشرده. دکمه رها است؛ روی بعدی بزن.","cells":[{"addr":"state","name":"حالت (عدد)","val":0,"kind":"var"},{"addr":"count","name":"شمارنده","val":0,"kind":"var"},{"addr":"event","name":"رویداد","val":"-","kind":"ptr"}],"steps":[{"line":0,"set":{},"hot":[0],"say":"نمونه بالا است و حالت ۰ (رها). هیچ اتفاقی نمی‌افتد."},{"line":1,"set":{},"hot":[0],"say":"باز هم بالا. همان وضع."},{"line":2,"set":{"0":1,"1":1},"hot":[0,1],"say":"اولین نمونهٔ پایین. حالت ۱ (کاندید فشردن) و شمارنده ۱ می‌شود. هنوز باور نمی‌کنیم."},{"line":3,"set":{"0":0},"hot":[0],"say":"نمونه برگشت بالا: نویز بود. به حالت ۰ (رها) برمی‌گردیم. رویدادی صادر نشد."},{"line":4,"set":{"0":1,"1":1},"hot":[0,1],"say":"دوباره پایین: کاندید، شمارنده ۱."},{"line":5,"set":{"1":2},"hot":[1],"say":"پایین ماند: شمارنده ۲. یکی مانده به سه."},{"line":6,"set":{"0":0},"hot":[0],"say":"بالا: پرش دیگر. دوباره از اول."},{"line":7,"set":{"0":1,"1":1},"hot":[0,1],"say":"پایین: کاندید، شمارنده ۱."},{"line":8,"set":{"1":2},"hot":[1],"say":"پایین ماند: شمارنده ۲."},{"line":9,"set":{"0":2,"1":3,"2":"PRESS"},"hot":[0,1,2],"say":"سومین نمونهٔ پشت‌سرهم پایین است. حالت ۲ (فشرده) می‌شود و رویداد PRESS صادر می‌شود، یک‌بار."}]}'></div>
+
+<h2 id="parser">پروژهٔ واقعی ۲: پارسر فریم سریال</h2>
+<p>ماشین حالت فقط برای دکمه و چراغ نیست. هر وقت داده‌ای به‌صورت رشته‌ای از بایت‌ها می‌رسد (مثل UART)، برای فهمیدن ساختارش به ماشین حالت نیاز داری. فرض کن دستگاهی فریم‌هایی به این شکل می‌فرستد: <code>$</code> در ابتدا، چند رقم، و <code>\n</code> در پایان؛ مثلا <code>$305\n</code>. بین فریم‌ها ممکن است هر آشغالی برسد. پارسر باید فقط فریم‌های سالم را قبول کند. حالت لازم: «منتظر شروع» و «در حال خواندن رقم».</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="ماشین حالت پارسر فریم سریال: منتظر علامت دلار، خواندن رقم‌ها، و پایان با خط جدید؛ هر نویسهٔ نامعتبر پارسر را به حالت انتظار برمی‌گرداند">
+  <defs><marker id="upA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <circle cx="40" cy="170" r="9" fill="#15120a"/>
+  <path d="M50 170H108" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#upA)"/>
+  <rect x="112" y="130" width="190" height="80" rx="16" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/>
+  <text x="207" y="168" text-anchor="middle" class="mono" fill="#15120a" font-size="17" font-weight="800">WAIT_START</text>
+  <text x="207" y="194" text-anchor="middle" fill="#15120a" font-size="13.5" font-weight="700">منتظر شروع فریم</text>
+  <rect x="458" y="130" width="190" height="80" rx="16" fill="#ffd60a" stroke="#15120a" stroke-width="3"/>
+  <text x="553" y="168" text-anchor="middle" class="mono" fill="#15120a" font-size="17" font-weight="800">DIGITS</text>
+  <text x="553" y="194" text-anchor="middle" fill="#15120a" font-size="13.5" font-weight="700">در حال خواندن رقم‌ها</text>
+  <path d="M304 152H454" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#upA)"/>
+  <text x="380" y="140" text-anchor="middle" class="mono s-tx" font-size="16" font-weight="800">$</text>
+  <text x="380" y="176" text-anchor="middle" class="s-tx" font-size="12.5">شروع تازه، مقدار = ۰</text>
+  <path d="M454 200H304" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#upA)"/>
+  <text x="380" y="222" text-anchor="middle" class="s-tx" font-size="12.5">پایان درست: خط جدید با حداقل یک رقم</text>
+  <text x="380" y="242" text-anchor="middle" class="s-tx" font-size="12.5">یا نویسهٔ نامعتبر: فریم خراب</text>
+  <path d="M505 128C480 60 620 60 601 128" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#upA)"/>
+  <text x="553" y="56" text-anchor="middle" class="s-tx" font-size="14" font-weight="800">یک رقم (۰ تا ۹)</text>
+  <text x="553" y="76" text-anchor="middle" class="s-tx" font-size="12.5">مقدار = مقدار×۱۰ + رقم</text>
+  <path d="M160 128C135 60 275 60 256 128" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#upA)"/>
+  <text x="207" y="56" text-anchor="middle" class="s-tx" font-size="12.5">هر نویسهٔ دیگر بین فریم‌ها:</text>
+  <text x="207" y="76" text-anchor="middle" class="s-tx" font-size="12.5">نادیده گرفته می‌شود</text>
+  <text x="380" y="284" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">علامت $ در هر حالتی پارسر را دوباره هم‌زمان می‌کند (resync)</text>
+</svg>
+</div><figcaption>هر بایت یک رویداد است. علامت <code>$</code> در هر حالتی پارسر را دوباره هم‌زمان می‌کند؛ این به تو اجازه می‌دهد اگر بایتی گم شد، با فریم بعدی خودت را به‌راه کنی. کد این پارسر را در تمرین ۳ می‌نویسی.</figcaption></figure>
+
+<h2 id="event-source">رویداد از کجا می‌آید؟</h2>
+<p>تا اینجا رویدادها را از آرایه می‌خواندیم. روی میکروکنترلر واقعی از دو جا می‌آیند: <b>سخت‌افزار</b> (دکمه، UART، تایمر) و <b>زمان</b> (tick). قاعدهٔ حرفه‌ای این است که رویداد در ISR فقط <b>ساخته و در صف گذاشته شود</b> و ماشین حالت در حلقهٔ اصلی اجرا شود. صف همان بافر حلقوی درس <a href="4-5.html">۴.۵</a> است: تولیدکننده ISR، مصرف‌کننده <code>main</code>.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="معماری رویدادمحور: ISR رویدادها را در صف حلقوی می‌گذارد، حلقهٔ main آن‌ها را برمی‌دارد و به ماشین حالت می‌دهد، ماشین حالت عمل‌ها را انجام می‌دهد">
+  <defs><marker id="arA6" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">ماشین حالت در برنامهٔ واقعی: رویدادها از صف می‌آیند</text>
+  <rect x="20" y="60" width="150" height="90" rx="14" fill="#3ddc97" stroke="#15120a" stroke-width="3"/>
+  <text x="95" y="94" text-anchor="middle" fill="#15120a" font-size="15" font-weight="800">سخت‌افزار و ISR</text>
+  <text x="95" y="116" text-anchor="middle" fill="#15120a" font-size="12.5">دکمه، تایمر، UART</text>
+  <text x="95" y="134" text-anchor="middle" fill="#15120a" font-size="12.5">رویداد می‌سازند</text>
+  <rect x="210" y="60" width="150" height="90" rx="14" fill="#ffd60a" stroke="#15120a" stroke-width="3"/>
+  <text x="285" y="94" text-anchor="middle" fill="#15120a" font-size="15" font-weight="800">صف رویداد</text>
+  <text x="285" y="116" text-anchor="middle" fill="#15120a" font-size="12.5">بافر حلقوی درس ۴.۵</text>
+  <text x="285" y="134" text-anchor="middle" class="mono" fill="#15120a" font-size="12.5">rb_put / rb_get</text>
+  <rect x="400" y="60" width="150" height="90" rx="14" fill="#ff86b3" stroke="#15120a" stroke-width="3"/>
+  <text x="475" y="94" text-anchor="middle" fill="#15120a" font-size="15" font-weight="800">حلقهٔ main</text>
+  <text x="475" y="116" text-anchor="middle" fill="#15120a" font-size="12.5">رویداد را برمی‌دارد و</text>
+  <text x="475" y="134" text-anchor="middle" class="mono" fill="#15120a" font-size="12.5">fsm_dispatch()</text>
+  <rect x="590" y="60" width="150" height="90" rx="14" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/>
+  <text x="665" y="94" text-anchor="middle" fill="#15120a" font-size="15" font-weight="800">ماشین حالت</text>
+  <text x="665" y="116" text-anchor="middle" fill="#15120a" font-size="12.5">state + جدول گذار</text>
+  <text x="665" y="134" text-anchor="middle" fill="#15120a" font-size="12.5">حالت بعدی و عمل‌ها</text>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M172 105H206" marker-end="url(#arA6)"/><path d="M362 105H396" marker-end="url(#arA6)"/><path d="M552 105H586" marker-end="url(#arA6)"/>
+  </g>
+  <path d="M665 152V210H95V156" stroke="#15120a" stroke-width="3" fill="none" stroke-dasharray="8 5" marker-end="url(#arA6)"/>
+  <text x="380" y="234" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">عمل‌ها (LED، رله، ارسال پیام...) روی سخت‌افزار اثر می‌گذارند و رویدادهای تازه می‌سازند</text>
+  <text x="380" y="272" text-anchor="middle" class="s-tx" font-size="13" >وقفه فقط رویداد را در صف می‌گذارد و زود برمی‌گردد؛ کار سنگین در حلقهٔ اصلی انجام می‌شود</text>
+</svg>
+</div><figcaption>در این چیدمان ISR کوتاه می‌ماند و ماشین حالت در حلقهٔ اصلی و با فرصت کافی کار می‌کند.</figcaption></figure>
+
+<p>ماشین حالت از قاعدهٔ <span class="term" data-t="rtc">اجرا تا پایان</span> (run-to-completion) پیروی می‌کند: هر رویداد <b>کامل</b> پردازش می‌شود (گذار، خروج، ورود) قبل از اینکه رویداد بعدی شروع شود. نتیجه: هیچ‌وقت وسط یک گذار نیستی و حالت هیچ‌وقت نیمه‌کاره نیست. برای همین در رسیدگی به رویداد <b>نباید</b> منتظر ماند (<code>delay</code> یا حلقهٔ انتظار درس <a href="2-5.html">۲.۵</a>): اگر یک عمل زمان‌بر لازم است، آن را به حالت جدید و رویداد «تمام شد» تبدیل کن.</p>
+
+<div class="callout warn"><div class="ct">هر حالت انتظار، مهلت لازم دارد</div>
+<p>پارسر بالا اگر <code>$12</code> را بگیرد و بقیه نرسد، برای همیشه در حالت <code>DIGITS</code> می‌ماند. هر حالتی که «منتظر چیزی» است باید یک مهلت (timeout) داشته باشد: مثلا اگر ۱۰۰ tick هیچ بایتی نرسید، به حالت انتظار برگرد. همان الگوی «حلقهٔ انتظار با timeout» درس <a href="2-5.html">۲.۵</a> است، ولی اینجا هر حالت مهلت خودش را دارد. همین ایده در چراغ راهنما هم بود (ستون <code>duration</code>).</p></div>
+
+<h2 id="mcu">در STM32 و ESP32 یعنی چه؟</h2>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>STM32 (Nucleo-F411RE)</th><th>ESP32</th></tr></thead>
+<tbody>
+<tr><td>دکمه</td><td>دکمهٔ آبی B1 روی PC13 است و <b>فعال-پایین</b> (درس <a href="2-4.html">۲.۴</a>): فشرده یعنی سطح صفر. پس نمونهٔ خام <code>raw_pressed = (level == 0)</code></td><td>هر GPIO با مقاومت pull-up یا pull-down؛ سطح فعال به مدار بستگی دارد</td></tr>
+<tr><td>tick</td><td>SysTick هر ۱ میلی‌ثانیه (درس <a href="5-4.html">۵.۴</a>)</td><td>تایمر یا <code>vTaskDelay</code> در یک task</td></tr>
+<tr><td>صف رویداد</td><td>بافر حلقوی خودمان (درس ۴.۵)</td><td>Queue آمادهٔ FreeRTOS که ISR هم می‌تواند به آن بنویسد (مستندات رسمی)</td></tr>
+<tr><td>ماشین حالت</td><td>همین کد بدون تغییر، در حلقهٔ اصلی</td><td>همین کد در یک task</td></tr>
+</tbody></table></div>
+<p>نکتهٔ مهم: <code>button.c</code> هیچ چیز از سخت‌افزار نمی‌داند؛ فقط «نمونهٔ خام» می‌گیرد. برای همین همین فایل را می‌شود روی PC آزمایش کرد و بی‌تغییر روی برد گذاشت. در فصل ۶ می‌بینی که این طراحی چقدر تست را آسان می‌کند.</p>
+
+<h2 id="mealy">مدل‌های خروجی: <span class="en">Mealy</span> و <span class="en">Moore</span></h2>
+<p>در ماشین حالت، «خروجی» (عمل) را دو جا می‌شود گذاشت:</p>
+<ul>
+  <li><span class="term" data-t="moore">مدل Moore</span>: خروجی وابسته به <b>حالت</b> است. مثل عمل ورود: «در حالت قرمز، چراغ عابر روشن است».</li>
+  <li><span class="term" data-t="mealy">مدل Mealy</span>: خروجی وابسته به <b>گذار</b> (حالت + رویداد) است. مثل «سکه شمرده شد» که فقط وقتی سکه رسید اتفاق می‌افتد، یا رویداد <code>PRESS</code> که فقط روی یک گذار خاص صادر می‌شود.</li>
+</ul>
+<p>در کد واقعی معمولا هر دو را با هم می‌بینی و لازم نیست نامش را بدانی؛ ولی وقتی در مستندات یا کتاب‌ها این دو اسم را دیدی، معنیشان همین است.</p>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">مهم‌ترین مزیت «یک متغیر <code>enum</code> برای حالت» نسبت به «چند <code>bool</code>» چیست؟</p>
+  <ol>
+    <li data-why="سرعت تفاوت محسوسی ندارد؛ مزیت اصلی ساختاری است.">سریع‌تر اجرا می‌شود</li>
+    <li>چون فقط یک مقدار می‌گیرد، ترکیب‌های بی‌معنی (مثل «کار و خطا هم‌زمان») اصلا وجود ندارند</li>
+    <li data-why="هر دو نوع در RAM هستند و مصرف حافظه فرق چندانی ندارد.">RAM کمتر می‌گیرد</li>
+    <li data-why="ماشین حالت نیازی به اشاره‌گر ندارد؛ فقط یک عدد است.">چون نیازی به اشاره‌گر نیست</li>
+  </ol>
+  <div class="fb">با n فلگ، ۲<sup>n</sup> ترکیب داریم که بیشترشان بی‌معنی‌اند. یک <code>enum</code> فقط حالت‌های معتبر را دارد.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">دروازهٔ چرخان این درس در حالت <code>LOCKED</code> است و این رویدادها به‌ترتیب می‌رسند: <code>PUSH, COIN, COIN, PUSH</code>. حالت نهایی، تعداد سکه و تعداد عبور چیست؟</p>
+  <ol>
+    <li data-why="PUSH اول در حالت قفل بی‌اثر است؛ سکه‌ها هر دو شمرده می‌شوند و فقط یک عبور داریم.">UNLOCKED، ۲ سکه، ۲ عبور</li>
+    <li data-why="سکهٔ دوم در حالت باز هم شمرده می‌شود (فقط حالت عوض نمی‌شود)؛ پس ۲ سکه داریم.">LOCKED، ۱ سکه، ۱ عبور</li>
+    <li>LOCKED، ۲ سکه، ۱ عبور</li>
+    <li data-why="PUSH آخر یک نفر را رد و قفل را می‌بندد؛ پس حالت نهایی LOCKED است.">UNLOCKED، ۲ سکه، ۱ عبور</li>
+  </ol>
+  <div class="fb">PUSH اول بی‌اثر؛ COIN اول → UNLOCKED (۱ سکه)؛ COIN دوم فقط شمرده می‌شود (۲ سکه)؛ PUSH آخر → عبور (۱) و LOCKED.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">در این <code>switch</code> چه مشکلی هست؟</p>
+<div class="code" data-lang="c"><pre>
+switch (state) {
+case S_IDLE:
+    if (ev == EV_START) { state = S_RUN; }
+case S_RUN:
+    if (ev == EV_STOP) { state = S_IDLE; }
+    break;
+}
+</pre></div>
+  <ol>
+    <li><code>break</code> بعد از <code>S_IDLE</code> نیست؛ اجرا به <code>case S_RUN</code> می‌ریزد و کد آن هم اجرا می‌شود</li>
+    <li data-why="کامپایل می‌شود؛ خطای نحوی ندارد. مشکل در منطق است، و فقط هشدار می‌گیری.">کامپایل نمی‌شود</li>
+    <li data-why="switch روی enum مجاز و رایج است.">switch روی enum مجاز نیست</li>
+    <li data-why="نوشتن ev == EV_STOP کاملا درست است؛ مقایسه با == انجام می‌شود.">علامت == باید = باشد</li>
+  </ol>
+  <div class="fb">بدون <code>break</code> به <code>case</code> بعدی می‌ریزی. GCC با <code>-Wextra</code> هشدار <code>this statement may fall through</code> می‌دهد. اگر عمدی است، کامنت <code>/* fall through */</code> بگذار.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">با <code>BTN_STABLE_TICKS = 3</code> و نمونه‌های خام <code>1, 1, 0, 1, 1, 1</code> (به‌ترتیب tick های ۰ تا ۵)، رویداد <code>PRESS</code> در کدام tick صادر می‌شود؟</p>
+  <ol>
+    <li data-why="در tick 2 نمونه ۰ است و کاندید نیمه‌کاره رها می‌شود؛ قبل از آن فقط دو نمونهٔ پایین دیده‌ایم.">tick ۲</li>
+    <li data-why="در tick 3 تازه دوباره کاندید شده‌ایم (شمارنده ۱)؛ هنوز سه نمونهٔ پشت‌سرهم نداریم.">tick ۳</li>
+    <li data-why="در tick 4 شمارندهٔ کاندید ۲ می‌شود، نه ۳.">tick ۴</li>
+    <li>tick ۵</li>
+  </ol>
+  <div class="fb">tick 0 و 1: شمارش ۱ و ۲ (هنوز کاندید). tick 2 نمونه ۰: به RELEASED برمی‌گردیم. tick 3، 4، 5: سه نمونهٔ پایین پشت‌سرهم، پس PRESS در tick ۵.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">چرا معمولا ISR فقط رویداد را در صف می‌گذارد و ماشین حالت را در حلقهٔ اصلی اجرا می‌کنیم؟</p>
+  <ol>
+    <li>چون ISR باید کوتاه باشد و ماشین حالت ممکن است چند عمل و چاپ داشته باشد؛ اجرا در main مهلت کافی می‌دهد و از دسترسی هم‌زمان به حالت جلوگیری می‌کند</li>
+    <li data-why="ماشین حالت در ISR هم قابل اجرا است؛ ولی طولانی شدن ISR و دسترسی هم‌زمان مشکل می‌سازد.">چون ماشین حالت در ISR اصلا اجرا نمی‌شود</li>
+    <li data-why="صف سرعت را زیاد نمی‌کند؛ کار اصلی‌اش جدا کردن زمان‌ها است.">چون صف سریع‌تر از تابع مستقیم است</li>
+    <li data-why="بافر حلقوی کاری به ESP32 یا STM32 ندارد؛ روی هر دو کار می‌کند.">چون فقط روی ESP32 ممکن است</li>
+  </ol>
+  <div class="fb">هر ISR طولانی، وقفه‌های دیگر را عقب می‌اندازد. اگر ماشین حالت هم در ISR و هم در main رویداد بگیرد، حالت مشترک می‌شود و هم‌زمانی خطرناک می‌شود. صف این دو را جدا می‌کند.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">در چراغ راهنمای درس، رویداد دکمهٔ عابر در حالت زرد چه می‌کند و چرا؟</p>
+  <ol>
+    <li data-why="جدول این را نمی‌گوید؛ در سطر زرد، ستون دکمه همان زرد است.">بلافاصله قرمز می‌شود</li>
+    <li data-why="نه؛ رویدادی که حالت را عوض نکند اصلا گذار انجام نمی‌دهد و مهلت هم دوباره پر نمی‌شود.">مهلت زرد را دوباره ۲ می‌کند</li>
+    <li>هیچ؛ خانهٔ جدول همان زرد است و <code>light_dispatch</code> در این حالت گذاری انجام نمی‌دهد</li>
+    <li data-why="جدول حالت بعدی را در هر خانه مشخص کرده؛ برنامه ناتمام نمی‌ماند.">برنامه متوقف می‌شود</li>
+  </ol>
+  <div class="fb">اگر حالت بعدی با حالت فعلی برابر باشد، تابع <code>light_dispatch</code> نه عمل خروج اجرا می‌کند نه ورود و نه مهلت را تنظیم می‌کند. رویداد نادیده گرفته می‌شود.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: درِ گاراژ</div>
+<p>درِ گاراژ چهار حالت دارد: بسته (<code>G_CLOSED</code>)، در حال باز شدن (<code>G_OPENING</code>)، باز (<code>G_OPEN</code>) و در حال بسته شدن (<code>G_CLOSING</code>). رویدادها: دکمهٔ ریموت، سوئیچ انتهای باز، سوئیچ انتهای بسته و مانع (<code>GE_OBSTACLE</code>: چیزی در مسیر است). قاعده‌ها:</p>
+<ul>
+  <li>بسته + دکمه ← در حال باز شدن. در حال باز شدن + سوئیچ باز ← باز.</li>
+  <li>باز + دکمه ← در حال بسته شدن. در حال بسته شدن + سوئیچ بسته ← بسته.</li>
+  <li>در حال بسته شدن + مانع ← دوباره در حال باز شدن.</li>
+  <li>هر رویداد دیگر در هر حالت: نادیده.</li>
+</ul>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> اگر در حالت «در حال باز شدن» دوباره دکمه را بزنی چه می‌شود؟ (با قاعده‌ها)</li>
+  <li><b>حل:</b> تابع <code>handle(state, event)</code> را با <code>switch</code> بنویس و برای این ۸ رویداد اجرا کن: دکمه، دکمه، سوئیچ‌باز، دکمه، مانع، سوئیچ‌باز، دکمه، سوئیچ‌بسته.</li>
+  <li><b>گسترش:</b> نمودار حالت را بکش و بگو اگر همین چهار حالت را با فلگ می‌نوشتی چند ترکیب ممکن بود.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>تابع را «حالت جدید را برگردان» بنویس: هر <code>case</code> اگر شرط گذار برقرار بود <code>return</code> می‌کند و در پایان تابع، خودِ حالت فعلی برگردانده می‌شود (رویداد نادیده). آرایه‌های نام هم برای چاپ کمک می‌کنند.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="garage.c">
+$ ./garage
+BUTTON      : CLOSED  -> OPENING
+BUTTON      : OPENING -> OPENING
+LIMIT_OPEN  : OPENING -> OPEN
+BUTTON      : OPEN    -> CLOSING
+OBSTACLE    : CLOSING -> OPENING
+LIMIT_OPEN  : OPENING -> OPEN
+BUTTON      : OPEN    -> CLOSING
+LIMIT_CLOSED: CLOSING -> CLOSED
+</pre>
+<p>جواب الف: دکمه در حال باز شدن نادیده می‌شود (خط دوم). جواب ج: با ۳ فلگ ۸ ترکیب و با ۴ فلگ ۱۶ ترکیب؛ در حالی که فقط ۴ وضعیت معتبر است.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="garage.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stdio.h&gt;
+
+typedef enum { G_CLOSED, G_OPENING, G_OPEN, G_CLOSING } garage_state_t;
+typedef enum { GE_BUTTON, GE_LIMIT_OPEN, GE_LIMIT_CLOSED, GE_OBSTACLE } garage_event_t;
+
+static const char *const state_name[] = { "CLOSED", "OPENING", "OPEN", "CLOSING" };
+static const char *const event_name[] = { "BUTTON", "LIMIT_OPEN", "LIMIT_CLOSED", "OBSTACLE" };
+
+static garage_state_t handle(garage_state_t s, garage_event_t ev)
+{
+    switch (s) {
+    case G_CLOSED:
+        if (ev == GE_BUTTON) {
+            return G_OPENING;
+        }
+        break;
+    case G_OPENING:
+        if (ev == GE_LIMIT_OPEN) {
+            return G_OPEN;
+        }
+        break;
+    case G_OPEN:
+        if (ev == GE_BUTTON) {
+            return G_CLOSING;
+        }
+        break;
+    case G_CLOSING:
+        if (ev == GE_LIMIT_CLOSED) {
+            return G_CLOSED;
+        }
+        if (ev == GE_OBSTACLE) {
+            return G_OPENING;               // مانع: برگرد و باز کن
+        }
+        break;
+    }
+    return s;                               // رویدادی که این حالت نمی‌شناسد: نادیده
+}
+
+int main(void)
+{
+    static const garage_event_t events[] = {
+        GE_BUTTON, GE_BUTTON, GE_LIMIT_OPEN, GE_BUTTON,
+        GE_OBSTACLE, GE_LIMIT_OPEN, GE_BUTTON, GE_LIMIT_CLOSED
+    };
+    garage_state_t s = G_CLOSED;
+
+    for (unsigned i = 0; i &lt; sizeof(events) / sizeof(events[0]); i++) {
+        garage_state_t next = handle(s, events[i]);
+        printf("%-12s: %-7s -&gt; %s\n", event_name[events[i]], state_name[s], state_name[next]);
+        s = next;
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="3-4"><b class="what">حالت‌ها و رویدادها.</b> دو <code>enum</code> کوتاه.</li>
+  <li data-lines="6-7"><b class="what">نام‌ها برای چاپ.</b> به ترتیب <code>enum</code>.</li>
+  <li data-lines="9-11"><b class="what">تابع بدون اثر جانبی.</b> حالت فعلی و رویداد را می‌گیرد و حالت بعدی را برمی‌گرداند.
+    <span class="why">چنین تابع «خالص» ساده‌ترین شکل برای تست است: ورودی ثابت، خروجی ثابت.</span></li>
+  <li data-lines="12-26"><b class="what">سه حالت اول.</b> هر کدام فقط یک گذار دارند. اگر شرط برقرار نبود، به <code>break</code> می‌رسند و به پایین تابع می‌روند.</li>
+  <li data-lines="27-34"><b class="what">حالت CLOSING.</b> دو گذار: به پایان رسید ← بسته؛ مانع ← دوباره باز.
+    <span class="why">مانع یک ویژگی ایمنی است: در حال بسته شدن اگر چیزی (یا کسی) در مسیر باشد، باید فورا برگردد.</span></li>
+  <li data-lines="36"><b class="what">رویداد ناشناخته.</b> حالت را عوض نمی‌کنیم.</li>
+  <li data-lines="41-45"><b class="what">سناریو.</b> ۸ رویداد که دکمهٔ اضافی و مانع را هم امتحان می‌کنند.</li>
+  <li data-lines="47-51"><b class="what">حلقه.</b> حالت بعدی را از تابع می‌گیرد، چاپ می‌کند و جایگزین حالت فعلی می‌کند.</li>
+</ol>
+<pre class="term" data-from="garage.c">
+$ gcc -std=c11 -Wall -Wextra -o garage garage.c
+$ ./garage
+BUTTON      : CLOSED  -&gt; OPENING
+BUTTON      : OPENING -&gt; OPENING
+LIMIT_OPEN  : OPENING -&gt; OPEN
+BUTTON      : OPEN    -&gt; CLOSING
+OBSTACLE    : CLOSING -&gt; OPENING
+LIMIT_OPEN  : OPENING -&gt; OPEN
+BUTTON      : OPEN    -&gt; CLOSING
+LIMIT_CLOSED: CLOSING -&gt; CLOSED
+</pre>
+</details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: باگ fall-through</div>
+<p>این ماشین سه حالت دارد: بیکار، در حال کار و خطا. سناریو: شروع، ریست، خطا، ریست. انتظار: ریست در حالت «در حال کار» نادیده گرفته شود (نباید کاری را وسط راه ریست کرد) و فقط در حالت خطا به بیکار برگردد.</p>
+<div class="code" data-file="fall_bug.c" data-lang="c" data-verify="host" data-warn-ok id="ex2bug">
+<pre>
+#include &lt;stdio.h&gt;
+
+typedef enum { S_IDLE, S_RUN, S_ERROR } state_t;
+typedef enum { EV_START, EV_FAULT, EV_RESET } event_t;
+
+static const char *const state_name[] = { "IDLE", "RUN", "ERROR" };
+static const char *const event_name[] = { "START", "FAULT", "RESET" };
+
+static state_t handle(state_t s, event_t ev)
+{
+    switch (s) {
+    case S_IDLE:
+        if (ev == EV_START) {
+            return S_RUN;
+        }
+        break;
+    case S_RUN:
+        if (ev == EV_FAULT) {
+            s = S_ERROR;
+        }
+    case S_ERROR:
+        if (ev == EV_RESET) {
+            s = S_IDLE;
+        }
+        break;
+    }
+    return s;
+}
+
+int main(void)
+{
+    static const event_t events[] = { EV_START, EV_RESET, EV_FAULT, EV_RESET };
+    state_t s = S_IDLE;
+
+    for (unsigned i = 0; i &lt; sizeof(events) / sizeof(events[0]); i++) {
+        state_t next = handle(s, events[i]);
+        printf("%-5s: %-5s -&gt; %s\n", event_name[events[i]], state_name[s], state_name[next]);
+        s = next;
+    }
+    return 0;
+}
+</pre></div>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> خروجی را حدس بزن. سطر دوم چه می‌گوید؟</li>
+  <li><b>باگ‌یابی:</b> مشکل کجاست؟ کامپایلر چه هشداری می‌دهد؟</li>
+  <li><b>حل:</b> اصلاحش کن.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>به ‎<code>case S_RUN:</code>‎ و آخرش دقت کن. بعد از شرط <code>ev == EV_FAULT</code> هیچ <code>break</code> نیست. اجرا از <code>S_RUN</code> به <code>S_ERROR</code> می‌ریزد و کد ریست هم اجرا می‌شود.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -o fall_bug_w fall_bug.c
+fall_bug.c: In function 'handle':
+fall_bug.c:18:12: warning: this statement may fall through [-Wimplicit-fallthrough=]
+   18 |         if (ev == EV_FAULT) {
+      |            ^
+fall_bug.c:21:5: note: here
+   21 |     case S_ERROR:
+      |     ^~~~
+</pre>
+<pre class="term" data-from="fall_bug.c">
+$ gcc -std=c11 -Wall -Wextra -o fall_bug fall_bug.c
+$ ./fall_bug
+START: IDLE  -&gt; RUN
+RESET: RUN   -&gt; IDLE
+FAULT: IDLE  -&gt; IDLE
+RESET: IDLE  -&gt; IDLE
+</pre>
+<p>سطر دوم غلط است: ریست در حال کار نباید اثر کند. و بدتر، بعدش <code>FAULT</code> در حالت بیکار هیچ اثری ندارد؛ یعنی خطای واقعی گم شد.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="fall_fix.c" data-lang="c" data-verify="host" id="ex2fix">
+<pre>
+#include &lt;stdio.h&gt;
+
+typedef enum { S_IDLE, S_RUN, S_ERROR } state_t;
+typedef enum { EV_START, EV_FAULT, EV_RESET } event_t;
+
+static const char *const state_name[] = { "IDLE", "RUN", "ERROR" };
+static const char *const event_name[] = { "START", "FAULT", "RESET" };
+
+static state_t handle(state_t s, event_t ev)
+{
+    switch (s) {
+    case S_IDLE:
+        if (ev == EV_START) {
+            return S_RUN;
+        }
+        break;
+    case S_RUN:
+        if (ev == EV_FAULT) {
+            s = S_ERROR;
+        }
+        break;
+    case S_ERROR:
+        if (ev == EV_RESET) {
+            s = S_IDLE;
+        }
+        break;
+    }
+    return s;
+}
+
+int main(void)
+{
+    static const event_t events[] = { EV_START, EV_RESET, EV_FAULT, EV_RESET };
+    state_t s = S_IDLE;
+
+    for (unsigned i = 0; i &lt; sizeof(events) / sizeof(events[0]); i++) {
+        state_t next = handle(s, events[i]);
+        printf("%-5s: %-5s -&gt; %s\n", event_name[events[i]], state_name[s], state_name[next]);
+        s = next;
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2fix">
+  <li data-lines="17-21"><b class="what">حالت S_RUN با break.</b> بعد از شرط خطا یک <code>break</code> اضافه شد تا اجرا به <code>case</code> بعدی نریزد.
+    <span class="why">در C هر <code>case</code> فقط یک برچسب است، نه یک بلوک جدا. اگر <code>break</code> نباشد، اجرا ادامه پیدا می‌کند تا به <code>break</code> یا انتها برسد.</span></li>
+  <li data-lines="22-26"><b class="what">حالت S_ERROR.</b> فقط ریست را می‌شناسد.</li>
+</ol>
+<pre class="term" data-from="fall_fix.c">
+$ gcc -std=c11 -Wall -Wextra -o fall_fix fall_fix.c
+$ ./fall_fix
+START: IDLE  -&gt; RUN
+RESET: RUN   -&gt; RUN
+FAULT: RUN   -&gt; ERROR
+RESET: ERROR -&gt; IDLE
+</pre>
+<p>اگر واقعا می‌خواهی اجرا از یک <code>case</code> به بعدی بریزد، نه تنها هشدار را می‌بینی، بلکه باید کنار آن کامنت <code>/* fall through */</code> بگذاری. بیشتر کدنویس‌های حرفه‌ای این را ممنوع می‌کنند مگر با دلیل مکتوب (فصل ۶، MISRA).</p></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: پارسر فریم سریال</div>
+<p>دستگاهی روی UART فریم‌هایی به شکل <code>$&lt;digits&gt;\n</code> می‌فرستد؛ مثلا <code>$305\n</code>. تابع <code>feed(parser, c)</code> بنویس که هر بار یک بایت بگیرد و اگر فریم سالم تمام شد <code>R_OK</code> و اگر خراب بود <code>R_BAD</code> برگرداند، وگرنه <code>R_NONE</code>. قاعده‌ها: حداکثر ۵ رقم؛ حداقل ۱ رقم؛ هر نویسهٔ غیررقم (به‌جز <code>$</code>) در حالت خواندن، فریم را خراب می‌کند؛ <code>$</code> در هر حالتی پارسر را دوباره شروع می‌کند.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> برای رشتهٔ <code>xx$12\n$7a\n$305\n$\n$1234567\n</code> چند فریم سالم و چند فریم خراب انتظار داری؟</li>
+  <li><b>حل:</b> پارسر را با دو حالت <code>P_WAIT_START</code> و <code>P_DIGITS</code> بنویس و روی همین رشته اجرا کن.</li>
+  <li><b>سخت‌افزار:</b> فرض کن بایت‌ها از UART با صف رویداد (بافر حلقوی درس ۴.۵) می‌رسند. اگر یک بایت وسط فریم گم شود، پارسر چطور دوباره هم‌زمان می‌شود؟ و اگر بایت <code>\n</code> گم شود؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>متغیرهای <code>value</code> و <code>digits</code> «داده‌های جانبی» هستند، نه حالت. حالت فقط می‌گوید داخل فریم هستی یا نه. علامت <code>$</code> را قبل از <code>switch</code> بررسی کن تا برای هر حالت تکرار نشود.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="uart_parse.c">
+$ ./uart_parse
+frame ok: 12
+bad frame at index 8
+frame ok: 305
+bad frame at index 16
+bad frame at index 23
+</pre>
+<p>جواب الف: دو فریم سالم (۱۲ و ۳۰۵) و سه فریم خراب: <code>$7a</code> (حرف <code>a</code>)، <code>$</code> بدون رقم و <code>$1234567</code> (بیش از ۵ رقم). شماره‌ها اندیس بایت خراب در رشته‌اند.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="uart_parse.c" data-lang="c" data-verify="host" id="ex3">
+<pre>
+#include &lt;stdio.h&gt;
+
+typedef enum { P_WAIT_START, P_DIGITS } pstate_t;
+typedef enum { R_NONE, R_OK, R_BAD } presult_t;
+
+typedef struct {
+    pstate_t state;
+    unsigned value;
+    unsigned digits;
+} parser_t;
+
+static presult_t feed(parser_t *p, char c)
+{
+    if (c == '$') {                         // شروع تازه، از هر حالتی
+        p-&gt;state = P_DIGITS;
+        p-&gt;value = 0;
+        p-&gt;digits = 0;
+        return R_NONE;
+    }
+    switch (p-&gt;state) {
+    case P_WAIT_START:
+        break;                              // آشغال بین فریم‌ها؛ نادیده
+    case P_DIGITS:
+        if (c &gt;= '0' &amp;&amp; c &lt;= '9' &amp;&amp; p-&gt;digits &lt; 5U) {
+            p-&gt;value = p-&gt;value * 10U + (unsigned)(c - '0');
+            p-&gt;digits++;
+        } else if (c == '\n' &amp;&amp; p-&gt;digits &gt; 0U) {
+            p-&gt;state = P_WAIT_START;
+            return R_OK;
+        } else {
+            p-&gt;state = P_WAIT_START;
+            return R_BAD;
+        }
+        break;
+    }
+    return R_NONE;
+}
+
+int main(void)
+{
+    const char stream[] = "xx$12\n$7a\n$305\n$\n$1234567\n";
+    parser_t p = { P_WAIT_START, 0, 0 };
+
+    for (unsigned i = 0; stream[i] != '\0'; i++) {
+        presult_t r = feed(&amp;p, stream[i]);
+        if (r == R_OK) {
+            printf("frame ok: %u\n", p.value);
+        } else if (r == R_BAD) {
+            printf("bad frame at index %u\n", i);
+        }
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="3-4"><b class="what">حالت‌ها و نتیجه‌ها.</b> دو حالت؛ و سه نتیجه: «چیزی نشد»، «فریم سالم»، «فریم خراب».</li>
+  <li data-lines="6-10"><b class="what">وضعیت پارسر.</b> حالت و دو داده جانبی: مقدار جمع‌شده و تعداد ارقام.</li>
+  <li data-lines="12-19"><b class="what">علامت شروع.</b> هر <code>$</code> پارسر را از اول می‌کند و مقدار را صفر.
+    <span class="why">این بررسی قبل از <code>switch</code> است چون در هر حالتی رفتار یکسانی دارد؛ قاعدهٔ «هم‌زمان‌سازی مجدد» فریم‌ها را از گم شدن بایت نجات می‌دهد.</span></li>
+  <li data-lines="20-22"><b class="what">حالت انتظار.</b> هر چیز دیگر بین فریم‌ها نادیده گرفته می‌شود.</li>
+  <li data-lines="23-26"><b class="what">رقم معتبر.</b> مقدار را با ۱۰ ضرب و رقم را اضافه می‌کنیم؛ شرط <code>digits &lt; 5</code> جلوی سرریز را می‌گیرد.
+    <span class="why">۵ رقم حداکثر ۹۹۹۹۹ است که در <code>unsigned</code> ۳۲ بیتی جا می‌شود. بدون این حد، فریمی بلند می‌توانست سرریز کند (درس ۲.۲).</span></li>
+  <li data-lines="27-29"><b class="what">پایان درست.</b> خط جدید با حداقل یک رقم: به حالت انتظار برمی‌گردیم و <code>R_OK</code> می‌دهیم.</li>
+  <li data-lines="30-34"><b class="what">هر چیز دیگر.</b> نویسهٔ نامعتبر، خط جدید بدون رقم، یا رقم ششم: فریم خراب.</li>
+  <li data-lines="41-51"><b class="what">آزمایش.</b> رشته‌ای پر از فریم سالم، خراب و آشغال؛ هر بایت به <code>feed</code> می‌رود.</li>
+</ol>
+<pre class="term" data-from="uart_parse.c">
+$ gcc -std=c11 -Wall -Wextra -o uart_parse uart_parse.c
+$ ./uart_parse
+frame ok: 12
+bad frame at index 8
+frame ok: 305
+bad frame at index 16
+bad frame at index 23
+</pre>
+<p>جواب پ: اگر بایتی وسط ارقام گم شود، پارسر مقدار کمی متفاوت می‌سازد و فریم را سالم می‌داند. این خطا را فقط با یک <b>جمع کنترلی</b> (checksum یا CRC) می‌توان تشخیص داد. اگر <code>\n</code> پایانی گم شود، پارسر در حالت <code>DIGITS</code> می‌ماند تا فریم بعدی با <code>$</code> برسد و آن او را دوباره هم‌زمان کند؛ ولی فریم قبلی از دست رفته است. برای مهلت (timeout) هم می‌توان یک شمارندهٔ tick اضافه کرد.</p></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>دو جا معمولا گیر می‌کنند. اول <b>«این‌همه کار برای یک if ساده؟»</b>: برای یک دکمهٔ ساده حق با توست. اما وقتی سومین فلگ را می‌گذاری و متوجه می‌شوی باید همهٔ توابع را دوباره بخوانی، وقت ماشین حالت است. قاعدهٔ من: <b>اگر «حالت» در ذهنت دارد و نام برایش انتخاب می‌کنی، آن را یک <code>enum</code> کن.</b> دوم <b>«رویداد و حالت را یکی می‌گیرند»</b>: رویداد چیزی است که <i>اتفاق می‌افتد</i> (دکمه فشرده شد، مهلت تمام شد)؛ حالت چیزی است که <i>هستی</i> (در حال شست‌وشو). قبل از کدنویسی، نمودار را روی کاغذ بکش؛ اگر نتوانستی بکشی، کد هم نمی‌توانی بنویسی.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li>ماشین حالت = <b>حالت</b> (یک <code>enum</code>) + <b>رویداد</b> + <b>گذار</b> (حالت فعلی و رویداد ← حالت بعدی و عمل). فقط یک حالت در هر لحظه.</li>
+  <li>چند فلگ <code>bool</code> ۲<sup>n</sup> ترکیب دارند که بیشترشان بی‌معنی‌اند؛ «اسپاگتی فلگ‌ها» باگ‌های نادر می‌سازد.</li>
+  <li>پیاده‌سازی: <code>switch</code> روی حالت (ساده، برای ماشین‌های کوچک) یا جدول گذار <code>next[state][event]</code> با اشاره‌گر تابع (برای ماشین‌های بزرگ).</li>
+  <li>عمل ورود و خروج، یک‌بار در <code>go_to</code>: خروج قدیم، عوض کردن، ورود جدید. گذار بی‌تغییر، عملی ندارد.</li>
+  <li>debounce: حالت‌های «کاندید» و شمارندهٔ پایداری؛ رویداد فقط یک بار در لحظهٔ گذار. پارسر فریم: هر بایت یک رویداد و <code>$</code> برای هم‌زمان‌سازی.</li>
+  <li>روی MCU: ISR فقط رویداد را در صف (بافر حلقوی) می‌گذارد؛ ماشین حالت کامل و بدون انتظار در main اجرا می‌شود. رویدادها را می‌شود از آرایه شبیه‌سازی و روی PC آزمایش کرد.</li>
+  <li>Moore = خروجی وابسته به حالت؛ Mealy = وابسته به گذار.</li>
+</ul></div>
+
+</article>
+</body>
+</html>
