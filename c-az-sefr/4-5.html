@@ -1,0 +1,1303 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ساختار داده در embedded: بافر حلقوی · C برای میکروکنترلر</title>
+<meta name="description" content="بافر حلقوی (ring buffer) چیست و چرا هر درایور سریال به آن نیاز دارد؟ ساخت یک ماژول چندفایلی با rb_put و rb_get، مسئلهٔ پر و خالی، ماسک توان ۲ و شبیه‌سازی ISR روی PC.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="4-5">
+
+<p class="lede">بایت‌ها از سیم سریال به میکروکنترلر می‌رسند، هر ۸۷ میکروثانیه یکی، و برنامهٔ تو ممکن است همان لحظه سرگرم کار دیگری باشد. اگر جایی برای نگه‌داشتنشان نباشد، از دست می‌روند. در این درس یک «اتاق انتظار» کوچک و سریع می‌سازیم که هر درایور حرفه‌ای دارد: <b>بافر حلقوی</b>. کدش فقط چند ده خط است، ولی چند نکتهٔ ظریف دارد که تازه‌کارها همیشه در آن می‌لغزند.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>بگویی بافر حلقوی چیست و <code>head</code> و <code>tail</code> چه می‌کنند</li>
+    <li>مسئلهٔ «پر یا خالی؟» را توضیح بدهی و سه راه‌حلش را مقایسه کنی</li>
+    <li>با اندیس‌های آزاد و ماسک توان ۲، بافری بسازی که همهٔ خانه‌ها را استفاده کند</li>
+    <li>یک ماژول چندفایلی <code>ringbuf.h/.c</code> با API روشن و برنامهٔ تست بنویسی</li>
+    <li>توضیح بدهی چرا تولیدکننده (ISR) و مصرف‌کننده (main) بدون قفل هم به هم برخورد نمی‌کنند</li>
+    <li>اندازهٔ بافر را از سرعت خط و تأخیر برنامه حساب کنی</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="4-2.html">۴.۲</a> (پروژهٔ چندفایلی، header) و <a href="4-1.html">۴.۱</a> (ماکرو و <code>_Static_assert</code>)</li>
+    <li>درس <a href="3-6.html">۳.۶</a> (<code>volatile</code>) و <a href="3-1.html">۳.۱</a> (ماسک بیتی)</li>
+    <li>درس <a href="2-2.html">۲.۲</a> (سرریز بی‌علامت و چرخش) و <a href="3-4.html">۳.۴</a> (<code>struct</code>)</li>
+    <li>فقط <code>gcc</code> روی PC؛ هیچ سخت‌افزاری لازم نیست</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: نوار گردانِ رستوران</h2>
+<p>در رستوران‌های سوشی یک نوار گردان هست که دور می‌زند. آشپز بشقاب می‌گذارد و مشتری برمی‌دارد. هیچ‌کس بشقاب‌ها را جابه‌جا نمی‌کند؛ خود نوار می‌چرخد. جایی که مشتری بشقاب را برداشت، دوباره خالی است و آشپز می‌تواند بشقاب تازه بگذارد. آشپز و مشتری هم‌زمان کار می‌کنند و لازم نیست منتظر هم بمانند، به شرط اینکه نوار پر نشود و مشتری هم سراغ جای خالی نرود.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>دو نشانه روی نوار بگذار: یکی «جایی که آشپز بشقاب بعدی را می‌گذارد» و یکی «جایی که مشتری بشقاب بعدی را برمی‌دارد». هر بار آشپز کار کرد، نشانهٔ خودش یک قدم جلو می‌رود. هر بار مشتری کار کرد، نشانهٔ او یک قدم جلو می‌رود. وقتی به انتهای نوار برسند، از اول ادامه می‌دهند. بافر حلقوی دقیقا همین است، با حافظه به‌جای نوار.</p></div>
+
+<h3 id="why">چرا اصلا چنین چیزی لازم است؟</h3>
+<p>میکروکنترلر وقتی از یک <span class="term" data-t="uart">UART</span> (پورت سریال؛ بایت‌ها را یکی‌یکی روی سیم می‌فرستد و می‌گیرد؛ کاملش در درس <a href="5-5.html">۵.۵</a>) بایت می‌گیرد، خود سخت‌افزار بایت را در یک رجیستر کوچک می‌گذارد. در بسیاری از میکروکنترلرها (مثل USART در STM32F411) آن رجیستر <b>فقط جای یک بایت</b> دارد. اگر تا بایت بعدی آن را برنداری، بایت قبلی رونویسی می‌شود و برای همیشه گم می‌شود.</p>
+<p>حساب کن: با سرعت ۱۱۵۲۰۰ بیت در ثانیه، هر بایت روی سیم ۱۰ بیت جا می‌گیرد (۸ بیت داده به‌علاوهٔ بیت شروع و بیت پایان). پس هر <b>۸۷ میکروثانیه</b> یک بایت می‌رسد. اگر برنامه‌ات فقط ۵ میلی‌ثانیه سرگرم به‌روزرسانی یک نمایشگر باشد، حدود ۵۸ بایت از راه می‌رسد و رجیستر تک‌خانه‌ای همه را جز آخری از دست می‌دهد.</p>
+<p>راه‌حل: هر بایت که رسید، بلافاصله در یک آرایه بگذار و برنامهٔ اصلی هر وقت وقت داشت، از همان آرایه بخواند. آرایه‌ای که اولین بایتِ رسیده را اول تحویل می‌دهد (اولین ورودی، اولین خروجی) یک <span class="term" data-t="fifo">FIFO</span> است، مثل صف نانوایی. کاری که می‌ماند این است که این آرایه را <b>سریع</b> و <b>بی‌خطر</b> بسازیم.</p>
+
+<div class="callout warn"><div class="ct">چرا آرایهٔ ساده و جابه‌جا کردن نه؟</div>
+<p>ساده‌ترین FIFO این است: بایت جدید را ته آرایه بگذار، و وقتی نفر اول را بردی، همهٔ بقیه را یک خانه به جلو بلغزان. مشکلش: با N بایت در بافر، هر خواندن N کپی می‌کند. در همان لحظه ممکن است بایت تازه‌ای برسد و به آرایه دست بزند که وسط جابه‌جایی است. بافر حلقوی هیچ چیز را جابه‌جا نمی‌کند؛ فقط دو عدد را یکی جلو می‌برد.</p></div>
+
+<h2 id="headtail">دو نشانه: head و tail</h2>
+<p>آرایه‌ای با هشت خانه را روی یک دایره بچین: بعد از خانهٔ ۷، خانهٔ ۰ می‌آید. دو عدد نگه می‌داریم:</p>
+<ul>
+  <li><b><code>head</code> (سر):</b> شمارهٔ خانه‌ای که بایت <b>بعدی</b> در آن نوشته می‌شود.</li>
+  <li><b><code>tail</code> (دم):</b> شمارهٔ خانه‌ای که بایت <b>بعدی</b> از آن خوانده می‌شود، یعنی قدیمی‌ترین بایتِ منتظر.</li>
+</ul>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 340" role="img" aria-label="بافر حلقوی با هشت خانه؛ خانه‌های ۳ و ۴ پر هستند؛ tail روی خانهٔ ۳ و head روی خانهٔ ۵ است">
+  <defs><marker id="rgA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <g stroke="#15120a" stroke-width="3">
+    <path d="M217.6 50.0A100 100 0 0 1 283.8 77.5L250.8 112.3A52 52 0 0 0 216.4 98.0Z" fill="#fff"/>
+    <path d="M287.5 81.2A100 100 0 0 1 315.0 147.4L267.0 148.6A52 52 0 0 0 252.7 114.2Z" fill="#fff"/>
+    <path d="M315.0 152.6A100 100 0 0 1 287.5 218.8L252.7 185.8A52 52 0 0 0 267.0 151.4Z" fill="#fff"/>
+    <path d="M283.8 222.5A100 100 0 0 1 217.6 250.0L216.4 202.0A52 52 0 0 0 250.8 187.7Z" fill="#ffd60a"/>
+    <path d="M212.4 250.0A100 100 0 0 1 146.2 222.5L179.2 187.7A52 52 0 0 0 213.6 202.0Z" fill="#ffd60a"/>
+    <path d="M142.5 218.8A100 100 0 0 1 115.0 152.6L163.0 151.4A52 52 0 0 0 177.3 185.8Z" fill="#fff"/>
+    <path d="M115.0 147.4A100 100 0 0 1 142.5 81.2L177.3 114.2A52 52 0 0 0 163.0 148.6Z" fill="#fff"/>
+    <path d="M146.2 77.5A100 100 0 0 1 212.4 50.0L213.6 98.0A52 52 0 0 0 179.2 112.3Z" fill="#fff"/>
+  </g>
+  <g class="mono" fill="#15120a" font-size="15" font-weight="800" text-anchor="middle">
+    <text x="244.1" y="73.8" font-size="12" font-weight="600">[0]</text>
+    <text x="285.2" y="114.9" font-size="12" font-weight="600">[1]</text>
+    <text x="285.2" y="173.1" font-size="12" font-weight="600">[2]</text>
+    <text x="244.1" y="214.2" font-size="12" font-weight="600">[3]</text>
+    <text x="244.1" y="234.2" font-size="20">D</text>
+    <text x="185.9" y="214.2" font-size="12" font-weight="600">[4]</text>
+    <text x="185.9" y="234.2" font-size="20">E</text>
+    <text x="144.8" y="173.1" font-size="12" font-weight="600">[5]</text>
+    <text x="144.8" y="114.9" font-size="12" font-weight="600">[6]</text>
+    <text x="185.9" y="73.8" font-size="12" font-weight="600">[7]</text>
+  </g>
+  <path d="M270.1 283.0L255.6 247.9" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#rgA)"/>
+  <rect x="243.0" y="285.7" width="68" height="26" rx="8" fill="#ff86b3" stroke="#15120a" stroke-width="2.5"/>
+  <text x="277.0" y="304.7" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="800">tail</text>
+  <path d="M82.0 205.1L117.1 190.6" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#rgA)"/>
+  <rect x="31.3" y="198.0" width="68" height="26" rx="8" fill="#3ddc97" stroke="#15120a" stroke-width="2.5"/>
+  <text x="65.3" y="217.0" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="800">head</text>
+  <text x="215" y="156" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="700">count = 2</text>
+  <rect x="440" y="30" width="305" height="290" rx="14" fill="#fff" stroke="#15120a" stroke-width="3"/>
+  <rect x="456" y="46" width="62" height="26" rx="7" fill="#ff86b3" stroke="#15120a" stroke-width="2.5"/>
+  <text x="487" y="64" text-anchor="middle" class="mono" fill="#15120a" font-size="14" font-weight="800">tail</text>
+  <text x="635" y="64" text-anchor="middle" fill="#15120a" font-size="13.5" font-weight="700">خواندن بعدی از این خانه</text>
+  <rect x="456" y="88" width="62" height="26" rx="7" fill="#3ddc97" stroke="#15120a" stroke-width="2.5"/>
+  <text x="487" y="106" text-anchor="middle" class="mono" fill="#15120a" font-size="14" font-weight="800">head</text>
+  <text x="635" y="106" text-anchor="middle" fill="#15120a" font-size="13.5" font-weight="700">نوشتن بعدی در این خانه</text>
+  <text x="592" y="160" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">نوشتن: بایت را در خانهٔ head بگذار</text>
+  <text x="592" y="180" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">و head را یکی جلو ببر</text>
+  <text x="592" y="212" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">خواندن: بایت را از خانهٔ tail بردار</text>
+  <text x="592" y="232" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">و tail را یکی جلو ببر</text>
+  <text x="592" y="268" text-anchor="middle" fill="#15120a" font-size="13" font-weight="700">بعد از خانهٔ ۷ دوباره خانهٔ ۰ می‌آید</text>
+  <text x="592" y="288" text-anchor="middle" fill="#15120a" font-size="12.5" font-weight="700">در شکل: A و B و C خوانده شده‌اند</text>
+  <text x="592" y="306" text-anchor="middle" fill="#15120a" font-size="12.5" font-weight="700">و D و E هنوز منتظرند</text>
+  <text x="215" y="326" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">جهت حرکت head و tail: ساعت‌گرد</text>
+</svg>
+</div><figcaption>نمای بافر حلقوی با هشت خانه. سه بایت اول (A و B و C) خوانده شده‌اند، پس <code>tail</code> از آن‌ها گذشته است. D و E هنوز منتظرند. <code>head</code> روی اولین خانهٔ خالی ایستاده.</figcaption></figure>
+
+<p>هر <span class="term" data-t="ringbuf">بافر حلقوی</span> (ring buffer یا circular buffer) یعنی یک آرایهٔ ثابت با دو نشانه که هر دو روی همین آرایه دور می‌زنند. قاعده‌ها فقط دو تا هستند:</p>
+<ol class="steps">
+  <li><b>نوشتن (put):</b> بایت را در خانهٔ <code>head</code> بگذار و <code>head</code> را یکی جلو ببر.</li>
+  <li><b>خواندن (get):</b> بایت را از خانهٔ <code>tail</code> بردار و <code>tail</code> را یکی جلو ببر.</li>
+</ol>
+<p>«یکی جلو ببر» در یک آرایهٔ ۸ خانه‌ای یعنی <code>(head + 1) % 8</code>. یعنی بعد از ۷ دوباره ۰. حالا ببینیم یک قدم ساده‌لوحانه کجا گیر می‌کند.</p>
+
+<h2 id="fullempty">مسئلهٔ بزرگ: پر است یا خالی؟</h2>
+<p>وقتی بافر خالی است، <code>head</code> و <code>tail</code> هر دو روی یک خانه‌اند. حالا چهار بایت پشت‌سرهم بنویس تا بافر چهارخانه‌ای پر شود: <code>head</code> چهار قدم جلو می‌رود، یک دور کامل می‌زند و دوباره به <code>tail</code> می‌رسد. یعنی «خالی» و «پر» هر دو <code>head == tail</code> هستند!</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="دو حالت متفاوت، بافر خالی و بافر پر، که هر دو head برابر tail دارند">
+  <defs><marker id="amA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">دو وضعیت کاملا متفاوت، یک شکل مشترک: head == tail</text>
+  <text x="190" y="62" text-anchor="middle" class="s-tx" font-size="15" font-weight="800">الف) بافر خالی</text>
+  <text x="570" y="62" text-anchor="middle" class="s-tx" font-size="15" font-weight="800">ب) بافر پر (چهار بایت)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="30" y="120" width="80" height="54" fill="#fff"/><rect x="110" y="120" width="80" height="54" fill="#fff"/><rect x="190" y="120" width="80" height="54" fill="#fff"/><rect x="270" y="120" width="80" height="54" fill="#fff"/>
+    <rect x="410" y="120" width="80" height="54" fill="#ffd60a"/><rect x="490" y="120" width="80" height="54" fill="#ffd60a"/><rect x="570" y="120" width="80" height="54" fill="#ffd60a"/><rect x="650" y="120" width="80" height="54" fill="#ffd60a"/>
+  </g>
+  <g class="mono" fill="#15120a" font-size="20" font-weight="800" text-anchor="middle">
+    <text x="450" y="155">A</text><text x="530" y="155">B</text><text x="610" y="155">C</text><text x="690" y="155">D</text>
+  </g>
+  <g class="mono s-tx" font-size="12.5" font-weight="700" text-anchor="middle">
+    <text x="70" y="194">[0]</text><text x="150" y="194">[1]</text><text x="230" y="194">[2]</text><text x="310" y="194">[3]</text>
+    <text x="450" y="194">[0]</text><text x="530" y="194">[1]</text><text x="610" y="194">[2]</text><text x="690" y="194">[3]</text>
+  </g>
+  <rect x="24" y="78" width="132" height="26" rx="8" fill="#3ddc97" stroke="#15120a" stroke-width="2.5"/>
+  <text x="90" y="96" text-anchor="middle" class="mono" fill="#15120a" font-size="13.5" font-weight="800">head=0 tail=0</text>
+  <path d="M70 106V116" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#amA)"/>
+  <rect x="404" y="78" width="132" height="26" rx="8" fill="#3ddc97" stroke="#15120a" stroke-width="2.5"/>
+  <text x="470" y="96" text-anchor="middle" class="mono" fill="#15120a" font-size="13.5" font-weight="800">head=0 tail=0</text>
+  <path d="M450 106V116" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#amA)"/>
+  <text x="190" y="226" text-anchor="middle" class="s-tx" font-size="13.5">هیچ بایتی منتظر نیست</text>
+  <text x="570" y="226" text-anchor="middle" class="s-tx" font-size="13.5">چهار بایت منتظرند (head یک دور زده و به tail رسیده)</text>
+  <text x="380" y="272" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="800">فقط از روی head و tail نمی‌شود فهمید کدام است!</text>
+</svg>
+</div><figcaption>اگر فقط دو شمارهٔ ۰ تا ۳ داشته باشیم، دو حالت مخالف هم را از هم تشخیص نمی‌دهیم.</figcaption></figure>
+
+<p>ببین کد ساده‌لوحانه دقیقا همین کار را می‌کند:</p>
+
+<div class="code" data-file="naive.c" data-lang="c" data-verify="host" id="code_naive">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+#define N 4
+
+static uint8_t data[N];
+static unsigned head = 0;   // جای نوشتن بعدی
+static unsigned tail = 0;   // جای خواندن بعدی
+
+static void put(uint8_t b)
+{
+    data[head] = b;
+    head = (head + 1) % N;
+}
+
+int main(void)
+{
+    printf("start:  head=%u tail=%u\n", head, tail);
+    for (uint8_t b = 'A'; b &lt; 'A' + N; b++) {
+        put(b);
+    }
+    printf("after %d puts: head=%u tail=%u\n", N, head, tail);
+    if (head == tail) {
+        printf("rule head==tail says: EMPTY (but %d bytes are inside!)\n", N);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code_naive">
+  <li data-lines="4"><b class="what">ظرفیت.</b> چهار خانه؛ کوچک انتخاب کردیم تا زود پر شود.</li>
+  <li data-lines="6-8"><b class="what">آرایه و دو نشانه.</b> <code>head</code> و <code>tail</code> از ۰ شروع می‌شوند و فقط شمارهٔ خانه‌اند.
+    <span class="why">این یعنی «همه‌چیز خالی است»؛ ولی قرار است همین دو عدد به‌تنهایی وضعیت را بگویند.</span></li>
+  <li data-lines="10-14"><b class="what">تابع put.</b> بایت را در خانهٔ <code>head</code> می‌گذارد و <code>head</code> را به‌صورت چرخشی جلو می‌برد. عملگر <code>%</code> باعث می‌شود بعد از خانهٔ ۳ دوباره ۰ شود (درس <a href="2-3.html">۲.۳</a>).</li>
+  <li data-lines="19-21"><b class="what">چهار نوشتن.</b> حرف‌های <code>A</code> تا <code>D</code> پشت هم می‌روند تو.</li>
+  <li data-lines="22"><b class="what">چاپ نشانه‌ها.</b> بعد از چهار نوشتن <code>head</code> یک دور زده و دوباره ۰ است.</li>
+  <li data-lines="23-25"><b class="what">آزمون «خالی؟».</b> قاعدهٔ ساده‌لوحانهٔ <code>head == tail</code> می‌گوید خالی است.
+    <span class="why">در حالی که چهار بایت داخلش است. کد واقعی که با این قاعده نوشته شود، همهٔ بایت‌ها را «خالی» می‌بیند و دور می‌ریزد.</span></li>
+</ol>
+<pre class="term" data-from="naive.c">
+$ gcc -std=c11 -Wall -Wextra -o naive naive.c
+$ ./naive
+start:  head=0 tail=0
+after 4 puts: head=0 tail=0
+rule head==tail says: EMPTY (but 4 bytes are inside!)
+</pre>
+
+<p>سه راه‌حل معروف وجود دارد:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>راه‌حل</th><th>چطور کار می‌کند</th><th>بهایش</th></tr></thead>
+<tbody>
+<tr><td>۱) یک خانه همیشه خالی بماند</td><td>پر یعنی <code>(head+1)%N == tail</code>؛ خالی یعنی <code>head == tail</code></td><td>از N خانه فقط N−۱ قابل‌استفاده است</td></tr>
+<tr><td>۲) شمارندهٔ جدا <code>count</code></td><td>هر put یکی به <code>count</code> اضافه می‌کند، هر get یکی کم</td><td><code>count</code> را <b>دو نفر</b> عوض می‌کنند (ISR و main). این در همین درس خطرناک بودنش را می‌بینی</td></tr>
+<tr><td>۳) اندیس‌های آزاد + ماسک</td><td>اندیس‌ها هرگز به صفر برنمی‌گردند؛ <code>count = head − tail</code></td><td>اندازهٔ بافر باید توان ۲ باشد</td></tr>
+</tbody></table></div>
+<p>ما راه سوم را می‌سازیم، چون همهٔ خانه‌ها را استفاده می‌کند و هر اندیس فقط یک نویسنده دارد. ببینیم چطور.</p>
+
+<h2 id="freerun">اندیس‌های آزاد و ماسک</h2>
+<p><span class="term" data-t="freerun">اندیس آزاد</span> (free-running index) یعنی شمارنده‌ای که فقط بالا می‌رود و هیچ‌وقت خودمان آن را به صفر برنمی‌گردانیم. برای پیدا کردن خانه، عدد را «ماسک» می‌کنیم: از بین بیت‌هایش فقط چند بیت پایین را نگه می‌داریم. برای بافر هشت‌خانه‌ای، ماسک <code>7</code> است (<code>0b111</code>) و <code>n &amp; 7</code> همان باقیماندهٔ <code>n</code> بر ۸ است. یادت هست ماسک بیتی را در درس <a href="3-1.html">۳.۱</a> دیدیم؟</p>
+<p>پس دو چیز داریم: <b>عدد کل نوشتن‌ها</b> (<code>head</code>) و <b>عدد کل خواندن‌ها</b> (<code>tail</code>). هر دو از صفر شروع می‌شوند و فقط زیاد می‌شوند. چون هر خواندن یک بایت را می‌برد و هر نوشتن یکی می‌آورد، تعداد بایت‌های منتظر ساده است:</p>
+<p style="text-align:center"><b><code>count = head − tail</code></b></p>
+<p>خالی یعنی <code>count == 0</code>؛ پر یعنی <code>count == N</code>. حالت «پر» و «خالی» دیگر با هم قاطی نمی‌شود، چون در حالت پر <code>head</code> دقیقا N تا از <code>tail</code> جلوتر است، نه برابر آن.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 320" role="img" aria-label="شمارنده‌های ۷ تا ۱۰ با ماسک ۷ روی خانه‌های ۷ و ۰ و ۱ و ۲ می‌افتند؛ بافر پر از خانهٔ ۷ به خانهٔ ۰ می‌پیچد">
+  <defs><marker id="frA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">شمارنده‌ها همیشه بالا می‌روند؛ ماسک تعیین می‌کند کدام خانه</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="30" y="72" width="60" height="42" rx="8" fill="#ffd60a"/><rect x="90" y="72" width="60" height="42" rx="8" fill="#ffd60a"/><rect x="150" y="72" width="60" height="42" rx="8" fill="#3ddc97"/>
+    <rect x="450" y="72" width="60" height="42" rx="8" fill="#ff86b3"/>
+  </g>
+  <g class="mono" fill="#15120a" font-size="20" font-weight="800" text-anchor="middle">
+    <text x="60" y="100">8</text><text x="120" y="100">9</text><text x="180" y="100">10</text><text x="480" y="100">7</text>
+  </g>
+  <g class="mono" fill="#15120a" font-size="12.5" font-weight="800" text-anchor="middle">
+    <text x="180" y="64">head</text><text x="480" y="64">tail</text>
+  </g>
+  <g stroke="#15120a" stroke-width="2.5" fill="none">
+    <path d="M60 116V172" marker-end="url(#frA)"/><path d="M120 116V172" marker-end="url(#frA)"/><path d="M180 116V172" marker-end="url(#frA)"/><path d="M480 116V172" marker-end="url(#frA)"/>
+  </g>
+  <text x="330" y="150" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">n &amp; 7</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="30" y="176" width="60" height="50" fill="#ffd60a"/><rect x="90" y="176" width="60" height="50" fill="#ffd60a"/><rect x="150" y="176" width="60" height="50" fill="#fff"/><rect x="210" y="176" width="60" height="50" fill="#fff"/>
+    <rect x="270" y="176" width="60" height="50" fill="#fff"/><rect x="330" y="176" width="60" height="50" fill="#fff"/><rect x="390" y="176" width="60" height="50" fill="#fff"/><rect x="450" y="176" width="60" height="50" fill="#ffd60a"/>
+  </g>
+  <g class="mono s-tx" font-size="12.5" font-weight="700" text-anchor="middle">
+    <text x="60" y="246">[0]</text><text x="120" y="246">[1]</text><text x="180" y="246">[2]</text><text x="240" y="246">[3]</text><text x="300" y="246">[4]</text><text x="360" y="246">[5]</text><text x="420" y="246">[6]</text><text x="480" y="246">[7]</text>
+  </g>
+  <g class="mono" fill="#15120a" font-size="16" font-weight="800" text-anchor="middle"><text x="480" y="207">D1</text><text x="60" y="207">D2</text><text x="120" y="207">D3</text></g>
+  <text x="600" y="130" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">سه بایت داخل بافر:</text>
+  <text x="600" y="152" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">شمارنده‌های ۷، ۸، ۹</text>
+  <text x="600" y="182" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">count = 10 − 7 = 3</text>
+  <text x="600" y="204" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">خانهٔ نوشتن بعدی: خانهٔ ۲</text>
+  <text x="380" y="288" text-anchor="middle" class="s-tx" font-size="13.5">بعد از خانهٔ ۷، شمارندهٔ ۸ به خانهٔ ۰ می‌افتد: پیچیدن خودکار است و هیچ if لازم نیست</text>
+</svg>
+</div><figcaption>بافر هشت‌خانه‌ای با <code>tail = 7</code> و <code>head = 10</code>. سه بایت داخل بافرند و در خانه‌های ۷، ۰ و ۱ نشسته‌اند. نوشتن بعدی به خانهٔ ۲ می‌رود.</figcaption></figure>
+
+<p>سؤال طبیعی: مگر این شمارنده‌ها بی‌نهایت بالا می‌روند؟ نه؛ نوعشان <code>uint16_t</code> است و بعد از ۶۵۵۳۵ به ۰ برمی‌گردد (چرخش بی‌علامت، درس <a href="2-2.html">۲.۲</a>). این چرخش هم مشکلی نمی‌سازد، چون ۶۵۵۳۶ بر ۸ بخش‌پذیر است و ماسک بدون هیچ شکافی ادامه می‌دهد. ببین:</p>
+
+<div class="code" data-file="mask.c" data-lang="c" data-verify="host" id="code_mask">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+#define SIZE 8U
+#define MASK (SIZE - 1U)
+
+int main(void)
+{
+    uint16_t head = 65533U;
+    uint16_t tail = 65533U;
+
+    for (int i = 0; i &lt; 5; i++) {
+        printf("put #%d: head=%5u slot=%u\n", i + 1, (unsigned)head, (unsigned)(head &amp; MASK));
+        head++;
+    }
+    printf("after 5 puts: head=%u tail=%u\n", (unsigned)head, (unsigned)tail);
+    printf("head - tail as int      = %d\n", head - tail);
+    printf("(uint16_t)(head - tail) = %u\n", (unsigned)(uint16_t)(head - tail));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code_mask">
+  <li data-lines="4-5"><b class="what">اندازه و ماسک.</b> <code>SIZE</code> هشت است و <code>MASK</code> برابر ۷ می‌شود. حرف <code>U</code> یعنی «بدون علامت» تا حساب‌ها بی‌علامت بمانند.</li>
+  <li data-lines="9-10"><b class="what">شروع نزدیک لبه.</b> عمدا <code>head</code> و <code>tail</code> را روی ۶۵۵۳۳ گذاشتیم تا چرخش را زود ببینیم.
+    <span class="why">در برنامهٔ واقعی ساعت‌ها طول می‌کشد تا به این عدد برسی؛ اگر منطق چرخش غلط باشد، باگ فقط بعد از چند ساعت خودش را نشان می‌دهد. پس آن را همین حالا آزمایش می‌کنیم.</span></li>
+  <li data-lines="12-15"><b class="what">پنج نوشتن.</b> هر بار خانهٔ <code>head &amp; MASK</code> را چاپ می‌کنیم و <code>head</code> را یکی بالا می‌بریم.</li>
+  <li data-lines="16"><b class="what">وضعیت بعد از چرخش.</b> <code>head</code> از ۶۵۵۳۵ گذشته و ۲ شده، ولی <code>tail</code> هنوز ۶۵۵۳۳ است.</li>
+  <li data-lines="17"><b class="what">تفریق ساده.</b> در C هر <code>uint16_t</code> قبل از تفریق به <code>int</code> ارتقا می‌یابد (درس <a href="2-2.html">۲.۲</a>)، پس جواب منفی می‌شود: ۲ − ۶۵۵۳۳.</li>
+  <li data-lines="18"><b class="what">برگرداندن به ۱۶ بیت.</b> تبدیل نتیجه به <code>uint16_t</code> آن را به پیمانهٔ ۶۵۵۳۶ می‌برد: −۶۵۵۳۱ می‌شود ۵.
+    <span class="why">این درست تعداد بایت‌های منتظر است. حساب پیمانه‌ای دقیقا همان چیزی است که ما لازم داریم.</span></li>
+</ol>
+<pre class="term" data-from="mask.c">
+$ gcc -std=c11 -Wall -Wextra -o mask mask.c
+$ ./mask
+put #1: head=65533 slot=5
+put #2: head=65534 slot=6
+put #3: head=65535 slot=7
+put #4: head=    0 slot=0
+put #5: head=    1 slot=1
+after 5 puts: head=2 tail=65533
+head - tail as int      = -65531
+(uint16_t)(head - tail) = 5
+</pre>
+
+<p>دو نکته: خانه‌ها از ۵ تا ۷ رفتند و بدون پرش به ۰ و ۱ رسیدند، و تعداد درست ۵ ماند. پس هیچ <code>if (head == N) head = 0;</code> لازم نیست و همین باعث می‌شود کد ساده و کم‌خطر بماند.</p>
+
+<div class="callout tip"><div class="ct">چرا توان ۲؟ چرا نه هر اندازه‌ای؟</div>
+<p>ماسک <code>&amp; (N-1)</code> فقط وقتی معادل «باقیمانده بر N» است که N توان ۲ باشد (۲، ۴، ۸، ۱۶، ...). چون آنگاه <code>N-1</code> فقط بیت‌های ۱ پشت سر هم دارد (مثل <code>0b0111</code>). با اندازهٔ ۶، ماسک <code>0b101</code> می‌شود و خانه‌های ۲ و ۳ هیچ‌وقت انتخاب نمی‌شوند. این باگ را در تمرین ۲ خودت پیدا می‌کنی. بونوس: عملگر <code>&amp;</code> یک دستور ساده است، ولی <code>%</code> در بعضی هسته‌ها (مثل Cortex-M0 که دستور تقسیم ندارد) به یک تابع نرم‌افزاری کند تبدیل می‌شود.</p></div>
+
+<h2 id="widget">خودت ببین: ساعت گردِ head و tail</h2>
+<p>این بار بافر فقط چهار خانه دارد تا زودتر دور بزند. با «بعدی» جلو برو و ببین <code>head</code> و <code>tail</code> چه می‌کنند. به یک نکته دقت کن: وقتی بایتی خوانده می‌شود، <b>مقدارش از خانه پاک نمی‌شود</b>؛ فقط <code>tail</code> از آن رد می‌شود و آن خانه از حساب می‌افتد تا نوشتن بعدی رویش بنویسد.</p>
+
+<div class="widget" data-w="mem" data-config='{"title":"بافر چهارخانه‌ای: put و get","code":["put(A);","put(B);","put(C);","get();   // A","get();   // B","put(D);","put(E);   // wrap","put(F);","put(G);   // full!","get();   // C"],"intro":"همه‌چیز خالی است: <code>head = 0</code> و <code>tail = 0</code>. روی بعدی بزن.","cells":[{"addr":"data[0]","name":"خانه ۰","val":"-","kind":"var"},{"addr":"data[1]","name":"خانه ۱","val":"-","kind":"var"},{"addr":"data[2]","name":"خانه ۲","val":"-","kind":"var"},{"addr":"data[3]","name":"خانه ۳","val":"-","kind":"var"},{"addr":"head","name":"جای نوشتن (شمارنده)","val":0,"kind":"ptr"},{"addr":"tail","name":"جای خواندن (شمارنده)","val":0,"kind":"ptr"}],"steps":[{"line":0,"set":{"0":"A","4":1},"hot":[0,4],"say":"خانهٔ <code>head & 3 = 0</code> گرفت A را. بعد head شد ۱. <code>count = 1 − 0 = 1</code>."},{"line":1,"set":{"1":"B","4":2},"hot":[1,4],"say":"B در خانهٔ ۱ رفت و head شد ۲."},{"line":2,"set":{"2":"C","4":3},"hot":[2,4],"say":"C در خانهٔ ۲. <code>head = 3</code> و <code>count = 3</code>."},{"line":3,"set":{"5":1},"hot":[0,5],"say":"از خانهٔ <code>tail & 3 = 0</code> خوانده شد: A. بعد tail شد ۱. خود A هنوز در خانه است ولی دیگر حساب نمی‌شود: <code>count = 3 − 1 = 2</code>."},{"line":4,"set":{"5":2},"hot":[1,5],"say":"B خوانده شد و tail شد ۲. <code>count = 1</code> (فقط C)."},{"line":5,"set":{"3":"D","4":4},"hot":[3,4],"say":"D در خانهٔ ۳ نشست و head شد ۴. <code>count = 4 − 2 = 2</code>."},{"line":6,"set":{"0":"E","4":5},"hot":[0,4],"say":"حالا <code>head = 4</code> است و <code>4 & 3 = 0</code>. E جای A نشست (A مدت‌ها پیش خوانده شده بود). head شد ۵. بافر دور زد و هیچ ifی لازم نبود. <code>count = 3</code>."},{"line":7,"set":{"1":"F","4":6},"hot":[1,4],"say":"F جای B نشست. <code>head = 6</code> و <code>count = 6 − 2 = 4</code>: بافر پر است."},{"line":8,"set":{},"hot":[4,5],"say":"<code>count == 4</code> یعنی جا نیست. put مقدار false برمی‌گرداند و هیچ‌چیز تغییر نمی‌کند. G رد شد."},{"line":9,"set":{"5":3},"hot":[2,5],"say":"<code>tail = 2</code> پس خانهٔ ۲ خوانده شد: C. ترتیب درست ماند: A، B، C، ... و بعد D و E و F. <code>count = 3</code>."}]}'></div>
+
+<h2 id="api">ساخت ماژول: ringbuf.h و ringbuf.c</h2>
+<p>حالا با همان طراحی، یک ماژول واقعی می‌سازیم (شیوهٔ درس <a href="4-2.html">۴.۲</a>): هدر کارهایی را که بافر می‌کند اعلام می‌کند و فایل <code>.c</code> طرز کارش را نگه می‌دارد. ظرفیت را با ماکرو <code>RB_SIZE</code> می‌گیریم تا هر پروژه اندازهٔ خودش را با <code>-DRB_SIZE=64U</code> بدهد (درس <a href="4-1.html">۴.۱</a>). خود بافر را از قبل، به‌صورت ایستا می‌سازیم و از <code>malloc</code> خبری نیست (درس <a href="4-4.html">۴.۴</a>).</p>
+
+<div class="code" data-file="ringbuf.h" data-lang="c" data-verify="host" data-project="ringbuf" id="rbh">
+<pre>
+#ifndef RINGBUF_H
+#define RINGBUF_H
+
+#include &lt;stdbool.h&gt;
+#include &lt;stdint.h&gt;
+
+#ifndef RB_SIZE
+#define RB_SIZE 8U              /* ظرفیت بافر؛ باید توان ۲ باشد */
+#endif
+#define RB_MASK (RB_SIZE - 1U)
+
+_Static_assert((RB_SIZE &amp; RB_MASK) == 0U &amp;&amp; RB_SIZE &lt;= 32768U,
+               "RB_SIZE must be a power of two, at most 32768");
+
+typedef struct {
+    volatile uint8_t  data[RB_SIZE];
+    volatile uint16_t head;     /* شمارندهٔ نوشتن: فقط تولیدکننده عوضش می‌کند */
+    volatile uint16_t tail;     /* شمارندهٔ خواندن: فقط مصرف‌کننده عوضش می‌کند */
+} ringbuf_t;
+
+void     rb_init(ringbuf_t *rb);
+uint16_t rb_count(const ringbuf_t *rb);
+bool     rb_is_empty(const ringbuf_t *rb);
+bool     rb_is_full(const ringbuf_t *rb);
+bool     rb_put(ringbuf_t *rb, uint8_t byte);
+bool     rb_get(ringbuf_t *rb, uint8_t *out);
+
+#endif /* RINGBUF_H */
+</pre></div>
+<ol class="walk" data-for="rbh">
+  <li data-lines="1-2,28"><b class="what">include guard.</b> مثل همیشه (درس ۴.۱).</li>
+  <li data-lines="4-5"><b class="what">هدرهای لازم.</b> <code>bool</code> و <code>uint8_t</code>/<code>uint16_t</code> در اعلان‌ها آمده‌اند، پس خود هدر آن‌ها را وارد می‌کند.</li>
+  <li data-lines="7-10"><b class="what">ظرفیت و ماسک.</b> اگر کسی <code>RB_SIZE</code> را ندهد، هشت می‌شود. ماسک همیشه یکی کمتر است.
+    <span class="why">با <code>#ifndef</code> می‌شود اندازه را از خط فرمان عوض کرد بدون دست‌بردن به هدر.</span></li>
+  <li data-lines="12-13"><b class="what">نگهبان زمان کامپایل.</b> <code>_Static_assert</code> (درس ۴.۱) وقتی <code>RB_SIZE</code> توان ۲ نباشد یا از ۳۲۷۶۸ بیشتر باشد، کامپایل را با پیام روشن متوقف می‌کند.
+    <span class="why">عبارت <code>N &amp; (N-1)</code> برای توان ۲ صفر می‌شود (مثلا ۸ &amp; ۷ = ۰) و برای غیرتوان ۲ نه (۶ &amp; ۵ = ۴). سقف ۳۲۷۶۸ برای این است که <code>count</code> در <code>uint16_t</code> جا شود.</span></li>
+  <li data-lines="15-19"><b class="what">ساختار بافر.</b> آرایهٔ داده و دو اندیس آزاد. نوع <code>ringbuf_t</code> در هدر است تا هر کسی بتواند متغیر ایستایش را بسازد.
+    <span class="why">همهٔ اعضا <code>volatile</code> هستند چون یک طرف (ISR) و طرف دیگر (main) با هم به آن‌ها دست می‌زنند؛ در بخش «تولیدکننده و مصرف‌کننده» دقیق‌تر می‌گوییم.</span></li>
+  <li data-lines="21-26"><b class="what">شش تابع API.</b> ساخت (<code>rb_init</code>)، پرسیدن تعداد، خالی/پر بودن، نوشتن و خواندن. نوشتن و خواندن <code>bool</code> برمی‌گردانند: <code>false</code> یعنی نشد.
+    <span class="why">هرگز بی‌سروصدا بایتی را دور نریز؛ به تماس‌گیرنده بگو نشد تا خودش تصمیم بگیرد.</span></li>
+</ol>
+
+<div class="code" data-file="ringbuf.c" data-lang="c" data-verify="host" data-project="ringbuf" id="rbc">
+<pre>
+#include "ringbuf.h"
+
+void rb_init(ringbuf_t *rb)
+{
+    rb-&gt;head = 0;
+    rb-&gt;tail = 0;
+}
+
+uint16_t rb_count(const ringbuf_t *rb)
+{
+    return (uint16_t)(rb-&gt;head - rb-&gt;tail);
+}
+
+bool rb_is_empty(const ringbuf_t *rb)
+{
+    return rb-&gt;head == rb-&gt;tail;
+}
+
+bool rb_is_full(const ringbuf_t *rb)
+{
+    return rb_count(rb) == RB_SIZE;
+}
+
+bool rb_put(ringbuf_t *rb, uint8_t byte)
+{
+    if (rb_is_full(rb)) {
+        return false;                       // جا نیست؛ بایت جدید را نمی‌پذیریم
+    }
+    rb-&gt;data[rb-&gt;head &amp; RB_MASK] = byte;    // اول داده را بنویس
+    rb-&gt;head++;                             // بعد اعلام کن که تازه چیزی آمده
+    return true;
+}
+
+bool rb_get(ringbuf_t *rb, uint8_t *out)
+{
+    if (rb_is_empty(rb)) {
+        return false;
+    }
+    *out = rb-&gt;data[rb-&gt;tail &amp; RB_MASK];    // اول داده را بردار
+    rb-&gt;tail++;                             // بعد جا را آزاد اعلام کن
+    return true;
+}
+</pre></div>
+<ol class="walk" data-for="rbc">
+  <li data-lines="1"><b class="what">include.</b> با <code>""</code> چون هدر خودمان است.</li>
+  <li data-lines="3-7"><b class="what">آماده‌سازی.</b> هر دو شمارنده صفر می‌شوند: بافر خالی است.
+    <span class="why">بافر ایستایی که هنوز <code>rb_init</code> نخورده، اگر سراسری باشد صفر است (درس <a href="3-5.html">۳.۵</a>)؛ ولی صدا زدن <code>rb_init</code> برای بافر محلی یا وقتی می‌خواهی دوباره خالی‌اش کنی لازم است.</span></li>
+  <li data-lines="9-12"><b class="what">تعداد بایت‌های منتظر.</b> تفریق آزاد و بازگرداندن به <code>uint16_t</code>؛ دقیقا همان ترفند بخش قبل.
+    <span class="why">تبدیل صریح (cast) لازم است چون تفریق در <code>int</code> انجام می‌شود و ممکن است منفی شود.</span></li>
+  <li data-lines="14-22"><b class="what">خالی؟ پر؟</b> خالی یعنی دو شمارنده برابر؛ پر یعنی <code>count</code> برابر ظرفیت.</li>
+  <li data-lines="24-32"><b class="what">rb_put.</b> اول می‌پرسد جا هست یا نه. اگر هست: بایت را در خانهٔ <code>head &amp; RB_MASK</code> می‌نویسد، <b>بعد</b> <code>head</code> را جلو می‌برد.
+    <span class="why">ترتیب مهم است. اگر اول <code>head</code> را بالا ببری، مصرف‌کننده لحظه‌ای فکر می‌کند بایت آماده است در حالی که هنوز ننوشته‌ای، و آشغال می‌خواند.</span></li>
+  <li data-lines="34-42"><b class="what">rb_get.</b> برعکس: اول می‌پرسد چیزی هست یا نه. اگر هست: بایت را از خانهٔ <code>tail &amp; RB_MASK</code> می‌خواند و <b>بعد</b> <code>tail</code> را جلو می‌برد.
+    <span class="why">اگر اول <code>tail</code> را بالا ببری، تولیدکننده فکر می‌کند خانه آزاد است و ممکن است روی بایتی که هنوز نخوانده‌ای بنویسد.</span></li>
+</ol>
+
+<h3 id="test">برنامهٔ تست</h3>
+<p>هر ماژول، برنامهٔ آزمایش خودش را می‌خواهد. این <code>main.c</code> همان صحنه‌هایی را می‌سازد که در ابزارک دیدی، ولی با بافر هشت‌خانه‌ای: پنج بایت می‌نویسد، سه‌تا می‌خواند، شش تای دیگر می‌نویسد تا بافر دور بزند و پر شود، یک نوشتن اضافه را امتحان می‌کند و در آخر همه را می‌خواند.</p>
+
+<div class="code" data-file="main.c" data-lang="c" data-verify="host" data-project="ringbuf" id="rbm">
+<pre>
+#include &lt;stdio.h&gt;
+#include "ringbuf.h"
+
+static ringbuf_t rx;
+
+static void show(const char *what)
+{
+    printf("%-10s count=%u head=%u tail=%u\n", what,
+           (unsigned)rb_count(&amp;rx), (unsigned)rx.head, (unsigned)rx.tail);
+}
+
+int main(void)
+{
+    uint8_t b;
+
+    printf("sizeof(ringbuf_t) = %zu\n", sizeof(ringbuf_t));
+    rb_init(&amp;rx);
+    show("init");
+
+    for (char c = 'A'; c &lt;= 'E'; c++) {
+        rb_put(&amp;rx, (uint8_t)c);
+    }
+    show("put A-E");
+
+    printf("get x3:   ");
+    for (int i = 0; i &lt; 3; i++) {
+        if (rb_get(&amp;rx, &amp;b)) {
+            printf("%c ", b);
+        }
+    }
+    printf("\n");
+    show("after get");
+
+    for (char c = 'F'; c &lt;= 'K'; c++) {
+        rb_put(&amp;rx, (uint8_t)c);
+    }
+    show("put F-K");
+
+    if (!rb_put(&amp;rx, 'L')) {
+        printf("put L -&gt; rejected (full)\n");
+    }
+
+    printf("get all:  ");
+    while (rb_get(&amp;rx, &amp;b)) {
+        printf("%c ", b);
+    }
+    printf("\n");
+    show("drained");
+
+    if (!rb_get(&amp;rx, &amp;b)) {
+        printf("get -&gt; nothing (empty)\n");
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="rbm">
+  <li data-lines="4"><b class="what">بافر ما.</b> یک متغیر ایستا (<code>static</code>) از نوع <code>ringbuf_t</code>؛ در بخش <code>.bss</code> می‌نشیند و از اول صفر است.</li>
+  <li data-lines="6-10"><b class="what">تابع کمکی show.</b> شمارنده‌ها را با یک برچسب چاپ می‌کند تا حال بافر را ببینیم.
+    <span class="why">تبدیل به <code>unsigned</code> لازم است چون <code>%u</code> نوع <code>unsigned int</code> می‌خواهد و مقدارهای <code>volatile uint16_t</code> با آن یکی نیستند.</span></li>
+  <li data-lines="14-18"><b class="what">شروع.</b> اندازهٔ ساختار را چاپ می‌کنیم (بعدا حساب می‌کنیم چرا ۱۲ است) و بافر را خالی می‌کنیم.</li>
+  <li data-lines="20-23"><b class="what">پنج نوشتن.</b> حرف‌های <code>A</code> تا <code>E</code>. مقدار برگشتی را چک نمی‌کنیم چون می‌دانیم جا هست؛ در برنامهٔ واقعی چک کن.</li>
+  <li data-lines="25-32"><b class="what">سه خواندن.</b> هر <code>rb_get</code> که موفق باشد، بایت را در <code>b</code> می‌گذارد و چاپ می‌کنیم.</li>
+  <li data-lines="34-37"><b class="what">شش نوشتن دیگر.</b> دو بایت (D و E) منتظر بودند و شش تا آمد: کل هشت خانه پر می‌شود و <code>head</code> از خانهٔ ۷ گذشته و به ۰ و ۱ و ۲ پیچیده است.</li>
+  <li data-lines="39-41"><b class="what">نوشتن اضافه.</b> نهمین بایت نباید جا شود. <code>rb_put</code> باید <code>false</code> بدهد.</li>
+  <li data-lines="43-48"><b class="what">خواندن همه.</b> تا وقتی <code>rb_get</code> موفق است بخوان. ترتیب باید <code>D E F G H I J K</code> باشد.
+    <span class="why">این ترتیب (ورودی اول، خروجی اول) تعریف FIFO است؛ حتی وقتی وسط راه بافر دور زده است.</span></li>
+  <li data-lines="50-52"><b class="what">خواندن از خالی.</b> باید <code>false</code> برگردد و بایتی گرفته نشود.</li>
+</ol>
+<pre class="term" data-from="ringbuf">
+$ gcc -std=c11 -Wall -Wextra -o ringbuf ringbuf.c main.c
+$ ./ringbuf
+sizeof(ringbuf_t) = 12
+init       count=0 head=0 tail=0
+put A-E    count=5 head=5 tail=0
+get x3:   A B C 
+after get  count=2 head=5 tail=3
+put F-K    count=8 head=11 tail=3
+put L -&gt; rejected (full)
+get all:  D E F G H I J K 
+drained    count=0 head=11 tail=11
+get -&gt; nothing (empty)
+</pre>
+
+<p>چند چیز را در خروجی بخوان. بعد از «put F-K»، <code>head=11</code> و <code>tail=3</code> است؛ تفاضل ۸ می‌شود و یعنی پر. حروف بعد از دور زدن بافر با همان ترتیب بیرون آمدند. و در «drained»، هر دو شمارنده ۱۱ شده‌اند: خالی. اندازهٔ <code>ringbuf_t</code> هم ۱۲ بایت است: ۸ بایت داده و دو <code>uint16_t</code> (هر کدام ۲ بایت)؛ بایت‌های اضافه‌ای در کار نیست.</p>
+
+<h3 id="broken">اگر اندازه را غلط بدهی؟</h3>
+<p>اگر <code>RB_SIZE</code> را ۶ بدهی، ماسک ۵ (<code>0b101</code>) می‌شود و بافر دو خانه‌اش را هرگز استفاده نمی‌کند، بی‌آنکه خطایی ببینی. برای همین <code>_Static_assert</code> را گذاشتیم. همان نگهبان را در یک فایل کوچک ببین:</p>
+
+<div class="code" data-file="assert_demo.c" data-lang="c" data-verify="host-fail" id="code_assert">
+<pre>
+#define RB_SIZE 6U
+#define RB_MASK (RB_SIZE - 1U)
+
+_Static_assert((RB_SIZE &amp; RB_MASK) == 0U, "RB_SIZE must be a power of two");
+
+int main(void)
+{
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-from="assert_demo.c">
+assert_demo.c:4:1: error: static assertion failed: "RB_SIZE must be a power of two"
+</pre>
+<p>پیام دقیق است و در همان لحظهٔ کامپایل می‌آید، نه ساعت‌ها بعد روی برد. این همان «خطای کامپایل بهترین خطاست» درس <a href="2-1.html">۲.۱</a> است.</p>
+
+<div class="callout warn"><div class="ct">دو اشتباه معمول دیگر</div>
+<ul>
+<li><b>چک نکردن مقدار برگشتی <code>rb_put</code>:</b> اگر بافر پر باشد، بایت بی‌صدا دور ریخته می‌شود و تو نمی‌فهمی. حداقل یک شمارندهٔ «از دست رفته» نگه دار (در بخش شبیه‌سازی می‌بینی).</li>
+<li><b>خواندن بدون چک <code>rb_get</code>:</b> اگر خالی باشد، <code>b</code> دست‌نخورده می‌ماند. آن‌وقت همان آشغال قبلی را به‌جای داده استفاده می‌کنی.</li>
+</ul></div>
+
+<h2 id="prodcons">تولیدکننده و مصرف‌کننده</h2>
+<p>چرا این‌قدر روی <code>volatile</code> و ترتیب دو دستور حساس بودیم؟ چون بافر حلقوی معمولا بین <b>دو جریان کد</b> است که هم‌زمان کار می‌کنند:</p>
+<ul>
+  <li><span class="term" data-t="producer">تولیدکننده</span> (producer): کسی که داده می‌نویسد. در درایور سریال، یک <span class="term" data-t="isr">ISR</span> است (Interrupt Service Routine، «تابع سرویس وقفه»): تابعی که خود سخت‌افزار وقتی رویدادی رخ داد، مثل رسیدن یک بایت، با «زنگ» صدا می‌زند و برنامهٔ جاری را وسط کارش متوقف می‌کند. جزئیاتش در درس <a href="5-3.html">۵.۳</a> می‌آید؛ فعلا فقط بدان: وسط هر دستور برنامهٔ اصلی ممکن است این تابع اجرا شود و بعد برگردد.</li>
+  <li><span class="term" data-t="consumer">مصرف‌کننده</span> (consumer): کسی که داده را برمی‌دارد. معمولا حلقهٔ اصلی <code>main</code> است (همان <code>super loop</code> درس <a href="1-4.html">۱.۴</a>).</li>
+</ul>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 326" role="img" aria-label="تولیدکننده (ISR) فقط head را می‌نویسد و مصرف‌کننده (main) فقط tail را؛ هر طرف اندیس دیگری را فقط می‌خواند">
+  <defs><marker id="owA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <rect x="24" y="60" width="200" height="120" rx="14" fill="#3ddc97" stroke="#15120a" stroke-width="3"/>
+  <text x="124" y="92" text-anchor="middle" fill="#15120a" font-size="16" font-weight="800">تولیدکننده</text>
+  <text x="124" y="116" text-anchor="middle" fill="#15120a" font-size="13.5" font-weight="700">ISR سریال</text>
+  <text x="124" y="140" text-anchor="middle" fill="#15120a" font-size="12.5">هر وقت بایتی رسید صدا زده می‌شود</text>
+  <text x="124" y="162" text-anchor="middle" class="mono" fill="#15120a" font-size="14" font-weight="800">rb_put()</text>
+  <rect x="536" y="60" width="200" height="120" rx="14" fill="#ff86b3" stroke="#15120a" stroke-width="3"/>
+  <text x="636" y="92" text-anchor="middle" fill="#15120a" font-size="16" font-weight="800">مصرف‌کننده</text>
+  <text x="636" y="116" text-anchor="middle" fill="#15120a" font-size="13.5" font-weight="700">حلقهٔ اصلی main</text>
+  <text x="636" y="140" text-anchor="middle" fill="#15120a" font-size="12.5">هر وقت وقت داشت می‌خواند</text>
+  <text x="636" y="162" text-anchor="middle" class="mono" fill="#15120a" font-size="14" font-weight="800">rb_get()</text>
+  <rect x="270" y="80" width="220" height="80" rx="12" fill="#ffd60a" stroke="#15120a" stroke-width="3"/>
+  <text x="380" y="112" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="800">data[ ... ]</text>
+  <text x="380" y="140" text-anchor="middle" fill="#15120a" font-size="13.5" font-weight="700">بافر حلقوی مشترک</text>
+  <path d="M226 120H266" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#owA)"/>
+  <path d="M494 120H532" stroke="#15120a" stroke-width="3" fill="none" marker-start="url(#owA)"/>
+  <rect x="24" y="210" width="330" height="100" rx="12" fill="#fff" stroke="#15120a" stroke-width="3"/>
+  <text x="189" y="234" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="800">head</text>
+  <text x="189" y="256" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">فقط تولیدکننده می‌نویسد</text>
+  <text x="189" y="277" text-anchor="middle" fill="#15120a" font-size="13">مصرف‌کننده فقط می‌خواند (برای دانستن تعداد)</text>
+  <text x="189" y="297" text-anchor="middle" fill="#15120a" font-size="12.5">مقدار کهنه فقط «کمتر از واقعیت» نشان می‌دهد</text>
+  <rect x="406" y="210" width="330" height="100" rx="12" fill="#fff" stroke="#15120a" stroke-width="3"/>
+  <text x="571" y="234" text-anchor="middle" class="mono" fill="#15120a" font-size="15" font-weight="800">tail</text>
+  <text x="571" y="256" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">فقط مصرف‌کننده می‌نویسد</text>
+  <text x="571" y="277" text-anchor="middle" fill="#15120a" font-size="13">تولیدکننده فقط می‌خواند (برای دانستن پر بودن)</text>
+  <text x="571" y="297" text-anchor="middle" fill="#15120a" font-size="12.5">مقدار کهنه فقط «پرتر از واقعیت» نشان می‌دهد</text>
+  <path d="M124 182V206" stroke="#15120a" stroke-width="2.5" fill="none" stroke-dasharray="6 4"/>
+  <path d="M636 182V206" stroke="#15120a" stroke-width="2.5" fill="none" stroke-dasharray="6 4"/>
+  <text x="380" y="34" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">هر اندیس دقیقا یک نویسنده دارد؛ برخوردی پیش نمی‌آید</text>
+</svg>
+</div><figcaption>قانون طلایی: هر اندیس فقط یک نویسنده دارد. طرف دیگر می‌تواند آن را بخواند ولی نمی‌نویسد.</figcaption></figure>
+
+<p>اگر تولیدکننده فقط <code>head</code> را بنویسد و مصرف‌کننده فقط <code>tail</code> را، وضعیتی به نام <span class="term" data-t="spsc">SPSC</span> (single producer, single consumer: یک تولیدکننده و یک مصرف‌کننده) داریم. چرا این طراحی <b>بدون قفل</b> هم امن است؟</p>
+<ol class="steps">
+  <li><b>هیچ نوشتنِ هم‌زمان روی یک متغیر نیست.</b> <code>head++</code> شامل «بخوان، جمع کن، بنویس» است (درس <a href="3-6.html">۳.۶</a>). اگر دو نفر همین را روی یک متغیر بکنند، یک افزایش گم می‌شود. اینجا هر اندیس یک نویسنده دارد؛ برای همین راه‌حل شماره ۲ (شمارندهٔ مشترک <code>count</code>) را کنار گذاشتیم.</li>
+  <li><b>خواندنِ کهنه بی‌خطر است.</b> ممکن است مصرف‌کننده <code>head</code> قدیمی را ببیند: آن‌وقت فکر می‌کند بایت‌های کمتری هست؛ چیزی جا نمی‌افتد و بعدا می‌رسد. ممکن است تولیدکننده <code>tail</code> قدیمی ببیند: فکر می‌کند بافر پرتر است؛ حداکثر یک بایت را بی‌جهت رد می‌کند و هرگز روی بایت خوانده‌نشده نمی‌نویسد.</li>
+  <li><b>ترتیب داده ← اندیس.</b> اگر <code>head</code> بعد از نوشتن داده بالا برود، هر وقت مصرف‌کننده <code>head</code> جدید را دید، داده هم آماده است.</li>
+</ol>
+
+<div class="callout info"><div class="ct">پس <span class="en">volatile</span> چه کاری اینجا می‌کند؟</div>
+<p>در درس <a href="3-6.html">۳.۶</a> دیدی که کامپایلر ممکن است مقدار یک متغیر را در ثبات نگه دارد و هرگز دوباره از حافظه نخواند. مصرف‌کننده‌ای که در یک حلقه منتظر تغییر <code>head</code> است، بدون <code>volatile</code> ممکن است همیشه همان مقدار اولیه را ببیند. <code>volatile</code> به کامپایلر می‌گوید «هر بار واقعا از حافظه بخوان» و ترتیب خواندن‌ها و نوشتن‌های <code>volatile</code> را هم عوض نمی‌کند. برای همین <code>data</code> را هم <code>volatile</code> گرفتیم: تا نوشتن داده و بالا بردن <code>head</code> جابه‌جا نشوند. <b>ولی</b> <code>volatile</code> عملیات را «اتمی» نمی‌کند؛ مسئله را فقط چون هر اندیس یک نویسنده دارد، حل شده می‌بینیم.</p></div>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: کجا این طراحی می‌شکند؟</div>
+<ul>
+<li><b>دو تولیدکننده</b> (مثلا دو ISR یا دو task) که هر دو <code>head</code> را می‌نویسند: دیگر SPSC نیست و باید قفل یا بخش بحرانی بگذاری.</li>
+<li><b>ESP32 دوهسته‌ای:</b> وقتی تولیدکننده و مصرف‌کننده روی دو هستهٔ متفاوت باشند، علاوه بر <code>volatile</code> به «سد حافظه» (memory barrier) هم نیاز است تا نوشتن داده قبل از نوشتن <code>head</code> در دید هستهٔ دیگر برسد. راه معمول: از ابزارهای آمادهٔ FreeRTOS استفاده کن. ESP-IDF یک Ring Buffer آماده هم دارد که برای چند task طراحی شده (در مستندات رسمی ESP-IDF «Ring Buffer» را ببین).</li>
+<li><b>سیاست overwrite</b> (بخش بعد): تولیدکننده <code>tail</code> را هم دست می‌زند و قانون طلایی را می‌شکند.</li>
+<li><b>استاندارد C11</b> نوع‌های <code>_Atomic</code> و سد حافظه دارد. در پروژهٔ جدی اینها را جای <code>volatile</code> به‌کار می‌گیرند؛ توضیحش از سطح این درس بیرون است.</li>
+</ul></div>
+
+<h2 id="sim">شبیه‌سازی ISR روی PC</h2>
+<p>ما ISR واقعی را در درس <a href="5-3.html">۵.۳</a> می‌نویسیم. فعلا روی PC یک «خط زمان» می‌سازیم: آرایه‌ای که در هر لحظه (tick) می‌گوید چند بایت از سیم می‌رسد و <code>main</code> فرصت خواندن چند بایت را دارد. تابعی به اسم <code>uart_rx_isr</code> نقش ISR را بازی می‌کند. بافر هشت‌خانه‌ای است و از t=2 به بعد تولیدکننده تندتر از مصرف‌کننده است، پس بافر پر می‌شود و باید تصمیم بگیریم بایت اضافه با چه سیاستی از بین برود.</p>
+
+<div class="callout analogy"><div class="ct">وقتی بافر پر است چه کنیم؟</div>
+<p>دو سیاست: (۱) <b>بایت جدید را دور بریز</b> (drop newest): مثل نانوایی‌ای که وقتی صف پر است، مشتری تازه را برمی‌گرداند. داده‌های قبلی سالم می‌مانند. (۲) <b>قدیمی‌ترین را دور بریز</b> (overwrite oldest): مثل دوربین مداربسته که وقتی حافظه پر شد، فیلم قدیمی را پاک می‌کند تا فیلم تازه جا شود. برای دنبالهٔ فرمان‌ها (۱) بهتر است چون شروع پیام سالم می‌ماند؛ برای دنبالهٔ سنسور که فقط تازه‌ترین‌ها مهم‌اند (۲) بهتر است.</p></div>
+
+<p>پروژهٔ دوم پنج فایل دارد. دو فایل اول همان ماژول بالاست و بدون تغییر (برای اینکه بتوانی هر پروژه را جدا کامپایل کنی، دوباره آورده‌ایم):</p>
+
+<details><summary>ringbuf.h و ringbuf.c (بدون تغییر نسبت به بخش قبل)</summary>
+<div class="code" data-file="ringbuf.h" data-lang="c" data-verify="host" data-project="rb_isr" id="r2h">
+<pre>
+#ifndef RINGBUF_H
+#define RINGBUF_H
+
+#include &lt;stdbool.h&gt;
+#include &lt;stdint.h&gt;
+
+#ifndef RB_SIZE
+#define RB_SIZE 8U              /* ظرفیت بافر؛ باید توان ۲ باشد */
+#endif
+#define RB_MASK (RB_SIZE - 1U)
+
+_Static_assert((RB_SIZE &amp; RB_MASK) == 0U &amp;&amp; RB_SIZE &lt;= 32768U,
+               "RB_SIZE must be a power of two, at most 32768");
+
+typedef struct {
+    volatile uint8_t  data[RB_SIZE];
+    volatile uint16_t head;     /* شمارندهٔ نوشتن: فقط تولیدکننده عوضش می‌کند */
+    volatile uint16_t tail;     /* شمارندهٔ خواندن: فقط مصرف‌کننده عوضش می‌کند */
+} ringbuf_t;
+
+void     rb_init(ringbuf_t *rb);
+uint16_t rb_count(const ringbuf_t *rb);
+bool     rb_is_empty(const ringbuf_t *rb);
+bool     rb_is_full(const ringbuf_t *rb);
+bool     rb_put(ringbuf_t *rb, uint8_t byte);
+bool     rb_get(ringbuf_t *rb, uint8_t *out);
+
+#endif /* RINGBUF_H */
+</pre></div>
+<div class="code" data-file="ringbuf.c" data-lang="c" data-verify="host" data-project="rb_isr" id="r2c">
+<pre>
+#include "ringbuf.h"
+
+void rb_init(ringbuf_t *rb)
+{
+    rb-&gt;head = 0;
+    rb-&gt;tail = 0;
+}
+
+uint16_t rb_count(const ringbuf_t *rb)
+{
+    return (uint16_t)(rb-&gt;head - rb-&gt;tail);
+}
+
+bool rb_is_empty(const ringbuf_t *rb)
+{
+    return rb-&gt;head == rb-&gt;tail;
+}
+
+bool rb_is_full(const ringbuf_t *rb)
+{
+    return rb_count(rb) == RB_SIZE;
+}
+
+bool rb_put(ringbuf_t *rb, uint8_t byte)
+{
+    if (rb_is_full(rb)) {
+        return false;                       // جا نیست؛ بایت جدید را نمی‌پذیریم
+    }
+    rb-&gt;data[rb-&gt;head &amp; RB_MASK] = byte;    // اول داده را بنویس
+    rb-&gt;head++;                             // بعد اعلام کن که تازه چیزی آمده
+    return true;
+}
+
+bool rb_get(ringbuf_t *rb, uint8_t *out)
+{
+    if (rb_is_empty(rb)) {
+        return false;
+    }
+    *out = rb-&gt;data[rb-&gt;tail &amp; RB_MASK];    // اول داده را بردار
+    rb-&gt;tail++;                             // بعد جا را آزاد اعلام کن
+    return true;
+}
+</pre></div>
+</details>
+
+<p>ماژول جدید فقط یک تابع دارد؛ سیاست «قدیمی را دور بریز»:</p>
+
+<div class="code" data-file="rb_policy.h" data-lang="c" data-verify="host" data-project="rb_isr" id="r2ph">
+<pre>
+#ifndef RB_POLICY_H
+#define RB_POLICY_H
+
+#include "ringbuf.h"
+
+/* اگر پر بود، قدیمی‌ترین بایت را دور می‌ریزد. true یعنی چیزی از دست نرفت. */
+bool rb_put_overwrite(ringbuf_t *rb, uint8_t byte);
+
+#endif /* RB_POLICY_H */
+</pre></div>
+<div class="code" data-file="rb_policy.c" data-lang="c" data-verify="host" data-project="rb_isr" id="r2pc">
+<pre>
+#include "rb_policy.h"
+
+bool rb_put_overwrite(ringbuf_t *rb, uint8_t byte)
+{
+    bool lost = false;
+
+    if (rb_is_full(rb)) {
+        rb-&gt;tail++;                         // قدیمی‌ترین بایت دور ریخته شد
+        lost = true;
+    }
+    rb-&gt;data[rb-&gt;head &amp; RB_MASK] = byte;
+    rb-&gt;head++;
+    return !lost;
+}
+</pre></div>
+<ol class="walk" data-for="r2pc">
+  <li data-lines="3-4"><b class="what">تابع overwrite.</b> مثل <code>rb_put</code> است ولی وقتی پر بود شکست نمی‌خورد.</li>
+  <li data-lines="7-10"><b class="what">پر بود؟ tail را جلو ببر.</b> جلو بردن <code>tail</code> یعنی قدیمی‌ترین بایت از حساب می‌افتد؛ حالا یک خانه آزاد است. یادداشت می‌کنیم چیزی از دست رفت.
+    <span class="why">اینجا تولیدکننده <code>tail</code> را می‌نویسد: قانون طلایی شکسته می‌شود. اگر مصرف‌کننده در همان لحظه <code>rb_get</code> بزند، هر دو <code>tail++</code> می‌کنند و ممکن است یک افزایش گم شود یا یک بایت دوبار تحویل داده شود. پس این تابع را فقط وقتی به‌کار ببر که مطمئنی مصرف‌کننده هم‌زمان نیست (مثلا وقفه‌ها را بسته‌ای) یا هر دو در یک جریان‌اند.</span></li>
+  <li data-lines="11-12"><b class="what">نوشتن معمولی.</b> حالا خانه آزاد است؛ مثل قبل بنویس و <code>head</code> را جلو ببر.</li>
+  <li data-lines="13"><b class="what">نتیجه.</b> <code>true</code> یعنی چیزی از دست نرفت.</li>
+</ol>
+
+<div class="code" data-file="main.c" data-lang="c" data-verify="host" data-project="rb_isr" id="r2m">
+<pre>
+#include &lt;stdio.h&gt;
+#include "ringbuf.h"
+#include "rb_policy.h"
+
+typedef struct {
+    uint8_t arrive;     // چند بایت در این لحظه از سیم می‌رسد
+    uint8_t consume;    // main در این لحظه فرصت دارد چند بایت بردارد
+} tick_t;
+
+static const tick_t timeline[] = {
+    {2, 2}, {2, 2}, {4, 0}, {4, 0}, {3, 1}, {0, 6}, {0, 6}
+};
+#define TICKS (sizeof(timeline) / sizeof(timeline[0]))
+
+static ringbuf_t rx;
+static volatile uint8_t next_byte;      // شمارندهٔ بایت‌های رسیده: 1، 2، 3، ...
+static volatile uint16_t lost;          // تعداد بایت‌های از دست‌رفته
+
+/* نقش ISR: وقتی بایتی از سیم می‌رسد، سخت‌افزار این تابع را صدا می‌زند */
+static void uart_rx_isr(bool overwrite)
+{
+    uint8_t byte = ++next_byte;
+    bool ok = overwrite ? rb_put_overwrite(&amp;rx, byte) : rb_put(&amp;rx, byte);
+    if (!ok) {
+        lost++;
+    }
+}
+
+static void simulate(bool overwrite)
+{
+    uint8_t b;
+
+    rb_init(&amp;rx);
+    next_byte = 0;
+    lost = 0;
+    for (unsigned t = 0; t &lt; TICKS; t++) {
+        for (uint8_t i = 0; i &lt; timeline[t].arrive; i++) {
+            uart_rx_isr(overwrite);
+        }
+        printf("t=%u arrive=%u consume=%u | ", t, (unsigned)timeline[t].arrive,
+               (unsigned)timeline[t].consume);
+        for (uint8_t i = 0; i &lt; timeline[t].consume &amp;&amp; rb_get(&amp;rx, &amp;b); i++) {
+            printf("%u ", (unsigned)b);
+        }
+        printf("| count=%u lost=%u\n", (unsigned)rb_count(&amp;rx), (unsigned)lost);
+    }
+}
+
+int main(void)
+{
+    printf("policy: drop newest\n");
+    simulate(false);
+    printf("policy: overwrite oldest\n");
+    simulate(true);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="r2m">
+  <li data-lines="5-12"><b class="what">خط زمان.</b> هر عنصر یک لحظه است: <code>arrive</code> چند بایت از سیم می‌رسد و <code>consume</code> چند بایت <code>main</code> فرصت خواندن دارد. لحظه‌های ۲ و ۳ و ۴ تندتر می‌رسند و کندتر برداشته می‌شوند.
+    <span class="why">خط زمان یک آرایهٔ ثابت است. نتیجه‌ها هر بار یکسانند و می‌توانیم خروجی را وارسی کنیم. روی برد واقعی این ترتیب را سرعت سیم و کد تو می‌سازد.</span></li>
+  <li data-lines="13"><b class="what">تعداد لحظه‌ها.</b> با ترفند <code>sizeof</code> (درس <a href="2-7.html">۲.۷</a>) از روی خود آرایه حساب می‌شود.</li>
+  <li data-lines="15-17"><b class="what">حافظهٔ مشترک.</b> بافر، شمارندهٔ بایت‌های رسیده و شمارندهٔ از دست رفته‌ها. این دو شمارنده <code>volatile</code> هستند چون در واقعیت ISR آن‌ها را عوض می‌کند و <code>main</code> می‌خواند.</li>
+  <li data-lines="19-27"><b class="what">نقش ISR.</b> بایتی با شمارهٔ بعدی می‌سازد (۱، ۲، ۳، ...) و آن را با سیاست انتخابی در بافر می‌گذارد. اگر بایتی از دست رفت، شمارنده را زیاد می‌کند.
+    <span class="why">شمارهٔ بایت‌ها یک ترفند آموزشی است: به‌جای داده‌ٔ واقعی، بایت شمارهٔ n را می‌فرستیم تا ببینیم کدام‌ها گم شدند.</span></li>
+  <li data-lines="29-35"><b class="what">شروع هر شبیه‌سازی.</b> همه‌چیز صفر می‌شود تا دو سیاست شرایط یکسان داشته باشند.</li>
+  <li data-lines="36-39"><b class="what">لحظهٔ t: اول ISR.</b> در هر لحظه ابتدا بایت‌های رسیده وارد بافر می‌شوند، مثل اینکه وقفه قبل از رسیدن <code>main</code> به خواندن اجرا شده باشد.</li>
+  <li data-lines="40-45"><b class="what">بعد main.</b> چند بایت مجاز را می‌خواند و می‌شمارد. حلقه هم به تعداد مجاز محدود است و هم به «خالی نبودن بافر».</li>
+  <li data-lines="51-54"><b class="what">دو اجرا.</b> اول با «جدید را دور بریز» و بعد با «قدیمی را دور بریز».</li>
+</ol>
+<pre class="term" data-from="rb_isr">
+$ gcc -std=c11 -Wall -Wextra -o rb_isr ringbuf.c rb_policy.c main.c
+$ ./rb_isr
+policy: drop newest
+t=0 arrive=2 consume=2 | 1 2 | count=0 lost=0
+t=1 arrive=2 consume=2 | 3 4 | count=0 lost=0
+t=2 arrive=4 consume=0 | | count=4 lost=0
+t=3 arrive=4 consume=0 | | count=8 lost=0
+t=4 arrive=3 consume=1 | 5 | count=7 lost=3
+t=5 arrive=0 consume=6 | 6 7 8 9 10 11 | count=1 lost=3
+t=6 arrive=0 consume=6 | 12 | count=0 lost=3
+policy: overwrite oldest
+t=0 arrive=2 consume=2 | 1 2 | count=0 lost=0
+t=1 arrive=2 consume=2 | 3 4 | count=0 lost=0
+t=2 arrive=4 consume=0 | | count=4 lost=0
+t=3 arrive=4 consume=0 | | count=8 lost=0
+t=4 arrive=3 consume=1 | 8 | count=7 lost=3
+t=5 arrive=0 consume=6 | 9 10 11 12 13 14 | count=1 lost=3
+t=6 arrive=0 consume=6 | 15 | count=0 lost=3
+</pre>
+
+<p>خروجی را بخوان. در هر دو سیاست، در t=4 هر سه بایت رسیده (۱۳ و ۱۴ و ۱۵) به بافر پر می‌خورند و <code>lost=3</code> می‌شود.</p>
+<ul>
+  <li><b>دور ریختن جدیدها:</b> بایت‌های ۱۳، ۱۴ و ۱۵ گم شدند؛ آنچه خوانده می‌شود از ۵ تا ۱۲ پشت‌سرهم است. یعنی داده‌های خوانده‌شده «یک تکهٔ پیوسته» است و فقط انتهایش کم است.</li>
+  <li><b>دور ریختن قدیمی‌ها:</b> بایت‌های ۵، ۶ و ۷ گم شدند و اولین بایت خوانده‌شده ۸ است؛ آخرین‌ها (تا ۱۵) هم سالم‌اند. باز هم داده «یک تکهٔ پیوسته» است و فقط <b>ابتدایش</b> کم شده.</li>
+</ul>
+<p>هر دو سیاست دقیقا ۳ بایت را از دست داده‌اند؛ فرق در «کدام ۳ تا». به همین دلیل <code>lost</code> را نگه می‌داریم: اگر صفر نباشد، یعنی بافر کوچک بود یا مصرف‌کننده دیر رسید. هیچ سیاستی جای اندازهٔ درست را نمی‌گیرد.</p>
+
+<h2 id="size">اندازهٔ بافر را چطور انتخاب کنیم؟</h2>
+<p>«۶۴ بایت باشه، کافیه» جواب مهندسی نیست. بافر باید <b>بدترین تأخیرِ مصرف‌کننده</b> را تاب بیاورد. سه مرحله:</p>
+<ol class="steps">
+  <li><b>سرعت ورود.</b> با سرعت خط ۱۱۵۲۰۰ بیت در ثانیه و ۱۰ بیت برای هر بایت: ۱۱۵۲۰ بایت در ثانیه.</li>
+  <li><b>بدترین تأخیر.</b> بیشترین مدتی که <code>main</code> ممکن است سرگرم کاری باشد و به خواندن نرسد (مثلا ۵ میلی‌ثانیه برای به‌روزرسانی نمایشگر). تعداد بایت‌های رسیده در آن مدت را حساب کن و <b>گرد به بالا</b> کن.</li>
+  <li><b>گرد کردن به توان ۲.</b> کوچک‌ترین توان ۲ که از آن عدد کمتر نباشد. بعد کمی حاشیهٔ ایمنی بده اگر RAM اجازه می‌دهد.</li>
+</ol>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 322" role="img" aria-label="در ۵ میلی‌ثانیه‌ای که main مشغول است، ۵۸ بایت از سیم می‌رسد و تعداد بایت‌های داخل بافر از صفر به ۵۸ می‌رسد">
+  <defs><marker id="tmA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">۵ میلی‌ثانیه تأخیر main در ۱۱۵۲۰۰ بیت بر ثانیه</text>
+  <g stroke="#15120a" stroke-width="3"><rect x="30" y="44" width="120" height="34" fill="#7ea3ff"/><rect x="150" y="44" width="470" height="34" fill="#ff9a4d"/><rect x="620" y="44" width="110" height="34" fill="#3ddc97"/></g>
+  <g fill="#15120a" font-size="13" font-weight="800" text-anchor="middle"><text x="90" y="66">آزاد</text><text x="385" y="66">مشغول کار دیگر (نمایشگر)، حدود ۵ میلی‌ثانیه</text><text x="675" y="66" class="mono">rb_get</text></g>
+  <text x="380" y="102" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">هر خط عمودی = یک بایت که از سیم می‌رسد (ISR آن را در بافر می‌گذارد)</text>
+  <g stroke="#15120a" stroke-width="2">
+    <path d="M154.1 114V150"/>
+    <path d="M162.2 114V150"/>
+    <path d="M170.3 114V150"/>
+    <path d="M178.4 114V150"/>
+    <path d="M186.5 114V150"/>
+    <path d="M194.6 114V150"/>
+    <path d="M202.7 114V150"/>
+    <path d="M210.8 114V150"/>
+    <path d="M218.9 114V150"/>
+    <path d="M227.0 114V150"/>
+    <path d="M235.1 114V150"/>
+    <path d="M243.2 114V150"/>
+    <path d="M251.3 114V150"/>
+    <path d="M259.4 114V150"/>
+    <path d="M267.5 114V150"/>
+    <path d="M275.6 114V150"/>
+    <path d="M283.7 114V150"/>
+    <path d="M291.8 114V150"/>
+    <path d="M299.9 114V150"/>
+    <path d="M308.0 114V150"/>
+    <path d="M316.1 114V150"/>
+    <path d="M324.2 114V150"/>
+    <path d="M332.3 114V150"/>
+    <path d="M340.4 114V150"/>
+    <path d="M348.5 114V150"/>
+    <path d="M356.6 114V150"/>
+    <path d="M364.7 114V150"/>
+    <path d="M372.8 114V150"/>
+    <path d="M380.9 114V150"/>
+    <path d="M389.1 114V150"/>
+    <path d="M397.2 114V150"/>
+    <path d="M405.3 114V150"/>
+    <path d="M413.4 114V150"/>
+    <path d="M421.5 114V150"/>
+    <path d="M429.6 114V150"/>
+    <path d="M437.7 114V150"/>
+    <path d="M445.8 114V150"/>
+    <path d="M453.9 114V150"/>
+    <path d="M462.0 114V150"/>
+    <path d="M470.1 114V150"/>
+    <path d="M478.2 114V150"/>
+    <path d="M486.3 114V150"/>
+    <path d="M494.4 114V150"/>
+    <path d="M502.5 114V150"/>
+    <path d="M510.6 114V150"/>
+    <path d="M518.7 114V150"/>
+    <path d="M526.8 114V150"/>
+    <path d="M534.9 114V150"/>
+    <path d="M543.0 114V150"/>
+    <path d="M551.1 114V150"/>
+    <path d="M559.2 114V150"/>
+    <path d="M567.3 114V150"/>
+    <path d="M575.4 114V150"/>
+    <path d="M583.5 114V150"/>
+    <path d="M591.6 114V150"/>
+    <path d="M599.7 114V150"/>
+    <path d="M607.8 114V150"/>
+    <path d="M615.9 114V150"/>
+  </g>
+  <path d="M150 170H620" stroke="#15120a" stroke-width="3" fill="none" marker-start="url(#tmA)" marker-end="url(#tmA)"/>
+  <text x="385" y="192" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">۵۸ بایت در این فاصله می‌رسد (هر ۸۷ میکروثانیه یکی)</text>
+  <path d="M30 276H150L620 216H730" stroke="#15120a" stroke-width="3" fill="none"/>
+  <path d="M150 276L620 216V276Z" fill="#ffd60a" fill-opacity="0.6" stroke="none"/>
+  <text x="140" y="270" text-anchor="end" class="mono s-tx" font-size="13" font-weight="800">count = 0</text>
+  <text x="626" y="212" text-anchor="start" class="mono s-tx" font-size="13" font-weight="800">count = 58</text>
+  <text x="385" y="304" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">ارتفاع نمودار = تعداد بایت‌های منتظر در بافر</text>
+</svg>
+</div><figcaption>هرچه <code>main</code> دیرتر برسد، بایت‌های بیشتری جمع می‌شوند. بافر باید همهٔ آن‌ها را نگه دارد.</figcaption></figure>
+
+<div class="code" data-file="baud.c" data-lang="c" data-verify="host" id="code_baud">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+#ifndef BAUD
+#define BAUD 115200U
+#endif
+#ifndef STALL_MS
+#define STALL_MS 5U             // main تا چند میلی‌ثانیه ممکن است گرفتار باشد
+#endif
+
+static uint32_t next_pow2(uint32_t n)
+{
+    uint32_t p = 1U;
+    while (p &lt; n) {
+        p &lt;&lt;= 1;
+    }
+    return p;
+}
+
+int main(void)
+{
+    uint32_t bytes_per_s = BAUD / 10U;      // هر بایت روی سیم ۱۰ بیت است
+    uint32_t in_stall = (bytes_per_s * STALL_MS + 999U) / 1000U;   // گرد به بالا
+
+    printf("baud=%u -&gt; %u bytes/s\n", (unsigned)BAUD, (unsigned)bytes_per_s);
+    printf("stall=%u ms -&gt; %u bytes arrive\n", (unsigned)STALL_MS, (unsigned)in_stall);
+    printf("buffer size = %u\n", (unsigned)next_pow2(in_stall));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code_baud">
+  <li data-lines="4-9"><b class="what">ورودی‌های قابل‌تنظیم.</b> سرعت و تأخیر، با مقدار پیش‌فرض ولی قابل‌تغییر با <code>-D</code> در خط فرمان (درس ۴.۱).</li>
+  <li data-lines="11-18"><b class="what">کوچک‌ترین توان ۲.</b> از ۱ شروع می‌کند و تا وقتی از <code>n</code> کمتر است، دو برابر می‌کند (<code>&lt;&lt;= 1</code> یعنی یک شیفت به چپ، درس ۳.۱).</li>
+  <li data-lines="22"><b class="what">بایت در ثانیه.</b> تقسیم بر ۱۰.</li>
+  <li data-lines="23"><b class="what">بایت در مدت تأخیر.</b> ضرب در میلی‌ثانیه و تقسیم بر ۱۰۰۰؛ با افزودن ۹۹۹ قبل از تقسیم، نتیجه به بالا گرد می‌شود.
+    <span class="why">تقسیم صحیح به پایین گرد می‌کند (درس <a href="2-3.html">۲.۳</a>). ولی کمبود یک بایت هم یعنی گم‌شدن داده، پس باید به بالا گرد کنیم.</span></li>
+  <li data-lines="25-27"><b class="what">چاپ.</b> نتیجهٔ نهایی همان اندازه‌ای است که به <code>RB_SIZE</code> می‌دهیم.</li>
+</ol>
+<pre class="term" data-from="baud.c">
+$ gcc -std=c11 -Wall -Wextra -o baud baud.c
+$ ./baud
+baud=115200 -&gt; 11520 bytes/s
+stall=5 ms -&gt; 58 bytes arrive
+buffer size = 64
+</pre>
+
+<p>یعنی اگر ۵ میلی‌ثانیه تأخیر داری، <code>-DRB_SIZE=64U</code> کافی است. اگر سرعت ۹۲۱۶۰۰ و تأخیر ۲۰ میلی‌ثانیه باشد:</p>
+<pre class="term" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -DBAUD=921600U -DSTALL_MS=20U -o baud2 baud.c
+$ ./baud2
+baud=921600 -&gt; 92160 bytes/s
+stall=20 ms -&gt; 1844 bytes arrive
+buffer size = 2048
+</pre>
+<p>یعنی ۲۰۴۸ بایت: ۲ کیلوبایت از ۱۲۸ کیلوبایت RAM در STM32F411. برای سرعت‌های بالا، بافر بزرگ‌تر می‌شود و همین‌جاست که RAM کم بودن حس می‌شود.</p>
+
+<h2 id="mcu">در STM32 و ESP32 یعنی چه؟</h2>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>STM32 (Cortex-M)</th><th>ESP32</th></tr></thead>
+<tbody>
+<tr><td>تولیدکننده</td><td>ISR درایور UART: با هر بایت رسیده رجیستر دادهٔ UART را می‌خواند و <code>rb_put</code> می‌زند</td><td>ISR درایور یا task درایور که از FIFO سخت‌افزاری UART می‌خواند</td></tr>
+<tr><td>مصرف‌کننده</td><td><code>main</code> (حلقهٔ اصلی) با <code>rb_get</code></td><td>یک task FreeRTOS</td></tr>
+<tr><td>ابزار آماده</td><td>سخت‌افزار DMA در حالت حلقوی (circular) همین ایده را بدون CPU انجام می‌دهد (در مرجع RM0383 بخش DMA را ببین)</td><td>ESP-IDF: پیاده‌سازی UART خودش بافر حلقوی دارد؛ Ring Buffer و Queue هم آماده است (مستندات رسمی ESP-IDF)</td></tr>
+</tbody></table></div>
+<p>یعنی همین کد PC تقریبا بدون تغییر روی STM32 هم کامپایل می‌شود؛ فقط ISR واقعی جای <code>uart_rx_isr</code> می‌نشیند. مثال کامل در فصل ۵ می‌آید.</p>
+<div class="callout tip"><div class="ct">خودت آزمایش کن: ماژول برای ARM هم بساز</div>
+<p>همان <code>ringbuf.c</code> را با <code>arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -c ringbuf.c</code> کامپایل کن. اگر بدون هشدار ساخته شد، ماژولت به کتابخانهٔ C هم وابسته نیست. (ما این را اجرا کرده‌ایم و بدون هشدار ساخته می‌شود.)</p></div>
+
+<h2 id="stack">صف و پشته: دو ساختار همسایه</h2>
+<p>بافر حلقوی یک <b>صف</b> (queue) است: <b>FIFO</b>؛ اولین ورودی اولین خروجی. ساختار همسایه‌اش <span class="term" data-t="lifo">پشته</span> (stack، LIFO: آخرین ورودی اولین خروجی) است، مثل دسته‌ای بشقاب که همیشه از رویش برمی‌داری. پشتهٔ برنامه‌ات (call stack درس <a href="2-6.html">۲.۶</a>) دقیقا همین است. پشتهٔ دستی از آرایه و یک عدد <code>top</code> ساخته می‌شود:</p>
+<div class="code" data-file="stack.c" data-lang="c" data-verify="host" id="code_stack">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdbool.h&gt;
+#include &lt;stdint.h&gt;
+
+#define STACK_MAX 4U
+
+typedef struct {
+    int16_t  item[STACK_MAX];
+    uint8_t  top;               // تعداد عنصرهای موجود = اندیس خانهٔ خالی بعدی
+} lifo_t;
+
+static bool lifo_push(lifo_t *s, int16_t v)
+{
+    if (s-&gt;top == STACK_MAX) {
+        return false;
+    }
+    s-&gt;item[s-&gt;top] = v;
+    s-&gt;top++;
+    return true;
+}
+
+static bool lifo_pop(lifo_t *s, int16_t *out)
+{
+    if (s-&gt;top == 0U) {
+        return false;
+    }
+    s-&gt;top--;
+    *out = s-&gt;item[s-&gt;top];
+    return true;
+}
+
+int main(void)
+{
+    lifo_t s = { .top = 0 };
+    int16_t v;
+
+    lifo_push(&amp;s, 10);
+    lifo_push(&amp;s, 20);
+    lifo_push(&amp;s, 30);
+    printf("pop order:");
+    while (lifo_pop(&amp;s, &amp;v)) {
+        printf(" %d", v);
+    }
+    printf("\n");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code_stack">
+  <li data-lines="7-10"><b class="what">ساختار.</b> آرایهٔ عنصرها و <code>top</code> که هم «تعداد» و هم «اندیس خانهٔ خالی بعدی» است.</li>
+  <li data-lines="12-20"><b class="what">push.</b> اگر جا هست، در <code>item[top]</code> بنویس و <code>top</code> را زیاد کن. پر است؟ <code>false</code>.</li>
+  <li data-lines="22-30"><b class="what">pop.</b> اول <code>top</code> را کم کن، بعد عنصر را بخوان. خالی است؟ <code>false</code>.
+    <span class="why">در pop اول کم می‌کنیم چون <code>top</code> به «خانهٔ خالی بعدی» اشاره می‌کند و آخرین عنصر یک خانه قبل از آن است.</span></li>
+  <li data-lines="34-44"><b class="what">آزمایش.</b> ۱۰ و ۲۰ و ۳۰ را می‌گذاریم و بیرون می‌آوریم: ترتیب برعکس ورود است.</li>
+</ol>
+<pre class="term" data-from="stack.c">
+$ gcc -std=c11 -Wall -Wextra -o stack stack.c
+$ ./stack
+pop order: 30 20 10
+</pre>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>صف / بافر حلقوی</th><th>پشته</th></tr></thead>
+<tbody>
+<tr><td>ترتیب</td><td>FIFO</td><td>LIFO</td></tr>
+<tr><td>نشانه‌ها</td><td>دو تا (<code>head</code> و <code>tail</code>)</td><td>یکی (<code>top</code>)</td></tr>
+<tr><td>کاربرد در embedded</td><td>بایت‌های UART، رویدادها، نمونه‌های سنسور، لاگ</td><td>بازگشت از تابع، ارزیابی عبارت، undo</td></tr>
+</tbody></table></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="3">
+  <p class="q">چرا در بافر حلقوی ساده که فقط <code>head</code> و <code>tail</code> (بین ۰ تا N−۱) دارد، وضعیت <code>head == tail</code> مشکل‌ساز است؟</p>
+  <ol>
+    <li data-why="سرعت ربطی به این مسئله ندارد؛ مشکل در «معنی» برابر بودن دو نشانه است.">چون مقایسهٔ دو عدد کند است</li>
+    <li data-why="هیچ‌وقت نمی‌شود؛ بافر حلقوی فقط دو عدد نگه می‌دارد و نیازی به پاک‌کردن ندارد.">چون در این حالت داده‌ها پاک می‌شوند</li>
+    <li>چون هم برای بافر خالی و هم برای بافر پر رخ می‌دهد و از روی همین دو عدد فرقشان را نمی‌فهمیم</li>
+    <li data-why="این برابری کاملا ممکن است؛ در بافر تازه‌ساخته‌شده هر دو صفرند.">چون هیچ‌وقت رخ نمی‌دهد</li>
+  </ol>
+  <div class="fb">هم «هیچ بایتی نیست» و هم «همهٔ N خانه پر است» می‌تواند <code>head == tail</code> بدهد. راه‌حل‌ها: یک خانهٔ خالی، شمارندهٔ جدا، یا اندیس‌های آزاد با <code>count = head − tail</code>.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">بافر هشت‌خانه‌ای با اندیس‌های آزاد و ماسک ۷ داریم؛ <code>head = 10</code> و <code>tail = 7</code>. <code>count</code> چند است و بایت بعدی در کدام خانه نوشته می‌شود؟</p>
+  <ol>
+    <li>تعداد ۳ و خانهٔ ۲</li>
+    <li data-why="۱۰ &amp; ۷ برابر ۲ است، نه ۳؛ و تعداد را با تفریق ۱۰ − ۷ به‌دست می‌آوریم که ۳ می‌شود، نه ۲.">تعداد ۲ و خانهٔ ۳</li>
+    <li data-why="تعداد ۱۰ − ۷ = ۳ است. عدد ۱۰ همان شمارندهٔ آزاد است، نه شمارهٔ خانه.">تعداد ۱۰ و خانهٔ ۰</li>
+    <li data-why="خانه را با ماسک به‌دست می‌آوریم: ۱۰ &amp; ۷ = ۲. این شمارنده به ۸ نمی‌رسد که صفر شود.">تعداد ۳ و خانهٔ ۱۰</li>
+  </ol>
+  <div class="fb"><code>count = 10 − 7 = 3</code> و <code>10 &amp; 7 = 0b1010 &amp; 0b0111 = 0b0010 = 2</code>. همان مثال شکل «اندیس‌های آزاد».</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">این نسخهٔ <code>rb_put</code> چه ایرادی دارد؟</p>
+<div class="code" data-lang="c"><pre>
+rb-&gt;head++;
+rb-&gt;data[(rb-&gt;head - 1U) &amp; RB_MASK] = byte;
+</pre></div>
+  <ol>
+    <li data-why="ایراد در محاسبهٔ خانه نیست؛ همان خانهٔ درست به‌دست می‌آید. مشکل ترتیب است.">خانهٔ اشتباه انتخاب می‌شود</li>
+    <li data-why="کامپایل می‌شود و هشداری هم ندارد؛ ایراد در زمان اجراست.">کامپایل نمی‌شود</li>
+    <li data-why="بافر به‌درستی پر و خالی حساب می‌شود؛ مشکل جای دیگری است.">پر بودن را اشتباه تشخیص می‌دهد</li>
+    <li>اگر ISR بین دو خط اجرا شود، اعلام «بایت آماده است» قبل از نوشتن بایت رخ می‌دهد و مصرف‌کننده آشغال می‌خواند</li>
+  </ol>
+  <div class="fb">ترتیب درست: اول داده، بعد بالا بردن <code>head</code>. اندیس مثل «اعلام رسمی» است: تا داده کامل ننشسته نباید اعلام شود.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">UART با سرعت ۱۱۵۲۰۰ و <code>main</code> که تا ۱۰ میلی‌ثانیه ممکن است گرفتار باشد. کوچک‌ترین <code>RB_SIZE</code> مجازِ ماژول ما چند است؟ (هر بایت ۱۰ بیت روی سیم؛ در ۱۰ میلی‌ثانیه حدود ۱۱۶ بایت می‌رسد.)</p>
+  <ol>
+    <li data-why="۶۴ بایت کمتر از ۱۱۶ است و در ۱۰ میلی‌ثانیه پر می‌شود و داده گم می‌شود.">۶۴</li>
+    <li>۱۲۸</li>
+    <li data-why="۱۱۶ توان ۲ نیست و ماژول ما با <code>_Static_assert</code> آن را رد می‌کند.">۱۱۶</li>
+    <li data-why="۲۵۶ کافی است ولی «کوچک‌ترین» نیست؛ ۱۲۸ هم کفایت می‌کند و RAM کمتری می‌گیرد.">۲۵۶</li>
+  </ol>
+  <div class="fb">۱۱۶ ← کوچک‌ترین توان ۲ که از ۱۱۶ کمتر نباشد: ۱۲۸. در عمل کمی حاشیهٔ ایمنی هم می‌گذاری، ولی حداقل همین است.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">کدام مقدار <code>RB_SIZE</code> را ماژول ما می‌پذیرد؟</p>
+  <ol>
+    <li data-why="۱۰ توان ۲ نیست؛ ۱۰ &amp; ۹ = ۸ و صفر نمی‌شود، پس <code>_Static_assert</code> خطا می‌دهد.">۱۰</li>
+    <li data-why="۱۰۰ توان ۲ نیست (۶۴ و ۱۲۸ توان‌های ۲ اطراف آن‌اند).">۱۰۰</li>
+    <li data-why="۶ توان ۲ نیست. با ماسک ۵ خانه‌های ۲ و ۳ هرگز استفاده نمی‌شوند.">۶</li>
+    <li>۱۶</li>
+  </ol>
+  <div class="fb">فقط ۲، ۴، ۸، ۱۶، ... تا ۳۲۷۶۸ مجازند.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">چرا در طراحی SPSC، تولیدکننده (ISR) <code>tail</code> را نمی‌نویسد و مصرف‌کننده <code>head</code> را نمی‌نویسد؟</p>
+  <ol>
+    <li data-why="حافظه فرقی نمی‌کند؛ هر دو در RAM‌اند و هر دو قابل نوشتن‌اند. مسئله به هم‌زمانی مربوط است، نه به نوع حافظه.">چون <code>tail</code> در Flash است و نوشتن ندارد</li>
+    <li data-why="نوشتن روی <code>volatile</code> ممنوع نیست؛ مسئله در «چند نفر» نوشتن هم‌زمان است.">چون <code>volatile</code> اجازهٔ نوشتن نمی‌دهد</li>
+    <li>چون اگر دو جریان هم‌زمان یک متغیر را بخوانند-بنویسند، ممکن است یک به‌روزرسانی گم شود؛ با یک نویسنده این اتفاق نمی‌افتد</li>
+    <li data-why="سرعت هدف نیست؛ ایمنی هدف است.">چون سریع‌تر می‌شود</li>
+  </ol>
+  <div class="fb">هر <code>x++</code> سه مرحله دارد (خواندن، جمع، نوشتن). با دو نویسنده ممکن است مرحله‌ها در هم بروند و یک افزایش گم شود. با یک نویسنده هیچ رقیبی نیست.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: میانگین متحرک با بافر حلقوی</div>
+<p>در پروژهٔ دمای درس <a href="4-2.html">۴.۲</a> «میانگین چند نمونهٔ آخر» را داشتیم. حالا بافر حلقوی کوچکی برای نمونه‌های <code>int16_t</code> می‌سازیم که آخرین ۴ نمونه را نگه می‌دارد و هر بار میانگین آن‌ها را می‌دهد.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> ورودی‌ها ۱۰۰، ۱۲۰، ۱۱۰، ۱۳۰، ۵۰۰، ۹۰، ۱۰۰ هستند. میانگین بعد از ورود ۵۰۰ چند می‌شود؟ (بدون اجرا، با حساب ذهنی.)</li>
+  <li><b>حل:</b> تابع <code>avg_add(sample)</code> بنویس: نمونه را در خانهٔ بعدی بگذار و اندیس را چرخشی جلو ببر؛ تا وقتی هنوز چهار نمونه جمع نشده، میانگین را فقط از نمونه‌های موجود حساب کن.</li>
+  <li><b>چالش:</b> پنجره را ۸ کن و به‌جای <code>%</code> از ماسک <code>&amp; (WIN-1U)</code> استفاده کن. خروجی‌ها چه فرقی می‌کنند؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>دو متغیر لازم داری: <code>idx</code> برای خانهٔ بعدی و <code>filled</code> برای اینکه چند خانه پر شده (تا ۴). جمع را در <code>int32_t</code> نگه دار (درس <a href="2-2.html">۲.۲</a>) تا سرریز نکند.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="avg.c">
+$ ./avg
+in=100 avg=100
+in=120 avg=110
+in=110 avg=110
+in=130 avg=115
+in=500 avg=215
+in= 90 avg=207
+in=100 avg=205
+</pre>
+<p>جواب الف: پنجرهٔ ۴تایی هنگام ورود ۵۰۰ شامل ۱۲۰ و ۱۱۰ و ۱۳۰ و ۵۰۰ است. مجموع ۸۶۰ و میانگین ۲۱۵. یک نمونهٔ پرت (۵۰۰) میانگین را بالا می‌برد و تا چهار نمونهٔ بعد تأثیرش می‌ماند. در بخش «چالش» با ۸ خانه و ماسک، خروجی‌ها (۱۰۰، ۱۱۰، ۱۱۰، ۱۱۵، ۱۹۲، ۱۷۵، ۱۶۴) نرم‌تر می‌شوند چون پنجره بلندتر است و نمونهٔ پرت بیشتر «رقیق» می‌شود.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="avg.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+#ifndef WIN
+#define WIN 4U                  // اندازهٔ پنجره
+#endif
+
+static int16_t win[WIN];
+static unsigned idx = 0;        // خانهٔ بعدی برای نوشتن
+static unsigned filled = 0;     // چند خانه تا حالا پر شده
+
+static int16_t avg_add(int16_t sample)
+{
+    win[idx] = sample;
+    idx = (idx + 1U) % WIN;
+    if (filled &lt; WIN) {
+        filled++;
+    }
+
+    int32_t sum = 0;
+    for (unsigned i = 0; i &lt; filled; i++) {
+        sum += win[i];
+    }
+    return (int16_t)(sum / (int32_t)filled);
+}
+
+int main(void)
+{
+    const int16_t samples[] = { 100, 120, 110, 130, 500, 90, 100 };
+
+    for (unsigned i = 0; i &lt; sizeof(samples) / sizeof(samples[0]); i++) {
+        printf("in=%3d avg=%d\n", samples[i], avg_add(samples[i]));
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="4-6"><b class="what">اندازهٔ پنجره.</b> قابل‌تغییر از خط فرمان.</li>
+  <li data-lines="8-10"><b class="what">وضعیت.</b> آرایهٔ پنجره، اندیس نوشتن و تعداد پرشده.</li>
+  <li data-lines="14-15"><b class="what">نوشتن چرخشی.</b> نمونه را در <code>win[idx]</code> بگذار و <code>idx</code> را با <code>%</code> جلو ببر. وقتی پنجره پر شد، خانهٔ قدیمی‌ترین نمونه رونویسی می‌شود.
+    <span class="why">«رونویسی قدیمی‌ترین» همان سیاست overwrite است و اینجا بی‌خطر است چون نه ISRی هست و نه مصرف‌کنندهٔ جدا.</span></li>
+  <li data-lines="16-18"><b class="what">شمارش پرشده‌ها.</b> تا وقتی از <code>WIN</code> کمتر است، زیاد می‌شود.
+    <span class="why">در ابتدا فقط چند خانه معتبر است؛ تقسیم بر ۴ ثابت میانگین را کم‌تر نشان می‌داد.</span></li>
+  <li data-lines="20-24"><b class="what">میانگین.</b> جمع در <code>int32_t</code> و تقسیم بر تعداد نمونه‌های معتبر.</li>
+</ol>
+<pre class="term" data-from="avg.c">
+$ gcc -std=c11 -Wall -Wextra -o avg avg.c
+$ ./avg
+in=100 avg=100
+in=120 avg=110
+in=110 avg=110
+in=130 avg=115
+in=500 avg=215
+in= 90 avg=207
+in=100 avg=205
+</pre>
+<p>برای چالش (پ) دستور <code>gcc -DWIN=8U</code> را بزن یا خط ۱۵ را به <code>idx = (idx + 1U) &amp; (WIN - 1U);</code> تغییر بده. ماسک فقط وقتی مجاز است که <code>WIN</code> توان ۲ باشد. خروجی با <code>-DWIN=8U</code> (اجرای واقعی):</p>
+<pre class="term" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -DWIN=8U -o avg8 avg.c
+$ ./avg8
+in=100 avg=100
+in=120 avg=110
+in=110 avg=110
+in=130 avg=115
+in=500 avg=192
+in= 90 avg=175
+in=100 avg=164
+</pre>
+</details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: باگ ماسک</div>
+<p>همکارت بافری با ۶ خانه ساخته و ماسک را <code>SIZE - 1</code> گرفته است. تست‌ها «گاهی» خراب می‌شوند و بعضی بایت‌ها روی هم می‌نویسند. برنامهٔ زیر خانه‌هایی را که <code>head = 0</code> تا ۱۱ به آن‌ها می‌رسد چاپ می‌کند: یک بار با ماسک و یک بار با <code>%</code>.</p>
+<div class="code" data-file="mask_bug.c" data-lang="c" data-verify="host" id="ex2bug">
+<pre>
+#include &lt;stdio.h&gt;
+
+#define SIZE 6U
+#define MASK (SIZE - 1U)        // 5 = 0b101
+
+int main(void)
+{
+    printf("mask:   ");
+    for (unsigned head = 0; head &lt; 12; head++) {
+        printf("%u ", head &amp; MASK);
+    }
+    printf("\nmodulo: ");
+    for (unsigned head = 0; head &lt; 12; head++) {
+        printf("%u ", head % SIZE);
+    }
+    printf("\n");
+    return 0;
+}
+</pre></div>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> خروجی دو سطر چیست؟ کدام سطر درست است؟ (ماسک ۶−۱ = ۵ به دودویی چه می‌شود؟)</li>
+  <li><b>تحلیل:</b> کدام خانه‌ها هرگز استفاده نمی‌شوند؟ چرا؟</li>
+  <li><b>حل:</b> راه‌حل را بنویس که ماسک درست کار کند، و <code>_Static_assert</code> بگذار که اگر کسی دوباره اندازهٔ اشتباه داد، کامپایل نشود.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>ماسک ۵ در دودویی <code>0b101</code> است؛ بیت ۱ آن صفر است. پس هر عددی که بیت ۱ آن یک باشد، آن بیت را از دست می‌دهد. برای درست‌بودن ماسک، همهٔ بیت‌های پایین باید یک باشند: ۱ و ۳ و ۷ و ۱۵ و ...</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="mask_bug.c">
+$ ./mask_bug
+mask:   0 1 0 1 4 5 4 5 0 1 0 1
+modulo: 0 1 2 3 4 5 0 1 2 3 4 5
+</pre>
+<p>سطر ماسک غلط است: فقط ۰، ۱، ۴ و ۵ ظاهر می‌شوند و خانه‌های ۲ و ۳ هرگز نه. یعنی از ۶ خانه فقط ۴ تا کار می‌کنند و بایت‌های نزدیک هم روی هم نوشته می‌شوند.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="mask_fix.c" data-lang="c" data-verify="host" id="ex2fix">
+<pre>
+#include &lt;stdio.h&gt;
+
+#define SIZE 8U
+#define MASK (SIZE - 1U)
+
+_Static_assert((SIZE &amp; MASK) == 0U, "SIZE must be a power of two");
+
+int main(void)
+{
+    printf("mask:   ");
+    for (unsigned head = 0; head &lt; 16; head++) {
+        printf("%u ", head &amp; MASK);
+    }
+    printf("\n");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2fix">
+  <li data-lines="3-4"><b class="what">اندازهٔ توان ۲.</b> ۸ به‌جای ۶؛ ماسک ۷ می‌شود (<code>0b111</code>).</li>
+  <li data-lines="6"><b class="what">نگهبان.</b> برای هر توان ۲، <code>SIZE &amp; MASK</code> صفر است. اگر کسی ۶ را برگرداند، کامپایل نمی‌شود.
+    <span class="why">بهتر است اشتباه، همان لحظهٔ نوشتن دیده شود؛ نه بعد از هفته‌ها که «گاهی داده گم می‌شود».</span></li>
+  <li data-lines="11-13"><b class="what">چاپ خانه‌ها.</b> برای ۱۶ شمارهٔ پشت‌سرهم هر هشت‌تا دور می‌زند.</li>
+</ol>
+<pre class="term" data-from="mask_fix.c">
+$ gcc -std=c11 -Wall -Wextra -o mask_fix mask_fix.c
+$ ./mask_fix
+mask:   0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 
+</pre>
+<p>اگر <code>SIZE</code> را ۶ کنی، کامپایلر با این پیام می‌ایستد (از اجرای واقعی): <code>error: static assertion failed: "SIZE must be a power of two"</code>. راه دوم: نگه‌داشتن ۶ و استفاده از <code>%</code>، ولی آنگاه باید اندیس‌ها را خودت به‌صورت چرخشی در بازهٔ ۰ تا ۵ نگه داری، نه آزاد (چون ۶۵۵۳۶ بر ۶ بخش‌پذیر نیست و در چرخش <code>uint16_t</code> شکاف می‌افتد).</p></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: اندازهٔ بافر برای یک درایور سریال</div>
+<p>در پروژه‌ات یک درایور UART باید بایت‌ها را در بافر حلقوی بگذارد. سرعت خط ۱۱۵۲۰۰ است و بدترین حالت کار <code>main</code> ۲۰ میلی‌ثانیه است (چاپ روی نمایشگر).</p>
+<ol class="parts">
+  <li><b>حساب دستی:</b> چند بایت در این ۲۰ میلی‌ثانیه می‌رسد؟ <code>RB_SIZE</code> چه باید باشد؟</li>
+  <li><b>برنامه:</b> برنامهٔ درس (<code>baud.c</code>) را با <code>-DSTALL_MS=20U</code> بساز و اجرا کن.</li>
+  <li><b>سخت‌افزار:</b> اگر روی STM32F411 با ۱۲۸ کیلوبایت RAM چهار UART هم‌زمان با همین سرعت‌ها داشته باشی، بافرها چند درصد RAM را می‌گیرند؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>۱۱۵۲۰۰ ÷ ۱۰ = ۱۱۵۲۰ بایت در ثانیه. در ۲۰ میلی‌ثانیه (یک پنجاهم ثانیه) ۲۳۰٫۴ بایت. گرد به بالا و بعد توان ۲.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -DSTALL_MS=20U -o baud3 baud.c
+$ ./baud3
+baud=115200 -&gt; 11520 bytes/s
+stall=20 ms -&gt; 231 bytes arrive
+buffer size = 256
+</pre>
+<p>جواب پ: چهار بافر ۲۵۶ بایتی می‌شود ۱۰۴۰ بایت (با شمارنده‌ها)؛ حدود ۰٫۸٪ از ۱۲۸ کیلوبایت RAM (هر بافر ۲۵۶ + ۴ بایت شمارنده). پس برای این سرعت، بافر ارزان است. برای سرعت‌های خیلی بالاتر یا تأخیرهای بلند، هزینه بالا می‌رود.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>برنامه همان <code>baud.c</code> درس است. با <code>-DSTALL_MS=20U</code>، ۱۱۵۲۰ × ۲۰ ÷ ۱۰۰۰ = ۲۳۰٫۴ می‌شود و گرد به بالا ۲۳۱ بایت. کوچک‌ترین توان ۲ بزرگ‌تر یا برابر ۲۳۱ عدد ۲۵۶ است (۱۲۸ کم است). برای پ: هر <code>ringbuf_t</code> با <code>RB_SIZE=256</code> دارای ۲۵۶ بایت داده و ۴ بایت شمارنده است؛ چهارتا ۱۰۴۰ بایت می‌شود که ۱۰۴۰ ÷ ۱۳۱۰۷۲ ≈ ۰٫۸٪ است.</p>
+<p>اگر بخواهی حاشیهٔ ایمنی هم بدهی، معمولا یک اندازه بزرگ‌تر (۵۱۲) می‌گیرند: اندازهٔ حساب‌شده حداقل است، نه توصیه.</p></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>دو جا معمولا گیر می‌کنند. اول <b>«چرا head و tail را صفر نمی‌کنیم؟»</b>: ذهن دنبال <code>if (head == N) head = 0</code> می‌گردد. فکر کن اندیس آزاد یک «شمارندهٔ کل» است و ماسک فقط «کدام خانه» را می‌گوید. دوم <b>ترتیب داده و اندیس</b>: روی PC که یک ریسه بیشتر ندارد، هر ترتیبی جواب می‌دهد و باگ نمی‌بینی؛ روی برد، یک بار در هزار بار خراب می‌شود. پس دو قاعده را عادت کن: <b>هر اندیس یک نویسنده</b>، و <b>اول داده، بعد اندیس</b>. و مقدار برگشتی <code>rb_put</code> را چک کن؛ حداقل یک شمارندهٔ «از دست رفته».</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li>بافر حلقوی = آرایهٔ ثابت + دو نشانه (<code>head</code> برای نوشتن، <code>tail</code> برای خواندن) که دور می‌زنند؛ هیچ داده‌ای جابه‌جا نمی‌شود.</li>
+  <li>مشکل: <code>head == tail</code> هم برای خالی و هم برای پر. راه‌حل ما: اندیس‌های آزاد و <code>count = head − tail</code> با نوع بی‌علامت (چرخش خودکار).</li>
+  <li>خانه = <code>index &amp; (N−1)</code>؛ فقط برای <b>N توان ۲</b> درست است. <code>_Static_assert</code> از اشتباه جلوگیری می‌کند.</li>
+  <li>API: <code>rb_init</code>، <code>rb_put</code>، <code>rb_get</code> (با مقدار برگشتی <code>bool</code>)، <code>rb_count</code>؛ اول داده، بعد اندیس.</li>
+  <li>SPSC: هر اندیس یک نویسنده (تولیدکننده <code>head</code>، مصرف‌کننده <code>tail</code>)؛ <code>volatile</code> برای ندیدن نسخهٔ کهنه، نه برای اتمی بودن.</li>
+  <li>سیاست پر بودن: دور ریختن جدید (امن‌تر) یا قدیمی (نیازمند مراقبت)؛ همیشه <code>lost</code> را بشمار.</li>
+  <li>اندازه: سرعت ورود × بدترین تأخیر، گرد به بالا و به توان ۲. صف همان FIFO است؛ پشته LIFO.</li>
+</ul></div>
+
+</article>
+</body>
+</html>
