@@ -1,0 +1,2133 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>پروژه پایانی: ثبت‌کننده دما · C برای میکروکنترلر</title>
+<meta name="description" content="ساختن یک ثبت‌کنندهٔ دما با C: نیازمندی‌ها، معماری لایه‌ای، بافر حلقوی، ماشین حالت، پارسر فرمان، تست واحد، شبیه‌سازی روی PC و پورت به STM32 و ESP32، همراه با rubric خودارزیابی.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="7-1">
+
+<p class="lede">تا اینجا تکه‌تکه یاد گرفتی: متغیر و اشاره‌گر، بافر حلقوی، ماشین حالت، رجیستر، وقفه، تست. حالا وقت آن است که همه را کنار هم بگذاری و <b>یک محصول کوچک ولی کامل</b> بسازی: ثبت‌کنندهٔ دما (temperature logger). یک برنامه که دما را می‌خواند، ذخیره می‌کند، از راه UART فرمان می‌گیرد، اگر داغ شد چراغ آلارم را روشن می‌کند، و <b>همان منطق</b> روی PC، STM32 و ESP32 اجرا می‌شود.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>از یک «نیازمندی» مبهم، فهرستی از شرط‌های قابل‌آزمایش بنویسی</li>
+    <li>برنامه را در لایه‌ها بچینی تا منطق آن هیچ‌وقت با سخت‌افزار گره نخورد</li>
+    <li>ماژول‌ها را با تست خودکار روی PC بسازی و بعد به STM32 و ESP32 منتقل کنی</li>
+    <li>لایهٔ پورت STM32 (UART، LED، SysTick) را با رجیستر بنویسی و با <code>arm-none-eabi-gcc</code> بسازی</li>
+    <li>کار خودت را با یک rubric صادقانه نمره بدهی و بدانی کجا ضعیفی</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس‌های <a href="4-5.html">۴.۵</a> (بافر حلقوی)، <a href="4-6.html">۴.۶</a> (ماشین حالت) و <a href="4-7.html">۴.۷</a> (عدد ثابت)</li>
+    <li>درس‌های <a href="5-2.html">۵.۲</a> تا <a href="5-5.html">۵.۵</a> (رجیستر، وقفه، SysTick، UART) و <a href="5-6.html">۵.۶</a> (ESP-IDF)</li>
+    <li>درس‌های <a href="6-4.html">۶.۴</a> (تست) و <a href="6-5.html">۶.۵</a> (اندازه‌گیری)</li>
+    <li><code>gcc</code> و <code>make</code> روی PC؛ برای بخش STM32 <code>arm-none-eabi-gcc</code>. برد لازم نیست، ولی اگر Nucleo-F411RE یا یک ESP32 داری، تجربه کامل‌تر می‌شود</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: آشپز و اجاق</h2>
+<p>یک آشپز حرفه‌ای را تصور کن. رسپی (دستور پخت) او این است: «پیاز را سرخ کن، گوشت را اضافه کن، ۲۰ دقیقه بگذار بپزد». این رسپی مهم‌ترین دارایی اوست. حالا اگر از او بخواهی در آشپزخانهٔ دیگری کار کند که اجاقش برقی است نه گازی، رسپی عوض نمی‌شود؛ فقط «روشن کردن اجاق» فرق دارد.</p>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>رسپی = منطق برنامهٔ تو (ثبت دما، آلارم، فرمان‌ها). اجاق = سخت‌افزار (UART، LED، سنسور، ساعت). اگر آشپز مستقیم با گاز کار کند («شعله را با کبریت روشن کن») هر آشپزخانهٔ جدید یعنی بازنویسی رسپی. ولی اگر بین آشپز و اجاق یک <b>دکمهٔ استاندارد</b> بگذاری («روشن»، «خاموش»)، فقط سیم‌کشی دکمه را عوض می‌کنی. این دکمه‌ها در پروژهٔ ما <code>hal.h</code> هستند، و آن سیم‌کشی‌ها <code>hal_host.c</code>، <code>hal_stm32.c</code> و <code>hal_esp32.c</code>.</p></div>
+
+<p>پروژه‌های واقعی هم همین شکل را دارند: ۹۰٪ کد «منطق» است و می‌شود روی PC آزمود، و ۱۰٪ «چسب» سخت‌افزار است. ما همین را می‌سازیم و اثبات می‌کنیم: منطق را با تست خودکار و شبیه‌سازی روی PC وارسی می‌کنیم، لایهٔ STM32 را با کامپایلر ARM می‌سازیم، و لایهٔ ESP32 را محتاطانه (مطابق ESP-IDF نسخهٔ ۵) می‌نویسیم.</p>
+
+<h2 id="req">نیازمندی‌ها: «کار تمام‌شده» یعنی چه؟</h2>
+<p>بدون فهرست نیازمندی (<span class="term" data-t="requirements">requirements</span>) هیچ‌وقت نمی‌فهمی کی تمام شده. هر نیازمندی باید <b>قابل آزمایش</b> باشد: یعنی بشود گفت «این آزمایش را انجام دادم و قبول شد» (این را «معیار پذیرش»، <span class="term" data-t="acceptance">acceptance criterion</span> می‌گویند). جمله‌ای مثل «دقیق باشد» نیازمندی نیست؛ «خطای تبدیل حداکثر ۰٫۰۱ درجه» هست.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>شماره</th><th>نیازمندی</th><th>چطور آزمایش می‌شود؟</th></tr></thead>
+<tbody>
+<tr><td>R1</td><td>هر <code>۱۰۰۰</code> میلی‌ثانیه یک نمونهٔ دما ثبت شود</td><td>خروجی شبیه‌سازی: اختلاف <code>t=</code> ها ۱۰۰۰</td></tr>
+<tr><td>R2</td><td>دما با تفکیک صدم درجه (عدد صحیح، نه <code>float</code>)، در بازهٔ ۴۰- تا ۱۲۵+ درجه</td><td>تست واحد: <code>raw = 0</code> و <code>raw = 4095</code></td></tr>
+<tr><td>R3</td><td>آخرین ۱۶ نمونه نگه داشته شود؛ نمونهٔ جدید جای قدیمی‌ترین را بگیرد</td><td>تست واحد بافر و فرمان <code>DUMP</code></td></tr>
+<tr><td>R4</td><td>وقتی دما ≥ آستانه شد چراغ آلارم روشن شود و تا ۲ درجه پایین‌تر از آستانه روشن بماند (پسماند)</td><td>تست واحد ماشین حالت + شبیه‌سازی</td></tr>
+<tr><td>R5</td><td>فرمان‌های <code>START</code>، <code>STOP</code>، <code>STATUS</code>، <code>DUMP</code>، <code>SET HIGH n</code>؛ فرمان نامعتبر خطا بدهد و برنامه را خراب نکند</td><td>تست واحد پارسر</td></tr>
+<tr><td>R6</td><td>در منطق برنامه: بدون <code>malloc</code>، بدون <code>float</code>، بدون <code>printf</code></td><td>بازبینی کد + کامپایل با <code>-nostdlib</code></td></tr>
+<tr><td>R7</td><td>منطق برنامه هیچ هدر سخت‌افزاری را <code>#include</code> نکند؛ روی سه سکو اجرا شود</td><td><code>make</code> روی PC و روی ARM بدون هشدار</td></tr>
+<tr><td>R8</td><td>بودجهٔ STM32: Flash کمتر از ۴ کیلوبایت، RAM کمتر از ۵۱۲ بایت</td><td><code>arm-none-eabi-size</code></td></tr>
+</tbody></table></div>
+<p><b>عمدا بیرون از پروژه:</b> ذخیرهٔ دائمی روی Flash، ساعت واقعی (RTC)، سنسور واقعی و امنیت. این‌ها در بخش «ایده‌های توسعه» می‌آیند. حد و مرز را از اول مشخص کردن، مهارتی است که پروژه‌ها را تمام می‌کند.</p>
+
+<h2 id="arch">معماری: لایه‌ها و یک قرارداد</h2>
+<p>ما برنامه را به چهار گروه فایل تقسیم می‌کنیم. قاعدهٔ اصلی: <b>پیکان وابستگی فقط رو به پایین است</b>. یعنی «منطق» فقط «قرارداد» را می‌شناسد و قرارداد را «سکوها» پر می‌کنند؛ هیچ‌وقت منطق مستقیم سراغ رجیستر نمی‌رود.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 420" role="img" aria-label="معماری لایه‌ای: لایهٔ برنامه شامل logger، parser، ringbuf و temp؛ قرارداد hal.h؛ و سه پیاده‌سازی برای PC، STM32 و ESP32 به‌همراه sim_sensor مشترک">
+  <defs><marker id="ar71a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">پیکان‌ها فقط رو به پایین</text>
+  <rect x="30" y="42" width="700" height="150" rx="14" fill="#ffd60a" stroke="#15120a" stroke-width="3"/>
+  <text x="380" y="68" text-anchor="middle" font-size="15" font-weight="800" fill="#15120a">منطق برنامه (روی هر سکویی بدون تغییر اجرا می‌شود)</text>
+  <g stroke="#15120a" stroke-width="3" fill="#fff">
+    <rect x="52" y="84" width="150" height="82" rx="10"/><rect x="220" y="84" width="150" height="82" rx="10"/><rect x="388" y="84" width="150" height="82" rx="10"/><rect x="556" y="84" width="150" height="82" rx="10"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-size="13.5" font-weight="700">
+    <text x="127" y="118" class="mono" direction="ltr" font-size="15" font-weight="800">logger.c</text><text x="127" y="142">ماشین حالت + فرمان‌ها</text>
+    <text x="295" y="118" class="mono" direction="ltr" font-size="15" font-weight="800">parser.c</text><text x="295" y="142">خط ← فرمان</text>
+    <text x="463" y="118" class="mono" direction="ltr" font-size="15" font-weight="800">ringbuf.c</text><text x="463" y="142">۱۶ نمونهٔ آخر</text>
+    <text x="631" y="118" class="mono" direction="ltr" font-size="15" font-weight="800">temp.c</text><text x="631" y="142">raw ← صدم درجه</text>
+  </g>
+  <path d="M380 194V222" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar71a)"/>
+  <rect x="30" y="226" width="700" height="52" rx="12" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/>
+  <text x="380" y="248" text-anchor="middle" font-size="15" font-weight="800" fill="#15120a"><tspan class="mono" direction="ltr">hal.h</tspan> = قرارداد</text>
+  <text x="380" y="268" text-anchor="middle" class="mono" direction="ltr" font-size="13" font-weight="700" fill="#15120a">sensor_read  uart_write  uart_getc  led_set  millis</text>
+  <path d="M130 280V318" stroke="#15120a" stroke-width="3" fill="none" marker-start="url(#ar71a)"/>
+  <path d="M380 280V318" stroke="#15120a" stroke-width="3" fill="none" marker-start="url(#ar71a)"/>
+  <path d="M630 280V318" stroke="#15120a" stroke-width="3" fill="none" marker-start="url(#ar71a)"/>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="30" y="322" width="200" height="56" rx="10" fill="#3ddc97"/><rect x="280" y="322" width="200" height="56" rx="10" fill="#ff86b3"/><rect x="530" y="322" width="200" height="56" rx="10" fill="#ff9a4d"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-size="13.5" font-weight="700">
+    <text x="130" y="346" class="mono" direction="ltr" font-size="15" font-weight="800">hal_host.c</text><text x="130" y="366">PC: printf و ساعت ساختگی</text>
+    <text x="380" y="346" class="mono" direction="ltr" font-size="15" font-weight="800">hal_stm32.c</text><text x="380" y="366">رجیستر: USART2، GPIOA، SysTick</text>
+    <text x="630" y="346" class="mono" direction="ltr" font-size="15" font-weight="800">hal_esp32.c</text><text x="630" y="366">ESP-IDF: uart، gpio، esp_timer</text>
+  </g>
+  <text x="380" y="404" text-anchor="middle" class="s-tx" font-size="13.5"><tspan class="mono" direction="ltr">sim_sensor.c</tspan> (دمای ساختگی) بین هر سه سکو مشترک است</text>
+</svg></div>
+<figcaption>هر سکو فقط یک فایل جدید می‌نویسد. منطق (زرد) هیچ‌وقت عوض نمی‌شود، برای همین همان تست‌های PC از درست‌بودنش در STM32 و ESP32 هم شواهد می‌دهند.</figcaption></figure>
+
+<div class="table-wrap"><table>
+<thead><tr><th>فایل</th><th>مسئولیت</th><th>ایده از درس</th></tr></thead>
+<tbody>
+<tr><td><code>config.h</code></td><td>نوع <code>centi_t</code> و همهٔ عددهای تنظیم‌شدنی؛ هیچ «عدد جادویی» بیرون از این فایل نیست</td><td><a href="4-1.html">۴.۱</a></td></tr>
+<tr><td><code>temp.c</code></td><td>تبدیل عدد ADC به صدم درجه (عدد ثابت) و ساخت متن «23.45» بدون <code>printf</code></td><td><a href="4-7.html">۴.۷</a></td></tr>
+<tr><td><code>ringbuf.c</code></td><td>نگه‌داشتن ۱۶ نمونهٔ آخر با شمارندهٔ آزاد و ماسک</td><td><a href="4-5.html">۴.۵</a></td></tr>
+<tr><td><code>parser.c</code></td><td>تبدیل یک خط متن به فرمان؛ ایمن در برابر ورودی بد</td><td><a href="2-8.html">۲.۸</a>، <a href="6-3.html">۶.۳</a></td></tr>
+<tr><td><code>logger.c</code></td><td>ماشین حالت (IDLE، SAMPLING، ALARM) و اجرای فرمان‌ها</td><td><a href="4-6.html">۴.۶</a></td></tr>
+<tr><td><code>hal.h</code></td><td>جدول تابع‌ها (اشاره‌گر به تابع) به‌عنوان قرارداد سخت‌افزار</td><td><a href="4-3.html">۴.۳</a>، <a href="5-7.html">۵.۷</a></td></tr>
+<tr><td><code>hal_*.c</code>، <code>startup.c</code>، <code>link.ld</code></td><td>پورت هر سکو: رجیستر یا API</td><td><a href="5-1.html">۵.۱</a> تا <a href="5-6.html">۵.۶</a></td></tr>
+</tbody></table></div>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: تزریق وابستگی</div>
+<p>اینکه <code>logger_init</code> جدول <code>hal_t</code> را از بیرون می‌گیرد، الگویی است به‌نام <span class="term" data-t="dependency_inject">تزریق وابستگی</span> (dependency injection). منطق نمی‌گوید «برو از STM32 بخوان»؛ می‌گوید «هر کسی هستی، این کار را بکن». نتیجهٔ مستقیمش: در تست واحد یک HAL ساختگی (mock) می‌دهیم و دقیقا همان کد اصلی بدون سخت‌افزار اجرا می‌شود. هزینه‌اش یک فراخوانی غیرمستقیم از راه اشاره‌گر به تابع در هر دسترسی است که برای این پروژه ناچیز است. در حلقه‌های خیلی داغ می‌شود آن را با <code>static inline</code> یا انتخاب زمان‌کامپایل جایگزین کرد (درس <a href="6-5.html">۶.۵</a>).</p></div>
+
+<h2 id="plan">نقشهٔ «همراه بساز»</h2>
+<p>پروژه‌های حرفه‌ای از پایین به بالا و با تست ساخته می‌شوند: اول ماژول‌های کوچک بی‌وابستگی، آخر چسباندن. به همین ترتیب جلو برو و بعد از هر گام <code>make</code> بزن:</p>
+<ol class="steps">
+  <li><b>ساخت پوشه و <code>config.h</code>.</b> نوع دما و همهٔ ثابت‌ها را یک‌جا بنویس.</li>
+  <li><b><code>temp.c</code> با تست اول.</b> ابتدا تست <code>raw = 0</code> و <code>raw = 4095</code> را بنویس، بعد تابع را. (روش «تست‌محور»، درس ۶.۴)</li>
+  <li><b><code>ringbuf.c</code>.</b> تست پر شدن و جایگزینی قدیمی‌ترین.</li>
+  <li><b><code>hal.h</code> و HAL ساختگی در تست.</b> این قرارداد است؛ قبل از منطق نوشته می‌شود.</li>
+  <li><b><code>parser.c</code>.</b> فرمان‌های خوب و ده‌ها ورودی بد.</li>
+  <li><b><code>logger.c</code>.</b> ماشین حالت را با HAL ساختگی تست کن.</li>
+  <li><b>سکوی PC:</b> <code>hal_host.c</code> و <code>main.c</code>؛ خروجی برنامه را به‌عنوان «خروجی مرجع» (<code>expected.txt</code>) ذخیره کن.</li>
+  <li><b><code>Makefile</code>:</b> یک دستور <code>make</code> که هم بسازد، هم تست کند، هم خروجی را با مرجع مقایسه کند.</li>
+  <li><b>پورت STM32:</b> <code>startup.c</code>، <code>link.ld</code>، <code>hal_stm32.c</code>. فقط بساز و اندازه بگیر؛ بعد روی برد.</li>
+  <li><b>پورت ESP32:</b> <code>hal_esp32.c</code> و <code>app_main</code>.</li>
+  <li><b>اندازه‌گیری و rubric.</b> Flash و RAM را ثبت کن و کارت را نمره بده.</li>
+</ol>
+<div class="callout tip"><div class="ct">قانون کار</div>
+<p>هر گام یک <code>make</code> سبز می‌خواهد. اگر گامی قرمز شد، <b>همان‌جا</b> درستش کن؛ خطایی که در گام ۳ ساخته شده و در گام ۹ کشف شود، ده برابر گران است.</p></div>
+
+
+<h2 id="config">گام ۱: <span class="en">config.h</span> و عدد دما</h2>
+<p>اولین سؤال هر پروژهٔ دما: دما را چطور نگه داریم؟ <code>float</code> ممنوع است (نیازمندی R6؛ در درس <a href="6-5.html">۶.۵</a> دیدی روی M4 یک ثابت <code>double</code> اشتباهی چقدر Flash می‌خورد و روی M0 چقدر کند است). راه ارزان‌تر، <b>عدد ثابت</b> (<span class="term" data-t="fixedpoint">fixed-point</span>) است: دما را به‌صورت «صدم درجه» در یک <code>int16_t</code> نگه می‌داریم. ۲۳٫۴۵ درجه می‌شود <code>2345</code>.</p>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>قیمت را در بانک به‌صورت «ریال» ذخیره می‌کنند، نه «۱۲٫۳۴ تومان» با ممیز. جمع و تفریق روی عدد صحیح دقیق و سریع است و فقط هنگام نمایش، ممیز را در متن می‌گذاریم. دمای ما هم همین است.</p></div>
+<p>بازهٔ سنسور ما ۴۰- تا ۱۲۵+ درجه است، یعنی از <code>-4000</code> تا <code>12500</code> که در محدودهٔ <code>int16_t</code> (تا ±۳۲۷۶۷) جا می‌شود. همهٔ عدد‌ها را فقط در <code>config.h</code> می‌نویسیم تا هر عدد یک نام و یک جا داشته باشد.</p>
+
+<div class="code" data-file="config.h" data-lang="c" data-verify="make" data-project="tlog" id="c1">
+<pre>
+#ifndef CONFIG_H
+#define CONFIG_H
+
+#include &lt;stdint.h&gt;
+
+typedef int16_t centi_t;                /* دما بر حسب صدم درجه: 2345 یعنی 23.45 C */
+
+#define SAMPLE_PERIOD_MS  1000u         /* هر چند میلی‌ثانیه یک نمونه */
+#define RING_CAPACITY     16u           /* تعداد نمونه‌های نگه‌داشته‌شده (توان ۲) */
+#define ALARM_HIGH_CENTI  3000          /* آستانهٔ پیش‌فرض آلارم: 30.00 C */
+#define ALARM_HYST_CENTI  200           /* پسماند: آلارم تا 2.00 C پایین‌تر روشن می‌ماند */
+#define CMD_LINE_MAX      24u           /* بیشینهٔ طول یک خط فرمان */
+
+#define ADC_MAX           4095u         /* سنسور ۱۲ بیتی */
+#define TEMP_MIN_CENTI    (-4000)       /* -40.00 C به ازای raw = 0 */
+#define TEMP_MAX_CENTI    12500         /* +125.00 C به ازای raw = 4095 */
+
+#endif /* CONFIG_H */
+</pre></div>
+<ol class="walk" data-for="c1">
+  <li data-lines="1-2,18"><b class="what">نگهبان include.</b> اگر این فایل چند بار وارد شود، فقط بار اول اثر دارد.
+    <span class="why">دلیل: <code>config.h</code> را تقریبا همهٔ فایل‌ها می‌خواهند؛ بدون نگهبان، <code>typedef</code> دوباره تعریف و خطا می‌شود (درس ۴.۲).</span></li>
+  <li data-lines="4-6"><b class="what">نوع دما.</b> <code>centi_t</code> یک نام برای <code>int16_t</code> است. <span class="why">دلیل: اگر روزی خواستی دقت را عوض کنی، فقط همین یک خط عوض می‌شود و هر جا <code>centi_t</code> دیده می‌شود، مفهوم «دما» را می‌فهمی.</span></li>
+  <li data-lines="8-12"><b class="what">عددهای تنظیمی.</b> دورهٔ نمونه‌برداری، ظرفیت بافر، آستانه و پسماند آلارم، طول خط فرمان. <span class="why">دلیل: پسوند <code>u</code> عدد را بدون‌علامت می‌کند تا مقایسه با <code>uint32_t</code> هشدار «علامت‌دار با بی‌علامت» ندهد.</span></li>
+  <li data-lines="14-16"><b class="what">مشخصات سنسور.</b> ADC ۱۲ بیتی (۰ تا ۴۰۹۵) که خطی به ۴۰- تا ۱۲۵+ درجه نگاشته می‌شود. <span class="why">دلیل: پرانتز دور <code>(-4000)</code> لازم است تا در عبارت‌هایی مثل <code>a - TEMP_MIN_CENTI</code> علامت منفی درست خوانده شود (درس ۴.۱).</span></li>
+</ol>
+
+<h2 id="temp">گام ۲: <span class="en">temp.c</span>؛ از عدد خام تا متن</h2>
+<p>سنسور یک عدد خام ۰ تا ۴۰۹۵ می‌دهد. باید آن را به صدم درجه ببریم و بعد به متن «۲۵٫۱۱» تبدیل کنیم، آن هم <b>بدون</b> <code>printf</code> (زیرا در <code>-nostdlib</code> وجود ندارد و در STM32 هزاران بایت Flash می‌خورد).</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 250" role="img" aria-label="مسیر داده: سنسور، عدد خام ۱۶۱۶، تبدیل temp_from_raw، عدد ۲۵۱۱ صدم درجه، بافر حلقوی و متن ۲۵٫۱۱ روی UART">
+  <defs><marker id="ar71b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">مسیر یک نمونه در برنامه</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="20" y="52" width="120" height="70" rx="10" fill="#3fd3e6"/>
+    <rect x="170" y="52" width="130" height="70" rx="10" fill="#7ea3ff"/>
+    <rect x="330" y="52" width="130" height="70" rx="10" fill="#ffd60a"/>
+    <rect x="490" y="52" width="110" height="70" rx="10" fill="#b394ff"/>
+    <rect x="630" y="52" width="110" height="70" rx="10" fill="#3ddc97"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-weight="800">
+    <text x="80" y="82" font-size="14.5">سنسور</text><text x="80" y="104" class="mono" direction="ltr" font-size="13">ADC 12 bit</text>
+    <text x="235" y="80" class="mono" direction="ltr" font-size="17">1616</text><text x="235" y="102" font-size="13">عدد خام (raw)</text>
+    <text x="395" y="80" class="mono" direction="ltr" font-size="17">2511</text><text x="395" y="102" font-size="13">صدم درجه</text>
+    <text x="545" y="80" font-size="14.5">بافر حلقوی</text><text x="545" y="102" class="mono" direction="ltr" font-size="13">ring_push</text>
+    <text x="685" y="80" class="mono" direction="ltr" font-size="17">25.11</text><text x="685" y="102" font-size="13">متن روی UART</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M142 87H166" marker-end="url(#ar71b)"/><path d="M302 87H326" marker-end="url(#ar71b)"/><path d="M462 87H486" marker-end="url(#ar71b)"/><path d="M602 87H626" marker-end="url(#ar71b)"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-size="13" font-weight="700" class="mono" direction="ltr">
+    <text x="235" y="150">temp_from_raw</text><text x="685" y="150">temp_format</text>
+  </g>
+  <g class="s-tx" text-anchor="middle" font-size="13.5" font-weight="700">
+    <text x="235" y="182">-4000 + 1616 × 16500 / 4095</text>
+    <text x="395" y="182">int16_t (نه float)</text>
+    <text x="685" y="182">۲۵ + «.» + ۱۱</text>
+  </g>
+  <text x="380" y="226" text-anchor="middle" class="s-tx" font-size="13.5">هر قدم ADC حدود ۴ صدم درجه است؛ پس عدد را با تفکیک صدم می‌نویسیم ولی دقت واقعی سنسور بهتر از این نمی‌شود.</text>
+</svg></div>
+<figcaption>از نمونهٔ واقعی خروجی برنامه: <code>t=4600 T=25.11</code>. برای ساده بودن، خواندن سنسور و چاپ در دو انتها هستند و همه‌چیز وسط با عدد صحیح انجام می‌شود.</figcaption></figure>
+
+<div class="code" data-file="temp.h" data-lang="c" data-verify="make" data-project="tlog" id="c2">
+<pre>
+#ifndef TEMP_H
+#define TEMP_H
+
+#include &lt;stddef.h&gt;
+#include &lt;stdint.h&gt;
+#include "config.h"
+
+centi_t temp_from_raw(uint16_t raw);                       /* عدد ADC به صدم درجه */
+size_t  temp_format(char *buf, size_t size, centi_t t);    /* "23.45" یا "-5.07" */
+size_t  u32_to_dec(char *buf, size_t size, uint32_t v);    /* عدد به متن ده‌دهی */
+
+#endif /* TEMP_H */
+</pre></div>
+<ol class="walk" data-for="c2">
+  <li data-lines="1-2,12"><b class="what">نگهبان include.</b> مثل <code>config.h</code>.</li>
+  <li data-lines="4-6"><b class="what">وابستگی‌ها.</b> <code>size_t</code>، <code>uint16_t</code> و <code>centi_t</code>. <span class="why">دلیل: هر هدر خودش هرچه لازم دارد را می‌خواند تا ترتیب <code>#include</code> ها مهم نباشد.</span></li>
+  <li data-lines="8-10"><b class="what">سه تابع.</b> تبدیل عدد به دما، دما به متن، عدد صحیح به متن. تابع‌های متنی طول بافر را می‌گیرند و هرگز بیرون آن نمی‌نویسند.</li>
+</ol>
+
+<div class="code" data-file="temp.c" data-lang="c" data-verify="make" data-project="tlog" id="c3">
+<pre>
+#include "temp.h"
+
+centi_t temp_from_raw(uint16_t raw)
+{
+    if (raw &gt; ADC_MAX) {
+        raw = ADC_MAX;                          /* عدد نامعتبر را محدود کن */
+    }
+    int32_t span = TEMP_MAX_CENTI - TEMP_MIN_CENTI;
+    int32_t centi = TEMP_MIN_CENTI + ((int32_t)raw * span) / (int32_t)ADC_MAX;
+    return (centi_t)centi;
+}
+
+/* متن را در buf می‌نویسد (با '\0' پایانی) و طول کامل متن را برمی‌گرداند */
+static size_t put_text(char *buf, size_t size, const char *text, size_t len)
+{
+    if (size &gt; 0u) {
+        size_t n = (len &lt; size - 1u) ? len : size - 1u;
+        for (size_t i = 0; i &lt; n; i++) {
+            buf[i] = text[i];
+        }
+        buf[n] = '\0';
+    }
+    return len;
+}
+
+size_t u32_to_dec(char *buf, size_t size, uint32_t v)
+{
+    char rev[10];                               /* حداکثر ۱۰ رقم برای uint32_t */
+    size_t n = 0;
+    do {
+        rev[n++] = (char)('0' + (v % 10u));
+        v /= 10u;
+    } while (v != 0u);
+
+    char text[10];
+    for (size_t i = 0; i &lt; n; i++) {
+        text[i] = rev[n - 1u - i];              /* برعکس کردن رقم‌ها */
+    }
+    return put_text(buf, size, text, n);
+}
+
+size_t temp_format(char *buf, size_t size, centi_t t)
+{
+    char text[16];
+    size_t n = 0;
+    uint32_t mag = (t &lt; 0) ? (uint32_t)(-(int32_t)t) : (uint32_t)t;
+
+    if (t &lt; 0) {
+        text[n++] = '-';
+    }
+    n += u32_to_dec(&amp;text[n], sizeof text - n, mag / 100u);
+    text[n++] = '.';
+    text[n++] = (char)('0' + (mag % 100u) / 10u);
+    text[n++] = (char)('0' + (mag % 10u));
+    return put_text(buf, size, text, n);
+}
+</pre></div>
+<ol class="walk" data-for="c3">
+  <li data-lines="5-7"><b class="what">محدود کردن ورودی.</b> عدد بزرگ‌تر از ۴۰۹۵ (مثلا خطای ADC) به ۴۰۹۵ می‌رسد. <span class="why">دلیل: ورودی سخت‌افزار قابل‌اعتماد نیست؛ اگر محدودش نکنی، فرمول دمای ۱۰۰۰ درجه می‌دهد و آلارم بی‌دلیل روشن می‌شود.</span></li>
+  <li data-lines="8-10"><b class="what">فرمول خطی.</b> <code>دما = -4000 + raw × 16500 / 4095</code>. اول ضرب و بعد تقسیم، همه در <code>int32_t</code>. <span class="why">دلیل: <code>4095 × 16500 = 67 567 500</code> در ۳۲ بیت جا می‌شود ولی در ۱۶ بیت نه؛ ضرب قبل از تقسیم دقت را نگه می‌دارد (درس ۴.۷).</span></li>
+  <li data-lines="13-24"><b class="what">نوشتن امن متن.</b> <code>put_text</code> حداکثر <code>size - 1</code> نویسه را کپی می‌کند، <code>'\0'</code> می‌گذارد و <b>طول کامل</b> را برمی‌گرداند (مثل <code>snprintf</code>). <span class="why">دلیل: اگر جا کم باشد، برنامه خراب نمی‌شود و صدازننده می‌تواند از مقدار برگشتی بفهمد متن بریده شده است.</span></li>
+  <li data-lines="26-40"><b class="what">عدد به متن.</b> ارقام از راست به چپ (باقی‌ماندهٔ تقسیم بر ۱۰) ساخته می‌شوند و بعد برعکس می‌شوند. <span class="why">دلیل: پایین‌ترین رقم را ساده‌ترین راه می‌دهد؛ ولی متن باید از بالاترین رقم شروع شود. <code>do…while</code> تضمین می‌کند صفر هم «0» چاپ شود.</span></li>
+  <li data-lines="42-56"><b class="what">دما به متن.</b> علامت منفی جدا، بخش صحیح (<code>mag / 100</code>)، نقطه، و دو رقم اعشار. <span class="why">دلیل: <code>-5.07</code> یعنی <code>-507</code>؛ اگر مستقیم <code>-507 % 100</code> را بگیری در C جواب منفی (<code>-7</code>) می‌آید. برای همین اول قدر مطلق می‌گیریم.</span></li>
+</ol>
+
+<h2 id="ring">گام ۳: بافر حلقوی برای «آخرین ۱۶ نمونه»</h2>
+<p>در درس <a href="4-5.html">۴.۵</a> بافری ساختی که وقتی پر بود، بایت <b>جدید</b> را رد می‌کرد. دلیلش این بود که وقفه‌ای که داده می‌ریزد نباید داده‌های قدیمی مصرف‌نشده را خراب کند. برای یک ثبت‌کننده، سیاست معکوس درست است: کسی می‌خواهد «آخرین ۱۶ نمونه» را ببیند و نمونهٔ قدیمی بی‌ارزش‌تر است. پس وقتی پر شد، <b>قدیمی‌ترین را دور می‌ریزیم</b>.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 260" role="img" aria-label="بافر شانزده‌خانه‌ای بعد از هفده نمونه: خانهٔ صفر نمونهٔ شانزدهم را دارد، tail برابر یک و head برابر هفده و نوشتن بعدی روی خانهٔ یک می‌نشیند">
+  <defs><marker id="ar71c" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">بعد از ۱۷ نمونه (شمارهٔ ۰ تا ۱۶) در بافر ۱۶ خانه‌ای</text>
+  <g stroke="#15120a" stroke-width="2.5">
+    <rect x="60" y="80" width="40" height="46" fill="#ff86b3"/>
+    <rect x="100" y="80" width="40" height="46" fill="#ffd60a"/><rect x="140" y="80" width="40" height="46" fill="#ffd60a"/><rect x="180" y="80" width="40" height="46" fill="#ffd60a"/><rect x="220" y="80" width="40" height="46" fill="#ffd60a"/>
+    <rect x="260" y="80" width="40" height="46" fill="#ffd60a"/><rect x="300" y="80" width="40" height="46" fill="#ffd60a"/><rect x="340" y="80" width="40" height="46" fill="#ffd60a"/><rect x="380" y="80" width="40" height="46" fill="#ffd60a"/>
+    <rect x="420" y="80" width="40" height="46" fill="#ffd60a"/><rect x="460" y="80" width="40" height="46" fill="#ffd60a"/><rect x="500" y="80" width="40" height="46" fill="#ffd60a"/><rect x="540" y="80" width="40" height="46" fill="#ffd60a"/>
+    <rect x="580" y="80" width="40" height="46" fill="#ffd60a"/><rect x="620" y="80" width="40" height="46" fill="#ffd60a"/><rect x="660" y="80" width="40" height="46" fill="#ffd60a"/>
+  </g>
+  <g class="mono" direction="ltr" fill="#15120a" text-anchor="middle" font-size="14" font-weight="800">
+    <text x="80" y="108">#16</text><text x="120" y="108">#1</text><text x="160" y="108">#2</text><text x="200" y="108">#3</text><text x="240" y="108">#4</text><text x="280" y="108">#5</text><text x="320" y="108">#6</text><text x="360" y="108">#7</text><text x="400" y="108">#8</text><text x="440" y="108">#9</text><text x="480" y="108">#10</text><text x="520" y="108">#11</text><text x="560" y="108">#12</text><text x="600" y="108">#13</text><text x="640" y="108">#14</text><text x="680" y="108">#15</text>
+  </g>
+  <g class="mono s-tx" direction="ltr" text-anchor="middle" font-size="11.5">
+    <text x="80" y="142">0</text><text x="120" y="142">1</text><text x="160" y="142">2</text><text x="200" y="142">3</text><text x="240" y="142">4</text><text x="280" y="142">5</text><text x="320" y="142">6</text><text x="360" y="142">7</text><text x="400" y="142">8</text><text x="440" y="142">9</text><text x="480" y="142">10</text><text x="520" y="142">11</text><text x="560" y="142">12</text><text x="600" y="142">13</text><text x="640" y="142">14</text><text x="680" y="142">15</text>
+  </g>
+  <path d="M120 210V152" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar71c)"/>
+  <text x="120" y="232" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="800"><tspan class="mono" direction="ltr">tail = 1</tspan> (قدیمی‌ترین: #1)</text>
+  <text x="380" y="52" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="800"><tspan class="mono" direction="ltr">head = 17</tspan> ← نوشتن بعدی: <tspan class="mono" direction="ltr">17 &amp; 15 = 1</tspan>، یعنی روی #1 می‌نشیند</text>
+  <text x="380" y="252" text-anchor="middle" class="s-tx" font-size="13" font-weight="600">#0 (زمان ۶۰۰ms) قبلا در خانهٔ ۰ بود و با #16 دور ریخته شد؛ فرمان DUMP از #1 شروع می‌شود.</text>
+</svg></div>
+<figcaption>شمارنده‌های <code>head</code> و <code>tail</code> هیچ‌وقت صفر نمی‌شوند و فقط بالا می‌روند؛ خانه با <code>&amp; 15</code> (ماسک) پیدا می‌شود. تعداد نمونه‌ها همیشه <code>head - tail</code> است.</figcaption></figure>
+
+<div class="code" data-file="ringbuf.h" data-lang="c" data-verify="make" data-project="tlog" id="c4">
+<pre>
+#ifndef RINGBUF_H
+#define RINGBUF_H
+
+#include &lt;stdbool.h&gt;
+#include &lt;stdint.h&gt;
+#include "config.h"
+
+_Static_assert((RING_CAPACITY &amp; (RING_CAPACITY - 1u)) == 0u, "RING_CAPACITY must be a power of two");
+
+typedef struct {
+    uint32_t t_ms;                      /* لحظهٔ نمونه‌برداری */
+    centi_t  centi;                     /* دما (صدم درجه) */
+} sample_t;
+
+typedef struct {
+    sample_t buf[RING_CAPACITY];
+    uint32_t head;                      /* شمارندهٔ نوشتن (آزادانه بالا می‌رود) */
+    uint32_t tail;                      /* شمارندهٔ قدیمی‌ترین نمونه */
+} ring_t;
+
+void     ring_init(ring_t *r);
+uint32_t ring_count(const ring_t *r);
+bool     ring_push(ring_t *r, sample_t s);                 /* true اگر قدیمی‌ترین را دور ریخت */
+bool     ring_at(const ring_t *r, uint32_t i, sample_t *out); /* i = 0 قدیمی‌ترین */
+
+#endif /* RINGBUF_H */
+</pre></div>
+<ol class="walk" data-for="c4">
+  <li data-lines="8"><b class="what">بررسی زمان کامپایل.</b> ظرفیت باید توان ۲ باشد. <span class="why">دلیل: ماسک <code>&amp; (N-1)</code> فقط برای توان ۲ درست کار می‌کند؛ اگر کسی ظرفیت را ۱۲ کند، کامپایل متوقف می‌شود، نه اینکه بی‌صدا داده خراب شود.</span></li>
+  <li data-lines="10-13"><b class="what">یک نمونه.</b> لحظهٔ ثبت و دما.</li>
+  <li data-lines="15-19"><b class="what">خود بافر.</b> آرایهٔ ثابت (بدون <code>malloc</code>) و دو شمارنده.</li>
+  <li data-lines="21-24"><b class="what">رابط.</b> <code>ring_push</code> اگر مجبور شد قدیمی‌ترین را دور بریزد <code>true</code> می‌دهد؛ <code>ring_at(i)</code> نمونهٔ <i>i</i>-ام از قدیمی‌ترین را می‌دهد.</li>
+</ol>
+
+<div class="code" data-file="ringbuf.c" data-lang="c" data-verify="make" data-project="tlog" id="c5">
+<pre>
+#include "ringbuf.h"
+
+#define RING_MASK (RING_CAPACITY - 1u)
+
+void ring_init(ring_t *r)
+{
+    r-&gt;head = 0u;
+    r-&gt;tail = 0u;
+}
+
+uint32_t ring_count(const ring_t *r)
+{
+    return r-&gt;head - r-&gt;tail;           /* با سرریز بدون‌علامت هم درست است */
+}
+
+bool ring_push(ring_t *r, sample_t s)
+{
+    bool dropped = false;
+    if (ring_count(r) == RING_CAPACITY) {
+        r-&gt;tail++;                      /* جا نیست: قدیمی‌ترین را دور بریز */
+        dropped = true;
+    }
+    r-&gt;buf[r-&gt;head &amp; RING_MASK] = s;
+    r-&gt;head++;
+    return dropped;
+}
+
+bool ring_at(const ring_t *r, uint32_t i, sample_t *out)
+{
+    if (i &gt;= ring_count(r)) {
+        return false;
+    }
+    *out = r-&gt;buf[(r-&gt;tail + i) &amp; RING_MASK];
+    return true;
+}
+</pre></div>
+<ol class="walk" data-for="c5">
+  <li data-lines="3"><b class="what">ماسک.</b> با ظرفیت ۱۶ می‌شود ۱۵ یعنی <code>0b1111</code>.</li>
+  <li data-lines="11-14"><b class="what">تعداد.</b> <code>head - tail</code>. <span class="why">دلیل: با شمارندهٔ بدون‌علامت، حتی وقتی <code>head</code> از ۲³² سرریز کند و کوچک شود، تفاضل درست می‌ماند (حساب پیمانه‌ای، درس ۴.۷).</span></li>
+  <li data-lines="16-26"><b class="what">نوشتن.</b> اگر پر است <code>tail++</code> یعنی قدیمی‌ترین دور ریخته شد؛ سپس نمونه در خانهٔ <code>head &amp; RING_MASK</code> می‌نشیند و <code>head</code> جلو می‌رود. <span class="why">دلیل: اول داده را می‌نویسیم و بعد شمارنده را جلو می‌بریم، پس هیچ‌وقت شمارنده به خانهٔ نانوشته اشاره نمی‌کند.</span></li>
+  <li data-lines="28-35"><b class="what">خواندن با اندیس.</b> اگر اندیس از تعداد بیشتر بود <code>false</code>؛ وگرنه خانهٔ <code>(tail + i) &amp; RING_MASK</code>.</li>
+</ol>
+
+<div class="callout warn"><div class="ct">مراقب باش: این بافر تک‌زمینه است</div>
+<p>این <code>ring_push</code> هم <code>head</code> را عوض می‌کند و هم (وقتی پر است) <code>tail</code> را. یعنی «نویسنده» به فیلد «خواننده» دست می‌زند. در برنامه‌ای که یک وقفه یا یک تسک دیگر همزمان می‌خواند، این کار شرایط مسابقه می‌سازد (درس <a href="5-3.html">۵.۳</a>). در پروژهٔ ما هر دو در حلقهٔ اصلی و در یک زمینه‌اند، پس امن است. اگر روزی نمونه‌ها را از یک ISR ثبت کردی، نسخهٔ «رد کردن جدید» درس ۴.۵ را بردار یا دسترسی را با بخش بحرانی محافظت کن.</p></div>
+
+<h2 id="hal">گام ۴: قرارداد سخت‌افزار <span class="en">hal.h</span></h2>
+<p>پیش از اینکه منطق را بنویسیم، قرارداد را می‌نویسیم. منطق فقط پنج کار از سخت‌افزار می‌خواهد: یک نمونه بخوان، یک رشته بفرست، یک نویسه بگیر، چراغ را روشن/خاموش کن و بگو ساعت چند است. این پنج کار را در یک <code>struct</code> از اشاره‌گر به تابع (درس <a href="4-3.html">۴.۳</a>) می‌گذاریم:</p>
+
+<div class="code" data-file="hal.h" data-lang="c" data-verify="make" data-project="tlog" id="c6">
+<pre>
+#ifndef HAL_H
+#define HAL_H
+
+#include &lt;stdbool.h&gt;
+#include &lt;stdint.h&gt;
+
+/* هر سکو (PC، STM32، ESP32) این چهار تابع را می‌دهد؛ منطق برنامه فقط این را می‌شناسد */
+typedef struct {
+    bool     (*sensor_read)(uint16_t *raw);     /* یک نمونهٔ خام؛ false = خطای سنسور */
+    void     (*uart_write)(const char *s);      /* ارسال یک رشته */
+    bool     (*uart_getc)(char *c);             /* دریافت یک نویسه بدون انتظار؛ false = چیزی نیست */
+    void     (*led_set)(bool on);               /* چراغ آلارم */
+    uint32_t (*millis)(void);                   /* میلی‌ثانیه از شروع کار */
+} hal_t;
+
+#endif /* HAL_H */
+</pre></div>
+<ol class="walk" data-for="c6">
+  <li data-lines="7-8"><b class="what">توضیح قرارداد.</b> هر سکو این پنج تابع را می‌دهد.</li>
+  <li data-lines="9"><b class="what">خواندن سنسور.</b> نمونهٔ خام را از راه اشاره‌گر می‌دهد و <code>bool</code> می‌گوید موفق بود یا نه. <span class="why">دلیل: سنسور واقعی می‌تواند قطع باشد؛ برگرداندن خطا از راه مقدار برگشتی، بهتر از «عدد جادویی» مثل ‎-1‎ است.</span></li>
+  <li data-lines="10-11"><b class="what">UART.</b> ارسال رشته، و دریافت <b>بدون انتظار</b> یک نویسه (اگر چیزی نبود <code>false</code>). <span class="why">دلیل: برنامهٔ ما یک حلقهٔ اصلی است (super loop)؛ هر تابعی که منتظر بماند، ساعت و نمونه‌برداری را می‌خواباند.</span></li>
+  <li data-lines="12-13"><b class="what">LED و ساعت.</b> ساعت میلی‌ثانیه‌ای که از شروع کار می‌شمارد (در STM32 با SysTick؛ درس ۵.۴).</li>
+</ol>
+
+<p>سنسور ساختگی هم بی‌نیاز از سخت‌افزار است و بین هر سه سکو مشترک: یک موج دمای از پیش‌نوشته که بالا می‌رود، به آلارم می‌رسد و برمی‌گردد. عددها را از خروجی <code>temp_from_raw</code> معکوس می‌کند تا مسیر «raw ← دما» واقعی طی شود.</p>
+
+<div class="code" data-file="sim_sensor.h" data-lang="c" data-verify="make" data-project="tlog" id="c7h">
+<pre>
+#ifndef SIM_SENSOR_H
+#define SIM_SENSOR_H
+
+#include &lt;stdbool.h&gt;
+#include &lt;stdint.h&gt;
+
+bool sim_sensor_read(uint16_t *raw);    /* دمای ساختگی: بالا می‌رود، آلارم می‌دهد، برمی‌گردد */
+
+#endif /* SIM_SENSOR_H */
+</pre></div>
+<ol class="walk" data-for="c7h">
+  <li data-lines="6"><b class="what">یک تابع.</b> همان شکل <code>sensor_read</code> در <code>hal.h</code>، تا بشود مستقیم در جدول HAL گذاشت.</li>
+</ol>
+
+<div class="code" data-file="sim_sensor.c" data-lang="c" data-verify="make" data-project="tlog" id="c7">
+<pre>
+#include "sim_sensor.h"
+#include "config.h"
+
+/* موج دمای ساختگی به صدم درجه؛ بعد از آخرین عضو دوباره از اول می‌شود */
+static const centi_t wave[20] = {
+    2210, 2240, 2295, 2380, 2510, 2680, 2890, 3050, 3210, 3300,
+    3260, 3120, 2980, 2850, 2700, 2560, 2430, 2330, 2260, 2225
+};
+
+static uint32_t next_index;
+
+bool sim_sensor_read(uint16_t *raw)
+{
+    int32_t centi = wave[next_index];
+    next_index = (next_index + 1u) % 20u;
+    /* معکوس تبدیل temp_from_raw، همان‌طور که ADC واقعی عدد می‌داد */
+    int32_t span = TEMP_MAX_CENTI - TEMP_MIN_CENTI;
+    *raw = (uint16_t)(((centi - TEMP_MIN_CENTI) * (int32_t)ADC_MAX + span / 2) / span);
+    return true;
+}
+</pre></div>
+<ol class="walk" data-for="c7">
+  <li data-lines="4-8"><b class="what">موج دما.</b> ۲۰ عدد ثابت. <code>const</code> است و در Flash می‌ماند نه RAM (درس ۶.۵).</li>
+  <li data-lines="10"><b class="what">شمارندهٔ داخلی.</b> نمونهٔ بعدی کدام است. <code>static</code> یعنی فقط این فایل می‌بیندش.</li>
+  <li data-lines="12-20"><b class="what">تولید raw.</b> نمونه را برمی‌دارد، اندیس را دور می‌دهد و با فرمول معکوس به عدد ۱۲ بیتی تبدیل می‌کند. <code>+ span / 2</code> گرد کردن است. <span class="why">دلیل: سنسور واقعی هم عدد صحیح می‌دهد؛ به همین دلیل خروجی مثلا <code>22.09</code> است، نه <code>22.10</code> (قدم ADC ≈ ۴ صدم درجه).</span></li>
+</ol>
+
+<h3 id="crash">اگر منطق مستقیم به رجیستر دست بزند چه می‌شود؟</h3>
+<p>برای فهمیدن ارزش قرارداد، ببین بدون آن چه می‌شد. فرض کن <code>alarm_led</code> مستقیم رجیستر <code>GPIOA_BSRR</code> را می‌نوشت. روی STM32 درست کار می‌کند؛ ولی روی PC آن آدرس اصلا وجود ندارد:</p>
+<div class="code" data-file="crash71.c" data-lang="c" data-verify="host" data-exit="-11" id="c8">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+#define GPIOA_BSRR (*(volatile uint32_t *)0x40020018u)   /* آدرس رجیستر STM32 */
+
+/* «منطق» که مستقیم به رجیستر دست می‌زند */
+static void alarm_led(int on)
+{
+    GPIOA_BSRR = on ? (1u &lt;&lt; 5) : (1u &lt;&lt; 21);
+}
+
+int main(void)
+{
+    printf("before\n");
+    fflush(stdout);
+    alarm_led(1);
+    printf("after\n");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="c8">
+  <li data-lines="4"><b class="what">آدرس رجیستر STM32.</b> روی PC یک آدرس نامعتبر است.</li>
+  <li data-lines="7-10"><b class="what">«منطق» آلوده.</b> تابع مستقیم به رجیستر می‌نویسد. <span class="why">دلیل: تابعی که به یک آدرس سخت‌افزاری وابسته است، روی PC اجرا شدنی نیست و پس تست‌پذیر هم نیست.</span></li>
+  <li data-lines="14-19"><b class="what">اجرا.</b> چاپ «before» انجام می‌شود، ولی خط ۱۶ سیستم‌عامل را به خطای دسترسی حافظه می‌رساند و برنامه می‌میرد.</li>
+</ol>
+<pre class="term" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -o crash71 crash71.c
+$ ./crash71
+before
+Segmentation fault (core dumped)
+</pre>
+<p>کد <code>Segmentation fault</code> (خروجی شل، از stdout برنامه نیست) نشان می‌دهد نوشتن در <code>0x40020018</code> روی PC مجاز نیست. راه‌حل همان قرارداد است: منطق فقط <code>led_set(true)</code> را صدا می‌زند و سکوی STM32 است که بعدا <code>GPIOA_BSRR</code> را می‌نویسد.</p>
+
+<h2 id="parser">گام ۵: پارسر فرمان</h2>
+<p>کاربر از راه UART متن می‌فرستد و <b>هر بار یک نویسه</b> می‌رسد. پارسر نویسه‌ها را در یک بافر خط جمع می‌کند و هنگام رسیدن <code>\n</code> یا <code>\r</code> آن را به یک فرمان تبدیل می‌کند. سه اصل حرفه‌ای در آن هست: (۱) بافر <b>محدود</b> است و سرریز نمی‌کند، (۲) ورودی بد فقط یک <code>CMD_ERROR</code> می‌دهد، نه یک خرابی، (۳) بدون <code>strcmp</code> و <code>atoi</code> کار می‌کند (کتابخانهٔ C در <code>-nostdlib</code> نیست).</p>
+
+<div class="code" data-file="parser.h" data-lang="c" data-verify="make" data-project="tlog" id="c9">
+<pre>
+#ifndef PARSER_H
+#define PARSER_H
+
+#include &lt;stdbool.h&gt;
+#include &lt;stddef.h&gt;
+#include &lt;stdint.h&gt;
+#include "config.h"
+
+typedef enum {
+    CMD_START,
+    CMD_STOP,
+    CMD_STATUS,
+    CMD_DUMP,
+    CMD_SET_HIGH,                       /* arg = دما به درجهٔ کامل */
+    CMD_ERROR
+} cmd_kind_t;
+
+typedef struct {
+    cmd_kind_t kind;
+    int32_t    arg;
+} cmd_t;
+
+typedef struct {
+    char   line[CMD_LINE_MAX];
+    size_t len;
+    bool   overflow;                    /* خط از حد بلندتر شد */
+} parser_t;
+
+void parser_init(parser_t *p);
+bool parser_feed(parser_t *p, char c, cmd_t *out);   /* true وقتی یک خط کامل فرمان شد */
+
+#endif /* PARSER_H */
+</pre></div>
+<ol class="walk" data-for="c9">
+  <li data-lines="9-16"><b class="what">انواع فرمان.</b> یک <code>enum</code> برای همهٔ فرمان‌ها به‌اضافهٔ <code>CMD_ERROR</code>.</li>
+  <li data-lines="18-21"><b class="what">خود فرمان.</b> نوع و یک عدد (برای <code>SET HIGH</code>).</li>
+  <li data-lines="23-27"><b class="what">حالت پارسر.</b> بافر خط، طول جاری و پرچم سرریز. <span class="why">دلیل: تمام حالت در یک <code>struct</code> است، پس چند پارسر (مثلا برای دو UART) می‌شود ساخت و هیچ متغیر سراسری پنهانی نیست.</span></li>
+  <li data-lines="29-30"><b class="what">رابط.</b> <code>parser_feed</code> یک نویسه می‌گیرد و وقتی خط کامل شد <code>true</code> می‌دهد.</li>
+</ol>
+
+<div class="code" data-file="parser.c" data-lang="c" data-verify="make" data-project="tlog" id="c10">
+<pre>
+#include "parser.h"
+
+static bool str_eq(const char *a, const char *b)
+{
+    while (*a != '\0' &amp;&amp; *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+static bool starts_with(const char *s, const char *prefix, const char **rest)
+{
+    while (*prefix != '\0') {
+        if (*s != *prefix) {
+            return false;
+        }
+        s++;
+        prefix++;
+    }
+    *rest = s;
+    return true;
+}
+
+static bool parse_int(const char *s, int32_t *out)
+{
+    bool neg = false;
+    int32_t v = 0;
+    int digits = 0;
+
+    if (*s == '-') {
+        neg = true;
+        s++;
+    }
+    for (; *s != '\0'; s++) {
+        if (*s &lt; '0' || *s &gt; '9' || digits &gt;= 4) {
+            return false;               /* غیررقم یا خیلی بلند */
+        }
+        v = v * 10 + (*s - '0');
+        digits++;
+    }
+    if (digits == 0) {
+        return false;
+    }
+    *out = neg ? -v : v;
+    return true;
+}
+
+static cmd_t parse_line(const char *line)
+{
+    cmd_t c = { CMD_ERROR, 0 };
+    const char *rest = "";
+
+    if (str_eq(line, "START")) {
+        c.kind = CMD_START;
+    } else if (str_eq(line, "STOP")) {
+        c.kind = CMD_STOP;
+    } else if (str_eq(line, "STATUS")) {
+        c.kind = CMD_STATUS;
+    } else if (str_eq(line, "DUMP")) {
+        c.kind = CMD_DUMP;
+    } else if (starts_with(line, "SET HIGH ", &amp;rest) &amp;&amp; parse_int(rest, &amp;c.arg)) {
+        if (c.arg &gt;= -40 &amp;&amp; c.arg &lt;= 125) {
+            c.kind = CMD_SET_HIGH;
+        }
+    }
+    return c;
+}
+
+void parser_init(parser_t *p)
+{
+    p-&gt;len = 0u;
+    p-&gt;overflow = false;
+}
+
+bool parser_feed(parser_t *p, char c, cmd_t *out)
+{
+    if (c == '\r' || c == '\n') {
+        if (p-&gt;len == 0u &amp;&amp; !p-&gt;overflow) {
+            return false;               /* خط خالی (مثلا \r\n) نادیده گرفته می‌شود */
+        }
+        if (p-&gt;overflow) {
+            out-&gt;kind = CMD_ERROR;
+            out-&gt;arg = 0;
+        } else {
+            p-&gt;line[p-&gt;len] = '\0';
+            *out = parse_line(p-&gt;line);
+        }
+        parser_init(p);
+        return true;
+    }
+    if (p-&gt;len &lt; CMD_LINE_MAX - 1u) {
+        p-&gt;line[p-&gt;len++] = c;
+    } else {
+        p-&gt;overflow = true;
+    }
+    return false;
+}
+</pre></div>
+<ol class="walk" data-for="c10">
+  <li data-lines="3-10"><b class="what">مقایسهٔ متن.</b> <code>str_eq</code> دو رشته را نویسه‌به‌نویسه می‌سنجد؛ کوچک و بزرگ فرق دارند.</li>
+  <li data-lines="12-23"><b class="what">پیشوند.</b> بررسی می‌کند خط با «SET HIGH » شروع می‌شود و اشاره‌گر <code>rest</code> را به بقیهٔ خط می‌برد (اشاره‌گر به اشاره‌گر، درس ۳.۲).</li>
+  <li data-lines="25-47"><b class="what">تبدیل عدد.</b> فقط رقم و یک <code>-</code> ابتدایی؛ حداکثر ۴ رقم. <span class="why">دلیل: با ۴ رقم، <code>int32_t</code> هرگز سرریز نمی‌کند و ورودی مثل «99999999999» رد می‌شود.</span></li>
+  <li data-lines="49-68"><b class="what">تبدیل خط به فرمان.</b> با <code>CMD_ERROR</code> شروع می‌کند و فقط اگر چیزی تطبیق کرد آن را عوض می‌کند. عدد <code>SET HIGH</code> باید بین ۴۰- و ۱۲۵ باشد. <span class="why">دلیل: پیش‌فرض «خطا» یعنی هر ورودی ناشناخته‌ای امن رد می‌شود؛ «همه‌چیز را قبول کن مگر...» خطرناک است.</span></li>
+  <li data-lines="70-74"><b class="what">ریست.</b> طول صفر و پرچم پاک.</li>
+  <li data-lines="76-98"><b class="what">دریافت یک نویسه.</b> پایان خط: خط خالی نادیده گرفته می‌شود (برای <code>\r\n</code>)؛ اگر سرریز شده بود خطا؛ وگرنه پارس می‌شود. غیر از پایان خط، نویسه در بافر جمع می‌شود و اگر جا نبود فقط پرچم <code>overflow</code> روشن می‌شود. <span class="why">دلیل: با ادامهٔ خواندن تا پایان خط، آشغال یک خط بلند به فرمان بعدی نمی‌چسبد.</span></li>
+</ol>
+
+<h2 id="logger">گام ۶: <span class="en">logger.c</span>؛ ماشین حالت</h2>
+<p>قلب برنامه اینجاست. سه حالت (<span class="term" data-t="fsm">FSM</span>، درس <a href="4-6.html">۴.۶</a>):</p>
+<ul>
+  <li><b>IDLE:</b> منتظر فرمان؛ نمونه نمی‌گیرد.</li>
+  <li><b>SAMPLING:</b> هر ۱۰۰۰ms یک نمونه می‌گیرد؛ اگر دما ≥ آستانه شد، به ALARM می‌رود.</li>
+  <li><b>ALARM:</b> چراغ روشن؛ همچنان نمونه می‌گیرد؛ وقتی دما به <b>آستانه منهای ۲ درجه</b> یا کمتر رسید، برمی‌گردد.</li>
+</ul>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 320" role="img" aria-label="ماشین حالت با سه حالت IDLE و SAMPLING و ALARM؛ گذارها: START، STOP، دما بیشتر یا مساوی آستانه، دما کمتر یا مساوی آستانه منهای دو درجه">
+  <defs><marker id="ar71d" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="30" y="80" width="160" height="90" rx="16" fill="#b394ff"/>
+    <rect x="300" y="80" width="160" height="90" rx="16" fill="#3ddc97"/>
+    <rect x="570" y="80" width="160" height="90" rx="16" fill="#ff86b3"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-weight="800">
+    <text x="110" y="118" class="mono" direction="ltr" font-size="18">IDLE</text><text x="110" y="144" font-size="13">چراغ خاموش</text><text x="110" y="162" font-size="12.5" font-weight="600">نمونه نمی‌گیرد</text>
+    <text x="380" y="118" class="mono" direction="ltr" font-size="18">SAMPLING</text><text x="380" y="144" font-size="13">چراغ خاموش</text><text x="380" y="162" font-size="12.5" font-weight="600">هر ۱۰۰۰ms نمونه</text>
+    <text x="650" y="118" class="mono" direction="ltr" font-size="18">ALARM</text><text x="650" y="144" font-size="13">چراغ روشن</text><text x="650" y="162" font-size="12.5" font-weight="600">نمونه می‌گیرد</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M192 108H296" marker-end="url(#ar71d)"/>
+    <path d="M296 146H192" marker-end="url(#ar71d)"/>
+    <path d="M462 108H566" marker-end="url(#ar71d)"/>
+    <path d="M566 146H462" marker-end="url(#ar71d)"/>
+    <path d="M650 172V262H110V174" marker-end="url(#ar71d)"/>
+  </g>
+  <g class="mono" direction="ltr" fill="#15120a" text-anchor="middle" font-size="13" font-weight="800">
+    <text x="244" y="98">START</text>
+    <text x="244" y="170">STOP</text>
+    <text x="514" y="98">T &gt;= high</text>
+    <text x="514" y="170">T &lt;= high-2.00</text>
+    <text x="380" y="284">STOP</text>
+  </g>
+  <text x="380" y="34" text-anchor="middle" class="s-tx" font-size="15" font-weight="800">هر گذار، «اعمال ورود» حالت جدید را یک‌جا اجرا می‌کند (چراغ + پیام)</text>
+  <text x="380" y="310" text-anchor="middle" class="s-tx" font-size="13.5">فاصلهٔ ۲ درجه بین «روشن شدن» و «خاموش شدن» همان پسماند است.</text>
+</svg></div>
+<figcaption>سه حالت و پنج گذار. <code>SET HIGH</code>، <code>STATUS</code> و <code>DUMP</code> حالت را عوض نمی‌کنند و در هر حالتی کار می‌کنند.</figcaption></figure>
+
+<h3 id="hyst">چرا پسماند؟</h3>
+<p>سنسور نویز دارد. اگر دما دور ۳۰٫۰۰ بالا و پایین بپرد (۲۹٫۹۸، ۳۰٫۰۲، ۲۹٫۹۹، ...)، آلارمی که دقیقا در ۳۰ روشن و خاموش می‌شود مثل دکمه‌ای است که بین دو حالت می‌لرزد. تجربه‌اش را در تمرین ۲ می‌بینی. راه‌حل، <span class="term" data-t="hysteresis">پسماند</span> است: برای <b>روشن شدن</b> باید به ۳۰٫۰۰ برسد، ولی برای <b>خاموش شدن</b> باید تا ۲۸٫۰۰ پایین بیاید. مثل ترموستات خانه که در ۲۰ درجه گرمکن را روشن و در ۲۲ خاموش می‌کند.</p>
+
+<div class="widget" data-w="mem" data-config='{"title":"آلارم با پسماند: آستانه 30.00 و پسماند 2.00","code":["نمونه 28.90   // SAMPLING","نمونه 30.51   // >= 30.00","نمونه 29.78   // زیر آستانه ولی بالای 28.00","نمونه 28.49   // هنوز بالای 28.00","نمونه 27.00   // <= 28.00"],"intro":"چراغ خاموش و حالت SAMPLING است. روی بعدی بزن و ببین آلارم کی خاموش می‌شود.","cells":[{"addr":"دما","name":"T (درجه)","val":"-","kind":"var"},{"addr":"حالت","name":"state","val":"SAMPLING","kind":"var"},{"addr":"پایه","name":"LED","val":"خاموش","kind":"var"}],"steps":[{"line":0,"set":{"0":"28.90"},"hot":[0],"say":"۲۸٫۹۰ از ۳۰٫۰۰ کمتر است؛ همان SAMPLING می‌ماند."},{"line":1,"set":{"0":"30.51","1":"ALARM","2":"روشن"},"hot":[0,1,2],"say":"۳۰٫۵۱ ≥ ۳۰٫۰۰. گذار به ALARM؛ اعمال ورود: چراغ روشن و پیام «-> ALARM»."},{"line":2,"set":{"0":"29.78"},"hot":[0],"say":"۲۹٫۷۸ از آستانه پایین‌تر است ولی برای خاموش شدن باید به ≤ ۲۸٫۰۰ برسد. آلارم می‌ماند."},{"line":3,"set":{"0":"28.49"},"hot":[0],"say":"۲۸٫۴۹ هنوز بالای ۲۸٫۰۰ است. آلارم می‌ماند؛ بدون پسماند تا الان چند بار روشن و خاموش شده بود."},{"line":4,"set":{"0":"27.00","1":"SAMPLING","2":"خاموش"},"hot":[0,1,2],"say":"۲۷٫۰۰ ≤ ۲۸٫۰۰. گذار به SAMPLING؛ چراغ خاموش. این‌ها همان اعداد خروجی واقعی برنامه‌اند."}]}'></div>
+
+<p>حالا کد. دو تکنیک را ببین: (۱) همهٔ کارهای «ورود به حالت» در یک تابع (<code>enter_state</code>) جمع شده‌اند، پس چراغ و پیام هیچ‌وقت با حالت ناهماهنگ نمی‌شوند؛ (۲) زمان با تفریق بدون‌علامت سنجیده می‌شود.</p>
+
+<div class="code" data-file="logger.h" data-lang="c" data-verify="make" data-project="tlog" id="c11">
+<pre>
+#ifndef LOGGER_H
+#define LOGGER_H
+
+#include &lt;stdbool.h&gt;
+#include &lt;stdint.h&gt;
+#include "config.h"
+#include "hal.h"
+#include "parser.h"
+#include "ringbuf.h"
+
+typedef enum {
+    LG_IDLE,                            /* نمونه نمی‌گیرد */
+    LG_SAMPLING,                        /* هر SAMPLE_PERIOD_MS یک نمونه */
+    LG_ALARM                            /* نمونه می‌گیرد و دما از آستانه بالاتر است */
+} lg_state_t;
+
+typedef struct {
+    lg_state_t   state;
+    const hal_t *hal;
+    parser_t     parser;
+    ring_t       ring;
+    uint32_t     last_sample_ms;
+    uint32_t     total;                 /* تعداد کل نمونه‌های گرفته‌شده */
+    centi_t      high;                  /* آستانهٔ آلارم */
+} logger_t;
+
+void        logger_init(logger_t *lg, const hal_t *hal);
+void        logger_poll(logger_t *lg);  /* در هر دور حلقهٔ اصلی صدا زده می‌شود */
+const char *logger_state_name(lg_state_t s);
+
+#endif /* LOGGER_H */
+</pre></div>
+<ol class="walk" data-for="c11">
+  <li data-lines="11-15"><b class="what">حالت‌ها.</b> سه مقدار <code>enum</code> با پیشوند <code>LG_</code> تا با فرمان‌ها (<code>CMD_</code>) قاطی نشوند.</li>
+  <li data-lines="17-25"><b class="what">حالت کل ثبت‌کننده.</b> حالت جاری، اشاره‌گر به HAL، پارسر، بافر، لحظهٔ آخرین نمونه، شمارندهٔ کل و آستانه. <span class="why">دلیل: همه‌چیز در یک <code>struct</code> است، پس هیچ متغیر سراسری برنامه‌ای نیست. در تست می‌شود چند ثبت‌کننده مستقل ساخت.</span></li>
+  <li data-lines="27-29"><b class="what">رابط عمومی.</b> فقط سه تابع: ساخت، «یک دور کار» و نام حالت.</li>
+</ol>
+
+<div class="code" data-file="logger.c" data-lang="c" data-verify="make" data-project="tlog" id="c12">
+<pre>
+#include "logger.h"
+#include "temp.h"
+
+static void say(const logger_t *lg, const char *s)
+{
+    lg-&gt;hal-&gt;uart_write(s);
+}
+
+static void say_u32(const logger_t *lg, uint32_t v)
+{
+    char buf[12];
+    (void)u32_to_dec(buf, sizeof buf, v);
+    say(lg, buf);
+}
+
+static void say_temp(const logger_t *lg, centi_t t)
+{
+    char buf[16];
+    (void)temp_format(buf, sizeof buf, t);
+    say(lg, buf);
+}
+
+const char *logger_state_name(lg_state_t s)
+{
+    switch (s) {
+    case LG_IDLE:     return "IDLE";
+    case LG_SAMPLING: return "SAMPLING";
+    case LG_ALARM:    return "ALARM";
+    }
+    return "?";
+}
+
+/* اعمال ورود به هر حالت یک‌جا جمع شده تا LED و پیام هیچ‌وقت ناهماهنگ نشوند */
+static void enter_state(logger_t *lg, lg_state_t next)
+{
+    lg-&gt;state = next;
+    lg-&gt;hal-&gt;led_set(next == LG_ALARM);
+    switch (next) {
+    case LG_IDLE:     say(lg, "-&gt; IDLE\n");     break;
+    case LG_SAMPLING: say(lg, "-&gt; SAMPLING\n"); break;
+    case LG_ALARM:    say(lg, "-&gt; ALARM\n");    break;
+    }
+}
+
+static void take_sample(logger_t *lg, uint32_t now)
+{
+    uint16_t raw;
+    if (!lg-&gt;hal-&gt;sensor_read(&amp;raw)) {
+        say(lg, "ERR sensor\n");
+        return;
+    }
+    sample_t s = { now, temp_from_raw(raw) };
+    (void)ring_push(&amp;lg-&gt;ring, s);
+    lg-&gt;total++;
+
+    say(lg, "t=");
+    say_u32(lg, now);
+    say(lg, " T=");
+    say_temp(lg, s.centi);
+    say(lg, "\n");
+
+    if (lg-&gt;state == LG_SAMPLING &amp;&amp; s.centi &gt;= lg-&gt;high) {
+        enter_state(lg, LG_ALARM);
+    } else if (lg-&gt;state == LG_ALARM &amp;&amp; s.centi &lt;= lg-&gt;high - ALARM_HYST_CENTI) {
+        enter_state(lg, LG_SAMPLING);   /* پسماند: پایین‌تر از آستانه باید بیاید */
+    }
+}
+
+static void print_status(const logger_t *lg)
+{
+    say(lg, "STATE=");
+    say(lg, logger_state_name(lg-&gt;state));
+    say(lg, " samples=");
+    say_u32(lg, lg-&gt;total);
+    say(lg, " high=");
+    say_temp(lg, lg-&gt;high);
+    say(lg, "\n");
+}
+
+static void print_dump(const logger_t *lg)
+{
+    sample_t s;
+    for (uint32_t i = 0; ring_at(&amp;lg-&gt;ring, i, &amp;s); i++) {
+        say(lg, "  ");
+        say_u32(lg, s.t_ms);
+        say(lg, " ");
+        say_temp(lg, s.centi);
+        say(lg, "\n");
+    }
+}
+
+static void handle_command(logger_t *lg, const cmd_t *c, uint32_t now)
+{
+    switch (c-&gt;kind) {
+    case CMD_START:
+        if (lg-&gt;state == LG_IDLE) {
+            lg-&gt;last_sample_ms = now - SAMPLE_PERIOD_MS;   /* اولین نمونه همین حالا */
+            enter_state(lg, LG_SAMPLING);
+        }
+        break;
+    case CMD_STOP:
+        if (lg-&gt;state != LG_IDLE) {
+            enter_state(lg, LG_IDLE);
+        }
+        break;
+    case CMD_STATUS:
+        print_status(lg);
+        break;
+    case CMD_DUMP:
+        print_dump(lg);
+        break;
+    case CMD_SET_HIGH:
+        lg-&gt;high = (centi_t)(c-&gt;arg * 100);
+        say(lg, "OK\n");
+        break;
+    case CMD_ERROR:
+        say(lg, "ERR command\n");
+        break;
+    }
+}
+
+void logger_init(logger_t *lg, const hal_t *hal)
+{
+    lg-&gt;state = LG_IDLE;
+    lg-&gt;hal = hal;
+    parser_init(&amp;lg-&gt;parser);
+    ring_init(&amp;lg-&gt;ring);
+    lg-&gt;last_sample_ms = 0u;
+    lg-&gt;total = 0u;
+    lg-&gt;high = ALARM_HIGH_CENTI;
+    hal-&gt;led_set(false);
+}
+
+void logger_poll(logger_t *lg)
+{
+    uint32_t now = lg-&gt;hal-&gt;millis();
+    char ch;
+    cmd_t cmd;
+
+    while (lg-&gt;hal-&gt;uart_getc(&amp;ch)) {
+        if (parser_feed(&amp;lg-&gt;parser, ch, &amp;cmd)) {
+            handle_command(lg, &amp;cmd, now);
+        }
+    }
+    if (lg-&gt;state != LG_IDLE &amp;&amp; (uint32_t)(now - lg-&gt;last_sample_ms) &gt;= SAMPLE_PERIOD_MS) {
+        lg-&gt;last_sample_ms = now;
+        take_sample(lg, now);
+    }
+}
+</pre></div>
+<ol class="walk" data-for="c12">
+  <li data-lines="4-21"><b class="what">کمک‌کننده‌های چاپ.</b> <code>say</code> یک رشته را می‌فرستد؛ <code>say_u32</code> و <code>say_temp</code> عدد را در بافر محلی کوچک می‌سازند و می‌فرستند. <span class="why">دلیل: بافر محلی ۱۲ و ۱۶ بایتی روی پشته کافی است (بیشینه‌ی <code>uint32_t</code> ده رقم و «-125.00» هفت نویسه است) و هیچ حافظهٔ پویایی لازم نیست.</span></li>
+  <li data-lines="23-31"><b class="what">نام حالت.</b> <code>switch</code> روی <code>enum</code> بدون <code>default</code>؛ اگر حالت جدیدی اضافه کنی و اینجا فراموش کنی، کامپایلر هشدار می‌دهد (<code>-Wswitch</code> در <code>-Wall</code>).</li>
+  <li data-lines="33-43"><b class="what">ورود به حالت.</b> حالت را می‌گذارد، چراغ را با <code>next == LG_ALARM</code> تنظیم می‌کند (فقط در ALARM روشن) و پیام می‌فرستد. <span class="why">دلیل: اگر هر گذار جداگانه چراغ را عوض می‌کرد، یک روز یکی فراموش می‌شد؛ اینجا حالت و چراغ نمی‌توانند ناسازگار باشند.</span></li>
+  <li data-lines="45-51"><b class="what">خواندن نمونه.</b> اگر HAL بگوید سنسور خراب است، «ERR sensor» می‌فرستیم و برمی‌گردیم؛ آلارم بر پایهٔ عدد نامعتبر ساخته نمی‌شود.</li>
+  <li data-lines="52-54"><b class="what">ثبت.</b> نمونه با لحظه‌اش در بافر می‌رود و شمارنده بالا می‌رود. <span class="why">دلیل: <code>(void)</code> جلوی <code>ring_push</code> یعنی «می‌دانم مقدار برگشتی هست و عمدا نادیده‌اش می‌گیرم» (اینجا به دور ریختن قدیمی‌ترین اهمیتی نمی‌دهیم).</span></li>
+  <li data-lines="56-60"><b class="what">چاپ نمونه.</b> خط «t=۷۶۰۰ T=30.51» از چند تکه ساخته می‌شود.</li>
+  <li data-lines="62-66"><b class="what">منطق آلارم و پسماند.</b> از SAMPLING با <code>≥ high</code> و از ALARM با <code>≤ high - hyst</code>. <span class="why">دلیل: دو آستانهٔ متفاوت برای رفت و برگشت، جلوی لرزش آلارم را می‌گیرد.</span></li>
+  <li data-lines="69-78"><b class="what">STATUS.</b> حالت، تعداد نمونه و آستانه را چاپ می‌کند.</li>
+  <li data-lines="80-90"><b class="what">DUMP.</b> از قدیمی‌ترین تا جدیدترین نمونهٔ بافر با <code>ring_at</code>. حلقه وقتی تمام می‌شود که <code>ring_at</code> <code>false</code> بدهد.</li>
+  <li data-lines="92-120"><b class="what">اجرای فرمان.</b> یک <code>switch</code> روی نوع فرمان. <code>START</code> فقط در IDLE اثر دارد و <code>last_sample_ms</code> را یک دوره عقب می‌برد تا اولین نمونه همین حالا گرفته شود؛ <code>STOP</code> در هر حالتی غیر از IDLE به IDLE می‌رود. <span class="why">دلیل: START در حالتی که ثبت جاری است نباید آن را ریست کند؛ فرمان تکراری بی‌اثر است.</span></li>
+  <li data-lines="122-132"><b class="what">ساخت.</b> همه‌چیز صریح مقداردهی می‌شود (بدون <code>memset</code>)؛ آخر سر چراغ خاموش می‌شود تا حالت اولیهٔ سخت‌افزار معلوم باشد.</li>
+  <li data-lines="134-149"><b class="what">یک دور کار.</b> اول ساعت را می‌خواند، بعد هر نویسهٔ رسیده را به پارسر می‌دهد و هر فرمان کامل را اجرا می‌کند؛ سپس اگر IDLE نیست و ۱۰۰۰ms گذشته، نمونه می‌گیرد. <span class="why">دلیل: <code>(uint32_t)(now - last) &gt;= دوره</code> حتی وقتی ساعت ۳۲ بیتی سرریز کند (هر ۴۹ روز) درست است؛ نوشتن <code>now &gt;= last + دوره</code> در لحظهٔ سرریز غلط می‌شود (درس ۵.۴).</span></li>
+</ol>
+
+
+<h2 id="host">گام ۷: شبیه‌سازی کامل روی PC</h2>
+<p>حالا منطق با سکوی PC کامل می‌شود. <code>hal_host.c</code> یک «کاربر خیالی» دارد که در زمان‌های مشخص فرمان تایپ می‌کند، ساعت ساختگی که <code>main</code> جلو می‌برد، و LED که به‌جای چراغ، خط «[LED ON]» چاپ می‌کند.</p>
+
+<div class="code" data-file="hal_host.h" data-lang="c" data-verify="make" data-project="tlog" id="c13">
+<pre>
+#ifndef HAL_HOST_H
+#define HAL_HOST_H
+
+#include "hal.h"
+
+const hal_t *hal_host_get(void);
+void         hal_host_advance(uint32_t ms);     /* ساعت ساختگی را جلو ببر */
+
+#endif /* HAL_HOST_H */
+</pre></div>
+<ol class="walk" data-for="c13">
+  <li data-lines="1-2,9"><b class="what">نگهبان include.</b></li>
+  <li data-lines="4"><b class="what">قرارداد.</b> این هدر فقط <code>hal.h</code> را می‌شناسد.</li>
+  <li data-lines="6-7"><b class="what">دو تابع عمومی.</b> گرفتن جدول HAL و جلو بردن ساعت ساختگی.</li>
+</ol>
+
+<div class="code" data-file="hal_host.c" data-lang="c" data-verify="make" data-project="tlog" id="c14">
+<pre>
+#include &lt;stdio.h&gt;
+#include "hal_host.h"
+#include "sim_sensor.h"
+
+static uint32_t now_ms;
+
+/* «تایپ‌های کاربر»: هر ورودی در لحظهٔ at_ms به UART می‌رسد */
+static const struct {
+    uint32_t    at_ms;
+    const char *text;
+} script[] = {
+    {   200, "STATUS\n" },
+    {   400, "FOO\n" },
+    {   600, "START\n" },
+    {  8000, "STATUS\n" },
+    { 17000, "DUMP\n" },
+    { 18500, "STOP\n" },
+    { 19000, "STATUS\n" },
+};
+#define SCRIPT_LEN (sizeof script / sizeof script[0])
+
+static size_t entry;                    /* ورودی جاری اسکریپت */
+static size_t pos;                      /* نویسهٔ جاری همان ورودی */
+
+static bool host_getc(char *c)
+{
+    if (entry &gt;= SCRIPT_LEN || now_ms &lt; script[entry].at_ms) {
+        return false;
+    }
+    *c = script[entry].text[pos++];
+    if (script[entry].text[pos] == '\0') {
+        entry++;
+        pos = 0u;
+    }
+    return true;
+}
+
+static void host_write(const char *s)   { fputs(s, stdout); }
+static void host_led(bool on)           { printf("[LED %s]\n", on ? "ON" : "OFF"); }
+static uint32_t host_millis(void)       { return now_ms; }
+
+static const hal_t host_hal = {
+    sim_sensor_read, host_write, host_getc, host_led, host_millis
+};
+
+const hal_t *hal_host_get(void)         { return &amp;host_hal; }
+void hal_host_advance(uint32_t ms)      { now_ms += ms; }
+</pre></div>
+<ol class="walk" data-for="c14">
+  <li data-lines="5"><b class="what">ساعت ساختگی.</b> یک شمارنده که فقط <code>hal_host_advance</code> جلو می‌برد. <span class="why">دلیل: زمان واقعی در تست بد است (کند و غیرقطعی)؛ با ساعت ساختگی ۲۰ ثانیه را در چند میلی‌ثانیه و همیشه یکسان اجرا می‌کنیم.</span></li>
+  <li data-lines="7-20"><b class="what">اسکریپت کاربر.</b> هر سطر: در چه لحظه‌ای چه متنی به UART می‌رسد. جدول <code>const</code> است و اندازه‌اش با <code>sizeof</code> حساب می‌شود، نه با عدد دستی.</li>
+  <li data-lines="22-23"><b class="what">مکان فعلی در اسکریپت.</b> کدام سطر و کدام نویسه.</li>
+  <li data-lines="25-36"><b class="what">دریافت یک نویسه.</b> اگر سطر جاری هنوز وقتش نرسیده یا اسکریپت تمام شده <code>false</code>؛ وگرنه یک نویسه می‌دهد و اگر متن سطر تمام شد، به سطر بعد می‌رود. <span class="why">دلیل: این دقیقا رفتار UART واقعی است؛ «چیزی نیست» و «یک بایت آمد».</span></li>
+  <li data-lines="38-40"><b class="what">سه تابع کوچک.</b> نوشتن روی <code>stdout</code>، چراغ ساختگی، خواندن ساعت.</li>
+  <li data-lines="42-44"><b class="what">پر کردن قرارداد.</b> سنسور از <code>sim_sensor</code> و بقیه از همین فایل.</li>
+  <li data-lines="46-47"><b class="what">تنها دو تابع عمومی.</b> گرفتن جدول HAL و جلو بردن ساعت؛ باقی چیزها <code>static</code> و پنهان‌اند.</li>
+</ol>
+
+<div class="code" data-file="main.c" data-lang="c" data-verify="make" data-project="tlog" id="c15">
+<pre>
+#include &lt;stdio.h&gt;
+#include "hal_host.h"
+#include "logger.h"
+
+int main(void)
+{
+    logger_t lg;
+    logger_init(&amp;lg, hal_host_get());
+
+    for (uint32_t t = 0; t &lt; 20000u; t += 10u) {    /* ۲۰ ثانیهٔ ساختگی، گام ۱۰ms */
+        hal_host_advance(10u);
+        logger_poll(&amp;lg);
+    }
+    printf("-- done: %u samples\n", (unsigned)lg.total);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="c15">
+  <li data-lines="7-8"><b class="what">ساخت.</b> ثبت‌کننده روی پشتهٔ <code>main</code> و متصل به HAL ی PC.</li>
+  <li data-lines="10-13"><b class="what">حلقهٔ شبیه‌سازی.</b> ۲۰ ثانیهٔ ساختگی در گام‌های ۱۰ms: ساعت جلو می‌رود و <code>logger_poll</code> یک دور کار می‌کند. <span class="why">دلیل: این همان «حلقهٔ اصلی» (super loop) میکروکنترلر است، فقط با ساعتی که ما کنترل می‌کنیم.</span></li>
+  <li data-lines="14"><b class="what">گزارش پایانی.</b> تعداد نمونه‌های ثبت‌شده.</li>
+</ol>
+
+<p>یک <code>Makefile</code> همه را یک‌جا می‌بندد. <b>توجه:</b> خط‌های دستور داخل قاعده‌ها باید با <b>Tab</b> شروع شوند، نه فاصله. فایل، هدف <code>check</code> دارد که تست‌ها را اجرا و خروجی برنامه را با <code>expected.txt</code> مقایسه می‌کند؛ و اگر <code>arm-none-eabi-gcc</code> پیدا شد، هدف <code>stm32</code> را هم می‌سازد (بخش بعد).</p>
+
+<div class="code" data-file="Makefile" data-lang="make" data-verify="make" data-project="tlog" id="c16">
+<pre>
+CC      = gcc
+CFLAGS  = -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2
+
+CORE    = logger.c parser.c ringbuf.c temp.c sim_sensor.c
+HDRS    = config.h hal.h hal_host.h logger.h parser.h ringbuf.h sim_sensor.h temp.h
+
+ARM_CC := $(shell command -v arm-none-eabi-gcc 2&gt;/dev/null)
+ARMFLAGS = -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -Wconversion -Os \
+           -ffreestanding -ffunction-sections -fdata-sections
+ARMLINK  = -nostdlib -T link.ld -Wl,--gc-sections -Wl,-Map=tlog_stm32.map
+
+ALL = check
+ifneq ($(ARM_CC),)
+ALL += stm32
+endif
+
+all: $(ALL)
+
+tlog: main.c hal_host.c $(CORE) $(HDRS)
+	$(CC) $(CFLAGS) -o $@ main.c hal_host.c $(CORE)
+
+tlog_test: test_main.c $(CORE) $(HDRS)
+	$(CC) $(CFLAGS) -o $@ test_main.c $(CORE)
+
+check: tlog tlog_test
+	./tlog_test
+	./tlog &gt; actual.txt
+	diff expected.txt actual.txt
+
+stm32: tlog_stm32.elf
+	arm-none-eabi-size tlog_stm32.elf
+
+tlog_stm32.elf: main_stm32.c hal_stm32.c startup.c link.ld $(CORE) $(HDRS) hal_stm32.h
+	arm-none-eabi-gcc $(ARMFLAGS) $(ARMLINK) -o $@ main_stm32.c hal_stm32.c startup.c $(CORE)
+
+clean:
+	rm -f tlog tlog_test actual.txt tlog_stm32.elf tlog_stm32.map
+
+.PHONY: all check stm32 clean
+</pre></div>
+<ol class="walk" data-for="c16">
+  <li data-lines="1-2"><b class="what">کامپایلر PC و پرچم‌های سخت‌گیر.</b> <code>-Wconversion</code> هر تبدیل ضمنی مشکوک (مثلا ۳۲ بیت به ۱۶ بیت) را نشان می‌دهد؛ <code>-Wshadow</code> متغیر هم‌نامِ پوشاننده را. <span class="why">دلیل: باگ‌های «بی‌صدا» در ساختن و اندازه‌گیری عدد‌ها را قبل از اجرا می‌گیرند (درس ۶.۳).</span></li>
+  <li data-lines="4-5"><b class="what">فهرست فایل‌ها.</b> هستهٔ مشترک بین همهٔ سکوها (<code>CORE</code>) و هدرها. هر سکو فقط فایل‌های خودش را اضافه می‌کند.</li>
+  <li data-lines="7-10"><b class="what">تنظیمات ARM.</b> <code>command -v</code> می‌پرسد کامپایلر ARM هست یا نه. پرچم‌های ARM: <code>-Os</code> برای اندازه، <code>-ffreestanding -nostdlib</code> (بدون کتابخانه)، و <code>gc-sections</code> (درس ۶.۵).</li>
+  <li data-lines="12-17"><b class="what">هدف پیش‌فرض.</b> همیشه <code>check</code>؛ اگر ARM باشد <code>stm32</code> هم اضافه می‌شود. <span class="why">دلیل: هر کسی که برد یا کامپایلر ARM ندارد، همچنان <code>make</code> سبز می‌گیرد.</span></li>
+  <li data-lines="19-23"><b class="what">ساخت برنامهٔ PC و برنامهٔ تست.</b> هر دو از <code>$(CORE)</code> استفاده می‌کنند؛ فقط یکی <code>main.c</code> و <code>hal_host.c</code> دارد و دیگری <code>test_main.c</code>.</li>
+  <li data-lines="25-28"><b class="what">هدف check.</b> اول تست‌ها، بعد خروجی برنامه در <code>actual.txt</code> و در آخر <code>diff</code> با مرجع. <span class="why">دلیل: اگر خروجی حتی یک نویسه تغییر کند، <code>diff</code> شکست می‌خورد و <code>make</code> قرمز می‌شود (به این <span class="term" data-t="regression_test">تست رگرسیون</span> می‌گویند).</span></li>
+  <li data-lines="30-34"><b class="what">ساخت STM32.</b> همان <code>$(CORE)</code> به‌علاوهٔ فایل‌های مخصوص STM32؛ سپس <code>arm-none-eabi-size</code>.</li>
+  <li data-lines="36-39"><b class="what">پاک‌سازی و اهداف ساختگی.</b> <code>.PHONY</code> می‌گوید <code>all</code> و <code>check</code> نام فایل نیستند.</li>
+</ol>
+
+<p>خروجی مرجع را ابتدا با اجرای دستی برنامه گرفتیم و خط‌به‌خط بازبینی کردیم که درست است؛ حالا به‌عنوان «حقیقت» در <code>expected.txt</code> می‌ماند:</p>
+
+<div class="code" data-file="expected.txt" data-lang="text" data-verify="make" data-project="tlog" id="c17">
+<pre>
+[LED OFF]
+STATE=IDLE samples=0 high=30.00
+ERR command
+[LED OFF]
+-&gt; SAMPLING
+t=600 T=22.09
+t=1600 T=22.41
+t=2600 T=22.93
+t=3600 T=23.78
+t=4600 T=25.11
+t=5600 T=26.80
+t=6600 T=28.90
+t=7600 T=30.51
+[LED ON]
+-&gt; ALARM
+STATE=ALARM samples=8 high=30.00
+t=8600 T=32.08
+t=9600 T=33.01
+t=10600 T=32.60
+t=11600 T=31.19
+t=12600 T=29.78
+t=13600 T=28.49
+t=14600 T=27.00
+[LED OFF]
+-&gt; SAMPLING
+t=15600 T=25.59
+t=16600 T=24.30
+  1600 22.41
+  2600 22.93
+  3600 23.78
+  4600 25.11
+  5600 26.80
+  6600 28.90
+  7600 30.51
+  8600 32.08
+  9600 33.01
+  10600 32.60
+  11600 31.19
+  12600 29.78
+  13600 28.49
+  14600 27.00
+  15600 25.59
+  16600 24.30
+t=17600 T=23.30
+[LED OFF]
+-&gt; IDLE
+STATE=IDLE samples=18 high=30.00
+-- done: 18 samples
+</pre></div>
+<ol class="walk" data-for="c17">
+  <li data-lines="1"><b class="what">ساخت.</b> ثبت‌کننده چراغ را در ابتدا خاموش می‌کند.</li>
+  <li data-lines="2-3"><b class="what">دو فرمان قبل از START.</b> <code>STATUS</code> حالت IDLE با ۰ نمونه و آستانهٔ ۳۰٫۰۰ می‌گوید. <code>FOO</code> ناشناخته است و «ERR command» می‌گیرد؛ برنامه سالم می‌ماند.</li>
+  <li data-lines="4-5"><b class="what">START.</b> حالت SAMPLING؛ چراغ خاموش.</li>
+  <li data-lines="6-13"><b class="what">هشت نمونه.</b> فاصلهٔ هر نمونه ۱۰۰۰ms (نیازمندی R1). دما بالا می‌رود.</li>
+  <li data-lines="14-15"><b class="what">آلارم.</b> در ۷۶۰۰ms دما ۳۰٫۵۱ شد؛ چراغ روشن و حالت ALARM. اول چراغ و بعد پیام (ترتیب <code>enter_state</code>).</li>
+  <li data-lines="16"><b class="what">STATUS در آلارم.</b> حالت ALARM با ۸ نمونه.</li>
+  <li data-lines="17-23"><b class="what">ادامهٔ آلارم.</b> دما به ۳۳٫۰۱ می‌رسد و پایین می‌آید. در ۱۳۶۰۰ms عدد ۲۸٫۴۹ است و آلارم هنوز روشن (پسماند).</li>
+  <li data-lines="24-25"><b class="what">پایان آلارم.</b> ۲۷٫۰۰ ≤ ۲۸٫۰۰: چراغ خاموش و برگشت به SAMPLING.</li>
+  <li data-lines="28-43"><b class="what">DUMP.</b> ۱۶ سطر از قدیمی‌ترین (۱۶۰۰ms) تا جدیدترین (۱۶۶۰۰ms). نمونهٔ ۶۰۰ms دور ریخته شده چون ۱۷ نمونه گرفته‌ایم (نیازمندی R3).</li>
+  <li data-lines="44-47"><b class="what">نمونهٔ آخر و STOP.</b> بعد از STOP ثبت‌کننده به IDLE می‌رود و <code>STATUS</code> ۱۸ نمونه را گزارش می‌کند.</li>
+  <li data-lines="48"><b class="what">خط پایانی <code>main</code>.</b> ۱۸ نمونه.</li>
+</ol>
+
+<h2 id="tests">گام ۸: تست‌های واحد</h2>
+<p>شبیه‌سازی نشان می‌دهد «یک مسیر» درست است. تست‌های واحد <b>لبه‌ها</b> را می‌آزمایند: ورودی‌های بد، مرزها، حالت‌های نادر. چون منطق با HAL ساختگی می‌گردد، بدون هیچ سخت‌افزاری و در کمتر از یک ثانیه اجرا می‌شود (درس <a href="6-4.html">۶.۴</a>). ما برای بی‌وابستگی بودن، یک ماکروی <code>CHECK</code> ساده نوشتیم؛ در پروژهٔ بزرگ‌تر می‌توانی همین ساختار را با Unity عوض کنی.</p>
+
+<div class="code" data-file="test_main.c" data-lang="c" data-verify="make" data-project="tlog" id="c18">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+#include "logger.h"
+#include "parser.h"
+#include "ringbuf.h"
+#include "temp.h"
+
+static int checks;
+static int failures;
+
+#define CHECK(cond) do { \
+    checks++; \
+    if (!(cond)) { failures++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } \
+} while (0)
+
+/* ---------- HAL ساختگی: همه‌چیز را ضبط می‌کند و هیچ سخت‌افزاری لازم ندارد ---------- */
+static char     uart_out[512];
+static uint16_t next_raw;
+static bool     led;
+static uint32_t clock_ms;
+static const char *input;
+
+static bool     mock_sensor(uint16_t *raw)  { *raw = next_raw; return true; }
+static void     mock_write(const char *s)   { strncat(uart_out, s, sizeof uart_out - strlen(uart_out) - 1u); }
+static bool     mock_getc(char *c)          { if (*input == '\0') { return false; } *c = *input++; return true; }
+static void     mock_led(bool on)           { led = on; }
+static uint32_t mock_millis(void)           { return clock_ms; }
+
+static const hal_t mock_hal = { mock_sensor, mock_write, mock_getc, mock_led, mock_millis };
+
+static void reset_mock(void)
+{
+    uart_out[0] = '\0';
+    led = false;
+    clock_ms = 0u;
+    input = "";
+}
+
+static uint16_t raw_for(int centi)      /* دلخواه‌ترین raw برای یک دمای هدف */
+{
+    for (uint16_t r = 0; r &lt;= ADC_MAX; r++) {
+        if (temp_from_raw(r) &gt;= centi) {
+            return r;
+        }
+    }
+    return ADC_MAX;
+}
+
+static void test_temp(void)
+{
+    char buf[16];
+    CHECK(temp_from_raw(0) == -4000);
+    CHECK(temp_from_raw(ADC_MAX) == 12500);
+    CHECK(temp_from_raw(60000u) == 12500);              /* عدد نامعتبر محدود می‌شود */
+    (void)temp_format(buf, sizeof buf, 2345);
+    CHECK(strcmp(buf, "23.45") == 0);
+    (void)temp_format(buf, sizeof buf, -507);
+    CHECK(strcmp(buf, "-5.07") == 0);
+    (void)temp_format(buf, sizeof buf, 0);
+    CHECK(strcmp(buf, "0.00") == 0);
+    CHECK(temp_format(buf, 4, 12500) == 6u);            /* طول کامل، ولی کوتاه‌شده */
+    CHECK(strcmp(buf, "125") == 0);
+}
+
+static void test_ring(void)
+{
+    ring_t r;
+    sample_t s;
+    ring_init(&amp;r);
+    CHECK(ring_count(&amp;r) == 0u);
+    CHECK(!ring_at(&amp;r, 0u, &amp;s));
+    for (uint32_t i = 0; i &lt; RING_CAPACITY; i++) {
+        CHECK(!ring_push(&amp;r, (sample_t){ i, (centi_t)i }));
+    }
+    CHECK(ring_count(&amp;r) == RING_CAPACITY);
+    CHECK(ring_push(&amp;r, (sample_t){ 99u, 99 }));        /* پر بود: قدیمی‌ترین رفت */
+    CHECK(ring_count(&amp;r) == RING_CAPACITY);
+    CHECK(ring_at(&amp;r, 0u, &amp;s) &amp;&amp; s.t_ms == 1u);         /* صفر دور ریخته شد */
+    CHECK(ring_at(&amp;r, RING_CAPACITY - 1u, &amp;s) &amp;&amp; s.t_ms == 99u);
+    CHECK(!ring_at(&amp;r, RING_CAPACITY, &amp;s));
+}
+
+static bool feed_line(const char *text, cmd_t *out)     /* true اگر خط کامل شد */
+{
+    parser_t p;
+    parser_init(&amp;p);
+    for (const char *q = text; *q != '\0'; q++) {
+        if (parser_feed(&amp;p, *q, out)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void test_parser(void)
+{
+    cmd_t c;
+    CHECK(feed_line("START\n", &amp;c) &amp;&amp; c.kind == CMD_START);
+    CHECK(feed_line("STOP\r", &amp;c) &amp;&amp; c.kind == CMD_STOP);
+    CHECK(feed_line("STATUS\n", &amp;c) &amp;&amp; c.kind == CMD_STATUS);
+    CHECK(feed_line("DUMP\n", &amp;c) &amp;&amp; c.kind == CMD_DUMP);
+    CHECK(feed_line("SET HIGH 35\n", &amp;c) &amp;&amp; c.kind == CMD_SET_HIGH &amp;&amp; c.arg == 35);
+    CHECK(feed_line("SET HIGH -10\n", &amp;c) &amp;&amp; c.kind == CMD_SET_HIGH &amp;&amp; c.arg == -10);
+    CHECK(feed_line("SET HIGH 999\n", &amp;c) &amp;&amp; c.kind == CMD_ERROR);   /* خارج از محدودهٔ دما */
+    CHECK(feed_line("SET HIGH abc\n", &amp;c) &amp;&amp; c.kind == CMD_ERROR);
+    CHECK(feed_line("SET HIGH \n", &amp;c) &amp;&amp; c.kind == CMD_ERROR);
+    CHECK(feed_line("start\n", &amp;c) &amp;&amp; c.kind == CMD_ERROR);          /* حروف کوچک نمی‌پذیریم */
+    CHECK(feed_line("THIS IS WAY TOO LONG FOR THE LINE BUFFER\n", &amp;c) &amp;&amp; c.kind == CMD_ERROR);
+    CHECK(!feed_line("STATUS", &amp;c));                                 /* بدون newline کامل نمی‌شود */
+}
+
+static void run_ms(logger_t *lg, uint32_t ms)
+{
+    for (uint32_t i = 0; i &lt; ms; i += 10u) {
+        clock_ms += 10u;
+        logger_poll(lg);
+    }
+}
+
+static void test_fsm(void)
+{
+    logger_t lg;
+    reset_mock();
+    logger_init(&amp;lg, &amp;mock_hal);
+    CHECK(lg.state == LG_IDLE);
+
+    next_raw = raw_for(2000);
+    run_ms(&amp;lg, 3000u);
+    CHECK(lg.total == 0u);                              /* IDLE: نمونه نمی‌گیرد */
+
+    input = "START\n";
+    run_ms(&amp;lg, 100u);
+    CHECK(lg.state == LG_SAMPLING);
+    CHECK(lg.total == 1u);                              /* اولین نمونه بلافاصله */
+    run_ms(&amp;lg, 2000u);
+    CHECK(lg.total == 3u);                              /* هر ۱۰۰۰ms یک نمونه */
+
+    next_raw = raw_for(3100);                           /* بالای آستانهٔ 30.00 */
+    run_ms(&amp;lg, 1000u);
+    CHECK(lg.state == LG_ALARM);
+    CHECK(led);
+
+    next_raw = raw_for(2900);                           /* زیر آستانه ولی هنوز در باند پسماند */
+    run_ms(&amp;lg, 1000u);
+    CHECK(lg.state == LG_ALARM);
+    CHECK(led);
+
+    next_raw = raw_for(2700);                           /* کاملا پایین‌تر: آلارم تمام می‌شود */
+    run_ms(&amp;lg, 1000u);
+    CHECK(lg.state == LG_SAMPLING);
+    CHECK(!led);
+
+    input = "STOP\n";
+    run_ms(&amp;lg, 100u);
+    CHECK(lg.state == LG_IDLE);
+    CHECK(strstr(uart_out, "-&gt; ALARM") != NULL);
+}
+
+int main(void)
+{
+    test_temp();
+    test_ring();
+    test_parser();
+    test_fsm();
+    if (failures != 0) {
+        printf("%d of %d checks FAILED\n", failures, checks);
+        return 1;
+    }
+    printf("all %d checks passed\n", checks);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="c18">
+  <li data-lines="8-14"><b class="what">ماکروی CHECK.</b> شرط را می‌سنجد و اگر غلط بود فایل، شماره خط و متن شرط را چاپ می‌کند (با <code>#cond</code>). <span class="why">دلیل: <code>do { … } while (0)</code> ماکرو را مثل یک دستور واحد رفتار می‌دهد و با <code>;</code> بعد از آن مشکل نمی‌سازد (درس ۴.۱).</span></li>
+  <li data-lines="16-29"><b class="what">HAL ساختگی.</b> سنسور مقداری را می‌دهد که تست تعیین می‌کند؛ UART خروجی را در یک بافر ضبط و ورودی را از یک متن می‌خواند؛ ساعت را تست جلو می‌برد. <span class="why">دلیل: اینجاست که تزریق وابستگی نتیجه می‌دهد: منطق اصلی بی‌تغییر، ولی محیطش کاملا کنترل‌شده.</span></li>
+  <li data-lines="31-47"><b class="what">کمک‌کننده‌ها.</b> <code>reset_mock</code> و <code>raw_for</code> (ساده‌ترین عدد خام برای رسیدن به یک دمای هدف).</li>
+  <li data-lines="49-63"><b class="what">تست تبدیل دما (R2).</b> دو سر بازه، ورودی نامعتبر، متن‌های مثبت و منفی، و بریدن متن در بافر کوچک.</li>
+  <li data-lines="65-81"><b class="what">تست بافر (R3).</b> پر شدن بدون دور ریختن، بعد یک نمونهٔ اضافه که قدیمی‌ترین را می‌برد و ترتیب را نگه می‌دارد.</li>
+  <li data-lines="83-110"><b class="what">تست پارسر (R5).</b> فرمان‌های درست، اعداد منفی، خارج از محدوده، رشتهٔ غلط، حروف کوچک، خط خیلی بلند و خط ناتمام.</li>
+  <li data-lines="112-118"><b class="what">جلو بردن زمان.</b> هر ۱۰ms ساعت را جلو می‌برد و یک دور کار را اجرا می‌کند.</li>
+  <li data-lines="120-157"><b class="what">تست ماشین حالت (R1 و R4).</b> IDLE نمونه نمی‌گیرد؛ START اولین نمونه را بلافاصله می‌گیرد؛ هر ۱۰۰۰ms یکی؛ بالای آستانه ALARM؛ در باند پسماند هنوز ALARM؛ پایین‌تر SAMPLING؛ و STOP.</li>
+  <li data-lines="159-171"><b class="what">نتیجه.</b> اگر هر شرطی شکست بخورد، برنامه کد خروج ۱ می‌دهد و <code>make</code> قرمز می‌شود.</li>
+</ol>
+
+<p>حالا یک بار <code>make</code> را کامل بزن. این خروجی واقعی همین پروژه روی یک PC لینوکس است (یک <code>make</code> برای ساخت، تست، مقایسه و ساخت STM32):</p>
+<pre class="term" data-nocheck>
+$ make
+gcc -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 -o tlog main.c hal_host.c logger.c parser.c ringbuf.c temp.c sim_sensor.c
+gcc -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 -o tlog_test test_main.c logger.c parser.c ringbuf.c temp.c sim_sensor.c
+./tlog_test
+all 57 checks passed
+./tlog &gt; actual.txt
+diff expected.txt actual.txt
+arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -Wconversion -Os -ffreestanding -ffunction-sections -fdata-sections -nostdlib -T link.ld -Wl,--gc-sections -Wl,-Map=tlog_stm32.map -o tlog_stm32.elf main_stm32.c hal_stm32.c startup.c logger.c parser.c ringbuf.c temp.c sim_sensor.c
+arm-none-eabi-size tlog_stm32.elf
+   text	   data	    bss	    dec	    hex	filename
+   2012	      0	    196	   2208	    8a0	tlog_stm32.elf
+</pre>
+
+<div class="callout tip"><div class="ct">تست‌ها را امتحان کن: «موتاسیون»</div>
+<p>یک آزمون ساده برای اینکه تست‌هایت واقعا کار می‌کنند (به آن <span class="term" data-t="mutation_test">آزمون موتاسیون</span> می‌گویند): عمدا یک باگ کوچک بساز و ببین تست‌ها می‌گیرندش. مثلا در <code>logger.c</code> خط ۶۴ را از <code>&lt;=</code> به <code>&lt;</code> عوض کن؛ در <code>ring_push</code> خط <code>tail++</code> را بردار؛ یا ماسک را حذف کن. اگر <code>make</code> سبز ماند، تست‌هایت سوراخ دارند.</p></div>
+
+<h2 id="stm32">گام ۹: پورت STM32 (Nucleo-F411RE)</h2>
+<p>حالا همان منطق را به میکروکنترلر می‌بریم؛ به این کار <span class="term" data-t="porting">پورت کردن</span> می‌گویند. چه چیزی باید نوشته شود؟ فقط <b>پنج تابع HAL</b> و «چسب» راه‌اندازی که در درس‌های ۵.۱ تا ۵.۵ ساختی. برای سنسور، همان <code>sim_sensor</code> را نگه می‌داریم (برنامه را با موج دمای ساختگی امتحان می‌کنیم؛ جایگزین کردنش با ADC یا BME280، تنها تغییر <code>sensor_read</code> است).</p>
+
+<h3 id="startup">فایل‌های راه‌اندازی</h3>
+<div class="code" data-file="startup.c" data-lang="c" data-verify="make" data-project="tlog" id="c19">
+<pre>
+#include &lt;stdint.h&gt;
+
+extern uint32_t _estack, _sidata, _sdata, _edata, _sbss, _ebss;
+int main(void);
+
+void Reset_Handler(void);
+void Default_Handler(void);
+void NMI_Handler(void)       __attribute__((weak, alias("Default_Handler")));
+void HardFault_Handler(void) __attribute__((weak, alias("Default_Handler")));
+void SysTick_Handler(void)   __attribute__((weak, alias("Default_Handler")));
+
+typedef void (*isr_t)(void);
+
+__attribute__((section(".isr_vector"), used))
+const isr_t vector_table[16] = {
+    (isr_t)&amp;_estack,            /* 0: مقدار اولیهٔ SP */
+    Reset_Handler,              /* 1: نقطهٔ شروع */
+    NMI_Handler,                /* 2 */
+    HardFault_Handler,          /* 3 */
+    0, 0, 0, 0, 0, 0, 0,       /* 4..10: خطاهای دیگر و رزرو */
+    0,                          /* 11: SVC */
+    0, 0, 0,                    /* 12..14 */
+    SysTick_Handler             /* 15: تیک ۱ms ما */
+};
+
+void Reset_Handler(void)
+{
+    uint32_t *src = &amp;_sidata;
+    for (uint32_t *dst = &amp;_sdata; dst &lt; &amp;_edata; ) {
+        *dst++ = *src++;        /* کپی .data از Flash به RAM */
+    }
+    for (uint32_t *dst = &amp;_sbss; dst &lt; &amp;_ebss; ) {
+        *dst++ = 0u;            /* صفر کردن .bss */
+    }
+    main();
+    for (;;) {
+    }
+}
+
+void Default_Handler(void)
+{
+    for (;;) {
+    }
+}
+</pre></div>
+<ol class="walk" data-for="c19">
+  <li data-lines="3-4"><b class="what">نماد‌های لینکر.</b> آدرس بالای پشته و مرزهای <code>.data</code> و <code>.bss</code> از اسکریپت لینکر می‌آیند.</li>
+  <li data-lines="6-10"><b class="what">کنترل‌کننده‌های «ضعیف».</b> <code>weak</code> یعنی اگر کسی تابعی با همین نام تعریف کرد (مثل <code>SysTick_Handler</code> ما در <code>hal_stm32.c</code>)، آن جایگزین می‌شود؛ وگرنه به <code>Default_Handler</code> می‌رسد. <span class="why">دلیل: وقفهٔ فراموش‌شده به‌جای پرش به آدرس خراب، در یک حلقهٔ مشخص می‌ایستد که با دیباگر پیدا می‌شود.</span></li>
+  <li data-lines="12"><b class="what">نوع اشاره‌گر به تابع.</b> هر ورودی جدول همین نوع است.</li>
+  <li data-lines="14-24"><b class="what">جدول ۱۶ ورودی.</b> کلمهٔ ۰ مقدار اولیهٔ SP، کلمهٔ ۱ آدرس <code>Reset_Handler</code>، کلمهٔ ۱۵ <code>SysTick_Handler</code>؛ بقیه صفر (رزرو یا استفاده‌نشده). <span class="why">دلیل: ما فقط SysTick را استفاده می‌کنیم؛ ورودی‌های صفر یعنی اگر آن وقفه‌ها اتفاق بیفتند (نباید بیفتند) پردازنده به‌جای پرش به آدرس معتبر به خطای سخت‌افزاری می‌رسد، که برای خطای برنامه‌نویسی مناسب است. جدول کامل در درس ۵.۱.</span></li>
+  <li data-lines="26-38"><b class="what">Reset_Handler.</b> کپی <code>.data</code>، صفر کردن <code>.bss</code> و صدا زدن <code>main</code>.</li>
+  <li data-lines="40-44"><b class="what">Default_Handler.</b> یک حلقهٔ بی‌پایان.</li>
+</ol>
+
+<div class="code" data-file="link.ld" data-lang="ld" data-verify="make" data-project="tlog" id="c20">
+<pre>
+ENTRY(Reset_Handler)
+_estack = ORIGIN(RAM) + LENGTH(RAM);
+
+MEMORY
+{
+    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 512K
+    RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
+}
+
+SECTIONS
+{
+    .isr_vector : { . = ALIGN(4); KEEP(*(.isr_vector)) . = ALIGN(4); } &gt; FLASH
+    .text       : { . = ALIGN(4); *(.text*) . = ALIGN(4); } &gt; FLASH
+    .rodata     : { . = ALIGN(4); *(.rodata*) . = ALIGN(4); } &gt; FLASH
+    _sidata = LOADADDR(.data);
+    .data : { . = ALIGN(4); _sdata = .; *(.data*) . = ALIGN(4); _edata = .; } &gt; RAM AT &gt; FLASH
+    .bss  : { . = ALIGN(4); _sbss = .; *(.bss*) *(COMMON) . = ALIGN(4); _ebss = .; } &gt; RAM
+    /DISCARD/ : { *(.ARM.exidx*) *(.comment) }
+
+    ASSERT(_ebss + 0x400 &lt;= _estack, "less than 1 KiB left for the stack")
+}
+</pre></div>
+<ol class="walk" data-for="c20">
+  <li data-lines="1-2"><b class="what">ورود و بالای پشته.</b> <code>_estack</code> انتهای RAM.</li>
+  <li data-lines="4-8"><b class="what">ناحیه‌های حافظه.</b> Flash ۵۱۲ کیلوبایت و RAM ۱۲۸ کیلوبایت.</li>
+  <li data-lines="12-14"><b class="what">جدول وقفه، کد و ثابت‌ها در Flash.</b> جدول وقفه اول و با <code>KEEP</code>.</li>
+  <li data-lines="15-16"><b class="what">.data.</b> در RAM ولی تصویرش در Flash.</li>
+  <li data-lines="17"><b class="what">.bss.</b> فقط در RAM.</li>
+  <li data-lines="18"><b class="what">دور ریختنی‌ها.</b> بخش‌های اطلاعاتی که در حافظه لازم نیستند.</li>
+  <li data-lines="20"><b class="what">نگهبان پشته.</b> اگر <code>.data + .bss</code> آن‌قدر بزرگ شود که کمتر از ۱ کیلوبایت برای پشته بماند، <b>لینک شکست می‌خورد</b>. <span class="why">دلیل: پشته و متغیرهای سراسری بی‌صدا روی هم می‌افتند و باگی می‌سازند که پیدا کردنش یک هفته طول می‌کشد؛ خطای زمان لینک ده برابر ارزان‌تر است.</span></li>
+</ol>
+
+<h3 id="halstm">لایهٔ پورت: <span class="en">hal_stm32</span></h3>
+<p>این فایل تنها جایی است که <b>رجیستر</b> دیده می‌شود. هر <code>#define</code> آدرس یک رجیستر را می‌دهد (پایه‌ها و آفست‌ها مطابق RM0383 STM32F411؛ همان‌هایی که در درس‌های ۵.۲ و ۵.۵ استفاده کردی):</p>
+<div class="widget" data-w="bits" data-width="16" data-reg="USART2_CR1" data-value="0" data-title="USART2_CR1 (0x4000440C): روشن کردن UART" data-fields='[{"name":"UE","hi":13,"lo":13,"map":["USART خاموش","USART روشن"]},{"name":"TE","hi":3,"lo":3,"map":["فرستنده خاموش","فرستنده روشن"]},{"name":"RE","hi":2,"lo":2,"map":["گیرنده خاموش","گیرنده روشن"]}]'></div>
+<p>سه بیت <code>UE</code> (بیت ۱۳)، <code>TE</code> (بیت ۳) و <code>RE</code> (بیت ۲) را روشن کن؛ عدد رجیستر می‌شود <code>0x200C</code>. این همان <code>CR1_UE | CR1_TE | CR1_RE</code> در کد است.</p>
+
+<div class="code" data-file="hal_stm32.h" data-lang="c" data-verify="make" data-project="tlog" id="c21">
+<pre>
+#ifndef HAL_STM32_H
+#define HAL_STM32_H
+
+#include "hal.h"
+
+const hal_t *hal_stm32_init(void);      /* ساعت‌ها، UART، LED و SysTick را راه می‌اندازد */
+
+#endif /* HAL_STM32_H */
+</pre></div>
+<ol class="walk" data-for="c21">
+  <li data-lines="1-2,8"><b class="what">نگهبان include.</b></li>
+  <li data-lines="6"><b class="what">تنها یک تابع.</b> سخت‌افزار را راه می‌اندازد و جدول HAL را می‌دهد؛ هرچه رجیستر است در <code>.c</code> می‌ماند.</li>
+</ol>
+
+<div class="code" data-file="hal_stm32.c" data-lang="c" data-verify="make" data-project="tlog" id="c22">
+<pre>
+#include "hal_stm32.h"
+#include "sim_sensor.h"
+
+#define RCC_AHB1ENR (*(volatile uint32_t *)0x40023830u)
+#define RCC_APB1ENR (*(volatile uint32_t *)0x40023840u)
+#define GPIOA_MODER (*(volatile uint32_t *)0x40020000u)
+#define GPIOA_BSRR  (*(volatile uint32_t *)0x40020018u)
+#define GPIOA_AFRL  (*(volatile uint32_t *)0x40020020u)
+#define USART2_SR   (*(volatile uint32_t *)0x40004400u)
+#define USART2_DR   (*(volatile uint32_t *)0x40004404u)
+#define USART2_BRR  (*(volatile uint32_t *)0x40004408u)
+#define USART2_CR1  (*(volatile uint32_t *)0x4000440Cu)
+#define SYST_CSR    (*(volatile uint32_t *)0xE000E010u)
+#define SYST_RVR    (*(volatile uint32_t *)0xE000E014u)
+#define SYST_CVR    (*(volatile uint32_t *)0xE000E018u)
+
+#define SR_RXNE     (1u &lt;&lt; 5)
+#define SR_TXE      (1u &lt;&lt; 7)
+#define CR1_RE      (1u &lt;&lt; 2)
+#define CR1_TE      (1u &lt;&lt; 3)
+#define CR1_UE      (1u &lt;&lt; 13)
+#define LED_PIN     5u                          /* LD2 روی Nucleo = PA5 */
+#define CPU_HZ      16000000u                   /* HSI پیش‌فرض */
+#define BAUD        115200u
+
+static volatile uint32_t g_ms;
+
+void SysTick_Handler(void)
+{
+    g_ms++;                                     /* هر ۱ms یک بار */
+}
+
+static uint32_t stm_millis(void)
+{
+    return g_ms;                                /* خواندن ۳۲ بیتی روی Cortex-M اتمیک است */
+}
+
+static void stm_led(bool on)
+{
+    GPIOA_BSRR = on ? (1u &lt;&lt; LED_PIN) : (1u &lt;&lt; (LED_PIN + 16u));
+}
+
+static void stm_write(const char *s)
+{
+    for (; *s != '\0'; s++) {
+        while ((USART2_SR &amp; SR_TXE) == 0u) {
+        }
+        USART2_DR = (uint32_t)(uint8_t)*s;
+    }
+}
+
+static bool stm_getc(char *c)
+{
+    if ((USART2_SR &amp; SR_RXNE) == 0u) {
+        return false;
+    }
+    *c = (char)(USART2_DR &amp; 0xFFu);             /* خواندن DR پرچم RXNE را پاک می‌کند */
+    return true;
+}
+
+static const hal_t stm_hal = {
+    sim_sensor_read, stm_write, stm_getc, stm_led, stm_millis
+};
+
+const hal_t *hal_stm32_init(void)
+{
+    RCC_AHB1ENR |= 1u &lt;&lt; 0;                     /* ساعت GPIOA */
+    RCC_APB1ENR |= 1u &lt;&lt; 17;                    /* ساعت USART2 */
+    (void)RCC_APB1ENR;                          /* خواندن برگشتی: صبر تا ساعت برسد */
+
+    GPIOA_MODER = (GPIOA_MODER &amp; ~((3u &lt;&lt; 4) | (3u &lt;&lt; 6) | (3u &lt;&lt; 10)))
+                | (2u &lt;&lt; 4) | (2u &lt;&lt; 6)         /* PA2, PA3 = تابع جایگزین */
+                | (1u &lt;&lt; 10);                   /* PA5 = خروجی */
+    GPIOA_AFRL  = (GPIOA_AFRL &amp; ~((0xFu &lt;&lt; 8) | (0xFu &lt;&lt; 12))) | (7u &lt;&lt; 8) | (7u &lt;&lt; 12);
+
+    USART2_BRR = (CPU_HZ + BAUD / 2u) / BAUD;   /* 139 = 0x8B */
+    USART2_CR1 = CR1_UE | CR1_TE | CR1_RE;
+
+    SYST_CSR = 0u;
+    SYST_RVR = CPU_HZ / 1000u - 1u;             /* ۱ms */
+    SYST_CVR = 0u;
+    SYST_CSR = 7u;                              /* ENABLE | TICKINT | CLKSOURCE */
+    return &amp;stm_hal;
+}
+</pre></div>
+<ol class="walk" data-for="c22">
+  <li data-lines="4-15"><b class="what">آدرس رجیسترها.</b> <code>RCC_AHB1ENR</code> (ساعت GPIO)، <code>RCC_APB1ENR</code> (ساعت USART2)، <code>GPIOA_MODER</code> (حالت پایه)، <code>GPIOA_BSRR</code> (تنظیم/پاک‌کردن بیت‌ها)، <code>GPIOA_AFRL</code> (تابع جایگزین)، چهار رجیستر USART2 و سه رجیستر SysTick. <span class="why">دلیل: <code>volatile</code> لازم است تا کامپایلر هر خواندن و نوشتن را دست‌نخورده نگه دارد (درس ۳.۶).</span></li>
+  <li data-lines="17-21"><b class="what">بیت‌ها.</b> <code>RXNE</code> (بیت ۵ SR، «داده رسید»)، <code>TXE</code> (بیت ۷ SR، «فرستنده آماده»)، و بیت‌های <code>RE</code>، <code>TE</code>، <code>UE</code> در CR1.</li>
+  <li data-lines="22-24"><b class="what">تنظیمات برد.</b> LD2 روی PA5؛ کلاک HSI ۱۶ مگاهرتز؛ نرخ ۱۱۵۲۰۰.</li>
+  <li data-lines="26-31"><b class="what">تیک ۱ms.</b> <code>g_ms</code> <code>volatile</code> است چون وقفه آن را عوض می‌کند و حلقهٔ اصلی می‌خواند؛ هر بار که SysTick تمام شود یکی زیاد می‌شود. <span class="why">دلیل: بدون <code>volatile</code>، کامپایلر مقدار را در رجیستر نگه می‌داشت و <code>millis()</code> هیچ‌وقت عوض نمی‌شد (درس ۵.۳).</span></li>
+  <li data-lines="33-36"><b class="what">millis.</b> خواندن یک کلمهٔ ۳۲ بیتی روی Cortex-M یک دستور است، پس وسط خواندن وقفه نصفه‌کاره نمی‌بُرد.</li>
+  <li data-lines="38-41"><b class="what">LED.</b> با <code>BSRR</code>: بیت ۵ = روشن، بیت ۲۱ (۵ + ۱۶) = خاموش. <span class="why">دلیل: نوشتن در BSRR فقط بیت‌های ۱ را اثر می‌دهد؛ نیازی به خواندن-تغییر-نوشتن نیست و اگر وسط کار وقفه بیاید پایهٔ دیگری خراب نمی‌شود (درس ۵.۲).</span></li>
+  <li data-lines="43-50"><b class="what">ارسال.</b> برای هر نویسه صبر می‌کنیم <code>TXE</code> روشن شود و بعد آن را در <code>DR</code> می‌نویسیم. <span class="why">دلیل: نوشتن قبل از خالی شدن، نویسهٔ قبلی را خراب می‌کند. این «ارسال با انتظار» ساده است ولی حلقهٔ اصلی را در حین ارسال مشغول می‌کند (ایدهٔ توسعه: بافر ارسال با وقفه).</span></li>
+  <li data-lines="52-59"><b class="what">دریافت بدون انتظار.</b> اگر <code>RXNE</code> روشن نیست <code>false</code>؛ وگرنه <code>DR</code> را می‌خواند (خواندن DR پرچم را پاک می‌کند). <span class="why">دلیل: این همان قراردادی است که <code>hal.h</code> خواسته. چون منطق هر دور <code>uart_getc</code> را تا خالی شدن صدا می‌زند و هر نویسه در ۱۱۵۲۰۰ باود حدود ۸۷ میکروثانیه طول می‌کشد، در حالت عادی چیزی از دست نمی‌رود. محدودیت: اگر حین ارسال طولانی (مثلا <code>DUMP</code>) سریع تایپ کنی، نویسه‌ای ممکن است از دست برود (خطای Overrun)؛ راه‌حلش وقفهٔ دریافت و بافر حلقوی است (ایدهٔ توسعه).</span></li>
+  <li data-lines="61-63"><b class="what">پر کردن قرارداد.</b> سنسور از <code>sim_sensor</code>، بقیه از همین فایل.</li>
+  <li data-lines="67-69"><b class="what">ساعت‌ها.</b> GPIOA (بیت ۰ AHB1ENR) و USART2 (بیت ۱۷ APB1ENR) روشن می‌شوند؛ خواندن برگشتی تا رسیدن ساعت. <span class="why">دلیل: تا ساعت برنامه نرسد، نوشتن در رجیستر اثری ندارد.</span></li>
+  <li data-lines="71-74"><b class="what">پایه‌ها.</b> PA2 و PA3 «تابع جایگزین ۷» (USART2 TX و RX؛ به ST-LINK وصل‌اند) و PA5 خروجی.</li>
+  <li data-lines="76-77"><b class="what">نرخ و روشن کردن UART.</b> <code>BRR = (16 000 000 + 57 600) / 115 200 = 139 = 0x8B</code>؛ سپس UE، TE و RE.</li>
+  <li data-lines="79-82"><b class="what">SysTick.</b> <code>LOAD = 15999</code> (۱۶۰۰۰ چرخه = ۱ms)، شمارنده صفر، و <code>CSR = 7</code>: فعال + وقفه + کلاک پردازنده.</li>
+</ol>
+
+<div class="code" data-file="main_stm32.c" data-lang="c" data-verify="make" data-project="tlog" id="c23">
+<pre>
+#include "hal_stm32.h"
+#include "logger.h"
+
+int main(void)
+{
+    static logger_t lg;                         /* static: در .bss، نه روی پشته */
+    logger_init(&amp;lg, hal_stm32_init());
+    for (;;) {
+        logger_poll(&amp;lg);
+    }
+}
+</pre></div>
+<ol class="walk" data-for="c23">
+  <li data-lines="6"><b class="what">ثبت‌کنندهٔ ایستا.</b> <code>static</code> یعنی در <code>.bss</code> می‌نشیند، نه روی پشته. <span class="why">دلیل: ۱۸۸ بایت روی پشتهٔ کوچک ارزش ندارد و <code>main</code> هرگز برنمی‌گردد؛ با <code>static</code> اندازه‌اش هنگام لینک در گزارش <code>size</code> دیده می‌شود.</span></li>
+  <li data-lines="7"><b class="what">ساخت.</b> <code>hal_stm32_init()</code> سخت‌افزار را راه می‌اندازد و جدول HAL را می‌دهد.</li>
+  <li data-lines="8-10"><b class="what">حلقهٔ بی‌پایان.</b> هر دور یک <code>logger_poll</code>. کل «برنامه» همین چند خط است.</li>
+</ol>
+
+<p>ساختن در خط فرمان: همان <code>make</code> کار می‌کند؛ یا فقط هدف ARM:</p>
+<pre class="term" data-nocheck>
+$ make stm32
+arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -Wconversion -Os -ffreestanding -ffunction-sections -fdata-sections -nostdlib -T link.ld -Wl,--gc-sections -Wl,-Map=tlog_stm32.map -o tlog_stm32.elf main_stm32.c hal_stm32.c startup.c logger.c parser.c ringbuf.c temp.c sim_sensor.c
+arm-none-eabi-size tlog_stm32.elf
+   text	   data	    bss	    dec	    hex	filename
+   2012	      0	    196	   2208	    8a0	tlog_stm32.elf
+</pre>
+<p>برای اجرا روی برد (با ST-LINK روی Nucleo؛ نام ابزارها به سیستم تو بستگی دارد):</p>
+<div class="code" data-lang="sh" id="sh1">
+<pre>
+arm-none-eabi-objcopy -O binary tlog_stm32.elf tlog_stm32.bin
+st-flash write tlog_stm32.bin 0x8000000       # یا با OpenOCD / STM32CubeProgrammer
+screen /dev/ttyACM0 115200                    # پورت سریال مجازی ST-LINK؛ در ویندوز COMx
+</pre></div>
+<ol class="walk" data-for="sh1">
+  <li data-lines="1"><b class="what">ساخت فایل باینری.</b> از ELF فقط بایت‌های Flash را بیرون می‌کشد.</li>
+  <li data-lines="2"><b class="what">برنامه‌ریزی Flash.</b> <code>0x8000000</code> آغاز Flash است. هر ابزار دیگری (OpenOCD، STM32CubeProgrammer) هم همین کار را می‌کند.</li>
+  <li data-lines="3"><b class="what">ترمینال.</b> ۱۱۵۲۰۰ باود، ۸ بیت داده، بدون توازن (8N1). حالا <code>START</code> و Enter را تایپ کن. ترمینال‌ها معمولا <code>\r</code> می‌فرستند و پارسر ما هر دو <code>\r</code> و <code>\n</code> را می‌پذیرد.</li>
+</ol>
+
+<div class="callout warn"><div class="ct">اگر چیزی چاپ نشد</div>
+<p>فهرست بررسی: (۱) اتصال PA2/PA3 به ST-LINK برقرار باشد (روی بردهای Nucleo-64 معمولا با جامپرهای SB13 و SB14؛ راهنمای بردت را ببین)؛ (۲) نرخ ترمینال ۱۱۵۲۰۰ باشد؛ (۳) بعد از <code>RCC_APB1ENR</code> برگشتی خوانده باشی؛ (۴) اگر کلاک را به PLL تغییر دادی، <code>CPU_HZ</code> و محاسبهٔ <code>BRR</code> باید عوض شوند (USART2 روی APB1 است و کلاکش می‌تواند نصف یا یک‌چهارم کلاک CPU باشد)؛ (۵) با تحلیلگر منطقی روی PA2 نگاه کن (درس ۶.۱).</p></div>
+
+<h2 id="esp32">گام ۱۰: پورت ESP32 (ESP-IDF v5.x)</h2>
+<p>در ESP32 <b>هیچ رجیستری</b> نمی‌نویسیم؛ ESP-IDF این‌ها را در <code>driver/gpio.h</code> و <code>driver/uart.h</code> پوشانده. منطق ما (<code>logger.c</code> و بقیه) بدون تغییر همان است. فقط سه چیز جدید داریم: یک فایل HAL، یک <code>app_main</code> که یک تسک FreeRTOS می‌سازد، و فایل‌های <code>CMakeLists.txt</code>.</p>
+<div class="callout warn"><div class="ct">این بخش در محیط ما کامپایل نشد</div>
+<p>ESP-IDF در محیط نوشتن این درس نصب نبود؛ پس قطعه‌های این بخش فقط <b>محتاطانه</b> و مطابق مستندات ESP-IDF نسخهٔ ۵ نوشته شده‌اند (نه اجرا‌شده). اگر خطایی دیدی، اول نام تابع‌ها و پارامترها را در «مستندات رسمی ESP-IDF» نسخهٔ خودت وارسی کن.</p></div>
+
+<div class="code" data-file="hal_esp32.h" data-lang="c" data-verify="frag" id="c24">
+<pre>
+#ifndef HAL_ESP32_H
+#define HAL_ESP32_H
+
+#include "hal.h"
+
+const hal_t *hal_esp32_init(void);
+
+#endif /* HAL_ESP32_H */
+</pre></div>
+<ol class="walk" data-for="c24">
+  <li data-lines="6"><b class="what">تابع راه‌اندازی.</b> همتای <code>hal_stm32_init</code> با همان شکل.</li>
+</ol>
+
+<div class="code" data-file="hal_esp32.c" data-lang="c" data-verify="frag" id="c25">
+<pre>
+#include &lt;string.h&gt;
+#include "driver/gpio.h"
+#include "driver/uart.h"
+#include "esp_timer.h"
+#include "hal_esp32.h"
+#include "sim_sensor.h"
+
+#define LED_GPIO   GPIO_NUM_2               /* روی بسیاری از DevKit ها؛ برد خودت را چک کن */
+#define UART_PORT  UART_NUM_0               /* همان UART کنسول (USB) */
+
+static bool esp_getc(char *c)
+{
+    uint8_t b;
+    int n = uart_read_bytes(UART_PORT, &amp;b, 1, 0);   /* 0 = بدون انتظار */
+    if (n != 1) {
+        return false;
+    }
+    *c = (char)b;
+    return true;
+}
+
+static void esp_write(const char *s)
+{
+    uart_write_bytes(UART_PORT, s, strlen(s));
+}
+
+static void esp_led(bool on)
+{
+    gpio_set_level(LED_GPIO, on ? 1 : 0);
+}
+
+static uint32_t esp_millis(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 1000);   /* میکروثانیه به میلی‌ثانیه */
+}
+
+static const hal_t esp_hal = {
+    sim_sensor_read, esp_write, esp_getc, esp_led, esp_millis
+};
+
+const hal_t *hal_esp32_init(void)
+{
+    gpio_config_t io = {
+        .pin_bit_mask = 1ULL &lt;&lt; LED_GPIO,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&amp;io);
+    uart_driver_install(UART_PORT, 256, 0, 0, NULL, 0);   /* بافر دریافت ۲۵۶ بایت */
+    return &amp;esp_hal;
+}
+</pre></div>
+<ol class="walk" data-for="c25">
+  <li data-lines="1-6"><b class="what">هدرها.</b> UART و GPIO از <code>driver/</code>، ساعت از <code>esp_timer.h</code>، قرارداد و سنسور ساختگی از پروژهٔ خودمان.</li>
+  <li data-lines="8-9"><b class="what">تنظیمات برد.</b> LED روی <code>GPIO2</code> (روی بسیاری از DevKit ها؛ روی برد تو ممکن است فرق کند) و UART شمارهٔ ۰ که همان کنسول USB است.</li>
+  <li data-lines="11-20"><b class="what">دریافت بدون انتظار.</b> <code>uart_read_bytes</code> با «صفر تیک انتظار» فورا برمی‌گردد؛ اگر بایتی نبود <code>false</code>. <span class="why">دلیل: همان قراردادی که <code>hal.h</code> خواسته؛ اگر منتظر می‌ماند، تسک ما بی‌جهت بلاک می‌شد.</span></li>
+  <li data-lines="22-25"><b class="what">ارسال.</b> <code>uart_write_bytes</code> رشته را به صف ارسال درایور می‌دهد.</li>
+  <li data-lines="27-30"><b class="what">LED.</b> <code>gpio_set_level</code> با ۰ یا ۱.</li>
+  <li data-lines="32-35"><b class="what">ساعت.</b> <code>esp_timer_get_time()</code> میکروثانیه می‌دهد؛ تقسیم بر ۱۰۰۰ می‌شود میلی‌ثانیه و برای <code>uint32_t</code> هر ۴۹ روز سرریز می‌کند، همان‌طور که منطق ما انتظار دارد.</li>
+  <li data-lines="37-39"><b class="what">پر کردن قرارداد.</b> همان پنج تابع.</li>
+  <li data-lines="41-53"><b class="what">راه‌اندازی.</b> LED را خروجی می‌کند (<code>gpio_config</code>) و درایور UART را با بافر دریافت ۲۵۶ بایت نصب می‌کند. <span class="why">دلیل: درایور UART یک بافر دریافت لازم دارد بزرگ‌تر از FIFO سخت‌افزار (۱۲۸ بایت)؛ ۲۵۶ انتخاب محافظه‌کارانه است.</span></li>
+</ol>
+
+<div class="code" data-file="main_esp32.c" data-lang="c" data-verify="frag" id="c26">
+<pre>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "hal_esp32.h"
+#include "logger.h"
+
+static void logger_task(void *arg)
+{
+    (void)arg;
+    static logger_t lg;
+    logger_init(&amp;lg, hal_esp32_init());
+    for (;;) {
+        logger_poll(&amp;lg);
+        vTaskDelay(pdMS_TO_TICKS(10));      /* به بقیهٔ تسک‌ها فرصت بده */
+    }
+}
+
+void app_main(void)
+{
+    xTaskCreate(logger_task, "logger", 4096, NULL, 5, NULL);
+}
+</pre></div>
+<ol class="walk" data-for="c26">
+  <li data-lines="1-4"><b class="what">هدرها.</b> FreeRTOS، HAL ی ESP32 و منطق.</li>
+  <li data-lines="6-15"><b class="what">تسک ثبت‌کننده.</b> ثبت‌کننده یک‌بار ساخته می‌شود و بعد در حلقه <code>logger_poll</code> و <code>vTaskDelay</code> ۱۰ms. <span class="why">دلیل: <code>vTaskDelay</code> تسک را می‌خواباند و به بقیهٔ تسک‌ها (و کارهای پس‌زمینهٔ سیستم) CPU می‌دهد؛ حلقهٔ بی‌وقفه‌ی <code>while(1)</code> بدون آن، Watchdog را گرسنه می‌کرد.</span></li>
+  <li data-lines="17-20"><b class="what">app_main.</b> نقطهٔ شروع ESP-IDF؛ فقط تسک را می‌سازد. پشتهٔ ۴۰۹۶ بایتی (کلمه‌ها/بایت‌ها بسته به نسخه؛ مستندات <code>xTaskCreate</code> را ببین) و اولویت ۵.</li>
+</ol>
+
+<p>دو فایل CMake لازم است. اولی در ریشهٔ پروژه، دومی در پوشهٔ <code>main/</code> کنار فایل‌های منبع؛ فایل‌های هسته (<code>logger.c</code>، <code>parser.c</code>، <code>ringbuf.c</code>، <code>temp.c</code>، <code>sim_sensor.c</code> و همهٔ هدرها) را به <code>main/</code> کپی کن:</p>
+<div class="code" data-file="CMakeLists.txt" data-lang="cmake" data-verify="frag" id="c27">
+<pre>
+cmake_minimum_required(VERSION 3.16)
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(tlog)
+</pre></div>
+<div class="code" data-file="CMakeLists.txt" data-lang="cmake" data-verify="frag" id="c28">
+<pre>
+idf_component_register(
+    SRCS "main_esp32.c" "hal_esp32.c" "logger.c" "parser.c" "ringbuf.c" "temp.c" "sim_sensor.c"
+    INCLUDE_DIRS "."
+)
+</pre></div>
+<ol class="walk" data-for="c28">
+  <li data-lines="1-4"><b class="what">ثبت کامپوننت.</b> فهرست منبع‌ها و اینکه هدرها کنار همین پوشه‌اند.</li>
+</ol>
+<div class="code" data-lang="sh" id="sh2">
+<pre>
+idf.py set-target esp32
+idf.py build
+idf.py -p /dev/ttyUSB0 flash monitor
+</pre></div>
+<ol class="walk" data-for="sh2">
+  <li data-lines="1"><b class="what">انتخاب تراشه.</b> یک‌بار برای پروژه.</li>
+  <li data-lines="2"><b class="what">ساخت.</b> ESP-IDF با CMake و Ninja همهٔ منبع‌ها را می‌سازد.</li>
+  <li data-lines="3"><b class="what">برنامه‌ریزی و مانیتور.</b> نام پورت بسته به سیستم فرق می‌کند (در ویندوز <code>COMx</code>). در مانیتور <code>START</code> و Enter را تایپ کن؛ برای خروج <code>Ctrl+]</code>.</li>
+</ol>
+
+<h2 id="size">اندازه‌گیری نهایی (درس ۶.۵ را به‌کار ببر)</h2>
+<p>قبل از اینکه کار را تمام‌شده بدانی، مصرف منابع را با ابزارهای درس قبل ثبت کن؛ نیازمندی R8 می‌گوید Flash کمتر از ۴ کیلوبایت و RAM کمتر از ۵۱۲ بایت. عددهای واقعی این پروژه روی STM32F411:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>ساخت</th><th>Flash (<code>text + data</code>)</th><th>RAM (<code>data + bss</code>)</th><th>وضعیت R8</th></tr></thead>
+<tbody>
+<tr><td><code>-Os</code> با <code>gc-sections</code></td><td>۲۰۱۲ بایت</td><td>۱۹۶ بایت</td><td>قبول (کمتر از ۴۰۹۶ و ۵۱۲)</td></tr>
+<tr><td><code>-O0</code></td><td>۳۵۸۰ بایت</td><td>۱۹۶ بایت</td><td>قبول، ولی نزدیک مرز Flash</td></tr>
+</tbody></table></div>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-nm --size-sort -S tlog_stm32.elf | tail -8
+080005c4 00000068 T u32_to_dec
+0800062c 0000008e T temp_format
+20000000 000000bc b lg.0
+08000438 00000108 T parser_feed
+080001fc 00000218 T logger_poll
+</pre>
+<p>چند نکته از این عددها: (۱) بیشترین Flash را <code>logger_poll</code> می‌خورد (۵۳۶ بایت)، چون کامپایلر <code>handle_command</code>، <code>take_sample</code> و چاپ‌ها را داخلش inline کرده است. (۲) بیشترین RAM همان ثبت‌کننده <code>lg.0</code> است: ۱۸۸ بایت (۱۶ نمونهٔ ۸ بایتی = ۱۲۸، به‌علاوهٔ پارسر، شمارنده‌ها و اشاره‌گر). ۴ بایت <code>g_ms</code> و ۴ بایت شمارندهٔ سنسور ساختگی، مجموع را ۱۹۶ می‌کنند. (۳) با <code>-fstack-usage</code>، بلندترین زنجیرهٔ فراخوانی <code>main</code> ← <code>logger_poll</code> ← <code>say_temp</code> ← <code>temp_format</code> ← <code>u32_to_dec</code> جمعا حدود ۸ + ۵۶ + ۲۴ + ۴۸ + ۴۸ = ۱۸۴ بایت پشته می‌خواهد (به‌اضافهٔ ۳۲ بایت برای هر وقفه)؛ نگهبان ۱ کیلوبایتی ما با فاصلهٔ خوب برقرار است. (۴) نه <code>printf</code> داریم، نه <code>float</code>، نه <code>malloc</code>: همین‌ها بودند که در درس ۶.۵ اندازه را هزاران بایت بالا می‌بردند.</p>
+
+<h2 id="rubric">Rubric: خودت را نمره بده</h2>
+<p><span class="term" data-t="rubric">Rubric</span> جدولی است که «کیفیت» را به معیار قابل‌سنجش تبدیل می‌کند. هر ردیف را صادقانه از ۰ تا ۳ نمره بده. اگر کسی دیگر (یا خودت شش ماه بعد) کد را بخواند، همان نمره را می‌دهد؟</p>
+<div class="table-wrap"><table>
+<thead><tr><th>معیار</th><th>۰ (نیست)</th><th>۱ (ضعیف)</th><th>۲ (خوب)</th><th>۳ (حرفه‌ای)</th></tr></thead>
+<tbody>
+<tr><td><b>کارکرد</b></td><td>ساخته نمی‌شود</td><td>فقط مسیر شاد کار می‌کند</td><td>R1 تا R5 در شبیه‌سازی درست‌اند</td><td>همه به‌علاوهٔ حالت‌های خطا (سنسور خراب، ورودی بد)</td></tr>
+<tr><td><b>تست</b></td><td>بدون تست</td><td>چاپ و نگاه‌کردن با چشم</td><td>تست خودکار برای هر ماژول</td><td>تست مرز و خطا، رگرسیون با <code>diff</code>، و «موتاسیون» را امتحان کرده‌ای</td></tr>
+<tr><td><b>معماری</b></td><td>همه‌چیز در <code>main.c</code></td><td>ماژول‌ها هست ولی وابستگی دوطرفه</td><td>پیکان‌ها رو به پایین؛ HAL جدا</td><td>منطق هیچ هدر سخت‌افزاری ندارد؛ تزریق وابستگی؛ مالکیت داده‌ها روشن</td></tr>
+<tr><td><b>ایمنی</b></td><td>هشدار زیاد</td><td>بدون هشدار با <code>-Wall</code></td><td>بدون هشدار با <code>-Wextra -Wconversion</code></td><td>به‌علاوهٔ <code>cppcheck</code> یا sanitizer تمیز و بدون رفتار تعریف‌نشده (درس‌های ۶.۲ و ۶.۳)</td></tr>
+<tr><td><b>منابع</b></td><td>اندازه نگرفته‌ای</td><td>یک بار <code>size</code> گرفتی</td><td>Flash و RAM ثبت‌شده و مقایسه با بودجه</td><td>بزرگ‌ترین مصرف‌کننده‌ها را با map شناختی و پشته را با <code>-fstack-usage</code> اندازه گرفتی</td></tr>
+<tr><td><b>پورت</b></td><td>فقط PC</td><td>STM32 یا ESP32 ساخته می‌شود ولی اجرا نشده</td><td>یک سکو روی برد کار می‌کند</td><td>هر دو سکو، با فقط یک فایل جدید برای هر کدام</td></tr>
+<tr><td><b>خوانایی</b></td><td>نام‌های <code>a</code>، <code>x1</code></td><td>نام‌ها خوب، کامنت کم/زیاد</td><td>نام معنی‌دار، کامنت «چرا» نه «چه»</td><td>عددهای جادویی در <code>config.h</code>؛ توابع کوتاه؛ سبک یکدست</td></tr>
+<tr><td><b>مستندات</b></td><td>هیچ</td><td>چند خط در README</td><td>چطور ساخت/اجرا و نیازمندی‌ها</td><td>معماری، محدودیت‌ها، نتایج اندازه‌گیری و «کارهای آینده»</td></tr>
+</tbody></table></div>
+<p><b>نمره‌گذاری (از ۲۴):</b> ۰ تا ۸ «شروع»؛ ۹ تا ۱۶ «خوب: کار می‌کند و قابل نگهداری است»؛ ۱۷ تا ۲۱ «حرفه‌ای»؛ ۲۲ تا ۲۴ «آماده برای نشان دادن در مصاحبه یا نمونه‌کار». صادق باش: ردیفی را که نمی‌دانی چه نمره‌ای بگیرد، ۱ بده و همان را اول بهتر کن.</p>
+
+<h3 id="checklist">چک‌لیست نهایی قبل از «تمام شد» گفتن</h3>
+<ul>
+  <li>☐ <code>make</code> بدون هیچ هشداری سبز می‌شود (PC؛ و ARM اگر کامپایلرش را داری)</li>
+  <li>☐ تست‌ها ورودی بد و مرز را می‌آزمایند، نه فقط مسیر درست</li>
+  <li>☐ یک باگ عمدی (موتاسیون) توسط تست‌ها گرفته شد</li>
+  <li>☐ <code>logger.c</code>، <code>parser.c</code>، <code>ringbuf.c</code> و <code>temp.c</code> هیچ <code>#include</code> سخت‌افزاری و هیچ <code>malloc</code>/<code>printf</code>/<code>float</code> ندارند</li>
+  <li>☐ همهٔ عددهای تنظیمی در <code>config.h</code> هستند و هر کدام واحد و دلیل دارند</li>
+  <li>☐ اندازهٔ Flash و RAM (و پشته) اندازه‌گیری و در README ثبت شده است</li>
+  <li>☐ برای سکوی روی برد، رفتار واقعی (چاپ UART، چراغ آلارم) دیده شده است، نه فقط «بدون خطا ساخته شد»</li>
+  <li>☐ <code>README.md</code> می‌گوید چطور ساخته و اجرا می‌شود و چه چیزهایی عمدا نیستند</li>
+</ul>
+
+<h2 id="extend">ایده‌های توسعه</h2>
+<p>پروژه را پایان ندهی و رها کنی؛ هر کدام از این‌ها یک درس واقعی است و می‌شود به‌عنوان نمونه‌کار نشان داد:</p>
+<ul>
+  <li><b>سنسور واقعی:</b> ADC داخلی یا یک NTC با جدول تبدیل (درس ۴.۷، «جدول جستجو»)، یا BME280 با I²C (درس ۵.۵). فقط <code>sensor_read</code> عوض می‌شود.</li>
+  <li><b>UART با وقفه و بافر حلقوی:</b> ISR بایت را در <code>ringbuf</code> ی درس ۴.۵ بریزد؛ همان‌طور که در درس ۵.۵ دیدی.</li>
+  <li><b>ذخیرهٔ دائمی:</b> نوشتن نمونه‌ها در Flash (سکتور آخر) یا EEPROM؛ به CRC (درس ۴.۷) و مدیریت فرسودگی فکر کن.</li>
+  <li><b>ساعت واقعی:</b> RTC به‌جای «میلی‌ثانیه از شروع».</li>
+  <li><b>پروتکل بهتر:</b> فرمان‌های باینری با CRC، یا JSON کوچک.</li>
+  <li><b>کم‌مصرف:</b> بین نمونه‌ها CPU را به خواب ببر و با تایمر بیدار کن (<code>WFI</code>).</li>
+  <li><b>RTOS:</b> جدا کردن تسک‌های نمونه‌برداری، UART و آلارم با صف FreeRTOS (درس ۷.۲ مسیر را نشان می‌دهد).</li>
+  <li><b>تحلیل ایستا:</b> <code>cppcheck</code> و قواعد MISRA را روی پروژه اجرا کن (درس ۶.۳).</li>
+  <li><b>Fuzz کردن پارسر:</b> هزاران ورودی تصادفی به <code>parser_feed</code> بده و مطمئن شو هرگز خراب نمی‌شود.</li>
+</ul>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="3">
+  <p class="q">چرا <code>logger_init</code> جدول <code>hal_t</code> را به‌عنوان آرگومان می‌گیرد، نه اینکه مستقیم <code>uart_write</code> و <code>led_set</code> ی یک سکوی مشخص را صدا بزند؟</p>
+  <ol>
+    <li data-why="فراخوانی از راه اشاره‌گر کمی کندتر هم هست، نه سریع‌تر؛ هدف سرعت نیست.">تا برنامه سریع‌تر اجرا شود</li>
+    <li data-why="اندازهٔ RAM فرقی نمی‌کند؛ جدول یک <code>const</code> کوچک است.">تا RAM کمتری بگیرد</li>
+    <li>تا همان منطق را بتوان با HAL ساختگی روی PC آزمود و روی سکوهای مختلف بدون تغییر اجرا کرد</li>
+    <li data-why="C بدون این کار هم کامپایل می‌شود؛ این یک انتخاب طراحی برای جدا کردن سخت‌افزار است، نه اجبار زبان.">چون C بدون اشاره‌گر به تابع کامپایل نمی‌شود</li>
+  </ol>
+  <div class="fb">وقتی منطق فقط «قرارداد» را می‌شناسد، در تست یک HAL ساختگی می‌دهی و بی‌سخت‌افزار همه‌چیز را می‌آزمایی؛ در سکوی واقعی، HAL واقعی را.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">بافر ۱۶ خانه‌ای ما بیست نمونهٔ پشت‌سرهم (شمارهٔ ۰ تا ۱۹) گرفته است. <code>ring_at(&amp;r, 0, &amp;s)</code> کدام نمونه را می‌دهد؟</p>
+  <ol>
+    <li data-why="نمونهٔ ۰ خیلی وقت پیش دور ریخته شد؛ بافر فقط ۱۶ تای آخر را نگه می‌دارد.">نمونهٔ ۰</li>
+    <li>نمونهٔ ۴</li>
+    <li data-why="نمونهٔ ۱۶ در وسط بافر است، نه قدیمی‌ترین. قدیمی‌ترین ۱۶ نمونه آخر، یعنی ۴ تا ۱۹، ۴ است.">نمونهٔ ۱۶</li>
+    <li data-why="نمونهٔ ۱۹ جدیدترین است، نه قدیمی‌ترین. <code>ring_at</code> با اندیس ۰ قدیمی‌ترین را می‌دهد.">نمونهٔ ۱۹</li>
+  </ol>
+  <div class="fb">۱۶ نمونهٔ آخر ۴ تا ۱۹ هستند؛ اندیس ۰ قدیمی‌ترین یعنی نمونهٔ ۴. (چهار نمونهٔ ۰ تا ۳ دور ریخته شده‌اند.)</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">آستانهٔ آلارم ۳۰٫۰۰ و پسماند ۲٫۰۰ است و حالت فعلی ALARM. نمونه‌های بعدی به‌ترتیب ۲۹٫۹۵، ۲۸٫۴۰، ۲۸٫۰۰ و ۲۷٫۹۰ هستند. آلارم در کدام نمونه خاموش می‌شود؟</p>
+  <ol>
+    <li data-why="۲۹٫۹۵ زیر آستانه است ولی برای خاموش شدن باید ≤ ۲۸٫۰۰ شود؛ این دقیقا کار پسماند است.">اولین (۲۹٫۹۵)</li>
+    <li data-why="۲۸٫۴۰ هنوز از ۲۸٫۰۰ بزرگ‌تر است.">دومین (۲۸٫۴۰)</li>
+    <li data-why="شرط خاموشی <code>&lt;=</code> است؛ خود ۲۸٫۰۰ کافی است و لازم نیست دما از آن هم کمتر شود.">هیچ‌کدام؛ باید صبر کند تا دما از ۲۸٫۰۰ هم کمتر شود</li>
+    <li>سومین (۲۸٫۰۰)</li>
+  </ol>
+  <div class="fb">شرط خاموشی <code>T &lt;= high - hyst</code> است، یعنی <code>≤ 2800</code>. عدد ۲۸٫۰۰ برابر مرز است و شرط را برآورده می‌کند؛ پس در سومین نمونه آلارم خاموش می‌شود.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">برای UART روی STM32F411 با کلاک ۱۶ مگاهرتز و نرخ ۱۱۵۲۰۰ باود (۱۶ برابر نمونه‌برداری)، مقدار <code>USART2_BRR</code> در کد ما چند است؟</p>
+  <ol>
+    <li>۱۳۹ (<code>0x8B</code>)</li>
+    <li data-why="۱۶۶۷ مقدار BRR برای ۹۶۰۰ باود است، نه ۱۱۵۲۰۰.">۱۶۶۷ (<code>0x683</code>)</li>
+    <li data-why="۱۶ تعداد نمونه‌برداری است، نه مقدار BRR؛ BRR = کلاک ÷ نرخ.">۱۶</li>
+    <li data-why="۱۶۰۰۰۰۰۰ خود کلاک است؛ باید بر نرخ تقسیم شود.">۱۶۰۰۰۰۰۰</li>
+  </ol>
+  <div class="fb"><code>BRR = (16 000 000 + 57 600) / 115 200 = 139 = 0x8B</code> (مانتیس ۸ و کسر ۱۱). خطای نرخ حدود ۰٫۰۸٪ است.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">کدام بررسی «زمان گذشته» وقتی <code>millis()</code> (۳۲ بیتی) سرریز می‌کند هنوز درست است؟</p>
+  <ol>
+    <li data-why="وقتی <code>last + دوره</code> خودش از ۲³² سرریز می‌کند و کوچک می‌شود، شرط بی‌وقت درست می‌شود.">‏<code>if (now &gt;= last + PERIOD)</code></li>
+    <li data-why="این هم به مقایسهٔ مطلق اتکا دارد و وقتی <code>now</code> بعد از سرریز کوچک شود، تا مدت‌ها نادرست می‌ماند.">‏<code>if (now &gt; last)</code></li>
+    <li>‏<code>if ((uint32_t)(now - last) &gt;= PERIOD)</code></li>
+    <li data-why="مقایسهٔ برابری خیلی شکننده است: اگر یک میلی‌ثانیه را از دست بدهی، هرگز درست نمی‌شود.">‏<code>if (now == last + PERIOD)</code></li>
+  </ol>
+  <div class="fb">تفریق بدون‌علامت مدولار ۲³² است و اختلاف واقعی را حتی بعد از سرریز درست می‌دهد. برای همین <code>logger_poll</code> همین را می‌نویسد.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">کدام مورد <b>قاعدهٔ لایه‌بندی</b> این پروژه را می‌شکند؟</p>
+  <ol>
+    <li data-why="منطق از راه قرارداد <code>hal_t</code> با سخت‌افزار حرف می‌زند؛ این دقیقا کار درست است.">‏<code>logger.c</code> در یک تابع <code>lg-&gt;hal-&gt;led_set(true)</code> را صدا می‌زند</li>
+    <li>‏<code>logger.c</code> فایل <code>stm32f4xx.h</code> را <code>#include</code> می‌کند و مستقیم <code>GPIOA-&gt;BSRR</code> را می‌نویسد</li>
+    <li data-why="پیاده‌سازی HAL باید قرارداد را بشناسد؛ پیکان از پیاده‌سازی به قرارداد رو به بالاست و اشکالی ندارد.">‏<code>hal_stm32.c</code> فایل <code>hal.h</code> را <code>#include</code> می‌کند</li>
+    <li data-why="نقطهٔ ورود سکو (<code>main</code>) باید هم منطق و هم HAL را بشناسد تا آن‌ها را وصل کند؛ این چسباندن جای درستش است.">‏<code>main_stm32.c</code> هم <code>logger.h</code> و هم <code>hal_stm32.h</code> را می‌خواهد</li>
+  </ol>
+  <div class="fb">منطق نباید به هدر یا رجیستر یک سکوی مشخص وابسته باشد؛ در غیر این صورت روی PC اجرا نمی‌شود و دیگر تست‌پذیر نیست (نمونهٔ <code>crash71.c</code>).</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: آمار نمونه‌ها (کمینه، بیشینه، میانگین)</div>
+<p>می‌خواهیم یک فرمان جدید <code>STATS</code> اضافه کنیم که کمینه، بیشینه و میانگین نمونه‌های بافر را بگوید. اول تابع محاسبه را جدا و بی‌وابستگی بنویس.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> برای هشت دمای <code>2210, 2240, 2295, 2380, 2510, 2680, 2890, 3050</code> (صدم درجه) کمینه، بیشینه و میانگین گردشدهٔ عدد صحیح چند است؟</li>
+  <li><b>حل:</b> تابع <code>compute_stats(const centi_t *v, size_t n)</code> را بنویس که یک <code>stats_t</code> بدهد. میانگین را به نزدیک‌ترین عدد گرد کن.</li>
+  <li><b>دام:</b> جمع را در چه نوعی نگه می‌داری؟ شانزده دمای ۱۲۵٫۰۰ را با یک جمع‌کنندهٔ ۱۶ بیتی امتحان کن و نتیجه را توضیح بده.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>جمع را در <code>int32_t</code> بگیر. برای گرد کردن میانگین مثبت، <code>(sum + n/2) / n</code>. مقدار <code>16 × 12500 = 200000</code> بزرگ‌تر از ۶۵۵۳۵ است.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="stats71.c">
+$ ./stats71
+min=22.10 max=30.50 avg=25.32
+good avg of sixteen 125.00=125.00
+bad  avg of sixteen 125.00=2.12
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="stats71.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;stddef.h&gt;
+
+typedef int16_t centi_t;
+
+typedef struct {
+    centi_t min;
+    centi_t max;
+    centi_t avg;
+} stats_t;
+
+static stats_t compute_stats(const centi_t *v, size_t n)
+{
+    stats_t s = { v[0], v[0], 0 };
+    int32_t sum = 0;                            /* ۳۲ بیتی: جمع ۱۶ عدد 125.00 در ۱۶ بیت جا نمی‌شود */
+    for (size_t i = 0; i &lt; n; i++) {
+        if (v[i] &lt; s.min) {
+            s.min = v[i];
+        }
+        if (v[i] &gt; s.max) {
+            s.max = v[i];
+        }
+        sum += v[i];
+    }
+    s.avg = (centi_t)((sum + (int32_t)n / 2) / (int32_t)n);   /* گرد به نزدیک‌ترین */
+    return s;
+}
+
+static centi_t naive_avg(const centi_t *v, size_t n)
+{
+    uint16_t sum = 0;                           /* خطا: ۱۶ بیتی */
+    for (size_t i = 0; i &lt; n; i++) {
+        sum = (uint16_t)(sum + (uint16_t)v[i]);
+    }
+    return (centi_t)(sum / n);
+}
+
+static void show(const char *label, centi_t t)
+{
+    printf("%s=%d.%02d", label, t / 100, t % 100);
+}
+
+int main(void)
+{
+    const centi_t a[8] = { 2210, 2240, 2295, 2380, 2510, 2680, 2890, 3050 };
+    centi_t hot[16];
+    for (size_t i = 0; i &lt; 16; i++) {
+        hot[i] = 12500;
+    }
+
+    stats_t s = compute_stats(a, 8);
+    show("min", s.min); printf(" ");
+    show("max", s.max); printf(" ");
+    show("avg", s.avg); printf("\n");
+
+    show("good avg of sixteen 125.00", compute_stats(hot, 16).avg); printf("\n");
+    show("bad  avg of sixteen 125.00", naive_avg(hot, 16)); printf("\n");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="7-11"><b class="what">ساختار نتیجه.</b> سه دما.</li>
+  <li data-lines="13-28"><b class="what">محاسبه.</b> کمینه و بیشینه در همان حلقه؛ جمع در <code>int32_t</code> و میانگین با گرد کردن به نزدیک‌ترین: <code>(20255 + 4) / 8 = 2532</code>. <span class="why">دلیل: ۲۰۲۵۵ ÷ ۸ = ۲۵۳۱٫۸۷۵؛ گرد به نزدیک‌ترین می‌شود ۲۵۳۲ یعنی ۲۵٫۳۲.</span></li>
+  <li data-lines="30-37"><b class="what">نسخهٔ خراب.</b> جمع ۱۶ بیتی: <code>200000 mod 65536 = 3392</code>؛ تقسیم بر ۱۶ می‌شود ۲۱۲، یعنی ۲٫۱۲ درجه به‌جای ۱۲۵٫۰۰. <span class="why">دلیل: جمع بدون‌علامت ۱۶ بیتی حساب پیمانه‌ای ۶۵۵۳۶ دارد؛ جواب «دور می‌زند» و هیچ هشداری هم نمی‌دهد.</span></li>
+</ol>
+<pre class="term" data-from="stats71.c">
+$ gcc -std=c11 -Wall -Wextra -o stats71 stats71.c
+$ ./stats71
+min=22.10 max=30.50 avg=25.32
+good avg of sixteen 125.00=125.00
+bad  avg of sixteen 125.00=2.12
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: آلارمی که می‌لرزد (پیدا کردن باگ طراحی)</div>
+<p>همکارت آلارم را بدون پسماند نوشته («دما ≥ ۳۰ روشن، دما &lt; ۳۰ خاموش») و می‌گوید LED هر ثانیه چشمک می‌زند، با اینکه دما تقریبا ثابت است. دمای نمونه‌ها دور ۳۰٫۰۰ نویز کوچکی دارد: <code>2995, 3005, 2998, 3004, 2996, 3006, 2997, 3003, 2999, 3005, 2994, 3002</code>.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> بدون پسماند، آلارم در این ۱۲ نمونه حدودا چند بار عوض می‌شود؟</li>
+  <li><b>آزمون:</b> برنامه‌ای بنویس که تعداد تغییرها را بدون پسماند و با پسماند ۲٫۰۰ بشمارد.</li>
+  <li><b>چالش:</b> کوچک‌ترین پسماند (صحیح، بر حسب صدم درجه) که لرزش را کاملا حذف کند چند است؟ با کد پیدایش کن.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>یک تابع <code>count_changes(hysteresis)</code> بنویس: روشن شدن در <code>t &gt;= HIGH</code>، خاموش شدن در <code>t &lt;= HIGH - hysteresis</code>. برای قسمت پ، مقدار را از ۰ بالا ببر تا فقط یک تغییر بماند.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="chatter71.c">
+$ ./chatter71
+without hysteresis: 11 state changes
+with hysteresis   : 1 state changes
+smallest working hysteresis: 7
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="chatter71.c" data-lang="c" data-verify="host" id="ex2">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+#define HIGH  3000
+#define HYST  200
+
+/* دمایی که نزدیک آستانه نوسان کوچک دارد (نویز سنسور) */
+static const int readings[12] = {
+    2995, 3005, 2998, 3004, 2996, 3006, 2997, 3003, 2999, 3005, 2994, 3002
+};
+
+static int count_changes(int hysteresis)
+{
+    int alarm = 0, changes = 0;
+    for (int i = 0; i &lt; 12; i++) {
+        int t = readings[i];
+        if (!alarm &amp;&amp; t &gt;= HIGH) {
+            alarm = 1;
+            changes++;
+        } else if (alarm &amp;&amp; t &lt;= HIGH - hysteresis) {
+            alarm = 0;
+            changes++;
+        }
+    }
+    return changes;
+}
+
+int main(void)
+{
+    printf("without hysteresis: %d state changes\n", count_changes(0));
+    printf("with hysteresis   : %d state changes\n", count_changes(HYST));
+
+    int h = 0;
+    while (count_changes(h) != 1) {              /* کوچک‌ترین پسماندی که لرزش را حذف می‌کند */
+        h++;
+    }
+    printf("smallest working hysteresis: %d\n", h);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="4-5"><b class="what">آستانه و پسماند.</b> ۳۰٫۰۰ و ۲٫۰۰ به صدم درجه.</li>
+  <li data-lines="7-10"><b class="what">داده‌های نویزی.</b> بین ۲۹٫۹۴ و ۳۰٫۰۶.</li>
+  <li data-lines="12-26"><b class="what">شمارش.</b> با پارامتر پسماند. با ۰ هر عبور از مرز یک تغییر می‌سازد؛ با پسماند بزرگ، فقط یک بار روشن می‌شود و هرگز به آستانهٔ خاموشی نمی‌رسد.
+    <span class="why">دلیل: کمترین نمونه ۲۹٫۹۴ است، یعنی ۶ صدم زیر آستانه. برای اینکه شرط <code>t &lt;= 3000 - h</code> هرگز درست نشود باید <code>3000 - h &lt; 2994</code> باشد، یعنی <code>h ≥ 7</code>.</span></li>
+  <li data-lines="33-37"><b class="what">جست‌وجوی کوچک‌ترین.</b> از ۰ بالا می‌رود تا فقط یک تغییر بماند.</li>
+</ol>
+<pre class="term" data-from="chatter71.c">
+$ gcc -std=c11 -Wall -Wextra -o chatter71 chatter71.c
+$ ./chatter71
+without hysteresis: 11 state changes
+with hysteresis   : 1 state changes
+smallest working hysteresis: 7
+</pre>
+<p>در برنامهٔ واقعی پسماند را با <b>اندازه‌گیری نویز سنسور</b> انتخاب می‌کنی (چند برابر نویس)، نه با حدس؛ و ۲ درجه برای دمای اتاق محافظه‌کارانه است.</p></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: نرخ UART و خطای آن (ارتباط با سخت‌افزار)</div>
+<p>در <code>hal_stm32.c</code> نوشتیم <code>BRR = (CPU_HZ + BAUD/2) / BAUD</code>. می‌خواهیم مطمئن شویم خطای نرخ واقعی کوچک است.</p>
+<ol class="parts">
+  <li><b>حساب دستی:</b> برای کلاک ۱۶ مگاهرتز و ۹۶۰۰ باود مقدار BRR چند می‌شود؟</li>
+  <li><b>برنامه:</b> تابعی بنویس که BRR، مانتیس (بیت‌های بالا)، کسر (۴ بیت پایین) و درصد خطای نرخ واقعی را بگوید.</li>
+  <li><b>تحلیل:</b> از میان چهار ترکیب زیر کدام بیشترین خطا را دارد و چرا؟ (۱۶ MHz و ۱۱۵۲۰۰؛ ۱۶ MHz و ۹۶۰۰؛ ۴۸ MHz و ۱۱۵۲۰۰؛ ۵۰ MHz و ۹۲۱۶۰۰)</li>
+</ol>
+<details><summary>راهنمایی</summary><p>نرخ واقعی = کلاک ÷ BRR. خطا = (واقعی − هدف) ÷ هدف. مانتیس <code>BRR &gt;&gt; 4</code> و کسر <code>BRR &amp; 0xF</code>.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="brr71.c">
+$ ./brr71
+clk=16000000 baud=115200 BRR=  139 (0x8B) mantissa=8 fraction=11 err=-0.08%
+clk=16000000 baud=  9600 BRR= 1667 (0x683) mantissa=104 fraction=3 err=-0.02%
+clk=48000000 baud=115200 BRR=  417 (0x1A1) mantissa=26 fraction=1 err=-0.08%
+clk=50000000 baud=921600 BRR=   54 (0x36) mantissa=3 fraction=6 err=+0.47%
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="brr71.c" data-lang="c" data-verify="host" id="ex3">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+static uint32_t brr_value(uint32_t clk, uint32_t baud)
+{
+    return (clk + baud / 2u) / baud;            /* گرد به نزدیک‌ترین (OVER8 = 0) */
+}
+
+static void show(uint32_t clk, uint32_t baud)
+{
+    uint32_t brr = brr_value(clk, baud);
+    double actual = (double)clk / (double)brr;
+    double err = (actual - (double)baud) * 100.0 / (double)baud;
+    printf("clk=%8u baud=%6u BRR=%5u (0x%X) mantissa=%u fraction=%u err=%+.2f%%\n",
+           (unsigned)clk, (unsigned)baud, (unsigned)brr, (unsigned)brr,
+           (unsigned)(brr &gt;&gt; 4), (unsigned)(brr &amp; 0xFu), err);
+}
+
+int main(void)
+{
+    show(16000000u, 115200u);
+    show(16000000u, 9600u);
+    show(48000000u, 115200u);
+    show(50000000u, 921600u);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="4-7"><b class="what">مقدار BRR.</b> کلاک تقسیم بر نرخ، با گرد کردن به نزدیک‌ترین (<code>+ baud/2</code>). <span class="why">دلیل: در حالت نمونه‌برداری ۱۶ برابری (OVER8 = 0)، <code>USARTDIV × 16 = کلاک ÷ نرخ</code>؛ رجیستر BRR همین عدد را نگه می‌دارد: ۴ بیت پایین کسر و بقیه مانتیس.</span></li>
+  <li data-lines="9-17"><b class="what">نرخ واقعی و خطا.</b> با <code>double</code> روی PC (روی MCU ممنوع، ولی اینجا فقط ابزار محاسبه است).</li>
+  <li data-lines="19-26"><b class="what">چهار حالت.</b> بیشترین خطا مال ۵۰ مگاهرتز و ۹۲۱۶۰۰ است (۰٫۴۷٪). <span class="why">دلیل: BRR فقط ۵۴ است؛ یعنی مقسوم‌علیه کوچک و هر واحد گرد شدن ۱٫۸۵٪ از خودش را می‌خورد. نرخ‌های پایین‌تر، BRR بزرگ‌تری دارند و خطای نسبی کوچک‌تری.</span></li>
+</ol>
+<pre class="term" data-from="brr71.c">
+$ gcc -std=c11 -Wall -Wextra -o brr71 brr71.c
+$ ./brr71
+clk=16000000 baud=115200 BRR=  139 (0x8B) mantissa=8 fraction=11 err=-0.08%
+clk=16000000 baud=  9600 BRR= 1667 (0x683) mantissa=104 fraction=3 err=-0.02%
+clk=48000000 baud=115200 BRR=  417 (0x1A1) mantissa=26 fraction=1 err=-0.08%
+clk=50000000 baud=921600 BRR=   54 (0x36) mantissa=3 fraction=6 err=+0.47%
+</pre>
+<p>خطای کمتر از حدود یک درصد برای UART معمولا بی‌مشکل است؛ حد دقیق تحمل را از مستندات (RM0383، بخش USART) ببین و خطای گیرنده و فرستنده با هم جمع می‌شود.</p></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>در پروژهٔ پایانی معمولا سه جا گیر می‌کنند. اول: <b>می‌خواهند اول روی برد کار کند</b> و همه‌چیز را یک‌جا بنویسند؛ وقتی چراغ روشن نمی‌شود نمی‌دانند مشکل از منطق است یا رجیستر. ترتیب این درس عمدا برعکس است: منطق را روی PC با تست ثابت کن، بعد فقط «چسب» را روی برد بیازمای. دوم: <b>UART خاموش می‌ماند</b>. تقریبا همیشه یکی از این‌هاست: ساعت USART روشن نشده، پایه در حالت جایگزین نیست، یا نرخ ترمینال با کد فرق دارد (با تحلیلگر منطقی یا اسیلوسکوپ روی TX نگاه کن). سوم: <b>rubric را پر نمی‌کنند</b> چون «کار می‌کند». ولی فرق یک تمرین و یک نمونه‌کار همان ردیف‌های ۱ و ۲ است. یک روز که چند ساعت وقت داشتی، فقط ردیف ضعیف‌ترت را بالا ببر.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li>اول <b>نیازمندی قابل‌آزمایش</b> (R1 تا R8)، بعد معماری، بعد کد.</li>
+  <li><b>پیکان‌ها رو به پایین:</b> منطق (<code>logger</code>، <code>parser</code>، <code>ringbuf</code>، <code>temp</code>) ← قرارداد <code>hal.h</code> ← سکوها (PC، STM32، ESP32). منطق هیچ‌وقت به رجیستر دست نمی‌زند.</li>
+  <li>دما = <code>int16_t</code> به صدم درجه؛ بدون <code>float</code> و <code>printf</code>. بافر حلقوی آخرین ۱۶ نمونه را نگه می‌دارد. آلارم با <b>پسماند</b> از لرزش جلوگیری می‌کند.</li>
+  <li>با HAL ساختگی، منطق را روی PC تست کن (۵۷ شرط) و یک خروجی مرجع با <code>diff</code> نگه دار؛ یک <code>make</code> همه را وارسی می‌کند.</li>
+  <li>لایهٔ STM32 فقط <code>hal_stm32.c</code> (UART، LED با <code>BSRR</code>، SysTick)، <code>startup.c</code> و <code>link.ld</code> است؛ ساخته‌شده با ARM: Flash ۲۰۱۲ و RAM ۱۹۶ بایت.</li>
+  <li>لایهٔ ESP32 با API ESP-IDF نوشته شد، بدون تغییر منطق؛ اجرایش را روی سخت‌افزار خودت وارسی کن.</li>
+  <li>کارت را با rubric نمره بده و ضعیف‌ترین ردیف را بالا ببر.</li>
+</ul>
+<p>درس بعد: <a href="7-2.html">مسیر بعدی: RTOS، Rust، کتاب‌ها و گواهی‌ها</a>. درس قبل: <a href="6-5.html">بهینه‌سازی، اندازه کد و فایل map</a>.</p></div>
+
+</article>
+</body>
+</html>
