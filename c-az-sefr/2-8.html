@@ -1,0 +1,1564 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>رشته‌ها و printf · C برای میکروکنترلر</title>
+<meta name="description" content="رشته در C چیست؟ آرایهٔ char و پایانگر صفر، توابع string.h، جدول کامل قالب‌های printf، snprintf، تبدیل امن متن به عدد با strtol و چاپ روی UART در STM32 و ESP32.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="2-8">
+
+<p class="lede">تا اینجا فقط با عدد کار کرده‌ای. ولی دستگاه‌ها با آدم‌ها <b>حرف می‌زنند</b>: «دما ۲۳٫۵ درجه»، «خطا: سنسور جواب نداد»، یا فرمانی که از کامپیوتر می‌رسد: «LED ON». متنِ C اسمش «رشته» است و ظاهر ساده‌ای دارد، اما بیشترین باگ و حفرهٔ امنیتی تاریخ برنامه‌نویسی از همین‌جا آمده است. در این درس یاد می‌گیری رشته در حافظه چه شکلی دارد، چطور امن با آن کار کنی، <code>printf</code> را کامل بشناسی و متن را بدون خطر به عدد تبدیل کنی.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>بگویی رشته در حافظه چیست و چرا آخرش یک بایت صفر دارد</li>
+    <li>فرق <code>sizeof</code> و <code>strlen</code> را توضیح بدهی</li>
+    <li>از توابع <code>string.h</code> درست و بدون سرریز بافر استفاده کنی</li>
+    <li>هر قالب <code>printf</code> را با عرض، دقت و پرچم بنویسی و بخوانی</li>
+    <li>با <code>snprintf</code> متن بسازی و بفهمی متن بریده شده یا نه</li>
+    <li>متن را با <code>strtol</code> امن به عدد تبدیل کنی و ورودی خراب را رد کنی</li>
+    <li>یک پارسر فرمان مثل «LED ON» بنویسی و دما را بدون <code>float</code> چاپ کنی</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="2-7.html">۲.۷</a> (آرایه‌ها: ایندکس، <code>sizeof</code>، پاس‌دادن آرایه به تابع)</li>
+    <li>درس <a href="2-6.html">۲.۶</a> (تابع) و <a href="2-5.html">۲.۵</a> (حلقه)</li>
+    <li>درس <a href="1-2.html">۱.۲</a> (بیت، بایت و هگز)</li>
+    <li>فقط رایانه و <code>gcc</code>؛ سخت‌افزار لازم نیست</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایده اصلی: قطاری از حرف‌ها</h2>
+<p>کامپیوتر فقط عدد می‌فهمد. پس متن را هم باید به عدد تبدیل کند: هر حرف یک عدد کوچک است. حالا فرض کن می‌خواهی کلمهٔ «Hi» را نگه داری. دو حرف داری، پس دو خانهٔ پشت‌سرهم در حافظه (آرایه‌ای که در درس ۲.۷ دیدی). اما یک مشکل هست: <b>کامپیوتر از کجا بفهمد کلمه کجا تمام می‌شود؟</b> خانه‌های بعدی هم مقدار دارند، شاید بقایای یک متن قدیمی.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>یک قطار باری را تصور کن. هر واگن یک حرف را حمل می‌کند. ناظر ایستگاه فقط یک واگن پس از دیگری را می‌بیند و نمی‌داند قطار چند واگن دارد. برای همین آخرین واگن را <b>پرچم قرمز</b> می‌زنند: «قطار اینجا تمام می‌شود». ناظر تا پرچم قرمز را نبیند، واگن بعدی را هم می‌خواند؛ حتی اگر واگن بعدی مالِ قطار دیگری باشد!</p></div>
+
+<p>در C همین کار را کرده‌اند. رشته یعنی <b>آرایه‌ای از <code>char</code> که با یک خانهٔ حاوی عدد صفر تمام می‌شود</b>. این صفر را «پایانگر» می‌گوییم و با <code>'\0'</code> می‌نویسیم. بدون آن، هیچ تابعی نمی‌داند رشته کجا تمام می‌شود.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 270" role="img" aria-label="رشته Hi در شش خانه حافظه: حرف H، حرف i، یک خانه پایانگر صفر و سه خانه صفر بی‌استفاده">
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">شش خانهٔ حافظه برای «Hi» (هر خانه یک بایت)</text>
+  <g class="mono s-tx" font-size="13" text-anchor="middle" font-weight="600">
+    <text x="130" y="60">s[0]</text><text x="230" y="60">s[1]</text><text x="330" y="60">s[2]</text><text x="430" y="60">s[3]</text><text x="530" y="60">s[4]</text><text x="630" y="60">s[5]</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="80" y="70" width="100" height="60" fill="#ffd60a"/><rect x="180" y="70" width="100" height="60" fill="#ffd60a"/>
+    <rect x="280" y="70" width="100" height="60" fill="#ff86b3"/>
+    <rect x="380" y="70" width="100" height="60" fill="#fff"/><rect x="480" y="70" width="100" height="60" fill="#fff"/><rect x="580" y="70" width="100" height="60" fill="#fff"/>
+  </g>
+  <g class="mono" font-size="26" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="130" y="110">'H'</text><text x="230" y="110">'i'</text><text x="330" y="110">'\0'</text><text x="430" y="110">'\0'</text><text x="530" y="110">'\0'</text><text x="630" y="110">'\0'</text>
+  </g>
+  <g class="mono s-tx" font-size="15" text-anchor="middle" font-weight="700">
+    <text x="130" y="156">72</text><text x="230" y="156">105</text><text x="330" y="156">0</text><text x="430" y="156">0</text><text x="530" y="156">0</text><text x="630" y="156">0</text>
+  </g>
+  <g class="mono s-tx" font-size="13" text-anchor="middle">
+    <text x="130" y="176">0x48</text><text x="230" y="176">0x69</text><text x="330" y="176">0x00</text><text x="430" y="176">0x00</text><text x="530" y="176">0x00</text><text x="630" y="176">0x00</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none"><path d="M84 196H276"/><path d="M284 196H376"/><path d="M384 196H676"/></g>
+  <g class="s-tx" font-size="14.5" font-weight="700" text-anchor="middle">
+    <text x="180" y="222">متن: ۲ حرف</text><text x="330" y="222">پایانگر</text><text x="530" y="222">خانه‌های بی‌استفاده (صفر)</text>
+  </g>
+  <text x="380" y="254" text-anchor="middle" class="s-tx" font-size="13.5">اندازهٔ آرایه ۶ بایت است، ولی طول رشته فقط ۲ است</text>
+</svg></div>
+<figcaption>رشتهٔ «Hi» داخل آرایهٔ شش‌خانه‌ای. آخرین حرف واقعی بلافاصله با <code>'\0'</code> دنبال می‌شود؛ خانه‌های بعد از آن به رشته تعلق ندارند.</figcaption></figure>
+
+<p>برای این‌که این تعریف رسمی در ذهنت بماند: <span class="term" data-t="cstring">رشتهٔ C</span> = چند <code>char</code> پشت‌سرهم + یک <span class="term" data-t="nulchar">پایانگر</span> <code>'\0'</code>. این خانهٔ صفر «حرف» نیست؛ فقط علامت پایان است.</p>
+
+<h2 id="char">حرف هم یک عدد است</h2>
+<p>نوع <code>char</code> یک بایت است (درس ۲.۲) و یک عدد کوچک نگه می‌دارد. وقتی آن را با <code>%c</code> چاپ کنی، حرفِ همان عدد را می‌بینی؛ با <code>%d</code> خودِ عدد را. جدول قرارداد عددی حرف‌ها را <span class="term" data-t="ascii_code">ASCII</span> می‌گویند. کل جدول را لازم نیست حفظ کنی؛ فقط این چند مورد را بشناس:</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>کاراکتر</th><th>عدد (ده‌دهی)</th><th>هگز</th><th>نکته</th></tr></thead>
+<tbody>
+<tr><td><code>'\0'</code></td><td>۰</td><td><code>0x00</code></td><td>پایانگر رشته</td></tr>
+<tr><td><code>'\n'</code></td><td>۱۰</td><td><code>0x0A</code></td><td>خط بعد (LF)</td></tr>
+<tr><td><code>'\r'</code></td><td>۱۳</td><td><code>0x0D</code></td><td>برگشت به اول خط (CR)؛ بسیاری از ترمینال‌ها Enter را با <code>\r</code> یا <code>\r\n</code> می‌فرستند</td></tr>
+<tr><td><code>' '</code> (فاصله)</td><td>۳۲</td><td><code>0x20</code></td><td>فاصله هم یک حرف است</td></tr>
+<tr><td><code>'0'</code> تا <code>'9'</code></td><td>۴۸ تا ۵۷</td><td><code>0x30</code> تا <code>0x39</code></td><td>پشت‌سرهم‌اند</td></tr>
+<tr><td><code>'A'</code> تا <code>'Z'</code></td><td>۶۵ تا ۹۰</td><td><code>0x41</code> تا <code>0x5A</code></td><td>حروف بزرگ</td></tr>
+<tr><td><code>'a'</code> تا <code>'z'</code></td><td>۹۷ تا ۱۲۲</td><td><code>0x61</code> تا <code>0x7A</code></td><td>حروف کوچک (۳۲ تا از بزرگ‌ها بالاتر)</td></tr>
+</tbody></table></div>
+
+<div class="code" data-file="chars.c" data-lang="c" data-verify="host" id="code1">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    char letter = 'A';      // تک‌کوتیشن = یک حرف
+    char digit = '7';       // این حرف «۷» است، نه عدد هفت!
+
+    printf("letter as char   : %c\n", letter);
+    printf("letter as number : %d\n", letter);
+    printf("digit as char    : %c\n", digit);
+    printf("digit as number  : %d\n", digit);
+    printf("digit value      : %d\n", digit - '0');
+    printf("next letter      : %c\n", letter + 1);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code1">
+  <li data-lines="1"><b class="what">کتابخانهٔ ورودی/خروجی.</b> برای <code>printf</code>.</li>
+  <li data-lines="3-4,15"><b class="what">تابع main.</b> نقطهٔ شروع برنامه.</li>
+  <li data-lines="5"><b class="what">یک حرف.</b> <code>'A'</code> با <b>تک‌کوتیشن</b> یعنی «کد ASCII حرف A» که ۶۵ است. متغیر <code>letter</code> فقط همان عدد ۶۵ را نگه می‌دارد.
+    <span class="why">C برای حرف نوع جدا ندارد؛ <code>char</code> همان عدد کوچک است. فقط نحوهٔ نمایش (<code>%c</code> یا <code>%d</code>) تعیین می‌کند حرف ببینی یا عدد.</span></li>
+  <li data-lines="6"><b class="what">رقم ۷ به‌عنوان حرف.</b> <code>'7'</code> عدد هفت نیست؛ حرفی است که شکلش ۷ است و کدش ۵۵ است.
+    <span class="why">صفحه‌کلید به برنامه حرف می‌فرستد، نه عدد. وقتی کاربر «۷» را می‌زند، برنامه ۵۵ می‌بیند.</span></li>
+  <li data-lines="8-9"><b class="what">یک متغیر، دو نمایش.</b> <code>%c</code> حرف را چاپ می‌کند، <code>%d</code> عدد را.</li>
+  <li data-lines="10-11"><b class="what">همین آزمایش برای رقم.</b> ۷ به‌شکل حرف، ۵۵ به‌شکل عدد.</li>
+  <li data-lines="12"><b class="what">ترفند تبدیل رقم به مقدار.</b> <code>'7' - '0'</code> یعنی ۵۵ − ۴۸ = ۷.
+    <span class="why">چون رقم‌های <code>'0'</code> تا <code>'9'</code> در جدول پشت‌سرهم‌اند، فاصلهٔ هر رقم تا <code>'0'</code> برابر خودِ رقم است.</span></li>
+  <li data-lines="13"><b class="what">حرف بعدی.</b> ۶۵ + ۱ = ۶۶ که کد <code>'B'</code> است. با <code>%c</code> حرف را می‌بینی.</li>
+  <li data-lines="14"><b class="what">return 0.</b> پایان موفق.</li>
+</ol>
+<pre class="term" data-from="chars.c">
+$ gcc -std=c11 -Wall -Wextra -o chars chars.c
+$ ./chars
+letter as char   : A
+letter as number : 65
+digit as char    : 7
+digit as number  : 55
+digit value      : 7
+next letter      : B
+</pre>
+
+<div class="callout warn"><div class="ct">تک‌کوتیشن و دوکوتیشن یکی نیستند</div>
+<p><code>'A'</code> یک حرف است (یک بایت، عدد ۶۵). <code>"A"</code> یک <b>رشته</b> است: دو بایت، یعنی <code>'A'</code> و بعد <code>'\0'</code>. اگر جای هم بنویسیشان، یا خطای کامپایل می‌گیری یا رفتار عجیب. قاعده: <b>یک حرف ← ' '</b> و <b>متن ← " "</b>.</p></div>
+
+<h2 id="first">اولین رشته‌ها</h2>
+<p>ساده‌ترین راه ساختن رشته این است که آرایهٔ <code>char</code> را با یک متن مقدار بدهی. کامپایلر خودش حرف‌ها را می‌چیند و <code>'\0'</code> را هم آخرش اضافه می‌کند. آرایه‌ای که برای نگه‌داشتن متن (و شاید تغییر متن) می‌سازیم، اغلب <span class="term" data-t="charbuffer">بافر</span> (buffer) نام دارد: جای موقت برای داده. این کد را اجرا کن:</p>
+
+<div class="code" data-file="first_string.c" data-lang="c" data-verify="host" id="code2">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+int main(void)
+{
+    char name[] = "Ali";        // کامپایلر خودش '\0' را اضافه می‌کند
+    char box[8] = "Hi";         // جا برای ۸ بایت؛ بقیه صفر می‌شود
+
+    printf("name = %s\n", name);
+    printf("sizeof(name) = %zu, strlen(name) = %zu\n", sizeof(name), strlen(name));
+    printf("sizeof(box)  = %zu, strlen(box)  = %zu\n", sizeof(box), strlen(box));
+
+    for (int i = 0; i &lt; 8; i++) {
+        printf("box[%d] = %d\n", i, box[i]);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code2">
+  <li data-lines="1-2"><b class="what">دو هدر.</b> <code>stdio.h</code> برای <code>printf</code> و <code>string.h</code> برای <code>strlen</code> و بقیهٔ توابع رشته.</li>
+  <li data-lines="4-5,16-17"><b class="what">تابع main.</b></li>
+  <li data-lines="6"><b class="what">اندازه را کامپایلر می‌شمارد.</b> در <code>name[]</code> عدد داخل کروشه را ننوشته‌ایم. کامپایلر «Ali» را می‌بیند: سه حرف، به‌اضافهٔ پایانگر = ۴ خانه.
+    <span class="why">اگر خودت بنویسی <code>name[3]</code>، جایی برای <code>'\0'</code> نمی‌ماند و رشته «بی‌پایان» می‌شود. با خالی گذاشتن کروشه از این اشتباه در امانی.</span></li>
+  <li data-lines="7"><b class="what">آرایهٔ بزرگ‌تر از متن.</b> ۸ خانه گرفتیم ولی فقط «Hi» گذاشتیم. C در این حالت <b>همهٔ خانه‌های باقی‌مانده را صفر می‌کند</b>.
+    <span class="why">این قانون برای مقداردهی اولیهٔ آرایه است. پس رشته حتما پایانگر دارد و بقیه هم تمیز است.</span></li>
+  <li data-lines="9"><b class="what">چاپ رشته با %s.</b> <code>printf</code> از خانهٔ اول شروع می‌کند و حرف‌ها را چاپ می‌کند تا به <code>'\0'</code> برسد.</li>
+  <li data-lines="10-11"><b class="what">sizeof در برابر strlen.</b> <code>sizeof</code> اندازهٔ <b>آرایه</b> را می‌گوید (کل قطار، با واگن‌های خالی). <code>strlen</code> طول <b>رشته</b> را می‌گوید (تعداد حرف‌ها تا پایانگر، بدون شمردن خود پایانگر).
+    <span class="why">این دو فقط وقتی برابرند که آرایه دقیقا به اندازهٔ رشته + ۱ باشد. یکی را جای دیگری به کار نبر.</span></li>
+  <li data-lines="13-15"><b class="what">دیدن تک‌تک خانه‌ها.</b> هر خانه را به‌صورت عدد چاپ می‌کنیم تا قطار واقعی را ببینی.</li>
+</ol>
+<pre class="term" data-from="first_string.c">
+$ gcc -std=c11 -Wall -Wextra -o first_string first_string.c
+$ ./first_string
+name = Ali
+sizeof(name) = 4, strlen(name) = 3
+sizeof(box)  = 8, strlen(box)  = 2
+box[0] = 72
+box[1] = 105
+box[2] = 0
+box[3] = 0
+box[4] = 0
+box[5] = 0
+box[6] = 0
+box[7] = 0
+</pre>
+<p>در خروجی ببین: ۷۲ و ۱۰۵ همان <code>'H'</code> و <code>'i'</code>اند؛ بعدش شش خانهٔ صفر. اولین صفر پایانگر است؛ پنج تای بعدی فقط تمیزکاری آرایه‌اند.</p>
+
+<p>حالا با دست هم ببین که رشته‌ای که خودت خانه‌به‌خانه می‌سازی چه می‌شود. روی «بعدی» بزن:</p>
+<div class="widget" data-w="mem" data-config='{"title":"ساختن رشتهٔ Hi خانه به خانه","code":["char s[4];","s[0] = &#39;H&#39;;","s[1] = &#39;i&#39;;","s[2] = 0;","printf(\"%s\", s);"],"intro":"چهار خانه ساخته می‌شود. روی بعدی بزن.","cells":[{"addr":"0x20000000","name":"s[0]","val":null,"kind":"var"},{"addr":"0x20000001","name":"s[1]","val":null,"kind":"var"},{"addr":"0x20000002","name":"s[2]","val":null,"kind":"var"},{"addr":"0x20000003","name":"s[3]","val":null,"kind":"var"}],"steps":[{"line":0,"set":{},"hot":[0,1,2,3],"say":"چهار خانه گرفتیم. هنوز هیچ‌کدام مقدار نگرفته‌اند (علامت ؟ یعنی آشغال)."},{"line":1,"set":{"0":"72 = H"},"hot":[0],"say":"حرف H (عدد ۷۲) در خانهٔ اول نشست."},{"line":2,"set":{"1":"105 = i"},"hot":[1],"say":"حرف i (عدد ۱۰۵) در خانهٔ دوم نشست."},{"line":3,"set":{"2":"0 = پایان"},"hot":[2],"say":"حالا پایانگر را با دست گذاشتیم. از این لحظه رشته کامل است: دو حرف + پایانگر."},{"line":4,"set":{},"hot":[0,1,2],"say":"printf از s[0] شروع می‌کند، H و i را چاپ می‌کند و به صفر که رسید می‌ایستد. خانهٔ s[3] را هرگز نمی‌خواند، پس آشغال بودنش مهم نیست. اگر خط چهارم را نگذاشته بودی، printf از s[2] هم رد می‌شد و آشغال چاپ می‌کرد."}]}'></div>
+
+<h3 id="strlen-how">strlen از کجا می‌داند؟</h3>
+<p>هیچ جادویی در کار نیست. <code>strlen</code> فقط خانه‌ها را یکی‌یکی می‌شمارد تا اولین صفر. خودت هم می‌توانی بنویسی:</p>
+<div class="code" data-file="my_strlen.c" data-lang="c" data-verify="host" id="code3">
+<pre>
+#include &lt;stdio.h&gt;
+
+// شمردن حرف‌ها تا رسیدن به '\0'
+int count_chars(const char text[])
+{
+    int n = 0;
+    while (text[n] != '\0') {
+        n++;
+    }
+    return n;
+}
+
+int main(void)
+{
+    char word[] = "sensor";
+    printf("%d\n", count_chars(word));
+    printf("%d\n", count_chars(""));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code3">
+  <li data-lines="3-4,10-11"><b class="what">تابع شمارنده.</b> پارامتر <code>text[]</code> یعنی «یک آرایهٔ char». <code>const</code> می‌گوید تابع نباید متن را تغییر بدهد (فقط می‌خواند).
+    <span class="why">آرایه به تابع کپی نمی‌شود؛ خودِ آرایه را می‌دهی (درس ۲.۷). برای همین طول را نمی‌داند و باید بر پایانگر تکیه کند.</span></li>
+  <li data-lines="6"><b class="what">شمارنده.</b> از صفر شروع می‌کنیم.</li>
+  <li data-lines="7-9"><b class="what">تا پایانگر جلو برو.</b> تا وقتی خانهٔ <code>n</code> صفر نشده، شمارنده را یکی زیاد کن.
+    <span class="why">اگر رشته پایانگر نداشته باشد، این حلقه از آرایه بیرون می‌زند و حافظهٔ دیگران را می‌خواند؛ تا خانه‌ای صفر پیدا کند.</span></li>
+  <li data-lines="15-16"><b class="what">رشتهٔ عادی.</b> شش حرف: «sensor».</li>
+  <li data-lines="17"><b class="what">رشتهٔ خالی.</b> <code>""</code> فقط یک پایانگر دارد. خانهٔ اول صفر است، پس طول ۰.</li>
+  <li data-lines="13-14,18-19"><b class="what">main و بازگشت.</b></li>
+</ol>
+<pre class="term" data-from="my_strlen.c">
+$ gcc -std=c11 -Wall -Wextra -o my_strlen my_strlen.c
+$ ./my_strlen
+6
+0
+</pre>
+
+<div class="callout warn"><div class="ct">اگر پایانگر نباشد چه می‌شود؟</div>
+<p>هر تابعی که رشته را می‌خواند (<code>printf("%s")</code>، <code>strlen</code>، <code>strcpy</code> و بقیه) بدون پایانگر از انتهای آرایه رد می‌شود و بایت‌های همسایه را هم جزو متن می‌گیرد. نتیجه یکی از این‌هاست: آشغال در خروجی، عدد طول غلط، یا کرش. چون رفتارش به حافظهٔ اطراف بستگی دارد، ممکن است روی رایانهٔ تو سالم کار کند و روی میکروکنترلر خراب شود. قاعدهٔ ساده: <b>هر آرایه‌ای که قرار است رشته شود، همیشه یک خانه بیشتر از حرف‌هایش بگیر.</b></p></div>
+
+<h2 id="literal">متن‌های ثابت داخل کد</h2>
+<p>وقتی در کد می‌نویسی <code>"hello"</code>، به آن <span class="term" data-t="strliteral">رشتهٔ ثابت</span> (string literal) می‌گویند. کامپایلر این متن را یک‌جا در حافظه می‌گذارد. در میکروکنترلر آن جا <b>Flash</b> است (درس ۲.۱: حافظهٔ ماندگار و فقط‌خواندنی‌شونده)، نه RAM. این خبر خوبی است: متن‌های طولانی RAM ارزشمندت را اشغال نمی‌کنند. ولی یک قید دارد: <b>نباید تغییرشان بدهی</b>.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 270" role="img" aria-label="متن ثابت hello در Flash فقط‌خواندنی است و آرایه copy یک نسخهٔ قابل‌تغییر از آن در RAM دارد">
+  <defs><marker id="ar2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <rect x="30" y="46" width="300" height="150" rx="10" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/>
+  <rect x="430" y="46" width="300" height="150" rx="10" fill="#ffd60a" stroke="#15120a" stroke-width="3"/>
+  <text x="180" y="72" text-anchor="middle" fill="#15120a" font-size="16" font-weight="800">Flash (فقط‌خواندنی)</text>
+  <text x="580" y="72" text-anchor="middle" fill="#15120a" font-size="16" font-weight="800">RAM (قابل‌تغییر)</text>
+  <g stroke="#15120a" stroke-width="2.5" fill="#fff">
+    <rect x="48" y="96" width="44" height="44"/><rect x="92" y="96" width="44" height="44"/><rect x="136" y="96" width="44" height="44"/><rect x="180" y="96" width="44" height="44"/><rect x="224" y="96" width="44" height="44"/><rect x="268" y="96" width="44" height="44" fill="#ff86b3"/>
+    <rect x="448" y="96" width="44" height="44"/><rect x="492" y="96" width="44" height="44"/><rect x="536" y="96" width="44" height="44"/><rect x="580" y="96" width="44" height="44"/><rect x="624" y="96" width="44" height="44"/><rect x="668" y="96" width="44" height="44" fill="#ff86b3"/>
+  </g>
+  <g class="mono" font-size="19" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="70" y="125">h</text><text x="114" y="125">e</text><text x="158" y="125">l</text><text x="202" y="125">l</text><text x="246" y="125">o</text><text x="290" y="125">\0</text>
+    <text x="470" y="125">h</text><text x="514" y="125">e</text><text x="558" y="125">l</text><text x="602" y="125">l</text><text x="646" y="125">o</text><text x="690" y="125">\0</text>
+  </g>
+  <text x="180" y="172" text-anchor="middle" fill="#15120a" font-size="14" font-weight="700">متن ثابت — دست نزن</text>
+  <text x="580" y="172" text-anchor="middle" fill="#15120a" font-size="14" font-weight="700">کپیِ خودت — هر طور خواستی عوضش کن</text>
+  <path d="M336 118H424" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar2)"/>
+  <text x="380" y="106" text-anchor="middle" class="s-tx" font-size="13">کپی</text>
+  <text x="180" y="222" text-anchor="middle" class="s-tx mono" font-size="15" font-weight="700">const char *msg = "hello";</text>
+  <text x="580" y="222" text-anchor="middle" class="s-tx mono" font-size="15" font-weight="700">char copy[] = "hello";</text>
+  <text x="380" y="254" text-anchor="middle" class="s-tx" font-size="13.5">سمت چپ فقط اسمی برای متنِ Flash است؛ سمت راست کپیِ کامل داخل RAM می‌سازد</text>
+</svg></div>
+<figcaption>دو راه نگه‌داشتن «hello». راه اول RAM مصرف نمی‌کند ولی فقط‌خواندنی است؛ راه دوم RAM می‌گیرد ولی قابل‌تغییر است.</figcaption></figure>
+
+<p>راه اول (<code>const char *msg</code>) را فعلا مثل یک <b>الگوی آماده</b> ببین: علامت <code>*</code> یعنی «نشانیِ اولین حرف»؛ <code>msg</code> اسمی برای شروع همان متن ثابت است. معنی دقیقش را در درس <a href="3-2.html">۳.۲</a> (اشاره‌گر) می‌فهمی. حالا ببین اگر متن ثابت را بخواهی عوض کنی چه می‌شود:</p>
+
+<div class="code" data-file="lit_err.c" data-lang="c" data-verify="host-fail" id="code4">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    const char *msg = "hello";   // متن ثابت در Flash
+    msg[0] = 'H';                // تلاش برای تغییر متن ثابت
+    printf("%s\n", msg);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code4">
+  <li data-lines="5"><b class="what">const char *.</b> «متنِ ثابتِ فقط‌خواندنی». <code>const</code> می‌گوید: از این نشانی فقط بخوان، ننویس.
+    <span class="why">متن در Flash است. Flash را برنامه در حال اجرا نمی‌تواند مثل RAM بنویسد.</span></li>
+  <li data-lines="6"><b class="what">تلاش برای نوشتن.</b> کامپایلر جلویت را می‌گیرد.</li>
+</ol>
+<pre class="term" data-kind="err" data-from="lit_err.c">
+lit_err.c: In function 'main':
+lit_err.c:6:12: error: assignment of read-only location '*msg'
+</pre>
+<p>این خطا لطف کامپایلر است. اگر <code>const</code> را برمی‌داشتی (<code>char *msg = "hello";</code>)، کامپایلر C ساکت می‌ماند، ولی نتیجه بدتر بود: روی PC برنامه هنگام اجرا با خطای دسترسی می‌ترکد؛ روی میکروکنترلر یا نوشتن بی‌اثر می‌ماند یا به <b>HardFault</b> می‌رسد (درس ۶.۱). برای همین قاعدهٔ حرفه‌ای‌ها: <b>اشاره به متن ثابت را همیشه با <code>const</code> بنویس.</b> اگر متنی قرار است تغییر کند، یک کپی در آرایه بگیر:</p>
+
+<div class="code" data-file="lit_ok.c" data-lang="c" data-verify="host" id="code5">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    char copy[] = "hello";      // آرایه: یک کپی در RAM
+    copy[0] = 'H';              // تغییر کپی مجاز است
+    printf("%s\n", copy);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code5">
+  <li data-lines="5"><b class="what">آرایه با مقدار اولیه.</b> این‌بار خود آرایه ۶ خانه در RAM می‌گیرد و «hello» را در آن کپی می‌کند.
+    <span class="why">کپی در RAM هزینه دارد (۶ بایت RAM)، ولی آزادی تغییر می‌دهد.</span></li>
+  <li data-lines="6"><b class="what">تغییر مجاز.</b> اولین خانه از <code>'h'</code> به <code>'H'</code> عوض می‌شود.</li>
+  <li data-lines="7"><b class="what">چاپ.</b> متن کپی را می‌بینیم، نه متن اصلی را.</li>
+</ol>
+<pre class="term" data-from="lit_ok.c">
+$ gcc -std=c11 -Wall -Wextra -o lit_ok lit_ok.c
+$ ./lit_ok
+Hello
+</pre>
+
+<div class="callout warn"><div class="ct">آرایه را نمی‌شود با = پر کرد</div>
+<p>مقدار دادن با <code>=</code> فقط <b>هنگام ساختن</b> آرایه مجاز است (<code>char s[8] = "hi";</code>). بعدا نمی‌توانی بنویسی <code>s = "hi";</code>؛ آرایه را یکجا نمی‌شود جایگزین کرد. کامپایلر می‌گوید:</p>
+<pre class="term" data-kind="cmd">
+array_assign.c:6:9: error: assignment to expression with array type
+</pre>
+<p>برای پر کردن بعدی از <code>strcpy</code>/<code>snprintf</code> (پایین‌تر) استفاده کن. همین دلیل باعث می‌شود مقایسهٔ رشته‌ها هم با <code>==</code> ممکن نباشد؛ در بخش بعد می‌بینی.</p></div>
+
+<h2 id="stringh">جعبه‌ابزار string.h</h2>
+<p>چون آرایه را نمی‌شود با <code>=</code> کپی یا با <code>==</code> مقایسه کرد، فایل <code>string.h</code> تابع‌های آماده دارد. هر کدام از خانه‌ها شروع می‌کند و کارش را تا پایانگر ادامه می‌دهد (یا تا تعداد مشخص). در جدول، <code>dst</code> مقصد است و <code>src</code> منبع. علامت <code>*</code> را فعلا «آدرس شروع آرایه» بخوان.</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>تابع</th><th>کار</th><th>خطر و نکته</th></tr></thead>
+<tbody>
+<tr><td><code>strlen(s)</code></td><td>طول رشته تا پایانگر (بدون شمردن آن)</td><td>هر بار کل رشته را می‌شمارد؛ در حلقه‌ها نتیجه‌اش را در متغیر نگه دار. نتیجه از نوع <code>size_t</code> (بی‌علامت) است</td></tr>
+<tr><td><code>strcpy(dst, src)</code></td><td>کپی رشته همراه پایانگر</td><td><b>اندازهٔ dst را نمی‌داند.</b> اگر src بلندتر باشد، از dst بیرون می‌نویسد</td></tr>
+<tr><td><code>strncpy(dst, src, n)</code></td><td>حداکثر n بایت کپی می‌کند</td><td><b>اگر src به n برسد پایانگر نمی‌گذارد!</b> اگر src کوتاه‌تر باشد بقیه را صفر می‌کند (زمان هدر می‌رود)</td></tr>
+<tr><td><code>strcat(dst, src)</code></td><td>src را به انتهای dst می‌چسباند</td><td>مثل strcpy، جای کافی را چک نمی‌کند</td></tr>
+<tr><td><code>strcmp(a, b)</code></td><td>مقایسهٔ حرف‌به‌حرف؛ <code>0</code> یعنی برابر، منفی یعنی a کوچک‌تر، مثبت یعنی a بزرگ‌تر</td><td>فقط <b>علامت</b> نتیجه معتبر است، نه مقدار آن. برابر بودن = <code>== 0</code></td></tr>
+<tr><td><code>strncmp(a, b, n)</code></td><td>فقط n حرف اول را مقایسه می‌کند</td><td>برای «پیشوند» مثل <code>BLINK </code> عالی است</td></tr>
+<tr><td><code>strchr(s, c)</code></td><td>اولین جای حرف <code>c</code> در s</td><td>اگر نباشد <code>NULL</code> (یعنی «هیچ‌جا») برمی‌گرداند</td></tr>
+<tr><td><code>strstr(s, t)</code></td><td>جستجوی زیررشتهٔ t در s</td><td>اگر نباشد <code>NULL</code></td></tr>
+<tr><td><code>memcpy(dst, src, n)</code></td><td>کپی n <b>بایت خام</b>؛ به پایانگر کاری ندارد</td><td>برای داده‌های غیرمتنی (بسته‌ها، struct)؛ دو محدوده نباید هم‌پوشانی داشته باشند</td></tr>
+<tr><td><code>memset(p, v, n)</code></td><td>n بایت را با مقدار <code>v</code> پر می‌کند</td><td>برای صفر کردن بافر‌ها: <code>memset(buf, 0, sizeof(buf))</code></td></tr>
+<tr><td><code>memcmp(a, b, n)</code></td><td>مقایسهٔ n بایت خام</td><td>مثل strcmp ولی بدون توجه به پایانگر</td></tr>
+</tbody></table></div>
+
+<div class="code" data-file="str_funcs.c" data-lang="c" data-verify="host" id="code6">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+int main(void)
+{
+    char a[] = "apple";
+    char b[] = "banana";
+    char line[16] = "LED";           // جا برای ۱۵ حرف + '\0'
+
+    // مقایسه: فقط علامت نتیجه مهم است
+    printf("apple before banana: %s\n", strcmp(a, b) &lt; 0 ? "yes" : "no");
+    printf("apple vs apple     : %d\n", strcmp(a, "apple"));
+    printf("apple vs app (3)   : %d\n", strncmp(a, "app", 3));
+
+    // چسباندن
+    strcat(line, " ");
+    strcat(line, "ON");
+    printf("line = \"%s\" (len %zu)\n", line, strlen(line));
+
+    // جستجو
+    printf("has letter 'O'     : %s\n", strchr(line, 'O') != NULL ? "yes" : "no");
+    printf("has \"OFF\"          : %s\n", strstr(line, "OFF") != NULL ? "yes" : "no");
+
+    // بایت‌های خام (بدون توجه به '\0')
+    unsigned char raw[6];
+    memset(raw, 0xAA, sizeof(raw));   // همه ۶ بایت را 0xAA کن
+    memcpy(raw, "AB", 2);             // دو بایت اول را کپی کن
+    for (size_t i = 0; i &lt; sizeof(raw); i++) {
+        printf("%02X ", raw[i]);
+    }
+    printf("\n");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code6">
+  <li data-lines="1-2"><b class="what">هدرها.</b> <code>string.h</code> همهٔ توابع بالا را می‌آورد.</li>
+  <li data-lines="6-8"><b class="what">سه آرایه.</b> <code>line</code> ۱۶ خانه دارد و فعلا فقط «LED» در آن است؛ جای خالی برای ادامه.
+    <span class="why">قبل از چسباندن، همیشه بشمار جای کافی هست. اینجا «LED ON» ۶ حرف + پایانگر است؛ ۱۶ خانه بسیار کافی است.</span></li>
+  <li data-lines="11"><b class="what">strcmp با علامت.</b> «apple» در ترتیب الفبا قبل از «banana» است، پس نتیجه منفی است و <code>&lt; 0</code> درست درمی‌آید.</li>
+  <li data-lines="12"><b class="what">برابری.</b> دو رشتهٔ یکسان نتیجهٔ <code>0</code> می‌دهند. از همین‌جا: <code>strcmp(a, b) == 0</code> یعنی «برابرند».
+    <span class="why">صفر در C «نادرست» است، پس <code>if (strcmp(a,b))</code> یعنی «برابر <b>نیستند</b>»! خیلی‌ها این را اشتباه می‌فهمند؛ همیشه با <code>== 0</code> بنویس.</span></li>
+  <li data-lines="13"><b class="what">strncmp.</b> فقط سه حرف اول «apple» و «app» را مقایسه می‌کنیم؛ برابرند.</li>
+  <li data-lines="16-17"><b class="what">چسباندن.</b> «LED» + فاصله + «ON» = «LED ON».</li>
+  <li data-lines="18"><b class="what">چاپ با گیومه.</b> <code>\"</code> داخل رشته یعنی خودِ علامت گیومه را چاپ کن.</li>
+  <li data-lines="21-22"><b class="what">جستجو.</b> حرف <code>'O'</code> هست؛ زیررشتهٔ «OFF» نیست. نتیجهٔ <code>NULL</code> یعنی پیدا نشد.</li>
+  <li data-lines="25-27"><b class="what">بایت خام.</b> ابتدا شش بایت را <code>0xAA</code> می‌کنیم، بعد دو بایت اول را با «AB» عوض می‌کنیم.
+    <span class="why"><code>memcpy</code> پایانگر نمی‌گذارد. اینجا اصلا رشته نداریم؛ فقط یک تکه بایت.</span></li>
+  <li data-lines="28-31"><b class="what">چاپ هگز.</b> <code>%02X</code> یعنی هگز بزرگ با حداقل دو رقم (صفر جلویش). ۴۱ و ۴۲ کد A و B هستند.</li>
+  <li data-lines="4-5,32-33"><b class="what">main.</b></li>
+</ol>
+<pre class="term" data-from="str_funcs.c">
+$ gcc -std=c11 -Wall -Wextra -o str_funcs str_funcs.c
+$ ./str_funcs
+apple before banana: yes
+apple vs apple     : 0
+apple vs app (3)   : 0
+line = "LED ON" (len 6)
+has letter 'O'     : yes
+has "OFF"          : no
+41 42 AA AA AA AA 
+</pre>
+
+<h3 id="strncpy">تلهٔ strncpy</h3>
+<p>اسم <code>strncpy</code> «کپی امن» را در ذهن می‌آورد ولی این‌طور نیست. کدش برای متن‌های قدیمی با طول ثابت ساخته شده. ببین چه می‌کند وقتی متن دقیقا به اندازهٔ بافر باشد:</p>
+
+<div class="code" data-file="strncpy_trap.c" data-lang="c" data-verify="host" data-warn-ok id="code7">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+int main(void)
+{
+    char dst[4];
+    memset(dst, '#', sizeof(dst));      // همه را '#' کن تا ببینیم چه می‌شود
+
+    strncpy(dst, "abcd", sizeof(dst));  // دقیقا ۴ حرف؛ جایی برای '\0' نمانده
+    for (size_t i = 0; i &lt; sizeof(dst); i++) {
+        printf("%02X ", (unsigned char)dst[i]);
+    }
+    printf("\n");
+
+    // روش امن: یک خانه کمتر کپی کن و خودت پایان را بگذار
+    strncpy(dst, "abcd", sizeof(dst) - 1);
+    dst[sizeof(dst) - 1] = '\0';
+    printf("safe copy: %s\n", dst);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code7">
+  <li data-lines="6-7"><b class="what">آماده‌سازی.</b> ۴ خانه را با <code>'#'</code> پر می‌کنیم تا هر تغییری دیده شود.</li>
+  <li data-lines="9"><b class="what">کپی ۴ حرفی در بافر ۴ خانه‌ای.</b> هر چهار حرف کپی می‌شوند و جایی برای <code>'\0'</code> نمی‌ماند.
+    <span class="why"><code>strncpy</code> فقط تا n حرف کپی می‌کند. وقتی منبع به n برسد، پایانگر نمی‌گذارد. کامپایلر هم می‌فهمد و هشدار می‌دهد (پایین‌تر).</span></li>
+  <li data-lines="10-13"><b class="what">دیدن بایت‌ها.</b> چهار عدد هگز چاپ می‌شود: هیچ صفری آخرش نیست.</li>
+  <li data-lines="15-17"><b class="what">راه درست.</b> یک خانه کمتر کپی می‌کنیم (<code>sizeof - 1</code>) و آخرین خانه را خودمان <code>'\0'</code> می‌کنیم.
+    <span class="why">این الگو همیشه تضمین می‌کند بافر پایانگر دارد، حتی اگر متن ورودی خیلی بلند باشد؛ فقط متن بریده می‌شود.</span></li>
+  <li data-lines="18"><b class="what">چاپ امن.</b> فقط «abc» چاپ می‌شود.</li>
+</ol>
+<pre class="term" data-from="strncpy_trap.c">
+$ gcc -std=c11 -Wall -Wextra -o strncpy_trap strncpy_trap.c
+$ ./strncpy_trap
+61 62 63 64 
+safe copy: abc
+</pre>
+<p>کامپایلر از پیش هشدار داده بود (همین هشدار دلیل <code>data-warn-ok</code> در این مثال است؛ ما عمدا کد بد نوشتیم):</p>
+<pre class="term" data-kind="cmd">
+strncpy_trap.c:9:5: warning: 'strncpy' output truncated before terminating nul copying 4 bytes from a string of the same length [-Wstringop-truncation]
+</pre>
+
+<h2 id="overflow">سرریز بافر: بزرگ‌ترین خطر رشته‌ها</h2>
+<p><span class="term" data-t="buffer_overflow">سرریز بافر</span> وقتی رخ می‌دهد که متنی بلندتر از آرایه‌اش را در آن بریزی. C جلوی نوشتن را <b>نمی‌گیرد</b>؛ حرف‌های اضافه روی هر چه بعد از آرایه است می‌نشینند. فرض کن یک آرایهٔ ۸ خانه‌ای برای اسم و بعدش در حافظه یک متغیر <code>flag</code> باشد:</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 330" role="img" aria-label="قبل و بعد از سرریز: متن Sahand Azadee از آرایه هشت‌خانه‌ای name بیرون می‌زند و متغیر flag را خراب می‌کند">
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">مثال: <tspan direction="ltr" unicode-bidi="isolate">name[8]</tspan> و متغیر همسایه‌اش <tspan direction="ltr" unicode-bidi="isolate">flag</tspan></text>
+
+  <text x="380" y="58" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="800">قبل: متن کوتاه «<tspan direction="ltr" unicode-bidi="isolate">Sahand</tspan>»</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="40" y="70" width="56" height="50" fill="#ffd60a"/><rect x="96" y="70" width="56" height="50" fill="#ffd60a"/><rect x="152" y="70" width="56" height="50" fill="#ffd60a"/><rect x="208" y="70" width="56" height="50" fill="#ffd60a"/><rect x="264" y="70" width="56" height="50" fill="#ffd60a"/><rect x="320" y="70" width="56" height="50" fill="#ffd60a"/><rect x="376" y="70" width="56" height="50" fill="#ff86b3"/><rect x="432" y="70" width="56" height="50" fill="#fff"/>
+    <rect x="488" y="70" width="56" height="50" fill="#3ddc97"/><rect x="544" y="70" width="56" height="50" fill="#3ddc97"/><rect x="600" y="70" width="56" height="50" fill="#3ddc97"/><rect x="656" y="70" width="56" height="50" fill="#3ddc97"/>
+  </g>
+  <g class="mono" font-size="18" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="68" y="102">S</text><text x="124" y="102">a</text><text x="180" y="102">h</text><text x="236" y="102">a</text><text x="292" y="102">n</text><text x="348" y="102">d</text><text x="404" y="102">\0</text><text x="460" y="102">?</text>
+    <text x="516" y="102">00</text><text x="572" y="102">00</text><text x="628" y="102">00</text><text x="684" y="102">00</text>
+  </g>
+
+  <text x="380" y="164" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="800">بعد: متن بلند «<tspan direction="ltr" unicode-bidi="isolate">Sahand Azadee</tspan>» کپی شد (۱۳ حرف + پایانگر)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="40" y="176" width="56" height="50" fill="#ffd60a"/><rect x="96" y="176" width="56" height="50" fill="#ffd60a"/><rect x="152" y="176" width="56" height="50" fill="#ffd60a"/><rect x="208" y="176" width="56" height="50" fill="#ffd60a"/><rect x="264" y="176" width="56" height="50" fill="#ffd60a"/><rect x="320" y="176" width="56" height="50" fill="#ffd60a"/><rect x="376" y="176" width="56" height="50" fill="#ffd60a"/><rect x="432" y="176" width="56" height="50" fill="#ffd60a"/>
+    <rect x="488" y="176" width="56" height="50" fill="#ff86b3"/><rect x="544" y="176" width="56" height="50" fill="#ff86b3"/><rect x="600" y="176" width="56" height="50" fill="#ff86b3"/><rect x="656" y="176" width="56" height="50" fill="#ff86b3"/>
+  </g>
+  <g class="mono" font-size="18" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="68" y="208">S</text><text x="124" y="208">a</text><text x="180" y="208">h</text><text x="236" y="208">a</text><text x="292" y="208">n</text><text x="348" y="208">d</text><text x="404" y="208">_</text><text x="460" y="208">A</text>
+    <text x="516" y="208">z</text><text x="572" y="208">a</text><text x="628" y="208">d</text><text x="684" y="208">e</text>
+  </g>
+  <path d="M40 240V250H488V240" stroke="#15120a" stroke-width="3" fill="none"/>
+  <path d="M488 240V250H712V240" stroke="#15120a" stroke-width="3" fill="none"/>
+  <g class="s-tx" font-size="14" font-weight="700" text-anchor="middle">
+    <text x="264" y="272"><tspan direction="ltr" unicode-bidi="isolate">name</tspan> (هشت خانه، پر شد)</text><text x="600" y="272"><tspan direction="ltr" unicode-bidi="isolate">flag</tspan> (خراب شد)</text>
+  </g>
+  <text x="380" y="304" text-anchor="middle" class="s-tx" font-size="13.5">دو بایت آخر («<tspan direction="ltr" unicode-bidi="isolate">e</tspan>» و پایانگر) هم روی چیزهای بعد از <tspan direction="ltr" unicode-bidi="isolate">flag</tspan> نوشته می‌شوند. چیدمان واقعی به کامپایلر بستگی دارد؛ اینجا فقط نمونه است</text>
+  <text x="380" y="322" text-anchor="middle" class="s-tx" font-size="13.5">و هیچ پیام خطایی هم داده نمی‌شود</text>
+</svg></div>
+<figcaption>سرریز بافر: حرف‌های اضافه بی‌سروصدا روی همسایه می‌نشینند.</figcaption></figure>
+
+<p>در PC ممکن است سیستم‌عامل جلوی بدترین خرابی را بگیرد. روی میکروکنترلر <b>هیچ سیستم‌عاملی نگهبان نیست</b>: متن اضافه روی متغیر دیگری، روی وضعیت موتور یا حتی روی آدرس برگشت یک تابع می‌نشیند. علاوه بر باگ، این یکی از رایج‌ترین راه‌های نفوذ به دستگاه‌های متصل به شبکه است. سه قاعدهٔ ساده جلویش را می‌گیرد:</p>
+<ol class="steps">
+  <li><b>اندازه را همیشه همراه بافر بدان.</b> با <code>sizeof(buf)</code> اندازه را از خود آرایه بگیر، نه از عدد نوشته‌شده در جای دیگر.</li>
+  <li><b>به‌جای strcpy/strcat/sprintf، نسخه‌های اندازه‌دار بخواه:</b> <code>snprintf</code> (پایین‌تر) یا الگوی امن <code>strncpy</code> + پایانگر دستی. یا پیش از <code>strcpy</code> بررسی کن <code>strlen(src) &lt; sizeof(dst)</code>.</li>
+  <li><b>ورودی بیرونی را باور نکن.</b> هر متنی که از UART، شبکه یا کاربر می‌رسد ممکن است هر طولی داشته باشد. بلندی‌اش را پیش از کپی چک کن.</li>
+</ol>
+
+<h2 id="printf">printf کامل</h2>
+<p>تا حالا فقط <code>%d</code> و <code>%s</code> دیدی. حالا کل ماجرا را با هم می‌آموزیم. <code>printf</code> اولین ورودی‌اش «متن قالب» (<span class="term" data-t="format_spec">format string</span>) است. هر جا علامت <code>%</code> ببیند، یک آرگومان از ادامه را برمی‌دارد و در آن جا چاپ می‌کند. هر قالب کامل از پنج تکه ساخته می‌شود که همه به جز <code>%</code> و نوع، اختیاری‌اند:</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 290" role="img" aria-label="اجزای قالب printf مثل %+08.2f: علامت درصد، پرچم‌ها، عرض، دقت و نوع">
+  <text x="380" y="26" text-anchor="middle" class="s-tx mono" font-size="16" font-weight="800">%[flags][width][.precision][length]type</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="70" y="60" width="90" height="64" rx="12" fill="#fff"/>
+    <rect x="180" y="60" width="120" height="64" rx="12" fill="#ff86b3"/>
+    <rect x="320" y="60" width="90" height="64" rx="12" fill="#ffd60a"/>
+    <rect x="430" y="60" width="110" height="64" rx="12" fill="#3ddc97"/>
+    <rect x="560" y="60" width="110" height="64" rx="12" fill="#7ea3ff"/>
+  </g>
+  <g class="mono" font-size="32" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="115" y="104">%</text><text x="240" y="104">+0</text><text x="365" y="104">8</text><text x="485" y="104">.2</text><text x="615" y="104">f</text>
+  </g>
+  <g stroke="#15120a" stroke-width="2.5" fill="none"><path d="M115 130v24"/><path d="M240 130v24"/><path d="M365 130v24"/><path d="M485 130v24"/><path d="M615 130v24"/></g>
+  <g class="s-tx" font-size="15" font-weight="800" text-anchor="middle">
+    <text x="115" y="176">شروع</text><text x="240" y="176">پرچم‌ها</text><text x="365" y="176">عرض</text><text x="485" y="176">دقت</text><text x="615" y="176">نوع</text>
+  </g>
+  <g class="s-tx" font-size="12.5" text-anchor="middle">
+    <text x="115" y="196">همیشه</text><text x="240" y="196">علامت + و صفر پر کن</text><text x="365" y="196">کل ۸ خانه</text><text x="485" y="196">۲ رقم اعشار</text><text x="615" y="196">عدد اعشاری</text>
+  </g>
+  <text x="380" y="236" text-anchor="middle" class="s-tx mono" font-size="17" font-weight="700">printf("%+08.2f", 3.14159)   →   +0003.14</text>
+  <text x="380" y="266" text-anchor="middle" class="s-tx" font-size="13.5">«<tspan direction="ltr" unicode-bidi="isolate">length</tspan>» (مثل <tspan direction="ltr" unicode-bidi="isolate">l</tspan> یا <tspan direction="ltr" unicode-bidi="isolate">z</tspan>) بین دقت و نوع می‌نشیند و درباره اندازهٔ آرگومان است؛ در مثال بالا لازم نبود</text>
+</svg></div>
+<figcaption>یک قالب کامل. هر قسمت را می‌شود حذف کرد، ولی ترتیب ثابت است.</figcaption></figure>
+
+<h3 id="specs">نوع (حرف آخر قالب)</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>قالب</th><th>آرگومان</th><th>چاپ می‌کند</th><th>نمونه</th></tr></thead>
+<tbody>
+<tr><td><code>%d</code> ، <code>%i</code></td><td><code>int</code></td><td>عدد صحیح علامت‌دار به‌صورت ده‌دهی</td><td><code>-42</code></td></tr>
+<tr><td><code>%u</code></td><td><code>unsigned int</code></td><td>عدد بی‌علامت ده‌دهی</td><td><code>3000000000</code></td></tr>
+<tr><td><code>%x</code> ، <code>%X</code></td><td><code>unsigned int</code></td><td>هگز با حرف کوچک / بزرگ</td><td><code>ff</code> / <code>FF</code></td></tr>
+<tr><td><code>%o</code></td><td><code>unsigned int</code></td><td>هشت‌هشتی</td><td><code>377</code></td></tr>
+<tr><td><code>%c</code></td><td><code>int</code> (حرف)</td><td>یک حرف</td><td><code>Z</code></td></tr>
+<tr><td><code>%s</code></td><td>رشته (نشانی اولین حرف)</td><td>حرف‌ها تا پایانگر</td><td><code>text</code></td></tr>
+<tr><td><code>%f</code></td><td><code>double</code></td><td>اعشاری معمولی، پیش‌فرض ۶ رقم اعشار</td><td><code>3.141593</code></td></tr>
+<tr><td><code>%e</code> ، <code>%E</code></td><td><code>double</code></td><td>نمایش علمی</td><td><code>3.141593e+00</code></td></tr>
+<tr><td><code>%g</code> ، <code>%G</code></td><td><code>double</code></td><td>کوتاه‌تر از بین <code>%f</code> و <code>%e</code></td><td><code>3.14159</code></td></tr>
+<tr><td><code>%p</code></td><td><code>void *</code></td><td>یک آدرس حافظه؛ قالبش را پیاده‌سازی تعیین می‌کند. آرگومان را با <code>(void *)</code> بفرست</td><td><code>0x20000000</code></td></tr>
+<tr><td><code>%%</code></td><td>هیچ</td><td>خودِ علامت درصد</td><td><code>%</code></td></tr>
+<tr><td><code>%n</code></td><td>نشانی یک <code>int</code></td><td><b>چیزی چاپ نمی‌کند؛ تعداد حرف‌های چاپ‌شده را در حافظه می‌نویسد.</b> هرگز استفاده نکن (نوشتن در حافظه از راه رشته‌ای که شاید از بیرون آمده)</td><td>—</td></tr>
+</tbody></table></div>
+
+<div class="code" data-file="fmt_basic.c" data-lang="c" data-verify="host" id="code8">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int n = 255;
+    unsigned int u = 3000000000U;
+    double pi = 3.14159265;
+
+    printf("%%d  : %d\n", n);
+    printf("%%i  : %i\n", n);
+    printf("%%u  : %u\n", u);
+    printf("%%x  : %x\n", n);
+    printf("%%X  : %X\n", n);
+    printf("%%o  : %o\n", n);
+    printf("%%#x : %#x\n", n);
+    printf("%%c  : %c\n", 'Z');
+    printf("%%s  : %s\n", "text");
+    printf("%%f  : %f\n", pi);
+    printf("%%e  : %e\n", pi);
+    printf("%%g  : %g\n", pi);
+    printf("%%%%  : 100%%\n");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code8">
+  <li data-lines="5-7"><b class="what">سه مقدار.</b> یک <code>int</code>، یک بی‌علامت بزرگ (پسوند <code>U</code> یعنی بی‌علامت) و یک عدد اعشاری.</li>
+  <li data-lines="9-10"><b class="what">%d و %i.</b> در چاپ کاملا یکسان‌اند. (در <code>scanf</code> فرق دارند که ما از آن استفاده نمی‌کنیم.)</li>
+  <li data-lines="11"><b class="what">%u.</b> عدد سه میلیارد در یک <code>int</code> علامت‌دار ۳۲بیتی جا نمی‌شود، ولی در بی‌علامت جا می‌شود.
+    <span class="why">اگر با <code>%d</code> چاپش می‌کردی منفی می‌دیدی. قالب باید با نوع بخواند (درس ۲.۲).</span></li>
+  <li data-lines="12-13"><b class="what">%x و %X.</b> ۲۵۵ در هگز <code>ff</code> است.</li>
+  <li data-lines="14"><b class="what">%o.</b> هشت‌هشتی: ۲۵۵ = ۳۷۷. (در C پیش‌فرض کمتر استفاده می‌شود، ولی سطح دسترسی فایل‌ها در Linux با آن نوشته می‌شود.)</li>
+  <li data-lines="15"><b class="what">پرچم #.</b> جلوی هگز <code>0x</code> می‌گذارد؛ خواندنش راحت‌تر می‌شود.</li>
+  <li data-lines="16-17"><b class="what">%c و %s.</b> حرف و رشته.</li>
+  <li data-lines="18-20"><b class="what">سه قالب اعشاری.</b> همه برای یک عدد ولی با سه نمایش.</li>
+  <li data-lines="21"><b class="what">چاپ خودِ %.</b> برای این‌که printf فکر نکند قالب شروع شده، دو علامت پشت‌سرهم می‌نویسیم. (در برچسب‌های بالا هم به همین دلیل <code>%%</code> نوشته‌ایم.)</li>
+</ol>
+<pre class="term" data-from="fmt_basic.c">
+$ gcc -std=c11 -Wall -Wextra -o fmt_basic fmt_basic.c
+$ ./fmt_basic
+%d  : 255
+%i  : 255
+%u  : 3000000000
+%x  : ff
+%X  : FF
+%o  : 377
+%#x : 0xff
+%c  : Z
+%s  : text
+%f  : 3.141593
+%e  : 3.141593e+00
+%g  : 3.14159
+%%  : 100%
+</pre>
+
+<h3 id="flags">پرچم‌ها، عرض و دقت</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>بخش</th><th>نوشتن</th><th>اثر</th></tr></thead>
+<tbody>
+<tr><td rowspan="5">پرچم‌ها (flags)</td><td><code>-</code></td><td>چپ‌چین در عرض تعیین‌شده</td></tr>
+<tr><td><code>+</code></td><td>علامت را همیشه چاپ کن (حتی برای مثبت)</td></tr>
+<tr><td><code>0</code></td><td>جای خالی را با صفر پر کن (برای اعداد)</td></tr>
+<tr><td>فاصله</td><td>برای مثبت‌ها یک فاصله جلوی عدد بگذار</td></tr>
+<tr><td><code>#</code></td><td>پیشوند <code>0x</code> برای هگز، <code>0</code> برای هشت‌هشتی</td></tr>
+<tr><td>عرض (width)</td><td><code>8</code> یا <code>*</code></td><td>حداقل تعداد خانه‌ای که چاپ اشغال می‌کند. اگر متن کوتاه‌تر باشد، فاصله (یا صفر) اضافه می‌شود. اگر بلندتر باشد <b>بریده نمی‌شود</b>. با <code>*</code> عرض را از آرگومان بعدی می‌گیرد</td></tr>
+<tr><td rowspan="3">دقت (precision)</td><td><code>.2</code> با <code>%f</code></td><td>تعداد رقم‌های اعشار (گرد می‌شود)</td></tr>
+<tr><td><code>.3</code> با <code>%s</code></td><td>حداکثر تعداد حرف‌هایی که چاپ می‌شود</td></tr>
+<tr><td><code>.3</code> با <code>%d</code></td><td>حداقل تعداد رقم‌ها (صفر جلو اضافه می‌شود)</td></tr>
+</tbody></table></div>
+
+<div class="code" data-file="fmt_width.c" data-lang="c" data-verify="host" id="code9">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int v = 42;
+    double t = 3.14159;
+
+    printf("[%d]\n", v);
+    printf("[%6d]\n", v);       // عرض ۶، راست‌چین
+    printf("[%-6d]\n", v);      // چپ‌چین
+    printf("[%06d]\n", v);      // پر کردن با صفر
+    printf("[%+d]\n", v);       // علامت مثبت هم بیاید
+    printf("[%.2f]\n", t);      // دو رقم اعشار
+    printf("[%8.3f]\n", t);     // عرض ۸ و سه رقم اعشار
+    printf("[%.3s]\n", "microcontroller");   // فقط ۳ حرف اول
+    printf("[%-8s]\n", "led");
+    printf("[%*d]\n", 5, v);    // عرض از آرگومان می‌آید
+    printf("[%04X]\n", 0xEF);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code9">
+  <li data-lines="5-6"><b class="what">دو مقدار.</b> یک عدد صحیح و یک اعشاری.</li>
+  <li data-lines="8"><b class="what">بدون قید.</b> فقط خودِ عدد. کروشه‌ها را برای دیدن مرز چاپ گذاشته‌ایم.</li>
+  <li data-lines="9"><b class="what">عرض ۶.</b> ۴ فاصله جلوی «42» می‌آید (راست‌چین).</li>
+  <li data-lines="10"><b class="what">چپ‌چین.</b> فاصله‌ها بعد از عدد می‌روند.</li>
+  <li data-lines="11"><b class="what">صفر پر کن.</b> <code>000042</code>؛ برای چاپ کد‌ها و ساعت‌ها (مثل ۰۵:۰۷) مفید است.</li>
+  <li data-lines="12"><b class="what">علامت مثبت.</b> <code>+42</code>.</li>
+  <li data-lines="13-14"><b class="what">دقت اعشار.</b> <code>%.2f</code> عدد ۳٫۱۴۱۵۹ را به ۳٫۱۴ گرد می‌کند. در <code>%8.3f</code> کل خروجی ۸ خانه است که سه‌تایش اعشار است.</li>
+  <li data-lines="15"><b class="what">دقت با رشته.</b> فقط سه حرف اول «microcontroller» چاپ می‌شود.
+    <span class="why">این قالب وقتی رشته شاید پایانگر نداشته باشد یا خیلی بلند باشد برای برش امن بودن به کار می‌آید.</span></li>
+  <li data-lines="16"><b class="what">رشتهٔ چپ‌چین.</b> برای ستون‌بندی جدول‌های متنی.</li>
+  <li data-lines="17"><b class="what">عرض از آرگومان.</b> <code>*</code> یعنی «عرض را از آرگومان بعدی بگیر»؛ اینجا ۵.</li>
+  <li data-lines="18"><b class="what">هگز با صفر پر.</b> چهار رقم هگز بزرگ: <code>00EF</code>.</li>
+</ol>
+<pre class="term" data-from="fmt_width.c">
+$ gcc -std=c11 -Wall -Wextra -o fmt_width fmt_width.c
+$ ./fmt_width
+[42]
+[    42]
+[42    ]
+[000042]
+[+42]
+[3.14]
+[   3.142]
+[mic]
+[led     ]
+[   42]
+[00EF]
+</pre>
+
+<h3 id="lengths">اندازهٔ آرگومان: length</h3>
+<p>حرف‌های <code>l</code>، <code>ll</code>، <code>z</code> و ... قبل از نوع می‌گویند آرگومانت از کدام <b>نوع پهن‌تر یا باریک‌تر</b> است. <code>printf</code> نوع آرگومان‌ها را <b>نمی‌داند</b>؛ فقط به قالبی که نوشتی اعتماد می‌کند و همان‌قدر بایت از آرگومان‌ها برمی‌دارد. اگر قالب با نوع نخواند، خروجی بی‌معنی می‌شود.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>length</th><th>یعنی</th><th>مثال</th></tr></thead>
+<tbody>
+<tr><td>(هیچ)</td><td><code>int</code> / <code>unsigned</code> / <code>double</code></td><td><code>%d</code> ، <code>%u</code> ، <code>%f</code></td></tr>
+<tr><td><code>hh</code></td><td>مقدار را مثل <code>char</code> ببین (فقط بایت پایین)</td><td><code>%hhu</code></td></tr>
+<tr><td><code>h</code></td><td>مثل <code>short</code></td><td><code>%hd</code></td></tr>
+<tr><td><code>l</code></td><td><code>long</code> / <code>unsigned long</code></td><td><code>%ld</code> ، <code>%lu</code> ، <code>%lx</code></td></tr>
+<tr><td><code>ll</code></td><td><code>long long</code> (۶۴ بیت)</td><td><code>%lld</code> ، <code>%llu</code></td></tr>
+<tr><td><code>z</code></td><td><code>size_t</code> (نتیجهٔ <code>sizeof</code> و <code>strlen</code>)</td><td><code>%zu</code></td></tr>
+<tr><td><code>j</code> ، <code>t</code></td><td><code>intmax_t</code> ، <code>ptrdiff_t</code></td><td><code>%jd</code> ، <code>%td</code> (کم‌کاربرد)</td></tr>
+<tr><td><code>L</code></td><td><code>long double</code></td><td><code>%Lf</code></td></tr>
+</tbody></table></div>
+
+<p>مشکل بزرگ: <code>uint32_t</code> در دو دنیا دو نوع متفاوت است. کامپایلر این محیط را پرسیدیم:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>نوع</th><th>روی PC (x86-64، gcc)</th><th>روی STM32 (arm-none-eabi-gcc)</th></tr></thead>
+<tbody>
+<tr><td><code>uint32_t</code></td><td><code>unsigned int</code></td><td><code>unsigned long</code></td></tr>
+<tr><td><code>size_t</code></td><td><code>unsigned long</code></td><td><code>unsigned int</code></td></tr>
+</tbody></table></div>
+<p>هر دو ۳۲ بیت‌اند ولی نام‌شان فرق دارد، پس قالبی که در PC درست است روی STM32 هشدار می‌دهد و برعکس. راه حل رسمی، ماکروهای <code>inttypes.h</code> است: <code>PRIu32</code>، <code>PRId32</code>، <code>PRIx32</code> و ... . هر کدام یک تکه رشته‌اند که روی هر پلتفرم قالب درست را می‌سازند و به رشتهٔ قالب می‌چسبند. این ماکروها بیرون از گیومه نوشته می‌شوند:</p>
+
+<div class="code" data-file="fmt_len.c" data-lang="c" data-verify="host" id="code10">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;inttypes.h&gt;
+
+int main(void)
+{
+    uint8_t  small = 200;
+    uint32_t big = 4000000000U;
+    long long huge = 9000000000LL;
+    size_t bytes = sizeof(big);
+
+    printf("uint8_t   : %u\n", small);
+    printf("uint32_t  : %" PRIu32 "\n", big);
+    printf("hex32     : 0x%08" PRIX32 "\n", (uint32_t)0xBEEF);
+    printf("long long : %lld\n", huge);
+    printf("size_t    : %zu\n", bytes);
+    printf("as uchar  : %hhu\n", 300);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code10">
+  <li data-lines="2-3"><b class="what">دو هدر.</b> <code>stdint.h</code> برای <code>uint32_t</code> و <code>inttypes.h</code> برای ماکروهای <code>PRI...</code>.</li>
+  <li data-lines="7-10"><b class="what">چند نوع.</b> از ۸ بیتی تا ۶۴ بیتی و <code>size_t</code>.</li>
+  <li data-lines="12"><b class="what">uint8_t.</b> هر مقدار کوچک‌تر از <code>int</code> پیش از رسیدن به <code>printf</code> خودکار به <code>int</code> بزرگ می‌شود؛ پس <code>%u</code> کافی است.
+    <span class="why">قاعدهٔ ارتقا (promotion) در C: آرگومان‌های کوچک‌تر از int را به int تبدیل می‌کند. برای همین برای uint8_t و uint16_t لازم نیست ماکرو بنویسی.</span></li>
+  <li data-lines="13"><b class="what">PRIu32.</b> قالب به سه تکه جدا می‌شود: <code>"uint32_t  : %"</code> ، ماکرو، <code>"\n"</code>. کامپایلر آن‌ها را به هم می‌چسباند. روی این PC <code>PRIu32</code> برابر <code>"u"</code> است و روی STM32 برابر <code>"lu"</code>.</li>
+  <li data-lines="14"><b class="what">هگز ۳۲ بیتی.</b> <code>0x%08</code> + <code>PRIX32</code>: هشت رقم هگز بزرگ با صفر پر می‌شود.
+    <span class="why">هشت رقم هگز = ۳۲ بیت؛ برای چاپ رجیستر و آدرس عالی است.</span></li>
+  <li data-lines="15"><b class="what">long long.</b> <code>ll</code> برای ۶۴ بیت.</li>
+  <li data-lines="16"><b class="what">size_t.</b> برای نتیجهٔ <code>sizeof</code> و <code>strlen</code> از <code>%zu</code> استفاده کن.</li>
+  <li data-lines="17"><b class="what">hh.</b> عدد ۳۰۰ (که در یک بایت جا نمی‌شود) با <code>%hhu</code> فقط بایت پایینش را نشان می‌دهد: ۳۰۰ − ۲۵۶ = ۴۴.</li>
+</ol>
+<pre class="term" data-from="fmt_len.c">
+$ gcc -std=c11 -Wall -Wextra -o fmt_len fmt_len.c
+$ ./fmt_len
+uint8_t   : 200
+uint32_t  : 4000000000
+hex32     : 0x0000BEEF
+long long : 9000000000
+size_t    : 4
+as uchar  : 44
+</pre>
+
+<h3 id="mismatch">اگر قالب با نوع نخواند</h3>
+<div class="code" data-file="fmt_err.c" data-lang="c" data-verify="host-fail" data-cflags="-Werror=format" id="code11">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    long long big = 5000000000LL;
+    printf("%d\n", big);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code11">
+  <li data-lines="5"><b class="what">مقدار ۶۴ بیتی.</b> پنج میلیارد در ۳۲ بیت جا نمی‌شود.</li>
+  <li data-lines="6"><b class="what">قالب اشتباه.</b> <code>%d</code> فقط ۳۲ بیت برمی‌دارد، ولی ما ۶۴ بیت فرستادیم.
+    <span class="why">printf فقط به رشتهٔ قالب اعتماد می‌کند. کامپایلر gcc ولی قالب را می‌خواند و با نوع‌ها می‌سنجد. این دقیقا دلیل <code>-Wall</code> است.</span></li>
+</ol>
+<pre class="term" data-kind="err" data-from="fmt_err.c">
+fmt_err.c: In function 'main':
+fmt_err.c:6:14: error: format '%d' expects argument of type 'int', but argument 2 has type 'long long int' [-Werror=format=]
+</pre>
+<p>ما هشدار را با <code>-Werror=format</code> به خطا تبدیل کردیم. بدون آن فقط هشدار می‌گیری و برنامه ساخته می‌شود. روی همین PC چاپ می‌شد <code>705032704</code>، یعنی ۳۲ بیت پایین عدد. روی یک پلتفرم دیگر ممکن بود چیز دیگری بشود، چون رفتار رسما تعریف‌نشده است. <b>هشدار «format» را هرگز نادیده نگیر.</b></p>
+
+<h2 id="snprintf">ساختن متن: snprintf</h2>
+<p>گاهی متن را نمی‌خواهی چاپ کنی؛ می‌خواهی <b>بسازی و در آرایه بگذاری</b> (مثلاً برای فرستادن روی UART). خانوادهٔ <code>printf</code> چند عضو دارد:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>تابع</th><th>مقصد</th><th>ایمنی</th></tr></thead>
+<tbody>
+<tr><td><code>printf(fmt, ...)</code></td><td>خروجی استاندارد (در PC صفحه؛ در MCU هرجا تنظیم کنی)</td><td>بی‌خطر</td></tr>
+<tr><td><code>sprintf(buf, fmt, ...)</code></td><td>آرایه</td><td><b>خطرناک:</b> اندازهٔ بافر را نمی‌داند. هرگز استفاده نکن</td></tr>
+<tr><td><code>snprintf(buf, size, fmt, ...)</code></td><td>آرایه</td><td><b>امن:</b> بیشتر از <code>size-1</code> حرف نمی‌نویسد و همیشه پایانگر می‌گذارد</td></tr>
+</tbody></table></div>
+<p>نتیجهٔ <code>snprintf</code> یک عدد است: <b>طولی که متن کامل نیاز داشت</b> (بدون پایانگر)، حتی اگر بریده شده باشد. اگر آن عدد بزرگ‌تر یا مساوی اندازهٔ بافر باشد، یعنی متن بریده شده است. این ویژگی امکان می‌دهد ببینی جا کم بود یا نه:</p>
+
+<div class="code" data-file="snprintf_demo.c" data-lang="c" data-verify="host" id="code12">
+<pre>
+#include &lt;stdio.h&gt;
+
+// می‌سازد: "name=value" و طول لازم را برمی‌گرداند
+static int make_text(char out[], size_t size, const char name[], int value)
+{
+    return snprintf(out, size, "%s=%d", name, value);
+}
+
+int main(void)
+{
+    char buf[12];
+
+    int need = make_text(buf, sizeof(buf), "temp", 235);
+    printf("text = \"%s\", needed = %d, buffer = %zu\n", buf, need, sizeof(buf));
+
+    need = make_text(buf, sizeof(buf), "temperature", 123456);
+    printf("text = \"%s\", needed = %d, buffer = %zu\n", buf, need, sizeof(buf));
+
+    if (need &gt;= (int)sizeof(buf)) {
+        int lost = need - ((int)sizeof(buf) - 1);
+        printf("cut off! %d characters were lost\n", lost);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code12">
+  <li data-lines="3-7"><b class="what">تابع کمکی.</b> «نام=مقدار» را در <code>out</code> می‌سازد و خروجی <code>snprintf</code> را برمی‌گرداند.
+    <span class="why">اندازه را به‌عنوان پارامتر می‌گیرد (<code>size</code>)، چون داخل تابع <code>sizeof(out)</code> اندازهٔ آرایه را نمی‌دهد (درس ۲.۷).</span></li>
+  <li data-lines="11"><b class="what">بافر ۱۲ خانه‌ای.</b> جای ۱۱ حرف + پایانگر.</li>
+  <li data-lines="13-14"><b class="what">متن کوتاه.</b> «temp=235» هشت حرف است و جا می‌شود. برگشتی ۸ است.</li>
+  <li data-lines="16-17"><b class="what">متن بلند.</b> متن کامل ۱۸ حرف می‌شد. فقط ۱۱ حرف اول (به‌علاوهٔ پایانگر) در بافر می‌نشیند؛ ولی برگشتی همچنان ۱۸ است.</li>
+  <li data-lines="19-22"><b class="what">تشخیص برش.</b> اگر <code>need &gt;= size</code>، یعنی بریده شده. تعداد حرف‌های ازدست‌رفته = need منهای ۱۱ حرفی که جا شد.
+    <span class="why">این شرط را حتماً بنویس: در ارتباط سریال، پیام نصفه‌شده می‌تواند دستگاه مقابل را گیج کند.</span></li>
+  <li data-lines="9-10,23-24"><b class="what">main.</b></li>
+</ol>
+<pre class="term" data-from="snprintf_demo.c">
+$ gcc -std=c11 -Wall -Wextra -o snprintf_demo snprintf_demo.c
+$ ./snprintf_demo
+text = "temp=235", needed = 8, buffer = 12
+text = "temperature", needed = 18, buffer = 12
+cut off! 7 characters were lost
+</pre>
+
+<h2 id="parse">تبدیل امن متن به عدد</h2>
+<p>کاربر یا دستگاه دیگر برایت متن می‌فرستد: «250». ولی کامپیوتر برای محاسبه عدد می‌خواهد نه متن. کار تبدیل متن به ساختار قابل‌محاسبه را <span class="term" data-t="parsing">پارس</span> (parse) می‌گویند. سه تابع اول که به ذهن می‌رسد:</p>
+<ul>
+  <li><code>atoi("123")</code>: ساده و <b>بد</b>. اگر متن غلط باشد (<code>"abc"</code>) هم <code>0</code> برمی‌گرداند؛ نمی‌توانی بفهمی خطا بود یا واقعا «0» فرستاده شده بود. سرریز را هم نمی‌گوید.</li>
+  <li><code>sscanf</code>: قدرتمند ولی پیچیده و پرهزینه‌تر در Flash؛ در MCU معمولا دور است.</li>
+  <li><code>strtol</code>: <b>انتخاب درست.</b> هم عدد می‌دهد، هم می‌گوید تا کجا خوانده و هم می‌گوید سرریز شد یا نه.</li>
+</ul>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>فرض کن مسئول ثبت‌نام یک کلاس هستی و کاربرگه‌ای پر شده: «سن: ۱۲abc». <code>atoi</code> کارمندی است که هر چه بفهمد عدد می‌نویسد و اصلا نمی‌گوید کاربرگه خراب بود. <code>strtol</code> کارمند دقیقی است که می‌گوید: «تا اینجا را عدد خواندم؛ بقیهٔ نوشته را نتوانستم بخوانم. کجا ایستادم؟ اینجا.» تو از همین «کجا ایستادم» برای رد کردن کاربرگه استفاده می‌کنی.</p></div>
+
+<p>ما یک تابع <code>parse_int</code> می‌سازیم که «موفق» یا «رد» می‌گوید و عدد را در جایی که تو نشان بدهی می‌نویسد. این تابع دو چیز دارد که هنوز ندیده‌ای: علامت <code>*</code> و <code>&amp;</code>. آن‌ها را مثل یک <b>الگوی آماده</b> کپی کن؛ معنی دقیقشان در درس <a href="3-2.html">۳.۲</a> می‌آید. فعلا همین‌قدر بدان: <code>int *out</code> یعنی «نشانی یک جعبهٔ int که تابع اجازه دارد در آن بنویسد»، و <code>&amp;n</code> یعنی «نشانی جعبهٔ n». با این کار تابع می‌تواند هم «موفق/ناموفق» را برگرداند، هم عدد را تحویل بدهد.</p>
+
+<div class="code" data-file="parse_int.c" data-lang="c" data-verify="host" id="code13">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;errno.h&gt;
+#include &lt;limits.h&gt;
+#include &lt;stdbool.h&gt;
+
+// رشته را به int تبدیل می‌کند. true یعنی موفق؛ عدد در *out نوشته می‌شود.
+bool parse_int(const char text[], int *out)
+{
+    char *end;
+    long value;
+
+    if (text[0] == '\0') {
+        return false;               // رشتهٔ خالی
+    }
+    errno = 0;
+    value = strtol(text, &amp;end, 10);
+    if (end == text) {
+        return false;               // هیچ رقمی پیدا نشد
+    }
+    if (*end != '\0') {
+        return false;               // بعد از عدد، آشغال مانده
+    }
+    if (errno == ERANGE || value &gt; INT_MAX || value &lt; INT_MIN) {
+        return false;               // عدد از محدوده بیرون است
+    }
+    *out = (int)value;
+    return true;
+}
+
+int main(void)
+{
+    const char tests[][24] = {
+        "42", "-17", "+8", "12abc", "", "abc", "3.5",
+        "2147483648", "99999999999999999999", " 5"
+    };
+    int count = (int)(sizeof(tests) / sizeof(tests[0]));
+
+    for (int i = 0; i &lt; count; i++) {
+        int n = 0;
+        if (parse_int(tests[i], &amp;n)) {
+            printf("\"%s\" -&gt; OK, %d\n", tests[i], n);
+        } else {
+            printf("\"%s\" -&gt; rejected\n", tests[i]);
+        }
+    }
+    printf("atoi(\"abc\") = %d, atoi(\"0\") = %d\n", atoi("abc"), atoi("0"));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code13">
+  <li data-lines="1-5"><b class="what">هدرها.</b> <code>stdlib.h</code> برای <code>strtol</code> و <code>atoi</code>؛ <code>errno.h</code> برای متغیر خطا <code>errno</code> و <code>ERANGE</code>؛ <code>limits.h</code> برای <code>INT_MAX</code> و <code>INT_MIN</code>؛ <code>stdbool.h</code> برای <code>bool</code>.</li>
+  <li data-lines="7-9,29"><b class="what">امضای تابع.</b> نتیجه <code>bool</code> است. ورودی رشته و «جعبهٔ خروجی» است.
+    <span class="why">نتیجه را در خروجی تابع نمی‌گذاریم چون هر int (حتی ۰ و منفی) یک عدد معتبر است؛ جایی برای «خطا» باقی نمی‌ماند.</span></li>
+  <li data-lines="10-11"><b class="what">دو متغیر کمکی.</b> <code>end</code> بعد از خواندن نشان می‌دهد <code>strtol</code> تا کدام حرف رسید. <code>value</code> عدد <code>long</code> می‌ماند.</li>
+  <li data-lines="13-15"><b class="what">رشتهٔ خالی.</b> اگر خانهٔ اول پایانگر باشد، عددی وجود ندارد؛ رد.</li>
+  <li data-lines="16"><b class="what">errno را صفر کن.</b>
+    <span class="why"><code>strtol</code> فقط در صورت خطا <code>errno</code> را می‌نویسد؛ اگر از قبل عدد کهنه‌ای در آن مانده باشد، به‌اشتباه فکر می‌کنیم خطا شده است.</span></li>
+  <li data-lines="17"><b class="what">خواندن.</b> سه ورودی: متن، جایی برای گزارش نقطهٔ توقف (<code>&amp;end</code>)، و مبنای عدد (۱۰ یعنی ده‌دهی).</li>
+  <li data-lines="18-20"><b class="what">هیچ رقمی نبود.</b> اگر توقف در همان حرف اول بود (<code>end == text</code>)، مثل «abc» یعنی حتی یک رقم هم خوانده نشد.</li>
+  <li data-lines="21-23"><b class="what">آشغال بعد از عدد.</b> اگر جایی که ایستاده‌ایم پایانگر نباشد، متن تمیز نیست (مثل «12abc» یا «3.5»).
+    <span class="why">اگر این چک را نگذاری، «12abc» بی‌سروصدا ۱۲ می‌شود و خطای کاربر پنهان می‌ماند.</span></li>
+  <li data-lines="24-26"><b class="what">محدوده.</b> اگر عدد از <code>long</code> بیرون بود، <code>errno</code> برابر <code>ERANGE</code> می‌شود. اگر در <code>long</code> جا شد ولی در <code>int</code> نه (روی PC که <code>long</code> ۶۴ بیت است) هم رد می‌کنیم.</li>
+  <li data-lines="27-28"><b class="what">تحویل.</b> عدد را در جعبهٔ خروجی می‌نویسیم و «موفق» برمی‌گردانیم.</li>
+  <li data-lines="33-37"><b class="what">آرایهٔ دوبعدی از رشته‌ها.</b> ده متن آزمایشی؛ هر کدام حداکثر ۲۴ خانه. (آرایهٔ دوبعدی در درس ۲.۷ بود؛ تعداد را با تقسیم <code>sizeof</code> ها می‌شماریم.)</li>
+  <li data-lines="39-46"><b class="what">امتحان همه.</b> هر متن را پارس می‌کنیم و نتیجه را چاپ می‌کنیم.</li>
+  <li data-lines="47"><b class="what">مقایسه با atoi.</b> «abc» و «0» هر دو ۰ می‌شوند؛ از رویشان نمی‌شود فهمید کدام درست بود.</li>
+  <li data-lines="31-32,48-49"><b class="what">main.</b></li>
+</ol>
+<pre class="term" data-from="parse_int.c">
+$ gcc -std=c11 -Wall -Wextra -o parse_int parse_int.c
+$ ./parse_int
+"42" -&gt; OK, 42
+"-17" -&gt; OK, -17
+"+8" -&gt; OK, 8
+"12abc" -&gt; rejected
+"" -&gt; rejected
+"abc" -&gt; rejected
+"3.5" -&gt; rejected
+"2147483648" -&gt; rejected
+"99999999999999999999" -&gt; rejected
+" 5" -&gt; OK, 5
+atoi("abc") = 0, atoi("0") = 0
+</pre>
+<p>دو نکتهٔ جالب در خروجی: «+8» پذیرفته شد (علامت مثبت مجاز است) و « 5» با فاصلهٔ اول هم پذیرفته شد چون <code>strtol</code> فاصله‌های ابتدای متن را نادیده می‌گیرد. اگر نمی‌خواهی، جلوی تابع چک کن <code>isspace(text[0])</code> نباشد. یادت باشد روی میکروکنترلر (که <code>long</code> ۳۲ بیت است) شرط <code>value &gt; INT_MAX</code> همیشه نادرست است ولی بی‌ضرر است؛ کد روی هر دو پلتفرم درست می‌ماند.</p>
+
+<h2 id="ctype">ctype.h: سؤال دربارهٔ حرف</h2>
+<p>تابع‌های <code>ctype.h</code> دربارهٔ یک حرف سؤال می‌کنند یا آن را تبدیل می‌کنند:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>تابع</th><th>جواب می‌دهد</th></tr></thead>
+<tbody>
+<tr><td><code>isdigit(c)</code></td><td>رقم ۰ تا ۹ است؟</td></tr>
+<tr><td><code>isalpha(c)</code></td><td>حرف الفبای انگلیسی است؟</td></tr>
+<tr><td><code>isalnum(c)</code></td><td>حرف یا رقم است؟</td></tr>
+<tr><td><code>isspace(c)</code></td><td>فاصله، تب یا خط جدید (<code>\n \r \t</code>) است؟</td></tr>
+<tr><td><code>isupper(c)</code> ، <code>islower(c)</code></td><td>بزرگ / کوچک است؟</td></tr>
+<tr><td><code>toupper(c)</code> ، <code>tolower(c)</code></td><td>معادل بزرگ / کوچک را برمی‌گرداند</td></tr>
+</tbody></table></div>
+<p>پاسخ‌های «آره/نه» عدد صفر (نه) یا غیرصفر (آره) هستند؛ در <code>if</code> همین کافی است.</p>
+
+<div class="code" data-file="ctype_demo.c" data-lang="c" data-verify="host" id="code14">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;ctype.h&gt;
+
+int main(void)
+{
+    char text[] = "Room 42: led on";
+    int letters = 0;
+    int digits = 0;
+    int spaces = 0;
+
+    for (int i = 0; text[i] != '\0'; i++) {
+        unsigned char c = (unsigned char)text[i];
+        if (isalpha(c)) {
+            letters++;
+        } else if (isdigit(c)) {
+            digits++;
+        } else if (isspace(c)) {
+            spaces++;
+        }
+        text[i] = (char)toupper(c);
+    }
+    printf("%s\n", text);
+    printf("letters=%d digits=%d spaces=%d\n", letters, digits, spaces);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code14">
+  <li data-lines="2"><b class="what">هدر ctype.</b></li>
+  <li data-lines="6-9"><b class="what">متن و سه شمارنده.</b></li>
+  <li data-lines="11"><b class="what">حلقه تا پایانگر.</b> شرط <code>text[i] != '\0'</code> همان الگوی <code>strlen</code> است.</li>
+  <li data-lines="12"><b class="what">تبدیل به unsigned char.</b> حرف را قبل از دادن به توابع <code>ctype</code> به <code>unsigned char</code> تبدیل می‌کنیم.
+    <span class="why">این توابع فقط مقدار ۰ تا ۲۵۵ (یا EOF) را قبول دارند. <code>char</code> در بعضی پلتفرم‌ها علامت‌دار است و حرف غیر ASCII منفی می‌شود؛ آن‌وقت رفتار تابع تعریف‌نشده است.</span></li>
+  <li data-lines="13-19"><b class="what">شمردن.</b> هر حرف به یکی از سه دسته می‌رود.</li>
+  <li data-lines="20"><b class="what">بزرگ کردن در جا.</b> حرف را بزرگ می‌کنیم و در همان خانه برمی‌گردانیم. <code>(char)</code> نتیجهٔ <code>int</code> را دوباره به <code>char</code> برمی‌گرداند.</li>
+  <li data-lines="22-23"><b class="what">چاپ نتیجه.</b></li>
+</ol>
+<pre class="term" data-from="ctype_demo.c">
+$ gcc -std=c11 -Wall -Wextra -o ctype_demo ctype_demo.c
+$ ./ctype_demo
+ROOM 42: LED ON
+letters=9 digits=2 spaces=3
+</pre>
+
+<h2 id="parser">پروژهٔ کوچک: پارسر فرمان «LED ON»</h2>
+<p>وقتی به یک میکروکنترلر با UART وصل می‌شوی و می‌نویسی «LED ON»، برنامه باید متن را بخواند و تصمیم بگیرد. کارهای لازم را قدم‌به‌قدم می‌سازیم:</p>
+<ol class="steps">
+  <li><b>خط را به یک بافر کپی کن</b> (پس از چک طول، تا سرریز نشود).</li>
+  <li><b>تمیزکاری:</b> فاصله و <code>\r\n</code> انتهای خط را حذف کن؛ همهٔ حرف‌ها را بزرگ کن تا «led on» و «LED ON» یکی شوند.</li>
+  <li><b>مقایسهٔ کل خط</b> با <code>strcmp</code> برای فرمان‌های ثابت («LED ON»، «LED OFF»).</li>
+  <li><b>مقایسهٔ پیشوند</b> با <code>strncmp</code> برای فرمان‌هایی که عدد می‌گیرند («BLINK 250») و بعد پارس عدد با <code>strtol</code>.</li>
+  <li><b>هر شاخه جواب بدهد:</b> «OK ...» یا «ERR ...».</li>
+</ol>
+
+<div class="code" data-file="cmd_parser.c" data-lang="c" data-verify="host" id="code15">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+#include &lt;ctype.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;errno.h&gt;
+#include &lt;stdbool.h&gt;
+
+#define LINE_MAX_LEN 32
+
+static bool led_on = false;
+static int  blink_ms = 500;
+
+// حذف فاصله و \r \n از انتهای خط، و بزرگ کردن حرف‌ها
+static void normalize(char line[])
+{
+    size_t n = strlen(line);
+    while (n &gt; 0 &amp;&amp; isspace((unsigned char)line[n - 1])) {
+        line[n - 1] = '\0';
+        n--;
+    }
+    for (size_t i = 0; i &lt; n; i++) {
+        line[i] = (char)toupper((unsigned char)line[i]);
+    }
+}
+
+static bool parse_ms(const char text[], int *out)
+{
+    char *end;
+    errno = 0;
+    long v = strtol(text, &amp;end, 10);
+    if (end == text || *end != '\0' || errno == ERANGE || v &lt; 10 || v &gt; 5000) {
+        return false;
+    }
+    *out = (int)v;
+    return true;
+}
+
+static void handle_line(const char raw[])
+{
+    char line[LINE_MAX_LEN];
+
+    if (strlen(raw) &gt;= sizeof(line)) {
+        printf("ERR too long\n");
+        return;
+    }
+    strcpy(line, raw);
+    normalize(line);
+
+    if (strcmp(line, "LED ON") == 0) {
+        led_on = true;
+        printf("OK led=on\n");
+    } else if (strcmp(line, "LED OFF") == 0) {
+        led_on = false;
+        printf("OK led=off\n");
+    } else if (strncmp(line, "BLINK ", 6) == 0) {
+        int ms;
+        if (parse_ms(&amp;line[6], &amp;ms)) {
+            blink_ms = ms;
+            printf("OK blink=%d ms\n", blink_ms);
+        } else {
+            printf("ERR bad number\n");
+        }
+    } else {
+        printf("ERR unknown command\n");
+    }
+}
+
+int main(void)
+{
+    const char input[][64] = {
+        "led on\r\n", "LED OFF", "blink 250", "BLINK abc", "BLINK 99999",
+        "dance", "this line is far too long to fit in the buffer"
+    };
+    int count = (int)(sizeof(input) / sizeof(input[0]));
+
+    for (int i = 0; i &lt; count; i++) {
+        handle_line(input[i]);
+    }
+    printf("final: led=%d blink=%d\n", led_on, blink_ms);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code15">
+  <li data-lines="1-6"><b class="what">هدرها.</b> همان توابعی که در این درس دیدی.</li>
+  <li data-lines="8"><b class="what">نام برای عدد.</b> <code>#define</code> یک نام را با یک عدد جایگزین می‌کند (ماکرو، درس <a href="4-1.html">۴.۱</a>). اینجا طول بیشینهٔ خط ۳۲ است.
+    <span class="why">عدد را یک جا می‌نویسیم تا بعدا فقط همین‌جا عوضش کنیم.</span></li>
+  <li data-lines="10-11"><b class="what">وضعیت دستگاه.</b> دو متغیر سراسری: LED روشن است یا نه؛ فاصلهٔ چشمک‌زدن. <code>static</code> یعنی فقط داخل این فایل دیده شوند (درس ۲.۶).</li>
+  <li data-lines="13-20,24"><b class="what">حذف فاصله‌های انتها.</b> از آخر رشته شروع می‌کنیم؛ تا وقتی حرف آخر فاصله، <code>\r</code> یا <code>\n</code> است، آن را پایانگر می‌کنیم و رشته کوتاه می‌شود.
+    <span class="why">ترمینال‌های سریال معمولا با Enter حرف <code>\r</code> یا <code>\r\n</code> می‌فرستند. اگر حذفش نکنی، «LED ON\r» هرگز با «LED ON» برابر نمی‌شود و فرمان کار نمی‌کند؛ باگی که ساعت‌ها وقت می‌گیرد.</span></li>
+  <li data-lines="21-23"><b class="what">بزرگ کردن.</b> همه چیز بزرگ می‌شود تا مقایسه ساده شود.</li>
+  <li data-lines="26-36"><b class="what">پارس عدد با محدوده.</b> همان الگوی <code>strtol</code>، این‌بار همه شرط‌ها در یک <code>if</code> و محدودهٔ مجاز ۱۰ تا ۵۰۰۰ میلی‌ثانیه.
+    <span class="why">فقط «عدد بودن» کافی نیست. چشمک‌زدن با فاصلهٔ ۰ یا ۹۹۹۹۹ میلی‌ثانیه بی‌معنی است. محدودهٔ منطقی را همیشه چک کن.</span></li>
+  <li data-lines="38-39,66"><b class="what">تابع پردازش یک خط.</b> ورودی <code>raw</code> فقط‌خواندنی است (<code>const</code>).</li>
+  <li data-lines="40"><b class="what">بافر کاری.</b> ۳۲ خانه؛ کپی ما اینجاست و می‌شود آن را تغییر داد.</li>
+  <li data-lines="42-45"><b class="what">چک طول.</b> اگر خط ورودی به ۳۲ حرف یا بیشتر برسد، جایی برای پایانگر نیست؛ خطا می‌دهیم و کپی نمی‌کنیم.
+    <span class="why">این همان قانون «ورودی بیرونی را باور نکن» است. شرط <code>&gt;=</code> است نه <code>&gt;</code>، چون پایانگر هم یک خانه می‌خواهد.</span></li>
+  <li data-lines="46-47"><b class="what">کپی و تمیز کردن.</b> حالا که مطمئنیم جا هست، <code>strcpy</code> امن است.</li>
+  <li data-lines="49-51"><b class="what">فرمان اول.</b> اگر کل خط «LED ON» باشد، وضعیت را عوض می‌کنیم و پاسخ می‌دهیم. (روی سخت‌افزار واقعی همین‌جا پایهٔ GPIO را ۱ می‌کردی.)</li>
+  <li data-lines="52-54"><b class="what">فرمان دوم.</b> «LED OFF».</li>
+  <li data-lines="55"><b class="what">فرمان با آرگومان.</b> <code>strncmp(line, "BLINK ", 6)</code> فقط ۶ حرف اول را مقایسه می‌کند.</li>
+  <li data-lines="56-62"><b class="what">پارس عدد.</b> <code>&amp;line[6]</code> یعنی «متن از حرف شمارهٔ ۶ به بعد» (بعد از «BLINK »). این نوشتن را هم مثل الگوی آماده بپذیر تا در درس <a href="3-3.html">۳.۳</a> بفهمی. اگر عدد معتبر بود ذخیره می‌کنیم، وگرنه «ERR bad number».</li>
+  <li data-lines="63-65"><b class="what">فرمان ناشناس.</b> هر چیز دیگر یعنی خطا.
+    <span class="why">هرگز بی‌سروصدا نادیده نگیر. کاربر باید بفهمد فرمانش رد شد.</span></li>
+  <li data-lines="70-73"><b class="what">ورودی‌های آزمایشی.</b> از کوچک و بزرگ و <code>\r\n</code> تا خطاهای مختلف. در دستگاه واقعی این خط‌ها از UART می‌آیند (درس ۵.۵).</li>
+  <li data-lines="74-78"><b class="what">حلقهٔ آزمایش.</b> هر ورودی را به تابع می‌دهیم.</li>
+  <li data-lines="79"><b class="what">وضعیت نهایی.</b> چاپ می‌کنیم LED و فاصله چه شده‌اند.</li>
+</ol>
+<pre class="term" data-from="cmd_parser.c">
+$ gcc -std=c11 -Wall -Wextra -o cmd_parser cmd_parser.c
+$ ./cmd_parser
+OK led=on
+OK led=off
+OK blink=250 ms
+ERR bad number
+ERR bad number
+ERR unknown command
+ERR too long
+final: led=0 blink=250
+</pre>
+<p>چهار پاسخ خطا را ببین: «BLINK abc»، «BLINK 99999» (خارج از محدوده)، «dance» (ناشناس) و خط بلند همه رد شدند، و وضعیت دستگاه (<code>blink=250</code>) از خطاها دست‌نخورده ماند.</p>
+
+<h2 id="mcu">printf در میکروکنترلر</h2>
+<p>روی PC، <code>printf</code> به صفحه می‌رود. ولی روی میکروکنترلر «صفحه» وجود ندارد! <code>printf</code> باید یک جایی متن را بفرستد. جای معمول <b>UART</b> است: سیمی که بایت‌ها را یکی‌یکی می‌فرستد و ST-LINK روی برد Nucleo (یا مبدل USB روی برد ESP32) آن را به USB رایانه می‌رساند. UART را کامل در درس <a href="5-5.html">۵.۵</a> می‌سازیم؛ اینجا فقط مسیر متن را ببین:</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 210" role="img" aria-label="مسیر printf تا ترمینال رایانه: printf، تابع _write، ثبات داده USART2، مبدل USB، ترمینال">
+  <defs><marker id="ar3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">راه متنِ printf تا صفحه‌ای که می‌بینی</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="18" y="56" width="124" height="86" rx="12" fill="#ffd60a"/>
+    <rect x="168" y="56" width="124" height="86" rx="12" fill="#7ea3ff"/>
+    <rect x="318" y="56" width="124" height="86" rx="12" fill="#ff9a4d"/>
+    <rect x="468" y="56" width="124" height="86" rx="12" fill="#ff86b3"/>
+    <rect x="618" y="56" width="124" height="86" rx="12" fill="#3ddc97"/>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M144 99H164" marker-end="url(#ar3)"/><path d="M294 99H314" marker-end="url(#ar3)"/><path d="M444 99H464" marker-end="url(#ar3)"/><path d="M594 99H614" marker-end="url(#ar3)"/>
+  </g>
+  <g class="mono" font-size="15.5" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="80" y="90">printf()</text><text x="230" y="90">_write()</text><text x="380" y="90">USART2_DR</text><text x="530" y="90">ST-LINK</text><text x="680" y="90">Terminal</text>
+  </g>
+  <g fill="#15120a" font-size="13.5" font-weight="700" text-anchor="middle">
+    <text x="80" y="118">ساخت متن</text><text x="230" y="118">تحویل بایت‌ها</text><text x="380" y="118">ثبات داده</text><text x="530" y="118">پل به USB</text><text x="680" y="118">نمایش در PC</text>
+  </g>
+  <text x="380" y="176" text-anchor="middle" class="s-tx" font-size="13.5">فقط حلقه‌ای که بایت‌ها را به ثبات می‌دهد مخصوص برد توست؛ بقیه را کتابخانه انجام می‌دهد</text>
+  <text x="380" y="196" text-anchor="middle" class="s-tx" font-size="13.5">در کتابخانهٔ <tspan direction="ltr" unicode-bidi="isolate">newlib</tspan>، تابع <tspan direction="ltr" unicode-bidi="isolate">_write</tspan> همان «نقطهٔ اتصال» است</text>
+</svg></div>
+<figcaption>در STM32 با <span class="en">arm-none-eabi-gcc</span> فقط تابع <code>_write</code> را خودت می‌نویسی تا <code>printf</code> کار کند. به این کار «هدایت خروجی» (<span class="term" data-t="retarget">retarget</span>) می‌گویند.</figcaption></figure>
+
+<p>کتابخانهٔ C همراه <code>arm-none-eabi-gcc</code> (که اسمش newlib است) خودش <code>printf</code> را دارد. آخرِ کارِ <code>printf</code> وقتی متن ساخته شد، بایت‌های آن را به تابعی به اسم <code>_write</code> می‌دهد و فرض می‌کند تو آن را نوشته‌ای. این تابع اینجا به USART2 بایت می‌فرستد (روی Nucleo-F411RE، USART2 از پایه‌های PA2/PA3 به ST-LINK وصل است). ثبات‌های زیر از دفترچهٔ RM0383 است: <code>SR</code> در آفست ۰ و بیت ۷ آن <code>TXE</code> (یعنی «ثبات ارسال خالی است»)، و <code>DR</code> در آفست ۴. فرض این کد این است که UART قبلا تنظیم و روشن شده است (کلاک، پایه‌ها، سرعت)؛ کار درس ۵.۵ است.</p>
+
+<div class="code" data-file="retarget.c" data-lang="c" data-verify="arm" id="code16">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define USART2_BASE  0x40004400UL
+#define USART2_SR    (*(volatile uint32_t *)(USART2_BASE + 0x00UL))
+#define USART2_DR    (*(volatile uint32_t *)(USART2_BASE + 0x04UL))
+#define USART_SR_TXE (1UL &lt;&lt; 7)
+
+// newlib هر printf را در نهایت به _write می‌رساند
+int _write(int fd, const char *buf, int len)
+{
+    (void)fd;
+    for (int i = 0; i &lt; len; i++) {
+        while ((USART2_SR &amp; USART_SR_TXE) == 0) {
+            // منتظر بمان تا دیتاریجستر خالی شود
+        }
+        USART2_DR = (uint32_t)(unsigned char)buf[i];
+    }
+    return len;
+}
+</pre></div>
+<ol class="walk" data-for="code16">
+  <li data-lines="1"><b class="what">نوع‌های اندازه‌ثابت.</b> برای <code>uint32_t</code>.</li>
+  <li data-lines="3-6"><b class="what">نام برای ثبات‌ها.</b> <code>#define</code> نام‌های خوانا می‌سازد: پایهٔ USART2 برابر <code>0x40004400</code> است. <code>SR</code> در آفست ۰ و <code>DR</code> در آفست ۴. <code>(1UL &lt;&lt; 7)</code> یعنی بیت شمارهٔ ۷ (TXE). نوشتار <code>*(volatile uint32_t *)</code> یعنی «این آدرس را مثل یک جعبهٔ ۳۲ بیتی ببین که هر لحظه ممکن است سخت‌افزار عوضش کند».
+    <span class="why">این‌ها ابزارهای درس‌های <a href="3-1.html">۳.۱</a> (بیت‌ها)، <a href="3-6.html">۳.۶</a> (volatile) و <a href="4-1.html">۴.۱</a> (ماکرو) هستند. فعلا فقط شکل کلی را ببین.</span></li>
+  <li data-lines="8-9,19"><b class="what">تابع _write.</b> newlib آن را با شمارهٔ فایل، آرایهٔ بایت‌ها و تعدادشان صدا می‌زند.</li>
+  <li data-lines="11"><b class="what">نادیده گرفتن fd.</b> <code>fd</code> می‌گوید stdout است یا stderr؛ ما هر دو را به یک UART می‌فرستیم. <code>(void)fd;</code> هشدار «پارامتر بی‌استفاده» را ساکت می‌کند.</li>
+  <li data-lines="12,17"><b class="what">حلقه روی همهٔ بایت‌ها.</b></li>
+  <li data-lines="13-15"><b class="what">صبر تا آماده.</b> تا وقتی TXE صفر است (ثبات هنوز مشغول ارسال بایت قبلی است)، همین‌جا بچرخ.
+    <span class="why">اگر منتظر نمانی، بایت جدید روی بایتی که هنوز در راه است نوشته می‌شود و حرف‌ها گم می‌شوند.</span></li>
+  <li data-lines="16"><b class="what">ارسال بایت.</b> نوشتن در <code>DR</code> ارسال را شروع می‌کند.</li>
+  <li data-lines="18"><b class="what">گزارش موفقیت.</b> تعداد بایت‌های فرستاده‌شده را برمی‌گردانیم.</li>
+</ol>
+
+<div class="callout tip"><div class="ct">دو نکتهٔ عملی</div>
+<ul>
+<li>متن <code>printf</code> را همیشه با <code>\n</code> تمام کن. کتابخانه ممکن است تا دیدن خط جدید متن را در بافر نگه دارد و تو فکر کنی برنامه هنگ کرده.</li>
+<li>در CubeIDE (ST) معمولا فایلی به‌نام <code>syscalls.c</code> هست که <code>_write</code> را به تابع <code>__io_putchar</code> وصل می‌کند؛ کافی است آن را پر کنی. اسم و جزئیات را در مستندات همان ابزار ببین.</li>
+</ul></div>
+
+<h3 id="nano">هزینهٔ printf و newlib-nano</h3>
+<p><code>printf</code> کامل، مخصوصا با پشتیبانی اعشار، ده‌ها کیلوبایت از Flash را می‌گیرد؛ در تراشه‌ای که ۵۱۲ کیلوبایت یا کمتر دارد، این سهم بزرگی است و پشته (stack) هم بیشتر مصرف می‌کند. برای همین بسیاری از پروژه‌های STM32 با گزینهٔ <code>--specs=nano.specs</code> ساخته می‌شوند که نسخهٔ سبک‌تر کتابخانه (<span class="term" data-t="nano_libc">newlib-nano</span>) را می‌آورد. نکتهٔ مهم: <b>در نسخهٔ nano، <code>printf("%f")</code> به‌طور پیش‌فرض کار نمی‌کند</b> (چیزی چاپ نمی‌شود). راه رسمی‌اش افزودن گزینهٔ لینک <code>-u _printf_float</code> است که بخش اعشار را با هزینهٔ Flash برمی‌گرداند. بهتر است همیشه اندازهٔ واقعی را با <code>arm-none-eabi-size</code> ببینی (درس <a href="6-5.html">۶.۵</a>).</p>
+<p>در ESP-IDF شرایط فرق دارد: <code>printf</code> پیش‌فرض برای ESP32 اعشار را پشتیبانی می‌کند، ولی همان‌جا هم گزینه‌هایی برای کاهش حجم هست که در <code>menuconfig</code> پیدا می‌شود. جزئیات را در <a href="https://docs.espressif.com/projects/esp-idf/" target="_blank" rel="noopener">مستندات رسمی ESP-IDF</a> ببین. برای لاگ در ESP32 معمولا <code>ESP_LOGI</code> را به‌جای <code>printf</code> ترجیح می‌دهند:</p>
+<div class="code" data-file="esp_log_demo.c" data-lang="c" data-verify="frag" id="code17">
+<pre>
+#include "esp_log.h"
+
+static const char *TAG = "temp";
+
+void app_main(void)
+{
+    int t10 = 235;      // دما به دهم درجه: 23.5
+    ESP_LOGI(TAG, "temperature = %d.%d C", t10 / 10, t10 % 10);
+}
+</pre></div>
+<ol class="walk" data-for="code17">
+  <li data-lines="1"><b class="what">هدر لاگ.</b> از ESP-IDF.</li>
+  <li data-lines="3"><b class="what">برچسب لاگ.</b> اسمی که کنار هر پیام چاپ می‌شود تا بدانی کدام بخش برنامه پیام داده.</li>
+  <li data-lines="5-6,9"><b class="what">app_main.</b> نقطهٔ شروع برنامه در ESP-IDF، به‌جای <code>main</code>.</li>
+  <li data-lines="7"><b class="what">دما به‌صورت عدد صحیح.</b> ۲۳٫۵ را به‌صورت ۲۳۵ نگه می‌داریم (ضرب در ۱۰).</li>
+  <li data-lines="8"><b class="what">ESP_LOGI.</b> پیام سطح «اطلاعات» چاپ می‌کند؛ قالبش همان قالب <code>printf</code> است، به‌علاوهٔ زمان و اسم برچسب. سطح‌های دیگر: <code>ESP_LOGW</code> (هشدار)، <code>ESP_LOGE</code> (خطا) و ...
+    <span class="why">سطح‌بندی به تو اجازه می‌دهد در نسخهٔ نهایی پیام‌های کم‌اهمیت را بدون تغییر کد خاموش کنی.</span></li>
+</ol>
+
+<h3 id="notfloat">چاپ ۲۳٫۵ بدون float</h3>
+<p>راه حرفه‌ای‌ها: دما را به‌صورت عدد صحیحِ «دهم درجه» نگه دار (۲۳٫۵ ← ۲۳۵). برای چاپ، بخش صحیح (تقسیم بر ۱۰) و باقیمانده را جدا چاپ کن. هزینهٔ <code>float</code> ندارد و دقتش هم دقیقا همان است که سنسور می‌دهد. ولی یک تله دارد: <b>علامت منفی</b>.</p>
+<div class="code" data-file="temp_fmt.c" data-lang="c" data-verify="host" id="code18">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+
+// دما به دهم درجه: 235 یعنی 23.5
+static int format_temp(char out[], size_t size, int t10)
+{
+    int a = abs(t10);
+    if (t10 &lt; 0) {
+        return snprintf(out, size, "-%d.%d", a / 10, a % 10);
+    }
+    return snprintf(out, size, "%d.%d", a / 10, a % 10);
+}
+
+int main(void)
+{
+    const int samples[] = { 235, 50, 5, 0, -5, -235, -1000 };
+    char buf[12];
+
+    for (size_t i = 0; i &lt; sizeof(samples) / sizeof(samples[0]); i++) {
+        format_temp(buf, sizeof(buf), samples[i]);
+        printf("%5d -&gt; %s C\n", samples[i], buf);
+    }
+    int t10 = -5;
+    printf("naive: %d.%d\n", t10 / 10, abs(t10 % 10));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code18">
+  <li data-lines="4-5,12"><b class="what">تابع قالب‌بندی.</b> دما به دهم درجه و بافر مقصد را می‌گیرد.</li>
+  <li data-lines="7"><b class="what">قدر مطلق.</b> <code>abs</code> علامت را برمی‌دارد و کار را روی عدد مثبت انجام می‌دهیم.
+    <span class="why">در C تقسیم و باقیمانده برای عدد منفی، نتیجهٔ منفی می‌دهد. مثلا <code>-5 / 10</code> برابر ۰ است و علامت منفی گم می‌شود.</span></li>
+  <li data-lines="8-10"><b class="what">حالت منفی.</b> خودمان یک <code>-</code> در ابتدا می‌گذاریم.</li>
+  <li data-lines="11"><b class="what">حالت مثبت.</b> بخش صحیح، نقطه، یک رقم اعشار.</li>
+  <li data-lines="16-17"><b class="what">نمونه‌ها.</b> از حالت‌های مرزی: ۰٫۵ (بخش صحیح صفر)، ۰ و منفی.</li>
+  <li data-lines="19-22"><b class="what">چاپ.</b> عدد خام با عرض ۵ و متن ساخته‌شده کنار هم.</li>
+  <li data-lines="23-24"><b class="what">روش ساده‌لوحانه.</b> برای <code>-5</code> همان دو تقسیم بدون مدیریت علامت چاپ می‌کند: صفر و ۵. علامت منفی گم شده است!</li>
+</ol>
+<pre class="term" data-from="temp_fmt.c">
+$ gcc -std=c11 -Wall -Wextra -o temp_fmt temp_fmt.c
+$ ./temp_fmt
+  235 -&gt; 23.5 C
+   50 -&gt; 5.0 C
+    5 -&gt; 0.5 C
+    0 -&gt; 0.0 C
+   -5 -&gt; -0.5 C
+ -235 -&gt; -23.5 C
+-1000 -&gt; -100.0 C
+naive: 0.5
+</pre>
+<p>ردیف آخر همان تله است: «−۰٫۵ درجه» به‌غلط «۰٫۵ درجه» شد. اگر بخشی از دستگاه شما یخچال یا هشدار یخ‌زدگی باشد، این باگ می‌تواند خطرناک باشد.</p>
+
+<h2 id="traps">اشتباه‌های پرتکرار، یک‌جا</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>اشتباه</th><th>چه می‌شود</th><th>راه درست</th></tr></thead>
+<tbody>
+<tr><td><code>if (a == b)</code> برای دو رشته</td><td>آدرس آرایه‌ها مقایسه می‌شود، نه متن. gcc هشدار می‌دهد</td><td><code>strcmp(a, b) == 0</code></td></tr>
+<tr><td><code>if (strcmp(a, b))</code> به‌عنوان «برابرند»</td><td>وقتی <b>نابرابرند</b> درست است (چون نتیجه غیرصفر)</td><td>همیشه با <code>== 0</code> یا <code>!= 0</code> بنویس</td></tr>
+<tr><td>آرایه به اندازهٔ حرف‌ها (بدون خانهٔ پایانگر)</td><td>رشته پایان ندارد</td><td>یک خانه بیشتر؛ یا کروشهٔ خالی <code>[]</code></td></tr>
+<tr><td><code>strcpy</code>/<code>strcat</code>/<code>sprintf</code> با ورودی بیرونی</td><td>سرریز بافر</td><td>طول را پیش از کپی چک کن؛ <code>snprintf</code></td></tr>
+<tr><td><code>strncpy</code> بدون پایانگر دستی</td><td>رشتهٔ بی‌پایان</td><td><code>dst[size-1] = '\0'</code> بعد از آن</td></tr>
+<tr><td>تغییر متن ثابت (<code>char *s = "..."</code> و <code>s[0] = ...</code>)</td><td>کرش یا HardFault</td><td><code>const char *</code> برای خواندن؛ آرایه برای تغییر</td></tr>
+<tr><td>قالب <code>%d</code> برای <code>long long</code> یا <code>%u</code> برای <code>uint32_t</code></td><td>عدد اشتباه یا هشدار روی پلتفرم دیگر</td><td><code>%lld</code> ، <code>PRIu32</code> ، <code>%zu</code></td></tr>
+<tr><td>استفاده از <code>atoi</code></td><td>ورودی خراب بی‌صدا صفر می‌شود</td><td><code>strtol</code> با چک <code>end</code> و <code>errno</code></td></tr>
+<tr><td>تقسیم/باقیمانده با عدد منفی برای چاپ اعشار</td><td>علامت گم می‌شود</td><td>علامت را جدا مدیریت کن</td></tr>
+<tr><td><code>printf</code> داخل ISR یا حلقهٔ سریع</td><td>کند است و ممکن است وقفه‌های دیگر را از دست بدهی</td><td>پرچم بگذار و در <code>main</code> چاپ کن (درس <a href="5-3.html">۵.۳</a>)</td></tr>
+</tbody></table></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="3">
+  <p class="q">با <code>char s[] = "ABC";</code> مقدار <code>sizeof(s)</code> و <code>strlen(s)</code> به‌ترتیب چند است؟</p>
+  <ol>
+    <li data-why="۳ حرف داریم ولی آرایه یک خانه برای پایانگر هم دارد؛ sizeof کل آرایه را می‌شمارد.">۳ و ۳</li>
+    <li data-why="strlen پایانگر را نمی‌شمارد؛ فقط حرف‌های واقعی را.">۴ و ۴</li>
+    <li>۴ و ۳</li>
+    <li data-why="برعکس است: sizeof آرایه را می‌شمارد (با پایانگر) و strlen حرف‌ها را.">۳ و ۴</li>
+  </ol>
+  <div class="fb">آرایه چهار خانه دارد (A، B، C و <code>'\0'</code>) پس <code>sizeof</code> برابر ۴ است. <code>strlen</code> تا پایانگر می‌شمارد و خودِ آن را نه، پس ۳.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">خروجی <code>printf("[%5.1f|%-4d|%03d]", 3.14159, 7, 7);</code> کدام است؟</p>
+  <ol>
+    <li data-why="عرض ۵ یعنی حداقل ۵ خانه؛ عدد کوتاه‌تر است پس جلویش فاصله می‌آید. همین‌طور %-4d چهار خانه اشغال می‌کند.">[3.1|7|007]</li>
+    <li>[  3.1|7   |007]</li>
+    <li data-why="پرچم - یعنی چپ‌چین، نه صفر پر کردن. و %03d با صفر پر می‌کند نه فاصله.">[  3.1|   7|7  ]</li>
+    <li data-why=".1 یعنی فقط یک رقم اعشار؛ عدد به ۳٫۱ گرد می‌شود، نه ۳٫۱۴.">[3.14|7   |007]</li>
+  </ol>
+  <div class="fb"><code>%5.1f</code> یعنی ۵ خانه با یک رقم اعشار: «۲ فاصله + 3.1». <code>%-4d</code> چپ‌چین در ۴ خانه: «7» و سه فاصله. <code>%03d</code> سه رقم با صفر پر: «007».</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">کدام خط <b>خطای کامپایل</b> دارد؟</p>
+  <ol>
+    <li data-why="مقداردهی اولیهٔ آرایه با متن هنگام تعریف کاملا مجاز است.">char a[] = "hi";</li>
+    <li data-why="آرایه‌ای که خودت در RAM ساخته‌ای قابل‌تغییر است.">char b[8] = "hi"; b[0] = 'H';</li>
+    <li data-why="فقط خواندن/اشاره به متن ثابت مجاز است؛ خطا برای نوشتن روی آن است.">const char *c = "hi";</li>
+    <li>char d[8]; d = "hi";</li>
+  </ol>
+  <div class="fb">بعد از تعریف نمی‌شود آرایه را با <code>=</code> پر کرد: «assignment to expression with array type». برای این کار <code>strcpy</code> یا <code>snprintf</code> بنویس.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">شرط <code>if (strcmp(cmd, "stop"))</code> چه وقت درست (اجرای بدنه) است؟</p>
+  <ol>
+    <li>وقتی <code>cmd</code> با «stop» <b>برابر نباشد</b></li>
+    <li data-why="برابری یعنی strcmp صفر برمی‌گرداند و صفر در C یعنی نادرست؛ بدنهٔ if اجرا نمی‌شود.">وقتی <code>cmd</code> با «stop» برابر باشد</li>
+    <li data-why="strcmp هیچ‌وقت خطا نمی‌دهد؛ فقط عددی با علامت مقایسه برمی‌گرداند.">وقتی <code>cmd</code> خالی باشد</li>
+    <li data-why="طول اهمیتی ندارد؛ فقط برابر بودن حرف‌به‌حرف مهم است.">وقتی <code>cmd</code> از «stop» بلندتر باشد</li>
+  </ol>
+  <div class="fb">نتیجهٔ ۰ = برابر = «نادرست». پس <code>if (strcmp(...))</code> در حالت <b>نابرابری</b> اجرا می‌شود. برای وضوح بنویس <code>strcmp(...) == 0</code>.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">روی یک STM32 کوچک با newlib-nano می‌خواهی دمای ۲۳٫۵ را چاپ کنی. بهترین راه کدام است؟</p>
+  <ol>
+    <li data-why="در nano پیش‌فرض %f چیزی چاپ نمی‌کند؛ اگر هم فعالش کنی، ده‌ها کیلوبایت Flash می‌خرد.">کد را با <code>printf("%f", 23.5)</code> بنویسم و امیدوار باشم</li>
+    <li>دما را به‌صورت <code>235</code> (دهم درجه) نگه دارم و <code>"%d.%d"</code> چاپ کنم</li>
+    <li data-why="قالب %d برای int است؛ دادن double به آن رفتار تعریف‌نشده و عدد بی‌معنی می‌دهد.">مقدار <code>23.5</code> را با <code>%d</code> چاپ کنم</li>
+    <li data-why="snprintf هم همان موتور قالب‌بندی را دارد؛ اگر %f را پشتیبانی نکند اینجا هم چیزی نمی‌سازد.">اول با <code>snprintf</code> و <code>%f</code> در آرایه بریزم</li>
+  </ol>
+  <div class="fb">عدد صحیح ضرب‌در‌۱۰ ارزان، دقیق و مستقل از پشتیبانی <code>float</code> است. فقط مراقب منفی‌ها باش.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">با <code>parse_int</code> این درس، متن <code>"12abc"</code> رد می‌شود. کدام شرط آن را می‌گیرد؟</p>
+  <ol>
+    <li data-why="end == text یعنی هیچ رقمی نبود؛ اینجا «12» خوانده شد و end جلوتر رفت.">end == text</li>
+    <li data-why="ERANGE فقط وقتی است که عدد از محدوده بیرون بزند؛ ۱۲ کوچک است.">errno == ERANGE</li>
+    <li>*end != '\0'</li>
+    <li data-why="رشته خالی نیست؛ «1» حرف اول است.">text[0] == '\0'</li>
+  </ol>
+  <div class="fb">پس از خواندن «12»، <code>end</code> به حرف <code>'a'</code> اشاره می‌کند، نه پایانگر. یعنی «چیزی بعد از عدد مانده».</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: رشتهٔ من، حرف‌های من</div>
+<p>با رشته‌ها و توابع <code>ctype</code> کار کن.</p>
+<ol class="parts">
+  <li><span><b>پیش‌بینی:</b> برای <code>char s[10] = "cat";</code> مقدار <code>sizeof(s)</code>، <code>strlen(s)</code>، <code>s[3]</code> و <code>s[9]</code> چیست؟ (اول حدس بزن.)</span></li>
+  <li><span><b>حل:</b> تابع <code>count_vowels</code> بنویس که تعداد حروف صدادار (a e i o u، چه بزرگ چه کوچک) یک رشته را بشمارد.</span></li>
+  <li><span><b>چالش:</b> تابع <code>reverse</code> بنویس که رشته را در همان آرایه وارونه کند («abc» ← «cba»). به کپی گرفتن نیاز نداری.</span></li>
+</ol>
+<details><summary>راهنمایی</summary><p>برای شمردن، حلقه را تا پایانگر بچرخان و هر حرف را با <code>tolower</code> کوچک کن تا فقط پنج حرف را چک کنی. برای وارونه‌سازی، اولی را با آخری عوض کن، دومی را با ماقبل آخر و ... فقط تا نیمهٔ رشته (چرا؟ اگر تا آخر بروی چه می‌شود؟).</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="ex1.c">
+$ ./ex1
+sizeof=10 strlen=3 s[3]=0 s[9]=0
+microcontroller has 5 vowels
+reversed: rellortnocorcim
+</pre>
+<p>الف: آرایه ۱۰ خانه است؛ رشته ۳ حرف. <code>s[3]</code> پایانگر است و <code>s[9]</code> هم صفر، چون بقیهٔ خانه‌ها هنگام مقداردهی صفر شده‌اند.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="ex1.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+#include &lt;ctype.h&gt;
+
+// شمردن حروف صدادار
+static int count_vowels(const char text[])
+{
+    int n = 0;
+    for (int i = 0; text[i] != '\0'; i++) {
+        char c = (char)tolower((unsigned char)text[i]);
+        if (c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u') {
+            n++;
+        }
+    }
+    return n;
+}
+
+// وارونه کردن در جا: اولی با آخری، دومی با ماقبل آخر، ...
+static void reverse(char text[])
+{
+    size_t len = strlen(text);
+    for (size_t i = 0; i &lt; len / 2; i++) {
+        char tmp = text[i];
+        text[i] = text[len - 1 - i];
+        text[len - 1 - i] = tmp;
+    }
+}
+
+int main(void)
+{
+    char s[10] = "cat";
+    printf("sizeof=%zu strlen=%zu s[3]=%d s[9]=%d\n", sizeof(s), strlen(s), s[3], s[9]);
+
+    char word[] = "microcontroller";
+    printf("%s has %d vowels\n", word, count_vowels(word));
+    reverse(word);
+    printf("reversed: %s\n", word);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="5-9,14-16"><b class="what">حلقه تا پایانگر.</b> همان الگوی این درس.</li>
+  <li data-lines="10"><b class="what">کوچک‌کردن حرف.</b> با یک <code>tolower</code>، «A» و «a» یکی می‌شوند. تبدیل به <code>unsigned char</code> برای ctype لازم است.</li>
+  <li data-lines="11-13"><b class="what">پنج حرف صدادار.</b> اگر یکی بود شمارنده زیاد می‌شود.</li>
+  <li data-lines="21"><b class="what">طول یک بار.</b> <code>strlen</code> را یک بار حساب می‌کنیم، نه در هر دور حلقه.
+    <span class="why">strlen هر بار کل رشته را می‌شمارد؛ در شرط حلقه یعنی کار اضافه.</span></li>
+  <li data-lines="22-26"><b class="what">تعویض جفت‌ها.</b> تا <code>len / 2</code>. اگر تا آخر بروی، هر جفت دو بار عوض می‌شود و رشته به حالت اول برمی‌گردد!
+    <span class="why">پایانگر جایش را تغییر نمی‌دهد؛ فقط حرف‌های واقعی جابه‌جا می‌شوند.</span></li>
+  <li data-lines="31-32"><b class="what">الف.</b> چهار مقدار پرسش را چاپ می‌کند.</li>
+  <li data-lines="34-37"><b class="what">استفاده.</b> شمارش، وارونه‌سازی و چاپ.</li>
+</ol>
+<pre class="term" data-from="ex1.c">
+$ ./ex1
+sizeof=10 strlen=3 s[3]=0 s[9]=0
+microcontroller has 5 vowels
+reversed: rellortnocorcim
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: باگ‌ها را پیدا کن</div>
+<p>این برنامه کامپایل نمی‌شود (یا اگر بشود، خراب است). چند اشتباه در آن هست؟</p>
+<div class="code" data-file="ex2bad.c" data-lang="c" data-verify="host-fail" data-cflags="-Werror=address" id="ex2bad">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+int main(void)
+{
+    char cmd[] = "start";
+    char name[8];
+
+    strcpy(name, "Sahand Azadee");
+    if (cmd == "start") {
+        printf("go, %s\n", name);
+    }
+    if (strcmp(cmd, "stop")) {
+        printf("cmd is stop\n");
+    }
+    return 0;
+}
+</pre></div>
+<ol class="parts">
+  <li><span><b>پیام کامپایلر:</b> برنامه را کامپایل کن. کامپایلر دربارهٔ کدام خط‌ها چه می‌گوید؟</span></li>
+  <li><span><b>اصلاح:</b> هر مشکل را اصلاح کن تا برنامه «go, Sahand» چاپ کند (اسم را در بافر ۸ خانه‌ای بگذار، حتی اگر کوتاه شود).</span></li>
+  <li><span><b>فکر کن:</b> شرط خط ۱۳، یعنی <code>if (strcmp(cmd, "stop"))</code>، چه وقت اجرا می‌شود؟ با این متن (<code>cmd = "start"</code>) اجرا می‌شود؟</span></li>
+</ol>
+<details><summary>راهنمایی</summary><p>سه مشکل هست: مقایسهٔ رشته‌ها با <code>==</code>، کپی بی‌اندازه، و تفسیر اشتباه نتیجهٔ <code>strcmp</code>. برای کپی، الگوی «strncpy + پایانگر دستی» را بنویس یا <code>snprintf</code>.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-kind="err" data-from="ex2bad.c">
+ex2bad.c: In function 'main':
+ex2bad.c:10:13: error: comparison with string literal results in unspecified behavior [-Werror=address]
+ex2bad.c:9:5: warning: '__builtin_memcpy' writing 14 bytes into a region of size 8 overflows the destination [-Wstringop-overflow=]
+</pre>
+<p>نسخهٔ درست باید چاپ کند: «go, Sahand» و «not stop».</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="table-wrap"><table><thead><tr><th>خط</th><th>مشکل</th><th>اصلاح</th></tr></thead><tbody>
+<tr><td>۹</td><td><code>strcpy</code> از بافر ۸ خانه‌ای بیرون می‌نویسد (۱۴ بایت)</td><td><code>strncpy(name, "...", sizeof(name)-1); name[sizeof(name)-1] = '\0';</code></td></tr>
+<tr><td>۱۰</td><td><code>==</code> آدرس‌ها را مقایسه می‌کند، نه متن</td><td><code>strcmp(cmd, "start") == 0</code></td></tr>
+<tr><td>۱۳</td><td><code>if (strcmp(...))</code> یعنی «نابرابرند»؛ چاپ «cmd is stop» غلط است</td><td><code>strcmp(cmd, "stop") == 0</code> برای «برابر»، یا <code>!= 0</code> برای «نابرابر»</td></tr>
+</tbody></table></div>
+<div class="code" data-file="ex2good.c" data-lang="c" data-verify="host" id="ex2">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+int main(void)
+{
+    char cmd[] = "start";
+    char name[8];
+    strncpy(name, "Sahand", sizeof(name) - 1);
+    name[sizeof(name) - 1] = '\0';
+
+    if (strcmp(cmd, "start") == 0) {
+        printf("go, %s\n", name);
+    }
+    if (strcmp(cmd, "stop") != 0) {
+        printf("not stop\n");
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="7-9"><b class="what">کپی امن.</b> فقط ۷ حرف و پایانگر دستی.
+    <span class="why">«Sahand» شش حرف است و جا می‌شود. اگر اسم بلندتر بود، فقط بریده می‌شد، نه سرریز.</span></li>
+  <li data-lines="11-13"><b class="what">مقایسهٔ درست.</b> <code>== 0</code> یعنی برابر.</li>
+  <li data-lines="14-16"><b class="what">نابرابری.</b> با <code>!= 0</code> صریح نوشته شده تا معنی معلوم باشد.</li>
+</ol>
+<pre class="term" data-from="ex2good.c">
+$ ./ex2good
+go, Sahand
+not stop
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: پیام دما برای UART</div>
+<p>یک ماژول سنسور دما هر ثانیه پیام «T=23.5C» را با انتهای <code>\r\n</code> روی UART می‌فرستد. پیام را در بافر می‌سازیم و ببینیم جا کم می‌آید یا نه. (مثل تمرین‌های سخت‌افزاری، ولی روی PC اجرا می‌شود.)</p>
+<ol class="parts">
+  <li><span><b>پیش‌بینی:</b> <code>printf("%d.%d", -5 / 10, -5 % 10)</code> چه چاپ می‌کند؟ (در C، باقیمانده علامت عدد اول را دارد.)</span></li>
+  <li><span><b>حل:</b> تابع <code>format_reading(out, size, t10)</code> بنویس که «T=۲۳٫۵C» را با علامت منفی درست و <code>\r\n</code> بسازد و اگر جا کافی نبود <code>false</code> برگرداند.</span></li>
+  <li><span><b>چالش:</b> آن را با یک بافر ۱۶ خانه‌ای و یک بافر ۱۰ خانه‌ای امتحان کن. برای <code>-235</code> و <code>7</code> نتیجه چیست؟ چرا؟</span></li>
+</ol>
+<details><summary>راهنمایی</summary><p>از <code>abs</code> برای قدر مطلق و <code>%s</code> برای گذاشتن علامت استفاده کن (یک بار «-» و یک بار «»). خروجی <code>snprintf</code> «طول لازم» است؛ اگر کمتر از <code>size</code> باشد یعنی جا شد. پیام «T=-23.5C\r\n» ده حرف است، پس با پایانگر ۱۱ خانه می‌خواهد.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="ex3.c">
+$ ./ex3
+big   : ok
+small : TRUNCATED
+small : ok
+</pre>
+<p>الف: چاپ می‌کند <code>0.-5</code> (تقسیم ۰ می‌شود و باقیمانده −۵). این همان تلهٔ علامت است. ب و پ: «T=-23.5C\r\n» ده حرف است و در بافر ۱۰ خانه‌ای جا نمی‌شود (پایانگر خانهٔ یازدهم را می‌خواهد)؛ ولی «T=0.7C\r\n» هشت حرف است و جا می‌شود.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="ex3.c" data-lang="c" data-verify="host" id="ex3">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;stdbool.h&gt;
+#include &lt;string.h&gt;
+
+// "T=23.5C\r\n" را در out می‌سازد؛ اگر جا کم بود false برمی‌گرداند
+static bool format_reading(char out[], size_t size, int t10)
+{
+    int a = abs(t10);
+    const int need = snprintf(out, size, "T=%s%d.%dC\r\n",
+                              (t10 &lt; 0) ? "-" : "", a / 10, a % 10);
+    return need &gt;= 0 &amp;&amp; (size_t)need &lt; size;
+}
+
+int main(void)
+{
+    char big[16];
+    char small[10];
+
+    if (format_reading(big, sizeof(big), -235)) {
+        printf("big   : ok\n");
+    }
+    printf("small : %s\n", format_reading(small, sizeof(small), -235) ? "ok" : "TRUNCATED");
+    printf("small : %s\n", format_reading(small, sizeof(small), 7) ? "ok" : "TRUNCATED");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="6-8,13"><b class="what">امضا.</b> بافر، اندازه و دما؛ خروجی <code>bool</code> که می‌گوید جا شد یا نه.</li>
+  <li data-lines="9"><b class="what">قدر مطلق.</b> بخش صحیح و اعشار را روی عدد مثبت می‌گیریم.</li>
+  <li data-lines="10-11"><b class="what">ساختن متن.</b> <code>%s</code> یا «-» می‌گذارد یا «» (رشتهٔ خالی). <code>\r\n</code> در انتهای قالب.
+    <span class="why">یک <code>snprintf</code> برای همهٔ حالت‌ها بهتر از دو قالب جدا است؛ کمتر جای اشتباه دارد.</span></li>
+  <li data-lines="12"><b class="what">تشخیص برش.</b> جا شد اگر طول لازم منفی نباشد (خطای قالب) و کوچک‌تر از <code>size</code> باشد.</li>
+  <li data-lines="17-18"><b class="what">دو بافر.</b> ۱۶ و ۱۰ خانه.</li>
+  <li data-lines="20-24"><b class="what">امتحان.</b> بافر بزرگ جا دارد؛ بافر کوچک برای <code>-235</code> کم است و برای <code>7</code> کافی.</li>
+</ol>
+<pre class="term" data-from="ex3.c">
+$ ./ex3
+big   : ok
+small : TRUNCATED
+small : ok
+</pre>
+<p><b>ارتباط با سخت‌افزار:</b> در STM32 همین بافر را می‌توانی با یک حلقهٔ ساده حرف‌به‌حرف در ثبات <code>USART2_DR</code> بنویسی (مثل <code>_write</code> همین درس) و روی ESP32 با تابع‌های UART درایور. ولی نکتهٔ اصلی این بود که <b>اندازهٔ بافر و آزمودن برش</b> باید در نرم‌افزار انجام شود؛ سخت‌افزار خبرت نمی‌کند.</p></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>رشته‌ها در C ظاهری ساده دارند ولی سه جا مبتدی‌ها بیش از همه گیر می‌کنند. اول <b>پایانگر</b>: باور نمی‌کنند یک بایت صفر مخفی همه چیز را نگه داشته است، تا وقتی آشغال روی صفحه می‌بینند. دوم <b>مقایسه با <code>==</code></b>: در زبان‌های دیگر کار می‌کند، در C نه. سوم <b>سرریز بافر</b>: چون معمولا اولین بار «کار می‌کند» و بعد هفته‌ها بعد خراب می‌شود. اگر امروز فقط یک عادت با خودت ببری: هر بافری را همراه اندازه‌اش (<code>sizeof</code>) ببین و هر ورودی بیرونی را قبل از کپی، از نظر طول بسنج. و <code>-Wall -Wextra</code> را همیشه روشن نگه دار؛ در این درس بارها دیدی چطور کامپایلر جلوی همین اشتباه‌ها را گرفت.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li>رشته = آرایهٔ <code>char</code> که با <code>'\0'</code> تمام می‌شود. <code>sizeof</code> کل آرایه، <code>strlen</code> حرف‌ها تا پایانگر.</li>
+  <li><code>'A'</code> یک حرف (عدد ۶۵)، <code>"A"</code> رشته با دو بایت است. رقم به عدد: <code>c - '0'</code>.</li>
+  <li>متن ثابت در Flash است: با <code>const char *</code> بخوان؛ برای تغییر، در آرایه کپی کن. آرایه را با <code>=</code> پر نمی‌کنیم.</li>
+  <li>مقایسه: <code>strcmp(a, b) == 0</code>. کپی امن: <code>snprintf</code> یا <code>strncpy</code> + پایانگر دستی. <code>strcpy</code>/<code>sprintf</code> فقط وقتی طول از قبل بررسی شده.</li>
+  <li>قالب <code>printf</code>: <code>%[پرچم][عرض][.دقت][length]نوع</code>. با نوع بخوان: <code>%zu</code> ، <code>%lld</code> ، <code>PRIu32</code>. هشدار format را جدی بگیر.</li>
+  <li><code>snprintf</code> «طول لازم» را برمی‌گرداند؛ اگر ≥ اندازهٔ بافر، متن بریده شده.</li>
+  <li>متن به عدد: <code>strtol</code> + چک <code>end == text</code> ، <code>*end != '\0'</code> ، <code>ERANGE</code> و محدودهٔ منطقی. <code>atoi</code> نه.</li>
+  <li>روی MCU: <code>printf</code> با <code>_write</code> به UART می‌رود، در nano اعشار ندارد؛ دما را به‌صورت عدد صحیح ضرب‌در‌۱۰ نگه دار و علامت را جدا مدیریت کن. در ESP32 از <code>ESP_LOGI</code> استفاده کن.</li>
+</ul></div>
+
+</article>
+</body>
+</html>

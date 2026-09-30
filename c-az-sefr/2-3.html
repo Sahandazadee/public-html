@@ -1,0 +1,819 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>عملگرها · C برای میکروکنترلر</title>
+<meta name="description" content="عملگرهای C: حساب، تقسیم صحیح و باقیمانده، تقدم، انتساب ترکیبی، ++ و --، مقایسه و منطقی، و تله‌های معروف؛ با مثال تبدیل ADC به میلی‌ولت روی STM32 و ESP32، کد خط‌به‌خط، آزمون و تمرین.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="2-3">
+
+<p class="lede">متغیر فقط قفسه است؛ کاری نمی‌کند. برای اینکه برنامه «کار» کند باید بتواند با مقدارها حساب کند، آن‌ها را مقایسه کند و نتیجه را جایی بگذارد. ابزار همهٔ این کارها <b>عملگرها</b> هستند: علامت‌های کوچکی مثل <code>+</code>، <code>/</code>، <code>==</code> و <code>&amp;&amp;</code>. در این درس یاد می‌گیری هر کدام دقیقا چه می‌کنند، به چه ترتیبی اجرا می‌شوند و کدام‌شان مبتدی‌ها را زمین می‌زنند؛ از جمله «چرا ۷ تقسیم بر ۲ می‌شود ۳؟».</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>عبارت‌های حسابی را بنویسی و نتیجه‌شان را در ذهن حساب کنی</li>
+    <li>تقسیم صحیح و باقیمانده (<code>/</code> و <code>%</code>) را، حتی برای عدد منفی، پیش‌بینی کنی</li>
+    <li>ترتیب انجام عملگرها (تقدم) را بشناسی و با پرانتز کنترل کنی</li>
+    <li>فرق <code>=</code> و <code>==</code>، و فرق <code>i++</code> و <code>++i</code> را بگویی</li>
+    <li>شرط‌های ترکیبی با <code>&amp;&amp;</code> و <code>||</code> بنویسی و «میان‌بُر» را بفهمی</li>
+    <li>خوانش ADC را بدون سرریز به میلی‌ولت تبدیل کنی</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="2-1.html">۲.۱</a> (متغیر و انتساب) و درس <a href="2-2.html">۲.۲</a> (نوع‌ها و سرریز)</li>
+    <li>یک کامپایلر <code>gcc</code></li>
+    <li>هیچ سخت‌افزاری لازم نیست</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: ماشین‌حساب و پرسش‌های بله/خیر</h2>
+<p>ماشین‌حساب جیبی را ببین. چند دکمهٔ حساب دارد: جمع، تفریق، ضرب، تقسیم. به هر دکمه یک «کار» می‌گوییم. زبان C هم دکمه‌هایی مثل این دارد و به هر کدام <span class="term" data-t="operator">عملگر (operator)</span> می‌گوید. چیزهایی که عملگر رویشان کار می‌کند <span class="term" data-t="operand">عملوند (operand)</span> نام دارند. در <code>3 + 4</code> علامت <code>+</code> عملگر است و ۳ و ۴ عملوندند.</p>
+<p>دو دسته عملگر داریم که باید در ذهنت جدا نگه داری:</p>
+<ul>
+  <li><b>عملگر حسابی:</b> جواب یک <em>عدد</em> است. مثل <code>7 + 2</code> ← ۹.</li>
+  <li><b>عملگر مقایسه‌ای و منطقی:</b> جواب یک <em>بله/خیر</em> است. مثل «۷ بزرگ‌تر از ۲ است؟» ← بله. C بله را با <code>1</code> و خیر را با <code>0</code> نشان می‌دهد.</li>
+</ul>
+<p>هر ترکیبی از مقدار و عملگر که یک جواب بدهد، یک <span class="term" data-t="expression">عبارت (expression)</span> است. مثلا <code>age + 1</code> یک عبارت است و <code>age &gt; 18</code> هم.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>تصور کن در سوپرمارکت هستی. «سه بسته شیر، هرکدام ۲۰ هزار تومان» یک حساب است (<code>3 * 20</code>)؛ جواب یک عدد است. «آیا پولم برای خرید کافی است؟» یک مقایسه است (<code>wallet &gt;= total</code>)؛ جواب بله یا خیر است. «کارت اعتباری دارم <b>و</b> رمزش را یادم هست؟» یک شرط ترکیبی است (<code>&amp;&amp;</code>). برنامه‌های میکروکنترلر هم فقط همین را می‌کنند، فقط عددها از سنسور می‌آیند.</p></div>
+
+<h2 id="arith">حساب: جمع، تفریق، ضرب، تقسیم و باقیمانده</h2>
+<p>پنج عملگر حسابی داریم:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>عملگر</th><th>کار</th><th>مثال</th><th>جواب</th></tr></thead>
+<tbody>
+<tr><td><code>+</code></td><td>جمع</td><td><code>17 + 5</code></td><td>۲۲</td></tr>
+<tr><td><code>-</code></td><td>تفریق</td><td><code>17 - 5</code></td><td>۱۲</td></tr>
+<tr><td><code>*</code></td><td>ضرب (ستاره، نه ×)</td><td><code>17 * 5</code></td><td>۸۵</td></tr>
+<tr><td><code>/</code></td><td>تقسیم</td><td><code>17 / 5</code></td><td><b>۳</b> (نه ۳٫۴!)</td></tr>
+<tr><td><code>%</code></td><td>باقیمانده (modulo)</td><td><code>17 % 5</code></td><td>۲</td></tr>
+</tbody></table></div>
+<p>دو ردیف آخر جای صحبت دارند. وقتی هر دو عملوند <b>عدد صحیح</b> باشند، <code>/</code> یک <span class="term" data-t="intdiv">تقسیم صحیح</span> است: فقط «چند بار جا می‌شود» را می‌گوید و قسمت اعشار را می‌اندازد. باقیمانده را هم <code>%</code> می‌دهد. مثل تقسیم آب‌نبات‌ها بین بچه‌ها:</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 250" role="img" aria-label="هفده دایره: سه گروه پنج‌تایی و دو دایره باقیمانده">
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">۱۷ آب‌نبات را پنج‌تا پنج‌تا بسته‌بندی کن</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="40" y="50" width="150" height="64" rx="10" fill="#ffd60a"/><rect x="210" y="50" width="150" height="64" rx="10" fill="#7ea3ff"/><rect x="380" y="50" width="150" height="64" rx="10" fill="#3ddc97"/><rect x="550" y="50" width="150" height="64" rx="10" fill="#fff" stroke-dasharray="7 5"/>
+  </g>
+  <g fill="#fff" stroke="#15120a" stroke-width="2.5">
+    <circle cx="65" cy="72" r="10"/><circle cx="95" cy="72" r="10"/><circle cx="125" cy="72" r="10"/><circle cx="155" cy="72" r="10"/><circle cx="80" cy="97" r="10"/>
+    <circle cx="235" cy="72" r="10"/><circle cx="265" cy="72" r="10"/><circle cx="295" cy="72" r="10"/><circle cx="325" cy="72" r="10"/><circle cx="250" cy="97" r="10"/>
+    <circle cx="405" cy="72" r="10"/><circle cx="435" cy="72" r="10"/><circle cx="465" cy="72" r="10"/><circle cx="495" cy="72" r="10"/><circle cx="420" cy="97" r="10"/>
+    <circle cx="590" cy="82" r="10" fill="#ff86b3"/><circle cx="640" cy="82" r="10" fill="#ff86b3"/>
+  </g>
+  <g class="s-tx" font-size="14" font-weight="800" text-anchor="middle">
+    <text x="115" y="140">بسته ۱</text><text x="285" y="140">بسته ۲</text><text x="455" y="140">بسته ۳</text><text x="625" y="140">باقیمانده</text>
+  </g>
+  <g class="mono s-tx" font-size="22" font-weight="800" text-anchor="middle">
+    <text x="285" y="190">17 / 5 = 3</text><text x="625" y="190">17 % 5 = 2</text>
+  </g>
+  <text x="380" y="230" text-anchor="middle" class="s-tx" font-size="13.5">/ می‌گوید چند بسته کامل ساختی؛ % می‌گوید چند تا کم آمد</text>
+</svg></div>
+<figcaption>تقسیم صحیح و باقیمانده دو نیمهٔ یک کارند: <code>17 == 3 * 5 + 2</code>.</figcaption></figure>
+
+<div class="code" data-file="arith.c" data-lang="c" data-verify="host" id="code1">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int a = 17;
+    int b = 5;
+
+    printf("a + b = %d\n", a + b);
+    printf("a - b = %d\n", a - b);
+    printf("a * b = %d\n", a * b);
+    printf("a / b = %d\n", a / b);
+    printf("a %% b = %d\n", a % b);
+    printf("-a / b = %d\n", -a / b);
+    printf("-a %% b = %d\n", -a % b);
+    printf("a / 5.0 = %.1f\n", a / 5.0);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code1">
+  <li data-lines="5-6"><b class="what">دو ورودی.</b> ۱۷ و ۵ را در دو متغیر می‌گذاریم تا عبارت‌ها با نام کار کنند.</li>
+  <li data-lines="8-10"><b class="what">جمع، تفریق، ضرب.</b> ساده‌اند. <code>printf</code> جواب را با <code>%d</code> چاپ می‌کند.</li>
+  <li data-lines="11"><b class="what">تقسیم صحیح.</b> هر دو <code>int</code>‌اند، پس جواب ۳ است و ۰٫۴ دور ریخته می‌شود.
+    <span class="why">C نوع جواب را از نوع عملوندها می‌فهمد، نه از آنچه تو دلت می‌خواهی. دو <code>int</code> جواب <code>int</code> می‌دهد.</span></li>
+  <li data-lines="12"><b class="what">باقیمانده.</b> در رشتهٔ قالب باید <code>%%</code> بنویسی تا <code>printf</code> یک علامت % چاپ کند. خود عملگر <code>%</code> در <code>a % b</code> همان باقیمانده است.
+    <span class="why">در <code>printf</code> علامت % شروع یک قالب است (مثل %d)، پس برای خود % باید دوتایی نوشت.</span></li>
+  <li data-lines="13-14"><b class="what">عدد منفی.</b> C جواب تقسیم را به سمت <b>صفر</b> می‌بُرد: <code>-17 / 5</code> می‌شود <code>-3</code> (نه ۴-). و باقیمانده هم همان علامت عدد اول را می‌گیرد: <code>-17 % 5</code> می‌شود <code>-2</code>.
+    <span class="why">قاعده همیشه برقرار است: <code>(a / b) * b + a % b == a</code>. اینجا: <code>-3 * 5 + (-2) = -17</code>.</span></li>
+  <li data-lines="15"><b class="what">تقسیم اعشاری.</b> <code>5.0</code> از نوع <code>double</code> است، پس جواب هم <code>double</code> می‌شود: ۳٫۴.
+    <span class="why">کافی است یک عملوند اعشاری باشد تا تقسیم اعشاری شود. عملوند صحیح خودکار اعشاری می‌شود (درس ۲.۲).</span></li>
+  <li data-lines="16-17"><b class="what">پایان.</b></li>
+</ol>
+<pre class="term" data-from="arith.c">
+$ gcc -std=c11 -Wall -Wextra -o arith arith.c
+$ ./arith
+a + b = 22
+a - b = 12
+a * b = 85
+a / b = 3
+a % b = 2
+-a / b = -3
+-a % b = -2
+a / 5.0 = 3.4
+</pre>
+
+<div class="callout warn"><div class="ct">تقسیم بر صفر</div>
+<p>تقسیم عدد صحیح بر صفر در C <b>رفتار تعریف‌نشده</b> است: روی لپ‌تاپ معمولا برنامه با پیام «Floating point exception» می‌افتد و روی بعضی میکروکنترلرها نتیجهٔ بی‌معنی می‌دهد یا حتی بی‌صدا ادامه می‌دهد؛ رفتار به پردازنده بستگی دارد. راهش: پیش از هر <code>/</code> یا <code>%</code> که مخرج از بیرون می‌آید (سنسور، کاربر، UART)، بررسی کن صفر نباشد.</p></div>
+
+<h3 id="mcu-div">در میکروکنترلر: تقسیم گران است</h3>
+<p>در Cortex-M4 (STM32F411) یک دستور تقسیم سخت‌افزاری وجود دارد که چند چرخه طول می‌کشد. در Cortex-M0 چنین دستوری نیست و کامپایلر یک تکه کد کتابخانه‌ای برای هر <code>/</code> و <code>%</code> می‌گذارد که ده‌ها چرخه هزینه دارد. اگر مخرج ثابتِ توانی از ۲ باشد (مثل ۸ یا ۱۶)، کامپایلر خودش تقسیم را به شیفت تبدیل می‌کند و ارزان می‌شود؛ ولی برای عدد دلخواه مثل ۴۰۹۵ نه. نتیجه: در حلقه‌های پرتکرار به <code>/</code> و <code>%</code> حساس باش، ولی برای خوانایی هم زیاد نگران نشو؛ اول درست بنویس، بعد اندازه بگیر (درس ۶.۵).</p>
+
+<h2 id="precedence">تقدم: کدام عملگر اول انجام می‌شود؟</h2>
+<p>در ریاضی مدرسه یاد گرفتی «ضرب قبل از جمع». C هم همین قانون را دارد و اسمش <span class="term" data-t="precedence">تقدم (precedence)</span> است. در <code>2 + 3 * 4</code> اول <code>3 * 4</code> حساب می‌شود (۱۲) و بعد <code>2 + 12</code> (۱۴). اگر برعکس بخواهی، پرانتز می‌گذاری: <code>(2 + 3) * 4</code> می‌شود ۲۰.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 290" role="img" aria-label="دو درخت محاسبه: در درخت چپ ضرب زیر جمع است و جواب ۱۴؛ در درخت راست جمع با پرانتز زیر ضرب است و جواب ۲۰">
+  <text x="190" y="26" text-anchor="middle" class="mono s-tx" font-size="18" font-weight="800">2 + 3 * 4</text>
+  <text x="570" y="26" text-anchor="middle" class="mono s-tx" font-size="18" font-weight="800">(2 + 3) * 4</text>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M190 84L120 148"/><path d="M190 84L260 148"/><path d="M260 190L220 236"/><path d="M260 190L300 236"/>
+    <path d="M570 84L500 148"/><path d="M570 84L640 148"/><path d="M500 190L460 236"/><path d="M500 190L540 236"/>
+  </g>
+  <g stroke="#15120a" stroke-width="3">
+    <circle cx="190" cy="66" r="24" fill="#ffd60a"/><circle cx="120" cy="168" r="22" fill="#fff"/><circle cx="260" cy="168" r="24" fill="#ff86b3"/><circle cx="220" cy="254" r="20" fill="#fff"/><circle cx="300" cy="254" r="20" fill="#fff"/>
+    <circle cx="570" cy="66" r="24" fill="#ff86b3"/><circle cx="500" cy="168" r="24" fill="#ffd60a"/><circle cx="640" cy="168" r="22" fill="#fff"/><circle cx="460" cy="254" r="20" fill="#fff"/><circle cx="540" cy="254" r="20" fill="#fff"/>
+  </g>
+  <g class="mono" font-size="22" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="190" y="74">+</text><text x="120" y="176">2</text><text x="260" y="176">*</text><text x="220" y="262">3</text><text x="300" y="262">4</text>
+    <text x="570" y="74">*</text><text x="500" y="176">+</text><text x="640" y="176">4</text><text x="460" y="262">2</text><text x="540" y="262">3</text>
+  </g>
+  <g class="mono s-tx" font-size="14" font-weight="800">
+    <text x="330" y="176" text-anchor="start">= 12</text><text x="60" y="66" text-anchor="start">= 14</text>
+    <text x="410" y="176" text-anchor="end">= 5</text><text x="700" y="66" text-anchor="start">= 20</text>
+  </g>
+  <text x="190" y="284" text-anchor="middle" class="s-tx" font-size="12.5">از پایین‌ترین شاخه به بالا حساب کن</text>
+</svg></div>
+<figcaption>هر گره «یک کار» است. کارِ پایین‌تر زودتر انجام می‌شود. ضرب پایین جمع می‌نشیند چون تقدم بیشتری دارد؛ پرانتز می‌تواند ترتیب را عوض کند.</figcaption></figure>
+
+<p>وقتی دو عملگر <b>هم‌تقدم</b> باشند (مثل <code>10 - 4 - 3</code>)، به آن‌ها <span class="term" data-t="associativity">شرکت‌پذیری</span> می‌گویند: بیشتر عملگرها از چپ به راست کار می‌کنند؛ پس <code>(10 - 4) - 3</code> می‌شود ۳. برای انتساب برعکس است (از راست به چپ). جدول تقدم را از بالا (اول) به پایین (آخر) بخوان:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>ردیف</th><th>عملگرها</th><th>جهت</th><th>یادداشت</th></tr></thead>
+<tbody>
+<tr><td>۱</td><td><code>()</code> <code>[]</code> <code>.</code> <code>-&gt;</code> <code>++</code> <code>--</code> (پسوندی)</td><td>چپ ← راست</td><td>پرانتز، آرایه و…</td></tr>
+<tr><td>۲</td><td><code>!</code> <code>~</code> <code>-</code> (منفی) <code>++</code> <code>--</code> (پیشوندی) <code>*</code> <code>&amp;</code> <code>sizeof</code> <code>(نوع)</code></td><td>راست ← چپ</td><td>عملگرهای یک‌عملوندی</td></tr>
+<tr><td>۳</td><td><code>*</code> <code>/</code> <code>%</code></td><td>چپ ← راست</td><td>ضرب و تقسیم</td></tr>
+<tr><td>۴</td><td><code>+</code> <code>-</code></td><td>چپ ← راست</td><td>جمع و تفریق</td></tr>
+<tr><td>۵</td><td><code>&lt;&lt;</code> <code>&gt;&gt;</code></td><td>چپ ← راست</td><td>شیفت بیتی (درس ۳.۱)</td></tr>
+<tr><td>۶</td><td><code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code></td><td>چپ ← راست</td><td>مقایسهٔ ترتیبی</td></tr>
+<tr><td>۷</td><td><code>==</code> <code>!=</code></td><td>چپ ← راست</td><td>مقایسهٔ برابری</td></tr>
+<tr><td>۸</td><td><code>&amp;</code></td><td>چپ ← راست</td><td>AND بیتی (درس ۳.۱)</td></tr>
+<tr><td>۹</td><td><code>^</code></td><td>چپ ← راست</td><td>XOR بیتی</td></tr>
+<tr><td>۱۰</td><td><code>|</code></td><td>چپ ← راست</td><td>OR بیتی</td></tr>
+<tr><td>۱۱</td><td><code>&amp;&amp;</code></td><td>چپ ← راست</td><td>«و» منطقی</td></tr>
+<tr><td>۱۲</td><td><code>||</code></td><td>چپ ← راست</td><td>«یا» منطقی</td></tr>
+<tr><td>۱۳</td><td><code>?:</code></td><td>راست ← چپ</td><td>سه‌تایی (درس ۲.۴)</td></tr>
+<tr><td>۱۴</td><td><code>=</code> <code>+=</code> <code>-=</code> <code>*=</code> <code>/=</code> …</td><td>راست ← چپ</td><td>انتساب</td></tr>
+<tr><td>۱۵</td><td><code>,</code></td><td>چپ ← راست</td><td>ویرگول (کم‌کاربرد)</td></tr>
+</tbody></table></div>
+<p>لازم نیست جدول را حفظ کنی. قاعدهٔ مهندسی‌ها: <b>وقتی مطمئن نیستی، پرانتز بگذار.</b> پرانتز اضافه هزینه‌ای ندارد و خواننده را از حدس‌زدن نجات می‌دهد.</p>
+
+<div class="code" data-file="prec.c" data-lang="c" data-verify="host" id="code2">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    printf("2 + 3 * 4       = %d\n", 2 + 3 * 4);
+    printf("(2 + 3) * 4     = %d\n", (2 + 3) * 4);
+    printf("10 - 4 - 3      = %d\n", 10 - 4 - 3);
+    printf("100 / 10 * 5    = %d\n", 100 / 10 * 5);
+    printf("100 / (10 * 5)  = %d\n", 100 / (10 * 5));
+    printf("-2 * 3 + 1      = %d\n", -2 * 3 + 1);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code2">
+  <li data-lines="5-6"><b class="what">ضرب جلوتر از جمع.</b> ۱۴ در برابر ۲۰؛ فقط پرانتز فرق ایجاد کرد.</li>
+  <li data-lines="7"><b class="what">از چپ به راست.</b> اول <code>10 - 4</code> = ۶ و بعد <code>6 - 3</code> = ۳. اگر از راست می‌رفت ۹ درمی‌آمد (۱۰ − ۱).</li>
+  <li data-lines="8-9"><b class="what">ترتیب ضرب و تقسیم.</b> <code>100 / 10 * 5</code> از چپ می‌رود: ۱۰ × ۵ = ۵۰. اما <code>100 / (10 * 5)</code> = <code>100 / 50</code> = ۲. با پرانتز، جواب ۲۵ برابر شد!
+    <span class="why">این تله برای فرمول‌هایی مثل «مقدار ÷ (a × b)» جدی است. اگر پرانتز را فراموش کنی، ضرب به‌جای مخرج به صورت می‌رود.</span></li>
+  <li data-lines="10"><b class="what">منفی یک‌عملوندی.</b> علامت منفی جلوی ۲ اول اعمال می‌شود (ردیف ۲) و بعد ضرب: (−۲)×۳ = ۶−، و بعد + ۱ = ۵−.</li>
+</ol>
+<pre class="term" data-from="prec.c">
+$ ./prec
+2 + 3 * 4       = 14
+(2 + 3) * 4     = 20
+10 - 4 - 3      = 3
+100 / 10 * 5    = 50
+100 / (10 * 5)  = 2
+-2 * 3 + 1      = -5
+</pre>
+
+<h2 id="assign">انتساب ترکیبی، <span class="en">++</span> و <span class="en">--</span></h2>
+<p>در درس ۲.۱ دیدی <code>age = age + 1;</code> یعنی «مقدار را بخوان، یکی اضافه کن، برگردان». این الگو آن‌قدر پرتکرار است که C میان‌بُر دارد. به این میان‌بُرها <span class="term" data-t="compoundassign">انتساب ترکیبی</span> می‌گوییم:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>میان‌بُر</th><th>یعنی</th></tr></thead>
+<tbody>
+<tr><td><code>x += 5;</code></td><td><code>x = x + 5;</code></td></tr>
+<tr><td><code>x -= 5;</code></td><td><code>x = x - 5;</code></td></tr>
+<tr><td><code>x *= 2;</code></td><td><code>x = x * 2;</code></td></tr>
+<tr><td><code>x /= 2;</code></td><td><code>x = x / 2;</code></td></tr>
+<tr><td><code>x %= 4;</code></td><td><code>x = x % 4;</code></td></tr>
+<tr><td><code>x++;</code> و <code>++x;</code></td><td><code>x = x + 1;</code></td></tr>
+<tr><td><code>x--;</code> و <code>--x;</code></td><td><code>x = x - 1;</code></td></tr>
+</tbody></table></div>
+<p>ولی <code>x++</code> و <code>++x</code> یک تفاوت باریک دارند وقتی <b>نتیجه‌شان را در جای دیگری استفاده کنی</b>. مثل دو خبرنگار که یکی «قبل از ورود» و دیگری «بعد از ورود» عدد را می‌خواند:</p>
+<ul>
+  <li><code>a = i++;</code> (<b>پسوندی</b>): اول مقدار فعلی <code>i</code> به <code>a</code> برود، بعد <code>i</code> یکی زیاد شود.</li>
+  <li><code>b = ++i;</code> (<b>پیشوندی</b>): اول <code>i</code> یکی زیاد شود، بعد مقدار جدید به <code>b</code> برود.</li>
+</ul>
+<p>خودت قدم به قدم ببین:</p>
+<div class="widget" data-w="mem" data-config='{"title":"i++ در برابر ++i","code":["int i = 5;","int a = i++;","int b = ++i;"],"intro":"روی بعدی بزن و ببین a و b چه مقدارهایی می‌گیرند.","cells":[{"addr":"0x20000000","name":"i","val":null,"kind":"var"},{"addr":"0x20000004","name":"a","val":null,"kind":"var"},{"addr":"0x20000008","name":"b","val":null,"kind":"var"}],"steps":[{"line":0,"set":{"0":5},"hot":[0],"say":"i ساخته شد و ۵ گرفت."},{"line":1,"set":{"1":5,"0":6},"hot":[1,0],"say":"پسوندی: اول مقدار <b>قدیمی</b> i (یعنی ۵) در a رفت. بعد i شد ۶."},{"line":2,"set":{"0":7,"2":7},"hot":[0,2],"say":"پیشوندی: اول i شد ۷ (از ۶ یکی زیاد)، بعد همان ۷ در b رفت."}]}'></div>
+
+<div class="code" data-file="incdec.c" data-lang="c" data-verify="host" id="code3">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int i = 5;
+    int a = i++;
+    int b = ++i;
+    int total = 10;
+
+    total += 5;
+    total *= 2;
+    total -= 6;
+    total /= 4;
+    total %= 4;
+
+    printf("a = %d, b = %d, i = %d\n", a, b, i);
+    printf("total = %d\n", total);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code3">
+  <li data-lines="5"><b class="what">شروع.</b> <code>i</code> برابر ۵.</li>
+  <li data-lines="6"><b class="what">پسوندی.</b> <code>a</code> مقدار ۵ می‌گیرد و بعد <code>i</code> می‌شود ۶.</li>
+  <li data-lines="7"><b class="what">پیشوندی.</b> ابتدا <code>i</code> می‌شود ۷، بعد <code>b</code> همان ۷ را می‌گیرد.</li>
+  <li data-lines="8,10-14"><b class="what">زنجیرهٔ میان‌بُرها.</b> ۱۰ ← <code>+= 5</code> ← ۱۵ ← <code>*= 2</code> ← ۳۰ ← <code>-= 6</code> ← ۲۴ ← <code>/= 4</code> ← ۶ ← <code>%= 4</code> ← ۲.
+    <span class="why">هر خط همان قفسهٔ <code>total</code> را با مقدار جدید پر می‌کند. مقدار قبلی می‌رود، همان که در درس ۲.۱ گفتیم.</span></li>
+  <li data-lines="16-19"><b class="what">چاپ و پایان.</b></li>
+</ol>
+<pre class="term" data-from="incdec.c">
+$ ./incdec
+a = 5, b = 7, i = 7
+total = 2
+</pre>
+
+<div class="callout tip"><div class="ct">قاعدهٔ ایمن برای <span class="en">++</span></div>
+<p>تا وقتی تازه‌کاری، <code>i++</code> را <b>به‌تنهایی در یک دستور</b> بنویس (مثل <code>i++;</code>) و هرگز نتیجه‌اش را در همان خط جای دیگری استفاده نکن. خوانندهٔ کد حواسش به «قبل یا بعد» نمی‌ماند و باگ کمتر می‌شود. در حلقه‌ها (درس ۲.۵) <code>i++</code> تنها رایج‌ترین شکل است.</p></div>
+
+<h2 id="compare">مقایسه: پرسش بله/خیر</h2>
+<p>عملگرهای مقایسه‌ای شش تا هستند: <code>&lt;</code> کوچک‌تر، <code>&lt;=</code> کوچک‌تر یا مساوی، <code>&gt;</code> بزرگ‌تر، <code>&gt;=</code> بزرگ‌تر یا مساوی، <code>==</code> مساوی، <code>!=</code> نامساوی. دقت کن: «مساوی» با <b>دو</b> علامت <code>==</code> نوشته می‌شود، چون یک علامت <code>=</code> قبلا برای انتساب رزرو شده. جواب هر مقایسه در C یک <code>int</code> است: <code>1</code> اگر درست باشد و <code>0</code> اگر نادرست.</p>
+<p>عملگر <code>!</code> («نه» منطقی) هم داریم: <code>!x</code> اگر <code>x</code> صفر باشد ۱ می‌دهد و اگر غیرصفر باشد ۰. یعنی C هر عدد <b>غیرصفر</b> را «درست» می‌داند و فقط صفر را «نادرست». <code>!!x</code> هر عدد را به ۰ یا ۱ تبدیل می‌کند.</p>
+
+<div class="code" data-file="rel.c" data-lang="c" data-verify="host" id="code4">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int x = 7;
+
+    printf("x &gt; 3   -&gt; %d\n", x &gt; 3);
+    printf("x == 7  -&gt; %d\n", x == 7);
+    printf("x != 7  -&gt; %d\n", x != 7);
+    printf("x &lt;= 6  -&gt; %d\n", x &lt;= 6);
+    printf("!x      -&gt; %d\n", !x);
+    printf("!!x     -&gt; %d\n", !!x);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code4">
+  <li data-lines="7-10"><b class="what">مقایسه‌ها.</b> هر مقایسه خودش یک عدد است (۱ یا ۰) که مستقیم به <code>printf</code> داده می‌شود.
+    <span class="why">در زبان C نوع ویژه‌ای برای بله/خیر در خود عملگر نیست؛ جوابْ <code>int</code> است. به همین دلیل می‌شود مقایسه را در محاسبه هم به کار برد.</span></li>
+  <li data-lines="11"><b class="what">نفی.</b> ۷ غیرصفر است، پس «درست»؛ <code>!x</code> می‌شود ۰.</li>
+  <li data-lines="12"><b class="what">نفیِ نفی.</b> هر مقدار غیرصفر را به ۱ تبدیل می‌کند. در کد رجیستر زیاد می‌بینی.</li>
+</ol>
+<pre class="term" data-from="rel.c">
+$ ./rel
+x > 3   -> 1
+x == 7  -> 1
+x != 7  -> 0
+x <= 6  -> 0
+!x      -> 0
+!!x     -> 1
+</pre>
+
+<div class="callout warn"><div class="ct">تله‌ای که از ریاضی می‌آید: <code>3 &lt; x &lt; 5</code></div>
+<p>در ریاضی «۳ < x < ۵» یعنی x بین ۳ و ۵ است. در C این را به‌صورت <code>(3 &lt; x) &lt; 5</code> می‌خواند: اول <code>3 &lt; x</code> می‌شود ۰ یا ۱ و بعد آن با ۵ مقایسه می‌شود، که همیشه درست است!</p></div>
+<div class="code" data-file="chain.c" data-lang="c" data-verify="host" data-warn-ok id="code5">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int x = 7;
+
+    printf("3 &lt; x &lt; 5  -&gt; %d\n", 3 &lt; x &lt; 5);
+    printf("x is between 3 and 5? -&gt; %d\n", 3 &lt; x &amp;&amp; x &lt; 5);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code5">
+  <li data-lines="7"><b class="what">زنجیرهٔ ریاضی‌وار.</b> ۷ به‌وضوح بین ۳ و ۵ نیست، ولی جواب ۱ است: <code>3 &lt; 7</code> می‌شود ۱ و <code>1 &lt; 5</code> درست است.
+    <span class="why">کامپایلر این را هشدار می‌دهد (<code>-Wbool-compare</code>)؛ هشدار را جدی بگیر.</span></li>
+  <li data-lines="8"><b class="what">شکل درست.</b> دو مقایسه را با <code>&amp;&amp;</code> («و») به هم می‌بندیم. پایین‌تر کامل توضیح می‌دهیم.</li>
+</ol>
+<pre class="term" data-kind="cmd">
+$ gcc -std=c11 -Wall -Wextra -o chain chain.c
+chain.c:7:40: warning: comparison of constant '5' with boolean expression is always true [-Wbool-compare]
+</pre>
+<pre class="term" data-from="chain.c">
+$ ./chain
+3 < x < 5  -> 1
+x is between 3 and 5? -> 0
+</pre>
+
+<h2 id="logic">شرط ترکیبی: <span class="en">&amp;&amp;</span>، <span class="en">||</span> و میان‌بُر</h2>
+<p>گاهی یک پرسش کافی نیست: «دما بالای ۲۵ است <b>و</b> فن خاموش است؟» یا «دکمه A فشرده شده <b>یا</b> دکمه B؟». اینجا سه عملگر منطقی داریم:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>عملگر</th><th>اسم</th><th>درست است وقتی…</th></tr></thead>
+<tbody>
+<tr><td><code>a &amp;&amp; b</code></td><td>و (AND)</td><td>هر دو درست باشند</td></tr>
+<tr><td><code>a || b</code></td><td>یا (OR)</td><td>دست‌کم یکی درست باشد</td></tr>
+<tr><td><code>!a</code></td><td>نه (NOT)</td><td><code>a</code> نادرست باشد</td></tr>
+</tbody></table></div>
+<p>یک ویژگی مهم: C برای صرفه‌جویی، وقتی جواب معلوم شد، بقیه را <b>اصلا حساب نمی‌کند</b>. اسمش <span class="term" data-t="shortcircuit">ارزیابی میان‌بُر (short-circuit)</span> است. مثل بازرس فرودگاه: اگر بلیت نداری، دیگر پاسپورتت را نگاه نمی‌کند. یعنی:</p>
+<ul>
+  <li><code>a &amp;&amp; b</code>: اگر <code>a</code> نادرست باشد، جواب حتما نادرست است و <code>b</code> اجرا نمی‌شود.</li>
+  <li><code>a || b</code>: اگر <code>a</code> درست باشد، جواب حتما درست است و <code>b</code> اجرا نمی‌شود.</li>
+</ul>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 270" role="img" aria-label="جریان ارزیابی میان‌بُر برای AND و OR">
+  <defs><marker id="ar3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">میان‌بُر: اگر جواب معلوم شد، ادامه نده</text>
+  <text x="46" y="80" class="mono s-tx" font-size="18" font-weight="800" text-anchor="start">a &amp;&amp; b</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="170" y="52" width="110" height="52" rx="10" fill="#ffd60a"/><rect x="370" y="52" width="110" height="52" rx="10" fill="#7ea3ff"/><rect x="590" y="52" width="130" height="52" rx="10" fill="#3ddc97"/><rect x="370" y="120" width="230" height="30" rx="8" fill="#ff86b3"/>
+  </g>
+  <g fill="#15120a" font-size="15" font-weight="800" text-anchor="middle">
+    <text x="225" y="84">a را بسنج</text><text x="425" y="84">b را بسنج</text><text x="655" y="84">نتیجه = b</text><text x="485" y="141">نتیجه = ۰ (b اجرا نمی‌شود)</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar3)"><path d="M280 78H364"/><path d="M480 78H584"/><path d="M225 106V135H364"/></g>
+  <g class="s-tx" font-size="13" font-weight="700" text-anchor="middle"><text x="322" y="70">درست</text><text x="150" y="130">نادرست</text></g>
+
+  <text x="46" y="210" class="mono s-tx" font-size="18" font-weight="800" text-anchor="start">a || b</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="170" y="182" width="110" height="52" rx="10" fill="#ffd60a"/><rect x="370" y="182" width="110" height="52" rx="10" fill="#7ea3ff"/><rect x="590" y="182" width="130" height="52" rx="10" fill="#3ddc97"/><rect x="370" y="248" width="230" height="30" rx="8" fill="#ff86b3" transform="translate(0 -6)"/>
+  </g>
+  <g fill="#15120a" font-size="15" font-weight="800" text-anchor="middle">
+    <text x="225" y="214">a را بسنج</text><text x="425" y="214">b را بسنج</text><text x="655" y="214">نتیجه = b</text><text x="485" y="265">نتیجه = ۱ (b اجرا نمی‌شود)</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar3)"><path d="M280 208H364"/><path d="M480 208H584"/><path d="M225 236V257H364"/></g>
+  <g class="s-tx" font-size="13" font-weight="700" text-anchor="middle"><text x="322" y="200">نادرست</text><text x="150" y="252">درست</text></g>
+</svg></div>
+<figcaption>جواب «و» با اولین نادرست و جواب «یا» با اولین درست معلوم می‌شود. بقیه اجرا نمی‌شوند؛ حتی اگر عملوند بعدی تغییر متغیر داشته باشد.</figcaption></figure>
+
+<div class="code" data-file="shortc.c" data-lang="c" data-verify="host" id="code6">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int den = 0;
+    int b = 5;
+
+    int r1 = (den != 0) &amp;&amp; (100 / den &gt; 3);
+    printf("r1 = %d\n", r1);
+
+    int r2 = (den == 0) || (++b &gt; 0);
+    printf("r2 = %d, b = %d\n", r2, b);
+
+    int r3 = (den == 0) &amp;&amp; (++b &gt; 0);
+    printf("r3 = %d, b = %d\n", r3, b);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code6">
+  <li data-lines="5-6"><b class="what">دو مقدار.</b> <code>den</code> که مخرج بالقوه است (صفر!) و <code>b</code> که می‌خواهیم ببینیم دست می‌خورد یا نه.</li>
+  <li data-lines="8-9"><b class="what">محافظ تقسیم بر صفر.</b> <code>den != 0</code> نادرست است؛ پس طرف راست <code>&amp;&amp;</code> اصلا اجرا نمی‌شود و تقسیم <code>100 / den</code> هرگز رخ نمی‌دهد. نتیجه ۰.
+    <span class="why">این الگو همه‌جا استفاده می‌شود: «اول بررسی کن ایمن است، بعد انجام بده» در یک خط. ترتیب مهم است! اگر ترتیب را برعکس کنی، تقسیم بر صفر اجرا می‌شود.</span></li>
+  <li data-lines="11-12"><b class="what">یای میان‌بُر.</b> <code>den == 0</code> درست است؛ پس جواب «یا» معلوم است (۱) و طرف راست اجرا <b>نمی‌شود</b>. <code>++b</code> اتفاق نمی‌افتد و <code>b</code> هنوز ۵ است.</li>
+  <li data-lines="14-16"><b class="what">و با شرط اول درست.</b> اول درست است؛ پس برای دانستن جواب باید طرف راست هم سنجیده شود. <code>++b</code> اجرا می‌شود و <code>b</code> می‌شود ۶.
+    <span class="why">پس عملگرهای منطقی می‌توانند اثر جانبی (تغییر متغیر) را «بپرند». برای همین در طرف راست <code>&amp;&amp;</code> و <code>||</code> تغییر متغیر ننویس؛ خواننده را گیج می‌کند.</span></li>
+</ol>
+<pre class="term" data-from="shortc.c">
+$ ./shortc
+r1 = 0
+r2 = 1, b = 5
+r3 = 1, b = 6
+</pre>
+
+<div class="callout warn"><div class="ct">دو &amp; یا یک &amp;؟</div>
+<p><code>&amp;&amp;</code> و <code>||</code> منطقی‌اند (بله/خیر). <code>&amp;</code> و <code>|</code> (تک‌علامتی) <b>بیتی</b>‌اند و بیت‌های دو عدد را جدا جدا ترکیب می‌کنند (درس ۳.۱). اشتباه گرفتن‌شان جواب‌های عجیب می‌دهد؛ مثلا <code>2 &amp; 1</code> برابر ۰ است ولی <code>2 &amp;&amp; 1</code> برابر ۱. و <code>&amp;</code> میان‌بُر ندارد.</p></div>
+
+<h2 id="traps">پنج تله‌ای که همه در آن می‌افتند</h2>
+
+<h3 id="trap1">تلهٔ ۱: <code>=</code> به‌جای <code>==</code></h3>
+<p>این مشهورترین باگ C است. <code>if (mode = 1)</code> مقدار ۱ را در <code>mode</code> <b>می‌گذارد</b> و بعد ۱ (درست) را می‌سنجد. شرط همیشه درست می‌شود و <code>mode</code> هم خراب می‌شود. کامپایلر سرنخ می‌دهد:</p>
+<div class="code" data-file="eqbug.c" data-lang="c" data-verify="host-fail" data-cflags="-Werror=parentheses" id="code7">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int mode = 2;
+
+    if (mode = 1) {
+        printf("mode is one\n");
+    }
+    printf("mode = %d\n", mode);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code7">
+  <li data-lines="7"><b class="what">انتساب در شرط.</b> <code>mode = 1</code> یک انتساب است، نه مقایسه. مقدار عبارت خود انتساب ۱ است.
+    <span class="why">در C انتساب هم یک عبارت است و مقدار دارد (مقداری که ریخته شد). برای همین قانونی است و کامپایلر فقط <em>هشدار</em> می‌دهد.</span></li>
+  <li data-lines="8-9"><b class="what">بدنه.</b> همیشه اجرا می‌شود.</li>
+  <li data-lines="10"><b class="what">تباهی.</b> <code>mode</code> دیگر ۲ نیست.</li>
+</ol>
+<pre class="term" data-kind="err" data-from="eqbug.c">
+eqbug.c: In function 'main':
+eqbug.c:7:9: error: suggest parentheses around assignment used as truth value [-Werror=parentheses]
+</pre>
+<p>هشدار پیش‌فرض <code>-Wall</code> اینجا را می‌گیرد؛ ما برای نمایش، آن را به خطا تبدیل کردیم (<code>-Werror=parentheses</code>). عادت مفید: مقدار ثابت را <b>سمت چپ</b> بنویس (<code>if (1 == mode)</code>)؛ اگر یک <code>=</code> را جا بیندازی، کامپایلر خطا می‌دهد چون نمی‌شود در ۱ چیزی گذاشت. (این سبک را «Yoda condition» می‌نامند.)</p>
+
+<h3 id="trap2">تلهٔ ۲: تقسیم صحیح در جای نادرست</h3>
+<p>تقسیم صحیح را دیدی. تله وقتی است که «اول تقسیم و بعد ضرب» بنویسی: <code>done / total * 100</code> برای درصد. چون <code>30 / 120</code> صحیح است و ۰ می‌شود، جواب ۰ است. باید اول ضرب کنی: <code>done * 100 / total</code> (تمرین ۲ همین است).</p>
+
+<h3 id="trap3">تلهٔ ۳: ترتیب ارزیابی نامشخص</h3>
+<p>C ترتیب انجام دو نیمهٔ یک عبارت را همیشه تعیین نمی‌کند. بدتر: اگر در یک عبارت یک متغیر را دو بار تغییر بدهی یا هم بخوانی و هم تغییر بدهی، نتیجه تعریف‌نشده است:</p>
+<div class="code" data-file="seqpt.c" data-lang="c" data-verify="host-fail" data-cflags="-Werror=sequence-point" id="code8">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int i = 1;
+
+    i = i++ + i;
+    printf("%d\n", i);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code8">
+  <li data-lines="7"><b class="what">تغییر و خواندنِ همزمان.</b> در همین یک دستور، <code>i</code> هم با <code>i++</code> تغییر می‌کند، هم در سمت راست خوانده می‌شود، هم در سمت چپ انتساب می‌شود. C نمی‌گوید کدام اول است.
+    <span class="why">هر کامپایلر (و حتی هر سطح بهینه‌سازی) می‌تواند جواب متفاوتی بدهد. قاعده: <b>در هر دستور، هر متغیر را حداکثر یک بار تغییر بده و اگر تغییرش دادی جای دیگر همان دستور نخوانش.</b></span></li>
+</ol>
+<pre class="term" data-kind="err" data-from="seqpt.c">
+seqpt.c: In function 'main':
+seqpt.c:7:7: error: operation on 'i' may be undefined [-Werror=sequence-point]
+</pre>
+
+<h3 id="trap4">تلهٔ ۴: تقدم مقایسه در برابر بیتی</h3>
+<p>در جدول دیدی <code>==</code> (ردیف ۷) از <code>&amp;</code> (ردیف ۸) تقدم بیشتری دارد. پس <code>x &amp; 1 == 0</code> یعنی <code>x &amp; (1 == 0)</code> یعنی <code>x &amp; 0</code> که همیشه ۰ است، نه «آیا بیت صفر خاموش است؟». درمان: <code>(x &amp; 1) == 0</code> با پرانتز. این تله در کد رجیستر همه‌جا هست و در درس ۳.۱ به آن برمی‌گردیم.</p>
+
+<h3 id="trap5">تلهٔ ۵: سرریز میانی</h3>
+<p>حساب‌هایی مثل <code>a * b / c</code> ممکن است در <em>وسط</em> راه از ظرف بزرگ‌تر شوند حتی اگر جواب نهایی کوچک باشد. مثال بعدی، درست همین است و به شکل تمرین برای میکروکنترلر درمی‌آید.</p>
+
+<h2 id="adc">مثال واقعی میکروکنترلر: از ADC به میلی‌ولت</h2>
+<p>یک ADC (مبدل آنالوگ به دیجیتال، درس ۲.۲) ولتاژ ورودی را به یک عدد صحیح تبدیل می‌کند. فرض کن ADC ۱۲ بیتی است: عدد ۰ یعنی ۰ ولت و عدد ۴۰۹۵ یعنی ولتاژ مرجع، مثلا ۳٫۳ ولت = ۳۳۰۰ میلی‌ولت. رابطهٔ خطی است: <code>mv = adc * 3300 / 4095</code>. ولی ببین ترتیب و نوع چه می‌کنند:</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 270" role="img" aria-label="سه شیوه محاسبه adc ضرب در ۳۳۰۰ تقسیم بر ۴۰۹۵ با نتیجه‌های ۳۳۰۰، صفر و ۱۳۰۸۴">
+  <defs><marker id="ar4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">برای adc = 4095 سه شیوهٔ نوشتن، سه جواب</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="40" y="46" width="200" height="50" rx="10" fill="#3ddc97"/><rect x="290" y="46" width="200" height="50" rx="10" fill="#3ddc97"/><rect x="540" y="46" width="180" height="50" rx="10" fill="#3ddc97"/>
+    <rect x="40" y="130" width="200" height="50" rx="10" fill="#ff86b3"/><rect x="290" y="130" width="200" height="50" rx="10" fill="#ff86b3"/><rect x="540" y="130" width="180" height="50" rx="10" fill="#ff86b3"/>
+    <rect x="40" y="206" width="200" height="50" rx="10" fill="#ffd60a"/><rect x="290" y="206" width="200" height="50" rx="10" fill="#ffd60a"/><rect x="540" y="206" width="180" height="50" rx="10" fill="#ffd60a"/>
+  </g>
+  <g class="mono" font-size="15" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="140" y="76">adc * 3300</text><text x="390" y="76">13513500</text><text x="630" y="76">/ 4095 = 3300</text>
+    <text x="140" y="160">3300 / 4095</text><text x="390" y="160">0 (تقسیم صحیح)</text><text x="630" y="160">adc * 0 = 0</text>
+    <text x="140" y="236">adc * 3300</text><text x="390" y="236">13513500 mod 65536</text><text x="630" y="236">13084 (خراب)</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar4)">
+    <path d="M240 71H284"/><path d="M490 71H534"/><path d="M240 155H284"/><path d="M490 155H534"/><path d="M240 231H284"/><path d="M490 231H534"/>
+  </g>
+  <g class="s-tx" font-size="12.5" font-weight="700" text-anchor="middle">
+    <text x="380" y="118">✔ در uint32_t ضرب کن، بعد تقسیم</text>
+    <text x="380" y="202">✘ اول تقسیم</text>
+  </g>
+</svg></div>
+<figcaption>ردیف اول درست است. ردیف دوم (تقسیم اول) صفر می‌دهد. ردیف سوم مربوط به دستگاهی است که ضرب را در ۱۶ بیت انجام می‌دهد: Arduino Uno یا وقتی نتیجه را به <code>uint16_t</code> بریزی.</figcaption></figure>
+
+<div class="code" data-file="adc.c" data-lang="c" data-verify="host" id="code9">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+int main(void)
+{
+    uint16_t adc = 4095;
+    uint32_t good = (uint32_t)adc * 3300U / 4095U;
+    uint32_t zero = adc * (3300U / 4095U);
+    uint16_t narrow = (uint16_t)(adc * 3300U);
+
+    printf("good   = %u\n", (unsigned)good);
+    printf("zero   = %u\n", (unsigned)zero);
+    printf("narrow = %u\n", (unsigned)narrow);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code9">
+  <li data-lines="6"><b class="what">خوانش ADC.</b> بیشینهٔ ۱۲ بیتی؛ بدترین حالت برای سرریز.</li>
+  <li data-lines="7"><b class="what">روش درست.</b> اول <code>adc</code> را به <code>uint32_t</code> می‌بریم و <b>بعد</b> در ۳۳۰۰ ضرب می‌کنیم: ۱۳٬۵۱۳٬۵۰۰ که در ۳۲ بیت جا می‌شود. بعد تقسیم بر ۴۰۹۵ ← ۳۳۰۰.
+    <span class="why">ضرب پیش از تقسیم دقت را نگه می‌دارد؛ ولی به ظرف بزرگ‌تر نیاز دارد. این معامله همیشگی «دقت در برابر ظرفیت» است.</span></li>
+  <li data-lines="8"><b class="what">روش خراب ۱: تقسیم اول.</b> <code>3300U / 4095U</code> تقسیم صحیح است و ۰ می‌شود. هر ضربی در صفر، صفر است.</li>
+  <li data-lines="9"><b class="what">روش خراب ۲: ظرف کوچک.</b> حاصل‌ضرب ۱۳٬۵۱۳٬۵۰۰ را به <code>uint16_t</code> بریزیم، فقط ۱۶ بیت پایینش می‌ماند: ۱۳۰۸۴.
+    <span class="why">روی STM32 و ESP32 می‌توانی این باگ را با ضرب در ۳۲ بیت پنهان کنی، اما کد همین منطق روی AVR (Arduino Uno) با <code>int</code> ۱۶ بیتی واقعا رخ می‌دهد.</span></li>
+  <li data-lines="11-13"><b class="what">چاپ.</b> با cast به <code>unsigned</code> (درس ۲.۲).</li>
+</ol>
+<pre class="term" data-from="adc.c">
+$ ./adc
+good   = 3300
+zero   = 0
+narrow = 13084
+</pre>
+<p>یک ریزه‌کاری دیگر: تقسیم صحیح همیشه قسمت اعشار را <b>می‌اندازد</b>؛ یعنی نتیجه همیشه «رو به پایین» گرد می‌شود. برای نتیجهٔ نزدیک‌ترین عدد، نصف مخرج را پیش از تقسیم به صورت اضافه کن:</p>
+<div class="code" data-file="round.c" data-lang="c" data-verify="host" id="code10">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+int main(void)
+{
+    uint32_t raw = 2000;
+    uint32_t floored = raw * 3300U / 4095U;
+    uint32_t rounded = (raw * 3300U + 4095U / 2U) / 4095U;
+
+    printf("exact value  = 1611.72...\n");
+    printf("floor result = %u\n", (unsigned)floored);
+    printf("round result = %u\n", (unsigned)rounded);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code10">
+  <li data-lines="7"><b class="what">بریده‌شده.</b> مقدار دقیق ۱۶۱۱٫۷۲ است ولی تقسیم صحیح ۰٫۷۲ را دور می‌اندازد.</li>
+  <li data-lines="8"><b class="what">گردشده.</b> <code>4095U / 2U</code> (= ۲۰۴۷) را قبل از تقسیم اضافه می‌کنیم. چرا کار می‌کند؟ اگر اعشار ≥ ۰٫۵ باشد، جمع نیم مخرج یک واحد کامل روی جواب اضافه می‌کند، وگرنه نه.</li>
+  <li data-lines="10-12"><b class="what">چاپ.</b> ۱۶۱۱ در برابر ۱۶۱۲.</li>
+</ol>
+<pre class="term" data-from="round.c">
+$ ./round
+exact value  = 1611.72...
+floor result = 1611
+round result = 1612
+</pre>
+
+<p>حالا همین محاسبه را برای کامپایلر ARM (Cortex-M4) بنویس تا مطمئن شویم روی بردی مثل Nucleo-F411RE هم کامپایل می‌شود:</p>
+<div class="code" data-file="ops_arm.c" data-lang="c" data-verify="arm" id="code11">
+<pre>
+#include &lt;stdint.h&gt;
+
+uint16_t adc_to_mv(uint16_t adc)
+{
+    return (uint16_t)(((uint32_t)adc * 3300U) / 4095U);
+}
+
+uint32_t second_of_minute(uint32_t uptime_s)
+{
+    return uptime_s % 60U;
+}
+</pre></div>
+<ol class="walk" data-for="code11">
+  <li data-lines="3-6"><b class="what">تابع تبدیل.</b> ورودی و خروجی ۱۶ بیتی‌اند، ولی حساب میانی ۳۲ بیتی است. cast نهایی به <code>uint16_t</code> امن است چون جواب حداکثر ۳۳۰۰ است.
+    <span class="why">قانون: «داده کوچک، حساب بزرگ». ورودی و خروجی را به اندازهٔ داده نگه دار و حساب میانی را در نوع پهن‌تر انجام بده.</span></li>
+  <li data-lines="8-11"><b class="what">باقیمانده.</b> ثانیهٔ درون دقیقه از روی زمان کل: مثال <code>%</code> در دنیای واقعی. (نوشتن تابع را در درس ۲.۶ می‌آموزی؛ اینجا فقط به شکلش نگاه کن.)</li>
+</ol>
+<p>این کد فقط کامپایل می‌شود؛ خروجی ندارد.</p>
+
+<div class="callout info"><div class="ct">در ESP32 چه؟</div>
+<p>ESP32 هم ۳۲ بیتی است و همین قواعد را دارد: ترتیب ضرب و تقسیم، نوع میانی پهن‌تر و گردکردن. فقط بدان که ADC آن کاملا خطی نیست، و ESP-IDF برای تبدیل دقیق‌تر به میلی‌ولت ابزار کالیبراسیون دارد. جزئیاتش را در مستندات رسمی <a href="https://docs.espressif.com/projects/esp-idf/" target="_blank" rel="noopener">ESP-IDF</a> ببین.</p></div>
+<p>ESP32 هم ۳۲ بیتی است و همین قواعد را دارد. ADC آن معمولا ۱۲ بیتی است (۰ تا ۴۰۹۵)، ولی نمی‌گذارد یک دستور ساده مثل <code>adc * 3300 / 4095</code> کافی باشد، چون رابطهٔ ولتاژ با عدد ADC خطی کامل نیست و در ESP-IDF کتابخانهٔ کالیبراسیون دارد که میلی‌ولت را برایت حساب می‌کند. جزئیات را در مستندات رسمی <a href="https://docs.espressif.com/projects/esp-idf/" target="_blank" rel="noopener">ESP-IDF</a> ببین. آنچه اینجا آموختی (ترتیب، نوع میانی، گرد کردن) در هر دو تراشه لازم است.</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="3">
+  <p class="q">مقدار <code>17 % 5 + 17 / 5 * 2</code> چند است؟</p>
+  <ol>
+    <li data-why="این جواب حاصل «17/5=3.4 و 17%5=2» با اعشار است؛ ولی هر دو عملوند int‌اند و تقسیم صحیح می‌شود.">۸٫۸</li>
+    <li data-why="۱۷/۵ صحیح ۳ است، نه ۴. با ۴ می‌شد ۲+۸=۱۰.">۱۰</li>
+    <li>۸</li>
+    <li data-why="این فقط خود عدد ۱۷ است؛ جمع و ضرب‌ها آن را به ۱۷ نمی‌رسانند. ۱۷%۵ و ۱۷/۵ را جدا حساب کن.">۱۷</li>
+  </ol>
+  <div class="fb"><code>%</code> و <code>/</code> هم‌تقدم‌اند و از چپ می‌روند؛ <code>*</code> هم. ۱۷%۵ = ۲؛ ۱۷/۵ = ۳؛ ۳×۲ = ۶؛ ۲ + ۶ = ۸.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">خروجی چیست؟<br><code>int i = 3; int r = i++ * 2; printf("%d %d", r, i);</code></p>
+  <ol>
+    <li>۶ و ۴</li>
+    <li data-why="اگر پیشوندی (++i) بود ۸ و ۴ می‌شد؛ اینجا پسوندی است و مقدار قدیمی ۳ در ضرب می‌رود.">۸ و ۴</li>
+    <li data-why="i بعد از این دستور یکی زیاد می‌شود؛ پس ۴ است، نه ۳.">۶ و ۳</li>
+    <li data-why="کد کاملا قانونی است؛ خطا ندارد.">خطای کامپایل</li>
+  </ol>
+  <div class="fb">پسوندی یعنی «مقدار قدیمی را استفاده کن، بعد افزایش بده». پس ضرب ۳×۲ = ۶ و بعد <code>i</code> می‌شود ۴.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">کدام خط باگ دارد؟</p>
+  <ol>
+    <li data-why="این شرط درست و معمولی است؛ فقط == مقایسه می‌کند."><code>if (level == 100) {</code></li>
+    <li data-why="جمع و ضرب معمولی؛ فقط تقدم را می‌طلبد (ضرب اول) که درست است."><code>total = a + b * 2;</code></li>
+    <li data-why="این هم مقایسه‌ای درست است و با && ترکیب شده."><code>if (x &gt; 0 &amp;&amp; y &gt; 0) {</code></li>
+    <li><code>if (state = 0) {</code></li>
+  </ol>
+  <div class="fb"><code>state = 0</code> انتساب است؛ مقدار ۰ در <code>state</code> می‌نشیند و شرط همیشه نادرست می‌شود. باید <code>state == 0</code> باشد.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">با <code>uint16_t adc = 3000;</code> روی STM32 (int ۳۲ بیتی)، کدام عبارت میلی‌ولت را (با فرض ۳۳۰۰ mV برای ۴۰۹۵) <b>درست</b> می‌دهد؟</p>
+  <ol>
+    <li data-why="۳۳۰۰/۴۰۹۵ صحیح ۰ است، پس کل عبارت ۰ می‌شود.">adc * (3300 / 4095)</li>
+    <li><code>(uint32_t)adc * 3300U / 4095U</code></li>
+    <li data-why="۳۳۰۰ و ۴۰۹۵ هر دو ثابت‌اند و adc را نمی‌تواند تغییر دهد؛ جواب ۰ است.">3300 / 4095</li>
+    <li data-why="این یک مقایسه است و فقط ۰ یا ۱ می‌دهد، نه میلی‌ولت.">adc &gt; 3300</li>
+  </ol>
+  <div class="fb">اول ضرب در ظرف ۳۲ بیتی، بعد تقسیم؛ جواب برای ۳۰۰۰ برابر ۲۴۱۷ mV است.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">در <code>if (n != 0 &amp;&amp; total / n &gt; 10)</code> چرا نوشتن <code>n != 0</code> در سمت چپ مهم است؟</p>
+  <ol>
+    <li data-why="ترتیب روی سرعت برنامه اثر معنی‌داری ندارد؛ مسئله ایمنی است.">چون سریع‌تر می‌شود</li>
+    <li data-why="&& همیشه هر دو طرف را نمی‌سنجد؛ دقیقا همین موضوع مسئله است.">چون && همیشه هر دو طرف را اجرا می‌کند</li>
+    <li>چون اگر n صفر باشد، میان‌بُر مانع اجرای تقسیم می‌شود</li>
+    <li data-why="اگر ترتیب عوض شود، شرط درست کار نمی‌کند؛ ترتیب مهم است.">چون ترتیب اهمیتی ندارد</li>
+  </ol>
+  <div class="fb">اگر <code>n == 0</code> شرط اول نادرست است و طرف راست اجرا نمی‌شود، پس تقسیم بر صفر رخ نمی‌دهد.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: ثانیه به ساعت و دقیقه</div>
+<p>یک دستگاه با تراشهٔ STM32 مدت کارکرد را به ثانیه نگه می‌دارد (مثلا ۷۳۸۴ ثانیه). می‌خواهیم آن را به «ساعت، دقیقه، ثانیه» تبدیل کنیم.</p>
+<ol class="parts">
+  <li><span><b>پیش‌بینی:</b> با ماشین‌حساب ۷۳۸۴ را به ساعت و دقیقه و ثانیه تبدیل کن (هر ساعت ۳۶۰۰ ثانیه).</span></li>
+  <li><span><b>حل:</b> فقط با <code>/</code> و <code>%</code> برنامه بنویس که بگوید ۷۳۸۴ ثانیه چند ساعت، چند دقیقه و چند ثانیه است.</span></li>
+  <li><span><b>چالش:</b> برنامه را طوری تغییر بده که روز را هم جدا کند (۸۶۴۰۰ ثانیه = ۱ روز).</span></li>
+</ol>
+<details><summary>راهنمایی</summary><p>ساعت‌ها = <code>total / 3600</code>. باقیماندهٔ <code>total % 3600</code> ثانیه‌هایی است که به ساعت کامل نرسیده؛ آن را بر ۶۰ تقسیم کن تا دقیقه بیاید. ثانیهٔ آخر = <code>total % 60</code>.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="ex1.c">
+$ ./ex1
+7384 s = 2 h 3 m 4 s
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="ex1.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int total = 7384;
+    int hours = total / 3600;
+    int minutes = total % 3600 / 60;
+    int seconds = total % 60;
+
+    printf("%d s = %d h %d m %d s\n", total, hours, minutes, seconds);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="6"><b class="what">ساعت.</b> ۷۳۸۴ ÷ ۳۶۰۰ = ۲ (باقی ۱۸۴)؛ تقسیم صحیح بقیه را می‌اندازد.</li>
+  <li data-lines="7"><b class="what">دقیقه.</b> <code>%</code> و <code>/</code> هم‌تقدم‌اند و از چپ می‌روند؛ پس این <code>(total % 3600) / 60</code> است: ۱۸۴ ÷ ۶۰ = ۳.
+    <span class="why">پرانتز اضافه <code>(total % 3600) / 60</code> خواناتر است؛ حتما در کد واقعی بگذار.</span></li>
+  <li data-lines="8"><b class="what">ثانیه.</b> باقیماندهٔ تقسیم بر ۶۰: چون ۷۳۸۴ = ۱۲۳ × ۶۰ + ۴، جواب ۴ است.</li>
+  <li data-lines="10"><b class="what">چاپ.</b> ۲ ساعت و ۳ دقیقه و ۴ ثانیه: ۲×۳۶۰۰ + ۳×۶۰ + ۴ = ۷۳۸۴ ✓</li>
+</ol>
+<pre class="term" data-from="ex1.c">
+$ ./ex1
+7384 s = 2 h 3 m 4 s
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: باگ درصد پیشرفت (پیدا کن)</div>
+<p>برنامهٔ نوار پیشرفت باید ۲۵٪ نشان بدهد (۳۰ کار از ۱۲۰ انجام شده). ولی چیز دیگری چاپ می‌کند.</p>
+<div class="code" data-file="ex2bug.c" data-lang="c" data-verify="host" id="ex2bad">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int done = 30;
+    int total = 120;
+    int percent = done / total * 100;
+
+    printf("progress = %d%%\n", percent);
+    return 0;
+}
+</pre></div>
+<ol class="parts">
+  <li><span><b>پیش‌بینی:</b> بدون اجرا، جواب را حدس بزن. (سرنخ: <code>30 / 120</code> در تقسیم صحیح چند است؟)</span></li>
+  <li><span><b>پیدا کردن:</b> علت را با کلمات «تقسیم صحیح» و «ترتیب» توضیح بده.</span></li>
+  <li><span><b>اصلاح:</b> کوچک‌ترین تغییر را بده که ۲۵ چاپ شود. سپس فکر کن: روی Arduino Uno که <code>int</code> ۱۶ بیتی است، اگر <code>done = 500</code> باشد، <code>done * 100</code> چند می‌شود و چه اتفاقی می‌افتد؟</span></li>
+</ol>
+<details><summary>راهنمایی</summary><p>ضرب و تقسیم هم‌تقدم‌اند و از چپ به راست می‌روند. اگر ابتدا تقسیم شود، کسر ۰٫۲۵ به ۰ گرد می‌شود.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="ex2bug.c">
+$ ./ex2bug
+progress = 0%
+</pre>
+<p>باید ۲۵٪ می‌دیدی. علت: <code>30 / 120</code> صحیح ۰ است و <code>0 * 100</code> باز هم ۰.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="ex2fix.c" data-lang="c" data-verify="host" id="ex2">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int done = 30;
+    int total = 120;
+    int percent = done * 100 / total;
+
+    printf("progress = %d%%\n", percent);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="7"><b class="what">ضرب اول.</b> <code>done * 100</code> = ۳۰۰۰، بعد تقسیم بر ۱۲۰ = ۲۵ دقیق.
+    <span class="why">برای درصد و نسبت با اعداد صحیح، همیشه «ضرب را زودتر از تقسیم» انجام بده تا ریزهٔ کسر از بین نرود.</span></li>
+  <li data-lines="9"><b class="what">دو % در چاپ.</b> <code>%%</code> یک علامت درصد چاپ می‌کند.</li>
+</ol>
+<p>پاسخ بخش پ: <code>500 * 100 = 50000</code> از بیشینهٔ <code>int</code> ۱۶ بیتی (۳۲۷۶۷) بزرگ‌تر است. سرریز عدد با علامت رفتار تعریف‌نشده است. روی STM32 و ESP32 که <code>int</code> ۳۲ بیتی است این مشکل پیش نمی‌آید، ولی کد قابل‌حمل باید نوع میانی را صریح بگیرد: <code>(int32_t)done * 100 / total</code>.</p>
+<pre class="term" data-from="ex2fix.c">
+$ ./ex2fix
+progress = 25%
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: دما از سنسور آنالوگ</div>
+<p>یک سنسور دمای آنالوگ (مثل TMP36) ولتاژ خروجی ۵۰۰ میلی‌ولت در ۰ درجه دارد و به‌ازای هر درجه ۱۰ میلی‌ولت اضافه می‌کند. پس دما بر حسب «دهم درجه» برابر است با <code>mv - 500</code> (چون هر میلی‌ولت = ۰٫۱ درجه). خوانش ADC (۱۲ بیتی، مرجع ۳٫۳ ولت) عدد ۹۳۰ است.</p>
+<ol class="parts">
+  <li><span><b>پیش‌بینی:</b> با ماشین‌حساب: ۹۳۰ × ۳۳۰۰ ÷ ۴۰۹۵ = ؟ میلی‌ولت، و دما = ؟</span></li>
+  <li><span><b>حل:</b> برنامه بنویس که با <code>int32_t</code> میلی‌ولت و دما (به دهم درجه) را حساب کند و به شکل <code>24.9 C</code> چاپ کند (صحیح = <code>t / 10</code>، اعشار = <code>t % 10</code>).</span></li>
+  <li><span><b>چالش:</b> اگر دما ۲٫۵- درجه (یعنی <code>tenths = -25</code>) باشد، همان چاپ چه می‌نویسد؟ آن را اجرا کن و خطا را توضیح بده.</span></li>
+</ol>
+<details><summary>راهنمایی</summary><p>ضرب را در <code>int32_t</code> انجام بده: <code>(int32_t)adc * 3300 / 4095</code>. برای چاپ از دو <code>%d</code> با یک نقطه بینشان استفاده کن. یادت باشد برای منفی‌ها <code>/</code> به سمت صفر می‌بُرد و <code>%</code> علامت عدد اول را می‌گیرد.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="ex3.c">
+$ ./ex3
+adc = 930, mv = 749
+temp = 24.9 C
+negative: -2.-5 C
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="ex3.c" data-lang="c" data-verify="host" id="ex3">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+int main(void)
+{
+    uint16_t adc = 930;
+    int32_t mv = (int32_t)adc * 3300 / 4095;
+    int32_t tenths = mv - 500;
+
+    printf("adc = %d, mv = %d\n", (int)adc, (int)mv);
+    printf("temp = %d.%d C\n", (int)(tenths / 10), (int)(tenths % 10));
+
+    tenths = -25;
+    printf("negative: %d.%d C\n", (int)(tenths / 10), (int)(tenths % 10));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="6"><b class="what">خوانش خام.</b> ۹۳۰ از ۴۰۹۵.</li>
+  <li data-lines="7"><b class="what">میلی‌ولت.</b> cast به ۳۲ بیتی علامت‌دار، ضرب، بعد تقسیم؛ ۷۴۹ (۷۴۹٫۶ بریده شد).
+    <span class="why">علامت‌دار انتخاب شد چون در خط بعد تفریق ممکن است نتیجه را منفی کند.</span></li>
+  <li data-lines="8"><b class="what">دهم درجه.</b> ۷۴۹ − ۵۰۰ = ۲۴۹؛ یعنی ۲۴٫۹ درجه. بدون اعشاری کار کردیم.</li>
+  <li data-lines="11"><b class="what">چاپ صحیح و اعشار.</b> ۲۴۹ ÷ ۱۰ = ۲۴ و ۲۴۹ % ۱۰ = ۹.</li>
+  <li data-lines="13-14"><b class="what">باگ منفی‌ها.</b> ‎<code>-25 / 10</code> می‌شود ‎<code>-2</code> و ‎<code>-25 % 10</code> می‌شود ‎<code>-5</code> (علامت دارد)؛ چاپ می‌شود «‎-2.-5»، که اشتباه است: باید «‎-2.5» باشد.
+    <span class="why">راه درست: علامت را جدا کن (اگر منفی است، یک بار ‎<code>-</code> چاپ کن و مقدار را مثبت کن)، بعد جزء صحیح و اعشار را چاپ کن. شرط را در درس بعد یاد می‌گیری.</span></li>
+</ol>
+<pre class="term" data-from="ex3.c">
+$ ./ex3
+adc = 930, mv = 749
+temp = 24.9 C
+negative: -2.-5 C
+</pre></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>در این درس معمولا دو چیز مغز آدم را قفل می‌کند: <b>«چرا ۷/۲ می‌شود ۳؟»</b> و <b>«کدام اول حساب می‌شود؟»</b>. جواب اولی این است که C نوع جواب را از نوع عملوندها می‌گیرد، نه از خواسته‌ات. جواب دومی: پرانتز بگذار! هیچ برنامه‌نویس حرفه‌ای جدول تقدم را کامل حفظ نیست؛ همه پرانتز می‌گذارند. عادتی که از اینجا با خودت ببر: <b>هر بار در عبارت، عدد صحیح و تقسیم دیدی، ضرب را جلو بینداز و اندازهٔ نوع میانی را بررسی کن</b>. و هرگز نتیجهٔ <code>i++</code> را در همان خط جای دیگری استفاده نکن.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li>عملگر روی عملوند کار می‌کند؛ ترکیب‌شان یک عبارت است که مقدار دارد.</li>
+  <li><code>/</code> روی دو عدد صحیح، تقسیم صحیح است (اعشار را می‌اندازد و به سمت صفر می‌بُرد)؛ <code>%</code> باقیمانده است و علامت عدد اول را می‌گیرد. تقسیم بر صفر تعریف‌نشده است.</li>
+  <li>تقدم: ضرب/تقسیم/باقیمانده قبل از جمع/تفریق؛ همه از چپ به راست. وقتی مطمئن نیستی پرانتز بگذار.</li>
+  <li><code>+=</code>، <code>-=</code>، <code>*=</code> و… میان‌بُر انتساب‌اند. <code>i++</code> مقدار قدیمی، <code>++i</code> مقدار جدید را به عبارت می‌دهد.</li>
+  <li>مقایسه‌ها ۱ یا ۰ می‌دهند؛ صفر نادرست و هر عدد غیرصفر درست است. <code>=</code> انتساب است، <code>==</code> مقایسه. زنجیرهٔ <code>3 &lt; x &lt; 5</code> کار نمی‌کند؛ از <code>&amp;&amp;</code> استفاده کن.</li>
+  <li><code>&amp;&amp;</code> و <code>||</code> میان‌بُر دارند: طرف راست فقط در صورت نیاز اجرا می‌شود. شرط محافظ را سمت چپ بگذار.</li>
+  <li>در حساب میکروکنترلر: ضرب را پیش از تقسیم انجام بده، نوع میانی را بزرگ‌تر بگیر، و برای گردشدن نصف مخرج را اضافه کن.</li>
+</ul>
+<p>درس بعد: <a href="2-4.html">۲.۴ شرط‌ها</a> — از این بله/خیرها برای تصمیم‌گرفتن استفاده می‌کنیم.</p></div>
+
+</article>
+</body>
+</html>
