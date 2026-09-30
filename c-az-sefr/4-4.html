@@ -1,0 +1,923 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>حافظهٔ پویا و احتیاط در میکروکنترلر · C برای میکروکنترلر</title>
+<meta name="description" content="حافظهٔ پویا در C: malloc، calloc، realloc و free، باگ‌های نشتی و استفاده بعد از free، fragmentation، چرا میکروکنترلر از heap پرهیز می‌کند و جایگزین‌ها (تخصیص ایستا و memory pool)؛ با کد وارسی‌شده و خروجی sanitizer.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="4-4">
+
+<p class="lede">تا اینجا هر متغیری که ساختی، اندازه‌اش را همان لحظهٔ نوشتن کد می‌دانستی: <code>int a[10]</code> یعنی دقیقا ده عدد. ولی گاهی اندازه را فقط <b>وقتی برنامه در حال اجراست</b> می‌فهمی: کاربر چند نمونه سنسور خواست؟ فایل چند بایت است؟ C برای این حالت یک «انبار» دارد که هر وقت خواستی از آن جعبه می‌گیری و <b>خودت</b> باید پس بدهی. این انبار جادویی به نظر می‌رسد و در برنامه‌های PC بی‌دردسر است؛ اما در میکروکنترلر، که ماه‌ها بدون خاموش‌شدن کار می‌کند و فقط چند کیلوبایت RAM دارد، همین انبار منبع باگ‌های سخت و «گاهی خراب می‌شود» است. در این درس هم راه‌استفاده را یاد می‌گیری، هم دلیل احتیاط را می‌بینی، هم جایگزین‌های امن را.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>با <code>malloc</code>، <code>calloc</code>، <code>realloc</code> و <code>free</code> درست کار کنی و همیشه <code>NULL</code> را بررسی کنی</li>
+    <li>چهار باگ کلاسیک را بشناسی: نشتی، استفادهٔ بعد از free، free دوباره، سرریز بلوک</li>
+    <li>با <code>-fsanitize=address</code> روی PC این باگ‌ها را پیدا کنی</li>
+    <li>توضیح بدهی fragmentation چیست و چرا کلِ فضای آزاد گاهی کافی نیست</li>
+    <li>بدانی چرا کد ایمن و MISRA malloc را کنار می‌گذارد و به‌جایش چه می‌گذارند (تخصیص ایستا و memory pool)</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="3-2.html">۳.۲</a> و <a href="3-3.html">۳.۳</a>: اشاره‌گر، <code>NULL</code>، آویزان‌بودن، حساب اشاره‌گر</li>
+    <li>درس <a href="3-5.html">۳.۵</a>: نقشهٔ حافظه (heap و stack)</li>
+    <li>درس <a href="3-4.html">۳.۴</a>: <code>struct</code> و padding</li>
+    <li>کامپایلر gcc روی PC (برای sanitizer). هیچ سخت‌افزاری لازم نیست</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: کمد امانات فرودگاه</h2>
+<p>تا حالا حافظه را مثل <b>اتاق خودت</b> استفاده می‌کردی: وسایلی که از اول در برنامه نوشته‌ای، خودکار جا می‌گیرند و وقتی تابع تمام شد خودکار جمع می‌شوند (متغیر محلی روی <span class="term" data-t="stackframe">پشته</span> بود؛ درس <a href="3-5.html">۳.۵</a>). حالا فرض کن به فرودگاه رفته‌ای و می‌خواهی چمدانت را <b>تا شب</b> جایی بگذاری. می‌روی سراغ کمدهای امانات: به دستگاه می‌گویی «یک کمد به این اندازه بده»، دستگاه یک شماره و کلید می‌دهد، تو هر وقت خواستی برمی‌گردی و کمد را باز می‌کنی. ولی <b>خودت</b> باید یادت بماند کمد را پس بدهی. اگر کلید را گم کنی، کمد تا ابد اشغال می‌ماند.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>دستگاه کمد امانات = <code>malloc</code>. شماره و کلید = اشاره‌گری که برمی‌گرداند. پس‌دادن کمد = <code>free</code>. اگر کمدها تمام شده باشند، دستگاه «موجود نیست» می‌گوید = <code>malloc</code> مقدار <code>NULL</code> برمی‌گرداند. اگر کلید را گم کنی = نشتی حافظه (memory leak). اگر کمد را پس بدهی ولی بعدا با همان کلید بروی و در بزنی، ممکن است چمدان یک غریبه را باز کنی = استفاده بعد از <code>free</code>.</p></div>
+
+<p>در C این کار را <span class="term" data-t="dynalloc">تخصیص پویا</span> می‌گویند و «کمدهای امانات» در ناحیه‌ای از RAM به اسم <span class="term" data-t="heap">heap</span> (انبار) هستند. تابع‌های لازم در <code>stdlib.h</code> اعلان شده‌اند:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>تابع</th><th>کار</th><th>در صورت شکست</th></tr></thead>
+<tbody>
+<tr><td><code>malloc(n)</code></td><td>یک بلوک <code>n</code> بایتی می‌دهد؛ محتویاتش <b>آشغال</b> است</td><td><code>NULL</code></td></tr>
+<tr><td><code>calloc(count, size)</code></td><td>بلوک <code>count × size</code> بایتی، همه <b>صفر</b></td><td><code>NULL</code></td></tr>
+<tr><td><code>realloc(p, n)</code></td><td>بلوک <code>p</code> را به اندازهٔ <code>n</code> بزرگ/کوچک می‌کند (ممکن است جابه‌جا شود)</td><td><code>NULL</code> (و بلوک قدیمی سالم می‌ماند)</td></tr>
+<tr><td><code>free(p)</code></td><td>بلوک را پس می‌دهد</td><td>—</td></tr>
+</tbody></table></div>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="متغیر p در پشته آدرس یک بلوک در heap را نگه می‌دارد؛ بلوک heap یک هدر پنهان دارد که اندازه را ثبت می‌کند و بعد بایت‌های قابل‌استفاده">
+  <defs><marker id="g1a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">اشاره‌گر روی پشته، بلوک روی heap</text>
+  <text x="120" y="62" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="800">پشته (خودکار)</text>
+  <text x="560" y="62" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="800">heap (دستی)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="30" y="86" width="180" height="70" rx="10" fill="#ff86b3"/>
+    <rect x="360" y="86" width="90" height="70" fill="#b394ff"/>
+    <rect x="450" y="86" width="280" height="70" fill="#ffd60a"/>
+  </g>
+  <g class="mono" fill="#15120a" text-anchor="middle" font-weight="800">
+    <text x="120" y="118" font-size="20">int *p</text><text x="120" y="142" font-size="13">0x20000100</text>
+    <text x="405" y="126" font-size="14">header</text>
+    <text x="590" y="120" font-size="17">40 bytes</text><text x="590" y="142" font-size="13">مال توست</text>
+  </g>
+  <path d="M212 121H440" stroke="#15120a" stroke-width="3.5" fill="none" marker-end="url(#g1a)" transform="translate(0 -0)"/>
+  <text x="330" y="106" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">اشاره می‌کند</text>
+  <path d="M405 160V196" stroke="#15120a" stroke-width="2.5" fill="none" marker-end="url(#g1a)"/>
+  <text x="405" y="216" text-anchor="middle" class="s-tx" font-size="13.5">هدر پنهان: اندازه و اطلاعات مدیریت (malloc می‌سازد)</text>
+  <text x="380" y="256" text-anchor="middle" class="s-tx" font-size="14">با <tspan class="mono">free(p)</tspan> بلوک به انبار برمی‌گردد؛ خود <tspan class="mono">p</tspan> همان‌جا می‌ماند</text>
+  <text x="380" y="280" text-anchor="middle" class="s-tx" font-size="13.5">آدرس‌ها نمونه‌اند. اندازهٔ هدر به پیاده‌سازی بستگی دارد</text>
+</svg></div>
+<figcaption>اشاره‌گر <span class="en">p</span> یک متغیر معمولی است؛ آن‌چه <span class="en">malloc</span> می‌دهد آدرس بلوکی در <span class="en">heap</span> است. دقت کن اشاره‌گر بعد از <span class="en">free</span> عوض نمی‌شود.</figcaption></figure>
+
+<h2 id="basic">اولین تخصیص</h2>
+<p>الگوی درست همیشه چهار قدم دارد: <b>بگیر ← بررسی کن ← استفاده کن ← پس بده.</b> اندازه را با <code>sizeof *اشاره‌گر</code> بنویس، نه عدد جادویی.</p>
+
+<div class="code" data-file="malloc_basic.c" data-lang="c" data-verify="host" id="code1">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+
+int main(void)
+{
+    int count = 5;
+    int *values = malloc(count * sizeof *values);   // بگیر
+    if (values == NULL) {                           // بررسی کن
+        printf("out of memory\n");
+        return 1;
+    }
+
+    for (int i = 0; i &lt; count; i++) {
+        values[i] = (i + 1) * 10;                   // استفاده کن
+    }
+    int sum = 0;
+    for (int i = 0; i &lt; count; i++) {
+        sum += values[i];
+    }
+    printf("sum = %d (used %zu bytes)\n", sum, count * sizeof *values);
+
+    free(values);                                   // پس بده
+    values = NULL;                                  // دیگر آویزان نیست
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code1">
+  <li data-lines="1-2"><b class="what">سرآیندها.</b> <code>stdlib.h</code> اعلان <code>malloc</code> و <code>free</code> را دارد.</li>
+  <li data-lines="7"><b class="what">گرفتن.</b> <code>count * sizeof *values</code> یعنی «پنج تا از هر چه <code>values</code> به آن اشاره می‌کند». <code>malloc</code> آدرس اولین بایت را برمی‌گرداند و به‌صورت <code>void *</code> در <code>values</code> می‌نشیند.
+    <span class="why">نوشتن <code>sizeof *values</code> به‌جای <code>sizeof(int)</code> یعنی اگر فردا نوع را عوض کنی، اندازه خودکار درست می‌ماند. <code>malloc</code> فقط «بایت» می‌شناسد؛ ضرب در اندازهٔ هر عضو با خودت است.</span></li>
+  <li data-lines="8-11"><b class="what">بررسی <code>NULL</code>.</b> اگر انبار پر بود، <code>malloc</code> <code>NULL</code> می‌دهد. اینجا خطا را گزارش می‌دهیم و برمی‌گردیم.
+    <span class="why">فراموشی این <code>if</code> یعنی اولین بار که حافظه تمام شود، به <code>NULL[0]</code> می‌نویسی و برنامه خراب می‌شود. روی PC معمولا «هرگز» پیش نمی‌آید و همین باعث می‌شود بررسی را فراموش کنند؛ روی میکروکنترلر خیلی زود پیش می‌آید.</span></li>
+  <li data-lines="13-15"><b class="what">استفاده.</b> یک بلوک <code>malloc</code> مثل آرایه است؛ <code>values[i]</code> کار می‌کند (درس <a href="3-3.html">۳.۳</a>: <code>a[i]</code> یعنی <code>*(a+i)</code>).
+    <span class="why">محتویات بلوک تازه آشغال است. اینجا قبل از خواندن، خودمان همه را نوشته‌ایم.</span></li>
+  <li data-lines="20"><b class="what">چاپ.</b> <code>%zu</code> برای <code>size_t</code>. ۵ عدد × ۴ بایت = ۲۰ بایت.</li>
+  <li data-lines="22-23"><b class="what">پس‌دادن و پاک کردن اشاره‌گر.</b> <code>free(values)</code> بلوک را به انبار برمی‌گرداند؛ ولی متغیر <code>values</code> هنوز همان آدرس را دارد. با <code>NULL</code> کردنش، استفادهٔ اشتباه بعدی زود و واضح خراب می‌شود، نه بی‌صدا.
+    <span class="why">آدرسِ بلوکِ پس‌داده‌شده «آویزان» است (درس <a href="3-2.html">۳.۲</a>). <code>free(NULL)</code> در C کاملا بی‌خطر است و کاری نمی‌کند؛ پس <code>NULL</code> کردن اجازه می‌دهد اگر اشتباها دوباره <code>free</code> شد، اتفاقی نیفتد.</span></li>
+</ol>
+<pre class="term" data-from="malloc_basic.c">
+$ gcc -std=c11 -Wall -Wextra -o malloc_basic malloc_basic.c
+$ ./malloc_basic
+sum = 150 (used 20 bytes)
+</pre>
+
+<div class="widget" data-w="mem" data-config='{"title":"عمر یک بلوک: malloc ← استفاده ← free","code":["int *p = malloc(sizeof *p);","*p = 7;","free(p);","p = NULL;"],"intro":"p یک قفسه روی پشته است؛ بلوک قفسه‌ای در heap. روی بعدی بزن.","cells":[{"addr":"0x20000ff0","name":"p","val":null,"kind":"ptr"},{"addr":"0x20000100 (heap)","name":"بلوک","val":null,"kind":"var"}],"steps":[{"line":0,"set":{"0":"0x20000100","1":"آشغال"},"hot":[0,1],"say":"malloc یک بلوک ۴ بایتی داد و آدرسش در p نشست. محتوای بلوک هنوز آشغال است."},{"line":1,"set":{"1":7},"hot":[1],"say":"*p = 7 یعنی برو به آدرس داخل p و ۷ را بنویس؛ بلوک حالا ۷ دارد."},{"line":2,"set":{"1":"آزاد"},"hot":[1],"say":"بلوک به انبار برگشت و دیگر مال ما نیست. ولی p هنوز همان آدرس را دارد؛ p الان آویزان است. اگر *p بخوانی یا بنویسی، رفتار تعریف‌نشده است."},{"line":3,"set":{"0":"NULL"},"hot":[0],"say":"p را NULL کردیم. حالا استفادهٔ اشتباه از p زود و واضح خراب می‌شود، به‌جای اینکه بی‌صدا حافظهٔ دیگری را خراب کند."}]}'></div>
+
+<h2 id="grow"><code>calloc</code> و <code>realloc</code>: صفر و بزرگ‌کردن</h2>
+<p><code>calloc(count, size)</code> دو کار می‌کند: بلوک را می‌گیرد و <b>همه را صفر می‌کند</b>. علاوه بر این، خودش ضرب <code>count × size</code> را بررسی می‌کند که سرریز نکند (اگر سرریز کند <code>NULL</code> می‌دهد)؛ در حالی که <code>malloc(count * size)</code> ضرب را بی‌مراقبت انجام می‌دهد و ممکن است یک عدد کوچکِ اشتباه بسازد. پس برای آرایه‌ها <code>calloc</code> امن‌تر است.</p>
+<p><code>realloc(p, n)</code> برای «بلوک را بزرگ‌تر کن» است: اگر جای کافی پشت بلوک نباشد، بلوک تازه می‌گیرد، محتوا را کپی می‌کند و بلوک قدیمی را <b>خودش</b> آزاد می‌کند. پس آدرس ممکن است عوض شود. تلهٔ مشهور: نوشتن <code>p = realloc(p, n)</code>؛ اگر شکست بخورد، <code>NULL</code> در <code>p</code> می‌نشیند و آدرس بلوک قدیمی (که هنوز سالم است) برای همیشه گم می‌شود. راه درست: یک متغیر موقت.</p>
+
+<div class="code" data-file="grow.c" data-lang="c" data-verify="host" id="code2">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+
+int main(void)
+{
+    size_t capacity = 2;
+    size_t length = 0;
+    int *items = malloc(capacity * sizeof *items);
+    if (items == NULL) {
+        return 1;
+    }
+
+    for (int v = 1; v &lt;= 5; v++) {
+        if (length == capacity) {                   // پر شد؛ دو برابر کن
+            size_t new_capacity = capacity * 2;
+            int *bigger = realloc(items, new_capacity * sizeof *bigger);
+            if (bigger == NULL) {
+                free(items);                        // قدیمی هنوز سالم است
+                return 1;
+            }
+            items = bigger;
+            capacity = new_capacity;
+            printf("grew to %zu\n", capacity);
+        }
+        items[length] = v * v;
+        length++;
+    }
+
+    printf("items:");
+    for (size_t i = 0; i &lt; length; i++) {
+        printf(" %d", items[i]);
+    }
+    printf("\nlength=%zu capacity=%zu\n", length, capacity);
+
+    free(items);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code2">
+  <li data-lines="6-7"><b class="what">ظرفیت و طول.</b> <code>capacity</code> یعنی «جا برای چند عضو گرفته‌ام»؛ <code>length</code> یعنی «چند عضو واقعا پر است».
+    <span class="why">جداکردن این دو، الگوی همهٔ آرایه‌های پویاست (مثل <code>vector</code> در C++ یا <code>list</code> در Python). هر بار که پر شد، ظرفیت را دو برابر می‌کنند تا تعداد <code>realloc</code> ها کم بماند.</span></li>
+  <li data-lines="14-16"><b class="what">وقتی پر شد.</b> ظرفیت جدید را حساب می‌کند و نتیجهٔ <code>realloc</code> را در <b>متغیر موقت</b> <code>bigger</code> می‌گیرد.
+    <span class="why">اگر مستقیم به <code>items</code> می‌دادیم و <code>realloc</code> شکست می‌خورد، <code>items</code> می‌شد <code>NULL</code> و بلوک قدیمی گم می‌شد (نشتی).</span></li>
+  <li data-lines="17-20"><b class="what">شکست.</b> بلوک قدیمی هنوز مال ماست؛ پس آزادش می‌کنیم و خارج می‌شویم.</li>
+  <li data-lines="21-23"><b class="what">موفقیت.</b> حالا <code>items</code> را به بلوک تازه می‌بریم.
+    <span class="why">آدرس قدیمی <code>items</code> دیگر معتبر نیست (<code>realloc</code> آن را آزاد کرده). هر اشاره‌گر دیگری هم که به داخل بلوک قدیمی داشتی آویزان شده است.</span></li>
+  <li data-lines="25-26"><b class="what">افزودن عضو.</b> همان <code>items[length]</code> معمولی.</li>
+</ol>
+<pre class="term" data-from="grow.c">
+$ ./grow
+grew to 4
+grew to 8
+items: 1 4 9 16 25
+length=5 capacity=8
+</pre>
+
+<h2 id="bugs">چهار باگ کلاسیک heap</h2>
+<p>هر کدام از این‌ها روی PC ممکن است «بی‌صدا» کار کند و روی میکروکنترلر یک ماه بعد خودش را نشان بدهد. اول توضیح، بعد ابزاری که پیدایشان می‌کند.</p>
+
+<h3 id="leak">۱. نشتی حافظه (<span class="en">memory leak</span>)</h3>
+<p><span class="term" data-t="memleak">نشتی</span> یعنی بلوک را گرفته‌ای ولی آدرسش را از دست داده‌ای و نمی‌توانی <code>free</code> کنی. بلوک تا پایان برنامه اشغال می‌ماند. روی PC با پایان برنامه سیستم‌عامل همه چیز را جمع می‌کند؛ ولی روی میکروکنترلر برنامه هرگز تمام نمی‌شود. اگر در هر دور حلقهٔ اصلی ۱۶ بایت نشت کند و ۱۰ بار در ثانیه اجرا شود، RAM ۱۲۸ کیلوبایتی طی چند ساعت تمام است.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 290" role="img" aria-label="قبل: p به بلوک A اشاره می‌کند. بعد از p = malloc دوباره، p به بلوک B اشاره می‌کند و بلوک A بدون هیچ اشاره‌گری در heap می‌ماند و نشتی است">
+  <defs><marker id="g3a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">گم‌کردن آدرس = بلوک بی‌صاحب</text>
+  <text x="190" y="58" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="800">قبل</text>
+  <text x="570" y="58" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="800">بعد از p = malloc(...) دوباره</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="40" y="80" width="110" height="56" rx="10" fill="#ff86b3"/>
+    <rect x="240" y="80" width="120" height="56" rx="10" fill="#ffd60a"/>
+    <rect x="410" y="80" width="110" height="56" rx="10" fill="#ff86b3"/>
+    <rect x="600" y="80" width="120" height="56" rx="10" fill="#ffd60a" stroke-dasharray="8 6"/>
+    <rect x="600" y="170" width="120" height="56" rx="10" fill="#ffd60a"/>
+  </g>
+  <g class="mono" fill="#15120a" text-anchor="middle" font-size="20" font-weight="800">
+    <text x="95" y="116">p</text><text x="300" y="116">A</text><text x="465" y="116">p</text><text x="660" y="116">A</text><text x="660" y="206">B</text>
+  </g>
+  <path d="M152 108H236" stroke="#15120a" stroke-width="3.5" fill="none" marker-end="url(#g3a)"/>
+  <path d="M522 128L596 190" stroke="#15120a" stroke-width="3.5" fill="none" marker-end="url(#g3a)"/>
+  <path d="M600 80L720 136M720 80L600 136" stroke="#ff3b5c" stroke-width="4" fill="none"/>
+  <text x="380" y="262" text-anchor="middle" class="s-tx" font-size="14">هیچ متغیری آدرس A را ندارد؛ نه می‌توان استفاده‌اش کرد نه <tspan class="mono">free</tspan></text>
+  <text x="380" y="282" text-anchor="middle" class="s-tx" font-size="13.5">هر بار که این کد اجرا شود، یک بلوک A دیگر به heap اضافه می‌شود</text>
+</svg></div>
+<figcaption>نشتی معمولا با یک <span class="en">p = malloc</span> پشت‌سرهم بدون <span class="en">free</span> یا با یک <span class="en">return</span> زودهنگام قبل از <span class="en">free</span> ساخته می‌شود.</figcaption></figure>
+
+<div class="code" data-file="leak.c" data-lang="c" data-verify="host" data-cflags="-g -fsanitize=address" data-exit="1" id="code3">
+<pre>
+#include &lt;stdlib.h&gt;
+
+int main(void)
+{
+    int *p = malloc(10 * sizeof *p);
+    if (p == NULL) {
+        return 1;
+    }
+    p[0] = 42;
+    return 0;                       // free فراموش شد!
+}
+</pre></div>
+<ol class="walk" data-for="code3">
+  <li data-lines="5"><b class="what">گرفتن ۴۰ بایت.</b> ده <code>int</code> چهار بایتی.</li>
+  <li data-lines="10"><b class="what">خروج بدون free.</b> برنامه تمام می‌شود و بلوک ۴۰ بایتی هرگز پس داده نمی‌شود.
+    <span class="why">روی PC سیستم‌عامل بعد از خروج همهٔ حافظهٔ برنامه را پس می‌گیرد؛ پس اثری نمی‌بینی. ولی وقتی این کد داخل یک تابع باشد که هزار بار صدا زده شود، هزار بلوک نشت می‌کند.</span></li>
+</ol>
+<p>بدون sanitizer این برنامه کاملا بی‌صدا تمام می‌شود و هیچ نشانه‌ای از خطا نمی‌بینی. ولی <span class="term" data-t="sanitizer">sanitizer</span> (ابزاری که به کد دستورهای اضافه برای شکار باگ حافظه می‌دهد) با <code>-fsanitize=address</code> همه‌چیز را زیر نظر می‌گیرد و در پایان برنامه گزارش می‌دهد؛ برنامه با کد خروج ۱ (یعنی «خطا») تمام می‌شود:</p>
+<pre class="term" data-kind="cmd">
+$ gcc -std=c11 -Wall -Wextra -g -fsanitize=address -o leak leak.c
+$ ./leak
+</pre>
+<pre class="term" data-nocheck data-kind="err">
+=================================================================
+==3497==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 40 byte(s) in 1 object(s) allocated from:
+    #0 0x7f954aefd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x55fab9d4c21e in main leak.c:5
+    ...
+SUMMARY: AddressSanitizer: 40 byte(s) leaked in 1 allocation(s).
+</pre>
+<p>گزارش می‌گوید «۴۰ بایت در یک بلوک، ساخته‌شده در <code>main</code> خط ۵ فایل <code>leak.c</code>، پس داده نشده». (شمارهٔ فرایند و آدرس‌ها در هر اجرا فرق می‌کند؛ ما فقط بخش مهم را نگه داشته‌ایم.)</p>
+
+<h3 id="uaf">۲. استفاده بعد از <code>free</code> و <code>free</code> دوباره</h3>
+<p>بلوک را پس داده‌ای، ولی هنوز آدرسش در یک اشاره‌گر است. اگر بخوانی/بنویسی، به حافظه‌ای دست می‌زنی که ممکن است همین حالا مال کس دیگری باشد. دو حالت مشهور:</p>
+<ul>
+  <li><b><span class="term" data-t="useafterfree">use-after-free</span>:</b> خواندن یا نوشتن از طریق اشاره‌گر آویزان.</li>
+  <li><b><span class="term" data-t="doublefree">double free</span>:</b> دوبار <code>free</code> کردن همان آدرس. مدیریت داخلی heap را خراب می‌کند و ممکن است ماه‌ها بعد، در یک <code>malloc</code> کاملا بی‌ربط، برنامه را زمین بزند.</li>
+</ul>
+
+<div class="code" data-file="uaf.c" data-lang="c" data-verify="host" data-cflags="-g -fsanitize=address" data-exit="1" data-warn-ok id="code4">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+
+int main(void)
+{
+    int *p = malloc(sizeof *p);
+    if (p == NULL) {
+        return 1;
+    }
+    *p = 7;
+    free(p);
+    printf("%d\n", *p);             // باگ: p آویزان است
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code4">
+  <li data-lines="11"><b class="what">پس دادن.</b> بلوک دیگر مال ما نیست.</li>
+  <li data-lines="12"><b class="what">خواندن آویزان.</b> <code>*p</code> از حافظه‌ای می‌خواند که آزاد شده. ممکن است ۷ بخوانی، ممکن است آشغال؛ رفتار تعریف‌نشده است.
+    <span class="why">بعد از <code>free</code>، مدیریت heap ممکن است بلوک را فورا به درخواست بعدی <code>malloc</code> بدهد؛ آن‌وقت دو بخش از برنامه به یک بلوک می‌نویسند و همدیگر را خراب می‌کنند. باگی که فقط «گاهی» رخ می‌دهد.</span></li>
+</ol>
+<p>gcc 13 این را حتی <b>موقع کامپایل</b> می‌بیند (همیشه کمک نمی‌کند، ولی این‌جا کرد):</p>
+<pre class="term" data-kind="err" data-nocheck>
+uaf.c: In function 'main':
+uaf.c:12:5: warning: pointer 'p' used after 'free' [-Wuse-after-free]
+</pre>
+<p>و با sanitizer، هنگام اجرا:</p>
+<pre class="term" data-nocheck data-kind="err">
+==3506==ERROR: AddressSanitizer: heap-use-after-free on address 0x502000000010 at pc 0x5603183ba2f8 ...
+READ of size 4 at 0x502000000010 thread T0
+    #0 0x5603183ba2f7 in main uaf.c:12
+    ...
+0x502000000010 is located 0 bytes inside of 4-byte region [0x502000000010,0x502000000014)
+freed by thread T0 here:
+    #0 0x7fe511afc4d8 in free ...
+    #1 0x5603183ba2c0 in main uaf.c:11
+</pre>
+<p>ببین چقدر دقیق است: «۴ بایت را در خط ۱۲ خواندی؛ همان بلوک را در خط ۱۱ <code>free</code> کرده بودی». برای double free هم همین‌طور: پیام <code>attempting double-free</code> و خط هر دو <code>free</code> را نشان می‌دهد.</p>
+
+<h3 id="overflow">۳. نوشتن بیرون از بلوک</h3>
+<p>بلوکت ۴ عضو دارد ولی حلقه تا ایندکس ۴ (پنجمین) می‌رود؛ همان off-by-one آشنای درس <a href="2-5.html">۲.۵</a> و <a href="2-7.html">۲.۷</a>. اینجا هیچ چیز «آرایه» نیست که کامپایلر بشناسد؛ فقط یک آدرس است.</p>
+
+<div class="code" data-file="heap_overflow.c" data-lang="c" data-verify="host" data-cflags="-g -fsanitize=address" data-exit="1" id="code5">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+
+int main(void)
+{
+    int *v = malloc(4 * sizeof *v);
+    if (v == NULL) {
+        return 1;
+    }
+    for (int i = 0; i &lt;= 4; i++) {          // باگ: باید i &lt; 4
+        v[i] = i;
+    }
+    printf("done\n");
+    free(v);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code5">
+  <li data-lines="6"><b class="what">۴ عضو، یعنی ایندکس ۰ تا ۳.</b></li>
+  <li data-lines="10-12"><b class="what">حلقهٔ یکی‌زیاد.</b> <code>&lt;=</code> باعث می‌شود <code>v[4]</code> هم نوشته شود؛ ۴ بایت بعد از پایان بلوک.
+    <span class="why">آن چهار بایت شاید بخشی از هدر بلوک بعدی یا فضای پُرکنندهٔ heap باشد. روی PC اغلب چیزی نمی‌شود و برنامه «done» چاپ می‌کند؛ ولی هدر heap ممکن است خراب شده باشد و <code>free</code> بعدی از کار بیفتد.</span></li>
+</ol>
+<pre class="term" data-nocheck data-kind="err">
+==3514==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x502000000020 ...
+WRITE of size 4 at 0x502000000020 thread T0
+    #0 0x5591a426f2a8 in main heap_overflow.c:11
+    ...
+0x502000000020 is located 0 bytes after 16-byte region [0x502000000010,0x502000000020)
+allocated by thread T0 here:
+    #0 0x7f4cf1cfd9c7 in malloc ...
+    #1 0x5591a426f23e in main heap_overflow.c:6
+</pre>
+<p>پیام می‌گوید: «در خط ۱۱ چهار بایت نوشتی، دقیقا صفر بایت بعد از انتهای بلوک ۱۶ بایتی‌ای که در خط ۶ گرفته بودی».</p>
+
+<h3 id="sizeof-trap">۴. اندازهٔ اشتباه</h3>
+<p>سه اشتباه رایج در نوشتن اندازه:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>کد</th><th>مشکل</th></tr></thead>
+<tbody>
+<tr><td><code>malloc(10)</code> برای ۱۰ عدد <code>int</code></td><td>۱۰ <b>بایت</b> می‌دهد، جا برای ۲ عدد. فراموش‌کردن ضرب در <code>sizeof</code></td></tr>
+<tr><td><code>malloc(10 * sizeof(p))</code> که <code>p</code> از نوع <code>int *</code> است</td><td><code>sizeof(p)</code> اندازهٔ <b>اشاره‌گر</b> (۴ بایت روی MCU) است، نه <code>int</code>. اگر نوع بزرگ‌تر بود، کم می‌آید. بنویس <code>sizeof *p</code></td></tr>
+<tr><td><code>malloc(strlen(s))</code> برای کپی رشته</td><td>جای <code>'\0'</code> (درس <a href="2-8.html">۲.۸</a>) را فراموش کرده‌ای. بنویس <code>strlen(s) + 1</code></td></tr>
+</tbody></table></div>
+
+<h2 id="frag">شکل نامرئی: <span class="en">fragmentation</span></h2>
+<p>فرض کن پارکینگی با ۱۶ جا داری. پنج ماشین سه‌جایی (اتوبوس کوچک) پشت‌سرهم پارک کرده‌اند. سپس ماشین دوم و چهارم می‌روند. الان ۷ جای خالی داری، ولی یک ماشین <b>پنج‌جایی</b> که بیاید، جا ندارد: جاهای خالی پراکنده‌اند و هیچ کدام به‌تنهایی ۵ تایی نیست. در heap هم دقیقا همین است و اسمش <span class="term" data-t="fragmentation">fragmentation</span> (تکه‌تکه‌شدگی) است.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 250" role="img" aria-label="شانزده واحد heap: A B C D E هر کدام سه واحد و یک واحد خالی؛ پس از free کردن B و D، هفت واحد آزاد ولی در سه تکهٔ مجزا باقی می‌ماند و درخواست پنج واحدی شکست می‌خورد">
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">هفت واحد آزاد، ولی درخواست ۵ واحدی شکست می‌خورد</text>
+  <text x="30" y="70" class="s-tx" font-size="13.5" font-weight="700" text-anchor="start">بعد از ۵ تخصیص</text>
+  <g stroke="#15120a" stroke-width="2.5">
+    <rect x="30" y="80" width="135" height="44" fill="#ffd60a"/><rect x="165" y="80" width="135" height="44" fill="#7ea3ff"/><rect x="300" y="80" width="135" height="44" fill="#ff86b3"/><rect x="435" y="80" width="135" height="44" fill="#3ddc97"/><rect x="570" y="80" width="135" height="44" fill="#b394ff"/><rect x="705" y="80" width="30" height="44" fill="#fff"/>
+  </g>
+  <g class="mono" fill="#15120a" text-anchor="middle" font-size="18" font-weight="800">
+    <text x="97" y="109">A</text><text x="232" y="109">B</text><text x="367" y="109">C</text><text x="502" y="109">D</text><text x="637" y="109">E</text>
+  </g>
+  <text x="30" y="160" class="s-tx" font-size="13.5" font-weight="700" text-anchor="start">بعد از free(B) و free(D)</text>
+  <g stroke="#15120a" stroke-width="2.5">
+    <rect x="30" y="170" width="135" height="44" fill="#ffd60a"/><rect x="165" y="170" width="135" height="44" fill="#fff" stroke-dasharray="6 5"/><rect x="300" y="170" width="135" height="44" fill="#ff86b3"/><rect x="435" y="170" width="135" height="44" fill="#fff" stroke-dasharray="6 5"/><rect x="570" y="170" width="135" height="44" fill="#b394ff"/><rect x="705" y="170" width="30" height="44" fill="#fff" stroke-dasharray="6 5"/>
+  </g>
+  <g class="mono" fill="#15120a" text-anchor="middle" font-size="18" font-weight="800">
+    <text x="97" y="199">A</text><text x="367" y="199">C</text><text x="637" y="199">E</text>
+  </g>
+  <g class="s-tx" font-size="13" text-anchor="middle"><text x="232" y="199">آزاد ۳</text><text x="502" y="199">آزاد ۳</text><text x="720" y="199">۱</text></g>
+  <text x="380" y="240" text-anchor="middle" class="s-tx" font-size="13.5">هر مربع = یک واحد ۸ بایتی؛ آزاد‌ها ۳ + ۳ + ۱ = ۷ هستند ولی بزرگ‌ترین تکه فقط ۳ است</text>
+</svg></div>
+<figcaption>هر مستطیل رنگی سه واحد است. جاهای خالیِ پراکنده جمع می‌شوند ولی به‌هم نمی‌چسبند.</figcaption></figure>
+
+<p>این را با یک heap اسباب‌بازی شبیه‌سازی می‌کنیم: ۱۶ واحد، تخصیص «اولین جای خالیِ به‌اندازهٔ کافی» (first-fit). برنامه هر بار وضعیت را چاپ می‌کند. (این heap واقعی نیست؛ فقط برای دیدن پدیده است.)</p>
+
+<div class="code" data-file="toy_heap.c" data-lang="c" data-verify="host" id="code6">
+<pre>
+#include &lt;stdio.h&gt;
+
+#define UNITS 16                    // ۱۶ واحد
+
+static char owner[UNITS];           // '.' یعنی آزاد؛ حرف یعنی مال کدام بلوک
+
+static void show(const char *label)
+{
+    printf("%-12s |%.*s|\n", label, UNITS, owner);
+}
+
+// اولین جای خالیِ پشت‌سرهمِ به طول n را پیدا کن؛ نبود: -1
+static int toy_alloc(int n, char id)
+{
+    for (int start = 0; start + n &lt;= UNITS; start++) {
+        int ok = 1;
+        for (int i = 0; i &lt; n; i++) {
+            if (owner[start + i] != '.') {
+                ok = 0;
+                break;
+            }
+        }
+        if (ok) {
+            for (int i = 0; i &lt; n; i++) {
+                owner[start + i] = id;
+            }
+            return start;
+        }
+    }
+    return -1;
+}
+
+static void toy_free(char id)
+{
+    for (int i = 0; i &lt; UNITS; i++) {
+        if (owner[i] == id) {
+            owner[i] = '.';
+        }
+    }
+}
+
+static int free_total(void)
+{
+    int n = 0;
+    for (int i = 0; i &lt; UNITS; i++) {
+        n += (owner[i] == '.');
+    }
+    return n;
+}
+
+int main(void)
+{
+    for (int i = 0; i &lt; UNITS; i++) {
+        owner[i] = '.';
+    }
+
+    toy_alloc(3, 'A');
+    toy_alloc(3, 'B');
+    toy_alloc(3, 'C');
+    toy_alloc(3, 'D');
+    toy_alloc(3, 'E');
+    show("5 allocs");
+
+    toy_free('B');
+    toy_free('D');
+    show("free B, D");
+    printf("free units: %d\n", free_total());
+
+    int r = toy_alloc(5, 'F');
+    printf("alloc 5 units: %s\n", r &lt; 0 ? "FAILED" : "ok");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code6">
+  <li data-lines="5"><b class="what">نقشهٔ heap.</b> یک حرف برای هر واحد: <code>.</code> یعنی آزاد، حرف یعنی «مال بلوک این حرف».</li>
+  <li data-lines="7-10"><b class="what">نمایش.</b> نقشه را در یک خط چاپ می‌کند. <code>%.*s</code> یعنی «رشته را با طول داده‌شده چاپ کن» (درس <a href="2-8.html">۲.۸</a>)؛ چون <code>owner</code> پایان <code>'\0'</code> ندارد لازم است.</li>
+  <li data-lines="12-31"><b class="what">تخصیص first-fit.</b> از ابتدای heap می‌گردد و اولین جایی را که <code>n</code> واحد آزادِ <b>پشت‌سرهم</b> باشد می‌گیرد. اگر نبود <code>-1</code>.
+    <span class="why">کلمهٔ «پشت‌سرهم» کلید ماجراست. بلوک باید یک تکهٔ پیوسته باشد؛ نمی‌شود سه واحد از این‌جا و دو واحد از آن‌جا جمع کرد.</span></li>
+  <li data-lines="33-40"><b class="what">آزاد کردن.</b> همهٔ واحدهای یک بلوک را دوباره <code>.</code> می‌کند.</li>
+  <li data-lines="42-49"><b class="what">مجموع آزادها.</b> فقط تعداد <code>.</code> ها را می‌شمارد.</li>
+  <li data-lines="57-62"><b class="what">پنج بلوک سه‌واحدی.</b> ۱۵ واحد پر، یک واحد خالی.</li>
+  <li data-lines="64-67"><b class="what">آزاد کردن ب و د.</b> ۷ واحد آزاد ولی در سه تکه (۳، ۳ و ۱).</li>
+  <li data-lines="69-70"><b class="what">درخواست ۵ واحد.</b> <code>toy_alloc(5)</code> هیچ تکهٔ پیوستهٔ ۵ تایی پیدا نمی‌کند و شکست می‌خورد.</li>
+</ol>
+<pre class="term" data-from="toy_heap.c">
+$ ./toy_heap
+5 allocs     |AAABBBCCCDDDEEE.|
+free B, D    |AAA...CCC...EEE.|
+free units: 7
+alloc 5 units: FAILED
+</pre>
+<p>نکتهٔ ترسناک: <b>هیچ نشتی‌ای رخ نداده</b> و هیچ باگی در کد نیست؛ فقط ترتیب تخصیص و آزادسازی باعث شد. در دستگاهی که ماه‌ها روشن است، تخصیص‌ها و آزادسازی‌های با اندازه‌های مختلف، heap را کم‌کم مثل پنیر سوراخ‌سوراخ می‌کنند و یک روز <code>malloc</code> شکست می‌خورد، هرچند «کلی» جا آزاد است. این را با تست چند دقیقه‌ای پیدا نمی‌کنی.</p>
+
+<h2 id="whynot">چرا در میکروکنترلر احتیاط می‌کنیم؟</h2>
+<p>خلاصهٔ دلایل، به ترتیب اهمیت:</p>
+<ol class="steps">
+  <li><b>هیچ‌کس نیست که جمع کند.</b> برنامهٔ PC تمام می‌شود و سیستم‌عامل همه چیز را پس می‌گیرد. میکروکنترلر هرگز «تمام نمی‌شود»؛ هر نشتی و هر تکه‌تکه‌شدگی انباشته می‌شود.</li>
+  <li><b>RAM بسیار کم است.</b> ۱۲۸ کیلوبایت در STM32F411 (و برای بعضی مدل‌ها حتی چند کیلوبایت). یک نشتی کوچک هم آخرش RAM را می‌بلعد. و در STM32 heap و پشته در یک RAM هستند و به هم نزدیک می‌شوند (شکل درس <a href="3-5.html">۳.۵</a>)؛ heap پرشده یعنی پشته هم جا ندارد.</li>
+  <li><b>زمان اجرا قابل‌پیش‌بینی نیست.</b> <code>malloc</code> باید جای مناسب را بگردد؛ زمانش به وضعیت heap بستگی دارد. در سیستمی که باید هر ۱ میلی‌ثانیه پاسخ بدهد (درس <a href="5-4.html">۵.۴</a>) این عدم‌قطعیت بد است. در ISR هم که اصلا نباید <code>malloc</code> صدا زد.</li>
+  <li><b>شکست را نمی‌شود پنهان کرد.</b> اگر <code>malloc</code> در وسط کنترل موتور شکست بخورد، چه کنی؟ روی PC می‌گویی «حافظه کم است، خروج». روی دستگاه واقعی راه خوبی وجود ندارد.</li>
+  <li><b>ابزار سخت‌تر است.</b> sanitizer ها معمولا روی خود MCU نیستند؛ باگ‌ها را باید با دیباگر و دقت پیدا کنی.</li>
+</ol>
+<p>به همین دلیل استانداردهای کد ایمن صراحتا موضوع را گفته‌اند: <b>MISRA C:2012 قانون ۲۱.۳</b> استفاده از توابع تخصیص حافظهٔ <code>stdlib.h</code> را ممنوع می‌کند، و قاعدهٔ معروف «Power of 10» (نوشتهٔ Gerard Holzmann از JPL) می‌گوید بعد از راه‌اندازی، تخصیص پویا نکن. (درس <a href="6-3.html">۶.۳</a> این استانداردها را بیشتر باز می‌کند.)</p>
+
+<div class="callout warn"><div class="ct">«هرگز» نیست؛ «حساب‌شده» است</div>
+<p>این به معنای ممنوعیت مطلق نیست. برنامه‌های ESP32 با Wi-Fi و TLS خودشان مدام از heap استفاده می‌کنند (خود ESP-IDF این‌طور طراحی شده). قاعده این است: <b>اگر لازم شد، فقط یک‌بار در شروع برنامه</b> (قبل از حلقهٔ اصلی) بگیر و تا پایان نگه دار؛ همیشه <code>NULL</code> را چک کن؛ و برای داده‌های تکراری از جایگزین‌های زیر استفاده کن.</p></div>
+
+<h2 id="alt">جایگزین‌ها: ایستا و <span class="en">memory pool</span></h2>
+<h3 id="static">راه اول: تخصیص ایستا</h3>
+<p>ساده‌ترین جایگزین: بدترین حالت را حدس بزن و آرایهٔ ثابت بساز. <code>static uint8_t rx_buf[64];</code> در زمان کامپایل جا می‌گیرد (بخش <code>.bss</code>؛ درس <a href="3-5.html">۳.۵</a>)، هرگز تمام نمی‌شود، هرگز تکه‌تکه نمی‌شود و <b>مصرف RAM را همان‌جا در فایل map می‌بینی</b>. اگر ۱۰ بسته لازم داری، ۱۰ تا بگذار؛ اگر ۱۱ ام رسید، تصمیم طراحی است: رد کن، بنویس روی قدیمی‌ترین (بافر حلقوی، درس <a href="4-5.html">۴.۵</a>) یا گزارش خطا بده.</p>
+
+<h3 id="pool">راه دوم: <span class="en">memory pool</span></h3>
+<p>گاهی تعداد بلوک‌ها معلوم نیست ولی <b>همهٔ بلوک‌ها هم‌اندازه‌اند</b> (مثلا «پیام UART»). آن‌وقت یک <span class="term" data-t="mempool">memory pool</span> (استخر حافظه) می‌سازی: آرایه‌ای از N بلوک هم‌اندازه، از قبل در RAM و فهرستی از بلوک‌های آزاد. گرفتن = برداشتن یکی از فهرست، پس‌دادن = برگرداندن به فهرست. هر دو <b>در زمان ثابت</b> انجام می‌شوند و چون همه هم‌اندازه‌اند، هرگز fragmentation ندارند.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 270" role="img" aria-label="استخر با چهار بلوک هم‌اندازه: دو بلوک در حال استفاده و دو بلوک آزاد؛ فهرست آزادها به بلوک‌های آزاد اشاره می‌کند">
+  <defs><marker id="g5a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">استخر: N بلوک هم‌اندازه و فهرست آزادها</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="40" y="70" width="150" height="80" fill="#ff86b3"/><rect x="190" y="70" width="150" height="80" fill="#3ddc97"/><rect x="340" y="70" width="150" height="80" fill="#ff86b3"/><rect x="490" y="70" width="150" height="80" fill="#3ddc97"/>
+    <rect x="200" y="196" width="340" height="46" rx="10" fill="#ffd60a"/>
+  </g>
+  <g class="mono" fill="#15120a" text-anchor="middle" font-size="18" font-weight="800">
+    <text x="115" y="104">storage[0]</text><text x="265" y="104">storage[1]</text><text x="415" y="104">storage[2]</text><text x="565" y="104">storage[3]</text>
+    <text x="370" y="225" font-size="16">free_list = [1, 3]</text>
+  </g>
+  <g class="s-tx" font-size="14" font-weight="700" text-anchor="middle"><text x="115" y="132">در حال استفاده</text><text x="265" y="132">آزاد</text><text x="415" y="132">در حال استفاده</text><text x="565" y="132">آزاد</text></g>
+  <path d="M290 194L268 154" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#g5a)"/>
+  <path d="M450 194L560 154" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#g5a)"/>
+  <text x="380" y="262" text-anchor="middle" class="s-tx" font-size="13.5">گرفتن و پس‌دادن = برداشتن/گذاشتن یک عضو در فهرست؛ زمان ثابت و بدون جست‌وجو</text>
+</svg></div>
+<figcaption>ساده‌ترین پیاده‌سازی: فهرست آزادها یک آرایه از اشاره‌گر است.</figcaption></figure>
+
+<div class="code" data-file="pool.c" data-lang="c" data-verify="host" id="code7">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;stddef.h&gt;
+
+#define BLOCK_COUNT 4
+
+typedef struct {
+    uint16_t id;
+    int16_t  value;
+} packet_t;
+
+static packet_t storage[BLOCK_COUNT];       // همهٔ بلوک‌ها از قبل در RAM هستند
+static packet_t *free_list[BLOCK_COUNT];    // آدرس بلوک‌های آزاد
+static int free_count;
+
+static void pool_init(void)
+{
+    for (int i = 0; i &lt; BLOCK_COUNT; i++) {
+        free_list[i] = &amp;storage[BLOCK_COUNT - 1 - i];
+    }
+    free_count = BLOCK_COUNT;
+}
+
+static packet_t *pool_alloc(void)
+{
+    if (free_count == 0) {
+        return NULL;                        // پر است؛ تصمیمش با صدا زننده
+    }
+    free_count--;
+    return free_list[free_count];
+}
+
+static void pool_free(packet_t *p)
+{
+    if (p == NULL) {
+        return;
+    }
+    free_list[free_count] = p;
+    free_count++;
+}
+
+static int index_of(const packet_t *p)
+{
+    return (int)(p - storage);
+}
+
+int main(void)
+{
+    pool_init();
+
+    packet_t *a = pool_alloc();
+    packet_t *b = pool_alloc();
+    packet_t *c = pool_alloc();
+    packet_t *d = pool_alloc();
+    packet_t *e = pool_alloc();
+    printf("a=%d b=%d c=%d d=%d e=%s\n", index_of(a), index_of(b), index_of(c), index_of(d), e == NULL ? "NULL" : "?");
+
+    pool_free(b);
+    packet_t *f = pool_alloc();
+    printf("after free(b): f=%d, free=%d\n", index_of(f), free_count);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code7">
+  <li data-lines="7-10"><b class="what">نوع بلوک.</b> یک بستهٔ کوچک. همهٔ بلوک‌های استخر از همین نوع‌اند؛ پس هم‌اندازه.</li>
+  <li data-lines="12-14"><b class="what">حافظهٔ ثابت.</b> <code>storage</code> آرایهٔ چهار بسته است که از قبل جا دارد؛ <code>free_list</code> آدرس بلوک‌های آزاد است.
+    <span class="why">هر دو <code>static</code> اند؛ در <code>.bss</code> قرار می‌گیرند و در فایل map قابل‌مشاهده‌اند. هیچ <code>malloc</code>ای در کار نیست.</span></li>
+  <li data-lines="16-22"><b class="what">مقداردهی.</b> اول همهٔ بلوک‌ها آزادند. (به‌صورت معکوس می‌چینیم تا اولین گرفتن، بلوک صفر باشد.)</li>
+  <li data-lines="24-31"><b class="what">گرفتن.</b> اگر آزادی نیست، <code>NULL</code>؛ وگرنه آخرین آدرس فهرست را بیرون می‌آورد.
+    <span class="why">هزینه‌اش چند دستور ثابت است، مستقل از اینکه چند بلوک گرفته شده باشند. برای همین در حلقه‌های حساس زمانی هم قابل‌استفاده است.</span></li>
+  <li data-lines="33-40"><b class="what">پس دادن.</b> آدرس را دوباره در فهرست می‌گذارد.
+    <span class="why">این نسخه از double free محافظت نمی‌کند (اگر دوبار <code>pool_free(b)</code> شود، فهرست خراب می‌شود). نسخهٔ حرفه‌ای‌تر یک پرچم «در استفاده» در هر بلوک یا بررسی اندازه دارد؛ تمرین ۳ همین فکر را دنبال می‌کند.</span></li>
+  <li data-lines="42-45"><b class="what">شمارهٔ بلوک.</b> تفریق دو اشاره‌گر به عضو‌های یک آرایه، اندیس را می‌دهد (درس <a href="3-3.html">۳.۳</a>).</li>
+  <li data-lines="51-56"><b class="what">پنج درخواست از چهار بلوک.</b> پنجمی <code>NULL</code> می‌گیرد؛ این تصمیم طراحی توست که چه شود.</li>
+  <li data-lines="58-60"><b class="what">پس دادن و دوباره گرفتن.</b> بلوکی که پس داده شد، دقیقا همان بلوک دوباره داده می‌شود.</li>
+</ol>
+<pre class="term" data-from="pool.c">
+$ ./pool
+a=0 b=1 c=2 d=3 e=NULL
+after free(b): f=1, free=0
+</pre>
+
+<h2 id="mcu">در STM32 و ESP32</h2>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>STM32 (newlib با <code>arm-none-eabi-gcc</code>)</th><th>ESP32 (ESP-IDF)</th></tr></thead>
+<tbody>
+<tr><td>وجود heap</td><td>اگر <code>malloc</code> صدا بزنی، کتابخانه از تابع <code>_sbrk</code> و ناحیه‌ای که linker script مشخص می‌کند استفاده می‌کند. در پروژه‌های ساخته‌شده با CubeIDE اندازه‌اش در <code>.ld</code> (اسم‌هایی مثل <code>_Min_Heap_Size</code>) تنظیم می‌شود؛ مقدار پیش‌فرض کوچک است، پس در فایل خودت ببین</td><td>heap سیستم آماده است و خود ESP-IDF از آن مصرف می‌کند</td></tr>
+<tr><td>اگر heap تمام شود</td><td><code>malloc</code> مقدار <code>NULL</code> می‌دهد (اگر <code>_sbrk</code> درست نوشته شده باشد)؛ بدون آن، لینک نمی‌شود</td><td><code>NULL</code>. در بعضی تنظیمات، ESP-IDF لاگ می‌دهد</td></tr>
+<tr><td>مشاهده مقدار آزاد</td><td>خودت باید اندازه‌گیری کنی (فایل map و <code>arm-none-eabi-size</code>)</td><td>تابع‌های <code>esp_get_free_heap_size()</code> و <code>esp_get_minimum_free_heap_size()</code></td></tr>
+<tr><td>حافظهٔ خاص</td><td>—</td><td><code>heap_caps_malloc()</code> با پرچم‌هایی مثل ظرفیت DMA یا حافظهٔ خارجی؛ به «Heap Memory Allocation» در مستندات ESP-IDF نگاه کن</td></tr>
+<tr><td>FreeRTOS</td><td colspan="2">FreeRTOS heap مخصوص خودش دارد (<code>pvPortMalloc</code> و اندازهٔ <code>configTOTAL_HEAP_SIZE</code> در بعضی نمونه‌ها)، جدا از malloc کتابخانه؛ در درس <a href="5-6.html">۵.۶</a> می‌آید</td></tr>
+</tbody></table></div>
+
+<p>یک نمونهٔ ESP32 برای دیدن مقدار heap آزاد. (این قطعه در این محیط ساخته نمی‌شود؛ مطابق ESP-IDF نسخهٔ ۵.)</p>
+<div class="code" data-file="heap_info.c" data-lang="c" data-verify="frag" id="code8">
+<pre>
+#include "esp_log.h"
+#include "esp_system.h"
+
+static const char *TAG = "heap";
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "free heap: %u bytes", (unsigned)esp_get_free_heap_size());
+    ESP_LOGI(TAG, "lowest ever: %u bytes", (unsigned)esp_get_minimum_free_heap_size());
+}
+</pre></div>
+<ol class="walk" data-for="code8">
+  <li data-lines="1-2"><b class="what">سرآیندها.</b> لاگ و تابع‌های اطلاعات سیستم.</li>
+  <li data-lines="8"><b class="what">مقدار فعلی.</b> چند بایت heap الان آزاد است. <code>unsigned</code> تا با <code>%u</code> جور شود.</li>
+  <li data-lines="9"><b class="what">حداقل تاریخی.</b> کمترین مقدار آزادی که از شروع برنامه دیده شده.
+    <span class="why">این عدد مهم‌تر است: نشان می‌دهد در بدترین لحظه چقدر به لبهٔ پرتگاه نزدیک بوده‌ای. اگر این عدد در طول روزها کم‌کم کم شود، نشتی داری.</span></li>
+</ol>
+
+<h2 id="tools">ابزار: پیدا کردن باگ‌های heap</h2>
+<ul>
+  <li><b>روی PC:</b> <code>gcc -g -fsanitize=address</code> (نشتی، استفاده بعد از free، سرریز، double free). یک ابزار دیگر در لینوکس <code>valgrind</code> است. بهترین کار: منطق برنامه‌ات را روی PC بنویس و تست کن (درس <a href="6-4.html">۶.۴</a>)، با sanitizer.</li>
+  <li><b>روی MCU:</b> خودت heap را کنترل می‌کنی: شمارنده‌ی تخصیص و آزادسازی، پر کردن بلوک آزاد با الگوی مشخص (مثلا <code>0xDD</code>) تا استفادهٔ آویزان زود دیده شود، و نگه‌داشتن آمار «حداقل آزاد».</li>
+  <li><b>آنالیز ایستا:</b> ابزارهایی مثل <code>cppcheck</code> بعضی نشتی‌ها را بدون اجرا پیدا می‌کنند (درس <a href="6-3.html">۶.۳</a>).</li>
+</ul>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">اگر انبار پر باشد، <code>malloc</code> چه برمی‌گرداند و تو چه باید بکنی؟</p>
+  <ol>
+    <li data-why="برنامه خودکار متوقف نمی‌شود؛ malloc فقط مقدار برمی‌گرداند و تصمیم با توست.">برنامه را خودکار متوقف می‌کند</li>
+    <li><code>NULL</code>؛ باید قبل از استفاده بررسی‌اش کنی</li>
+    <li data-why="نه؛ آدرس معتبر نمی‌دهد. اگر بدهد، نوشتن در آن حافظهٔ مال کس دیگر را خراب می‌کند.">یک آدرس تصادفی که می‌شود استفاده کرد</li>
+    <li data-why="malloc عدد ۰ به‌عنوان int برنمی‌گرداند؛ اشاره‌گر برمی‌گرداند و مقدار خطا NULL است (که در عمل صفر است، ولی اشاره‌گر است).">عدد ۰ به‌عنوان int که باید با <code>if (x == 0)</code> بررسی شود</li>
+  </ol>
+  <div class="fb">نتیجهٔ <code>NULL</code> یعنی «جایی نبود». بدون بررسی، نوشتن در آن آدرس ۰ رفتار تعریف‌نشده است و برنامه در بهترین حالت با HardFault می‌میرد.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">بعد از این کد، کدام جمله درست است؟<br><code>int *p = malloc(sizeof *p); int *q = p; *p = 5; free(p);</code></p>
+  <ol>
+    <li data-why="اشاره‌گر q هم به همان بلوک آزادشده اشاره می‌کند؛ نه بلوک جدا دارد و نه مقدار ۵ تضمین می‌شود.">q بلوک جداگانهٔ خودش را دارد و <code>*q</code> برابر ۵ است</li>
+    <li data-why="free فقط بلوک را پس می‌دهد؛ p و q را تغییر نمی‌دهد و آن‌ها را NULL نمی‌کند.">هر دو p و q خودکار <code>NULL</code> می‌شوند</li>
+    <li data-why="این کد کاملا کامپایل می‌شود. مشکل در زمان اجرا (استفاده بعد از free) است، نه کامپایل.">کد کامپایل نمی‌شود</li>
+    <li>هر دو p و q آویزان هستند؛ خواندن یا نوشتن از هر کدام رفتار تعریف‌نشده است</li>
+  </ol>
+  <div class="fb"><code>free</code> بلوک را پس می‌دهد ولی آدرسی را که در p و q است دست نمی‌زند. هر دو حالا به حافظهٔ آزادشده اشاره می‌کنند. برای همین بعد از <code>free</code> اشاره‌گر را <code>NULL</code> می‌کنیم (اشاره‌گر «کپی‌ها» را نمی‌شود ردیابی کرد).</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">اگر <code>v</code> از نوع <code>int *</code> باشد، کدام خط برای گرفتن ۱۰ عدد <code>int</code> <b>اشتباه</b> است؟</p>
+  <ol>
+    <li data-why="این درست است و توصیهٔ ماست: sizeof *v اندازهٔ هر عضو را از خود نوع می‌گیرد.">v = malloc(10 * sizeof *v);</li>
+    <li data-why="این هم درست است؛ فقط اگر نوع v را عوض کنی باید اینجا را هم عوض کنی.">v = malloc(10 * sizeof(int));</li>
+    <li>v = malloc(10 * sizeof(v));</li>
+    <li data-why="درست است: sizeof v[0] هم اندازهٔ یک عضو است.">v = malloc(10 * sizeof v[0]);</li>
+  </ol>
+  <div class="fb"><code>sizeof(v)</code> اندازهٔ خود متغیر <code>v</code> (یک اشاره‌گر، ۴ بایت روی MCU) است، نه چیزی که به آن اشاره می‌کند. اینجا اتفاقی برابر است ولی برای <code>double</code> یا struct کمبود می‌آورد.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">اصلی‌ترین دلیل اینکه firmware ای که ماه‌ها روشن است از <code>malloc</code> پرهیز می‌کند چیست؟</p>
+  <ol>
+    <li>نشتی و تکه‌تکه‌شدگی انباشته می‌شوند، زمان <code>malloc</code> قابل‌پیش‌بینی نیست و شکستش راه خوبی ندارد</li>
+    <li data-why="malloc در C کامپایلر ARM هم هست (با _sbrk و کتابخانه)؛ استفاده‌اش ممنوع نیست، فقط پرخطر است.">malloc روی میکروکنترلر اصلا وجود ندارد</li>
+    <li data-why="بلوک‌ها در RAM هستند، نه Flash؛ Flash فقط کد و ثابت‌ها را نگه می‌دارد.">malloc بلوک‌ها را در Flash می‌سازد که کند است</li>
+    <li data-why="نه؛ اگر NULL را بررسی کنی خراب نمی‌شود. مشکل رفتار در طول زمان است.">malloc همیشه در بار اول خراب می‌شود</li>
+  </ol>
+  <div class="fb">مشکل بیشتر «طول عمر و شکست» است تا اجرای اولین <code>malloc</code>. برنامه‌ای که هر روز چند ساعت کار می‌کند و بعد ناگهان بی‌دلیل خراب می‌شود، معمولا همین است.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">در مثال heap اسباب‌بازی، ۷ واحد آزاد داشتیم ولی درخواست ۵ واحدی شکست خورد. علتش چیست؟</p>
+  <ol>
+    <li data-why="نشتی یعنی آدرس بلوک گم شده. اینجا همه چیز درست free شد و هیچ بلوکی گم نشد.">نشتی حافظه</li>
+    <li data-why="double free یعنی یک آدرس دو بار free شود؛ اینجا هر بلوک یک بار free شد.">double free</li>
+    <li data-why="سرریز پشته به پشتهٔ توابع مربوط است؛ اینجا فقط heap درگیر است.">سرریز پشته</li>
+    <li>fragmentation: جاهای خالی پراکنده‌اند و هیچ‌کدام به‌تنهایی پیوستهٔ ۵ واحد نیست</li>
+  </ol>
+  <div class="fb">بلوک باید یک تکهٔ <b>پیوسته</b> باشد. مجموع آزادها (۷) بیشتر از درخواست است، ولی بزرگ‌ترین تکه ۳ است.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">چرا نوشتن <code>p = realloc(p, new_size);</code> خطرناک است؟</p>
+  <ol>
+    <li data-why="realloc محتوای قدیمی را کپی می‌کند و از دست نمی‌دهد.">چون محتوای قدیمی را همیشه پاک می‌کند</li>
+    <li>چون اگر شکست بخورد، <code>NULL</code> در <code>p</code> می‌نشیند و آدرس بلوک قدیمی (که هنوز سالم بود) گم و نشتی می‌شود</li>
+    <li data-why="realloc حق دارد آدرس را عوض کند و این عادی است؛ خطر مربوط به شکست است.">چون آدرس را هرگز عوض نمی‌کند</li>
+    <li data-why="این خطا نیست؛ کامپایلر هیچ ایرادی نمی‌گیرد.">چون کامپایل نمی‌شود</li>
+  </ol>
+  <div class="fb">راه درست: نتیجه را در یک اشاره‌گر موقت بگیر، اگر <code>NULL</code> نبود در <code>p</code> بگذار؛ اگر <code>NULL</code> بود، هنوز <code>p</code> سالم است و می‌توانی آزادش کنی یا ادامه بدهی.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: آرایهٔ مربع‌ها با <code>calloc</code></div>
+<p>برنامه‌ای بنویس که تعداد <code>n = 6</code> را بگیرد، آرایه‌ای با <code>calloc</code> بسازد، مربع‌های ۱ تا ۶ را در آن بگذارد، آن‌ها و جمعشان را چاپ کند و در پایان <code>free</code> کند.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> با ماشین‌حساب بگو مربع‌ها و جمع چند است.</li>
+  <li><b>حل:</b> برنامه را با بررسی <code>NULL</code> و <code>free</code> بنویس.</li>
+  <li><b>فکر کن:</b> چرا <code>calloc(n, sizeof *sq)</code> از <code>malloc(n * sizeof *sq)</code> امن‌تر است؟ (دو دلیل.)</li>
+</ol>
+<details><summary>راهنمایی</summary><p>الگوی چهارقدمی: بگیر، بررسی کن، استفاده کن، پس بده. برای <code>n</code> از <code>size_t</code> استفاده کن تا با <code>calloc</code> هماهنگ باشد.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="squares.c">
+$ ./squares
+squares: 1 4 9 16 25 36
+sum = 91
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="squares.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+
+int main(void)
+{
+    size_t n = 6;
+    int *sq = calloc(n, sizeof *sq);
+    if (sq == NULL) {
+        printf("out of memory\n");
+        return 1;
+    }
+
+    int sum = 0;
+    printf("squares:");
+    for (size_t i = 0; i &lt; n; i++) {
+        sq[i] = (int)((i + 1) * (i + 1));
+        sum += sq[i];
+        printf(" %d", sq[i]);
+    }
+    printf("\nsum = %d\n", sum);
+
+    free(sq);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="7-11"><b class="what">گرفتن و بررسی.</b> <code>calloc</code> دو آرگومان دارد: تعداد و اندازهٔ هر عضو.</li>
+  <li data-lines="15-19"><b class="what">حلقه.</b> اندیس <code>i</code> از <code>size_t</code> است؛ حاصل <code>(i+1)*(i+1)</code> هم <code>size_t</code> می‌شود و با یک cast صریح به <code>int</code> می‌رود.
+    <span class="why">cast صریح به کامپایلر و خواننده می‌گوید «می‌دانم چه می‌کنم». بدون آن <code>-Wextra</code> در بعضی تنظیمات دربارهٔ تبدیل هشدار می‌دهد.</span></li>
+  <li data-lines="22"><b class="what">پس‌دادن.</b> هر <code>calloc</code> یک <code>free</code> دارد.</li>
+</ol>
+<pre class="term" data-from="squares.c">
+$ ./squares
+squares: 1 4 9 16 25 36
+sum = 91
+</pre>
+<p>جواب قسمت پ: (۱) بلوک را <b>صفر</b> می‌کند؛ پس اگر عضوی را فراموش کنی پر کنی، آشغال نمی‌خوانی. (۲) خودش ضرب <code>n × size</code> را روی سرریز بررسی می‌کند؛ اگر <code>n</code> از ورودی کاربر باشد، <code>malloc(n * size)</code> می‌تواند با سرریز یک بلوک خیلی کوچک بدهد و بعد حلقه بیرون از آن بنویسد.</p></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: باگ‌ها را پیدا کن</div>
+<p>هر کدام از این سه قطعه یک باگ heap دارد. باگ را نام ببر و اصلاحش کن.</p>
+<div class="code" data-lang="c" id="ex2bad"><pre>
+char *copy = malloc(strlen(name));      // الف
+strcpy(copy, name);
+
+int *v = malloc(10);                    // ب
+v[5] = 1;
+
+int *p = malloc(sizeof *p);             // پ
+*p = 3;
+free(p);
+printf("%d\n", *p);
+</pre></div>
+<ol class="parts">
+  <li>قطعهٔ الف (کپی یک رشته)</li>
+  <li>قطعهٔ ب (می‌خواهیم ۱۰ عدد <code>int</code> داشته باشیم)</li>
+  <li>قطعهٔ پ (چاپ بعد از <code>free</code>)</li>
+</ol>
+<details><summary>راهنمایی</summary><p>الف: رشتهٔ C چه چیزی در انتها دارد؟ ب: <code>malloc</code> بر حسب چه چیزی است؟ پ: بعد از <code>free</code> اشاره‌گر چه وضعیتی دارد؟</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="fixed.c">
+$ ./fixed
+copy: sensor
+v[5] = 1, count = 10
+p was 3
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="table-wrap"><table><thead><tr><th>قطعه</th><th>باگ</th><th>اصلاح</th></tr></thead><tbody>
+<tr><td>الف</td><td>جای <code>'\0'</code> در نظر گرفته نشده؛ <code>strcpy</code> یک بایت بیرون بلوک می‌نویسد (heap overflow)</td><td><code>malloc(strlen(name) + 1)</code></td></tr>
+<tr><td>ب</td><td><code>malloc(10)</code> ۱۰ <b>بایت</b> است، یعنی جای ۲ عدد <code>int</code>؛ <code>v[5]</code> بیرون بلوک است</td><td><code>malloc(10 * sizeof *v)</code></td></tr>
+<tr><td>پ</td><td>استفاده بعد از <code>free</code></td><td>اول چاپ کن، بعد <code>free</code> کن</td></tr>
+</tbody></table></div>
+<div class="code" data-file="fixed.c" data-lang="c" data-verify="host" id="ex2">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+
+int main(void)
+{
+    const char *name = "sensor";
+    char *copy = malloc(strlen(name) + 1);
+    int *v = malloc(10 * sizeof *v);
+    int *p = malloc(sizeof *p);
+    if (copy == NULL || v == NULL || p == NULL) {
+        free(copy);
+        free(v);
+        free(p);
+        return 1;
+    }
+
+    strcpy(copy, name);
+    printf("copy: %s\n", copy);
+
+    v[5] = 1;
+    printf("v[5] = %d, count = %d\n", v[5], 10);
+
+    *p = 3;
+    printf("p was %d\n", *p);
+
+    free(copy);
+    free(v);
+    free(p);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="8"><b class="what">+۱ برای پایان رشته.</b> رشتهٔ «sensor» شش حرف است و به هفت بایت نیاز دارد.</li>
+  <li data-lines="9"><b class="what">ضرب در sizeof.</b> ده عضو، هر کدام به‌اندازهٔ <code>*v</code>.</li>
+  <li data-lines="11-16"><b class="what">یک بررسی برای هر سه.</b> اگر هر کدام <code>NULL</code> بود، آن‌هایی را که گرفته شده‌اند آزاد می‌کنیم. <code>free(NULL)</code> بی‌خطر است.
+    <span class="why">اگر فقط یکی شکست بخورد و بقیه را آزاد نکنیم، نشتی می‌سازیم. بی‌خطر بودن <code>free(NULL)</code> این کد را ساده می‌کند.</span></li>
+  <li data-lines="27-29"><b class="what">آزادسازی در آخر.</b> بعد از آخرین استفاده. ترتیب free بین اشاره‌گرهای مستقل مهم نیست.</li>
+</ol>
+<pre class="term" data-from="fixed.c">
+$ ./fixed
+copy: sensor
+v[5] = 1, count = 10
+p was 3
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: ثبت‌کنندهٔ ایستا، بدون heap</div>
+<p>در یک ثبت‌کنندهٔ داده روی STM32، هر نمونه یک زمان (<code>uint32_t</code>) و یک مقدار (<code>int16_t</code>) دارد. می‌خواهیم آخرین ۸ نمونه را نگه داریم و <b>بدون <code>malloc</code></b>.</p>
+<ol class="parts">
+  <li><b>حساب:</b> هر نمونه چند بایت جا می‌گیرد؟ (به padding فکر کن؛ درس <a href="3-4.html">۳.۴</a>.) و ۸ نمونه چند بایت؟</li>
+  <li><b>حل:</b> یک آرایهٔ <code>static</code> ۸ عضوی و تابع <code>log_add</code> بنویس که وقتی پر شد، قدیمی‌ترین را بازنویسی کند. ۱۰ نمونه (<code>100</code> تا <code>109</code>) بفرست و ۸ آخر را از قدیمی به جدید چاپ کن.</li>
+  <li><b>سخت‌افزار:</b> اگر همین ثبت‌کننده با <code>malloc</code> برای هر نمونه ساخته می‌شد و ماه‌ها کار می‌کرد، چه مشکلاتی پیش می‌آمد؟ (سه مورد.)</li>
+</ol>
+<details><summary>راهنمایی</summary><p>برای جای بعدی از یک شمارنده و باقیمانده (<code>%</code>) استفاده کن: بعد از خانهٔ ۷ برمی‌گردی به ۰. اندیس شروع چاپ = <code>(next + LOG_SIZE - count) % LOG_SIZE</code>.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="logger.c">
+$ ./logger
+entry = 8 bytes, total = 64 bytes
+102 103 104 105 106 107 108 109
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="logger.c" data-lang="c" data-verify="host" id="ex3">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+#define LOG_SIZE 8u
+
+typedef struct {
+    uint32_t time_ms;
+    int16_t  value;
+} entry_t;
+
+static entry_t entries[LOG_SIZE];
+static unsigned next_slot = 0;
+static unsigned count = 0;
+
+static void log_add(uint32_t time_ms, int16_t value)
+{
+    entries[next_slot].time_ms = time_ms;
+    entries[next_slot].value = value;
+    next_slot = (next_slot + 1u) % LOG_SIZE;
+    if (count &lt; LOG_SIZE) {
+        count++;
+    }
+}
+
+int main(void)
+{
+    printf("entry = %zu bytes, total = %zu bytes\n", sizeof(entry_t), sizeof entries);
+
+    for (int i = 0; i &lt; 10; i++) {
+        log_add((uint32_t)(i * 10), (int16_t)(100 + i));
+    }
+
+    unsigned start = (next_slot + LOG_SIZE - count) % LOG_SIZE;
+    for (unsigned i = 0; i &lt; count; i++) {
+        printf("%d%s", entries[(start + i) % LOG_SIZE].value, i + 1 &lt; count ? " " : "\n");
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="6-9"><b class="what">نوع نمونه.</b> ۴ بایت زمان + ۲ بایت مقدار = ۶، ولی برای اینکه عضو بعدی (اگر آرایه) تراز بماند، کامپایلر ۲ بایت padding اضافه می‌کند: کل ۸ بایت.</li>
+  <li data-lines="11-13"><b class="what">حافظهٔ ثابت.</b> ۸ × ۸ = ۶۴ بایت، از لحظهٔ کامپایل معلوم است و هرگز کم و زیاد نمی‌شود.</li>
+  <li data-lines="15-23"><b class="what">افزودن.</b> در خانهٔ <code>next_slot</code> می‌نویسد، اندیس را یکی جلو می‌برد (با <code>%</code> که بعد از ۷ به ۰ برمی‌گردد) و تعداد را تا سقف ۸ زیاد می‌کند.
+    <span class="why">وقتی پر شد، خانهٔ جدید روی قدیمی‌ترین می‌نشیند: «بازنویسی قدیمی». این همان ایدهٔ بافر حلقوی است (درس <a href="4-5.html">۴.۵</a>).</span></li>
+  <li data-lines="33-36"><b class="what">چاپ از قدیمی به جدید.</b> اگر بافر پر است، قدیمی‌ترین خانه همان <code>next_slot</code> است؛ فرمول <code>(next + size - count) % size</code> این را هم برای حالت پر و هم نیمه‌پر درست می‌دهد.</li>
+</ol>
+<pre class="term" data-from="logger.c">
+$ ./logger
+entry = 8 bytes, total = 64 bytes
+102 103 104 105 106 107 108 109
+</pre>
+<p>جواب قسمت پ: (۱) با هر نمونه یک <code>malloc</code> و هر دور یک <code>free</code> heap را تکه‌تکه می‌کند. (۲) هر بلوک هدر پنهان دارد؛ ۶ بایت داده با هدر و padding چند برابر می‌شود و RAM هدر می‌رود. (۳) روزی که <code>malloc</code> شکست بخورد، ثبت‌کننده باید تصمیم بگیرد داده را از دست بدهد یا خراب شود؛ در نسخهٔ ایستا چنین لحظه‌ای وجود ندارد.</p></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>گیر اصلی این درس دو چیز است. اول: <b>«چرا کامپایلر ایراد نگرفت؟»</b> چون باگ‌های heap همه در زمان اجرا هستند و کامپایلر فقط بخشی را می‌بیند. عادت خوب: هر برنامه‌ای را که <code>malloc</code> دارد، یک بار با <code>-fsanitize=address</code> اجرا کن. دوم: <b>وسوسهٔ راحتی.</b> در برنامه‌های PC <code>malloc</code> همه جا هست و اشکال ندارد؛ فقط یادت باشد میکروکنترلر دنیای دیگری است: اول آرایهٔ ثابت و pool، و فقط با دلیل قوی heap. اگر دستگاهی را دیدی که «بعد از سه هفته هنگ می‌کند»، اولین مظنونش heap است.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li><code>malloc</code> بلوکی از heap می‌دهد (آشغال)، <code>calloc</code> صفر‌شده، <code>realloc</code> تغییر اندازه، <code>free</code> پس‌دادن. همیشه: <b>بگیر ← <code>NULL</code> را بررسی کن ← استفاده کن ← <code>free</code></b>.</li>
+  <li>اندازه را <code>n * sizeof *p</code> بنویس. برای رشته <code>strlen + 1</code>.</li>
+  <li>چهار باگ: نشتی، استفاده بعد از free، double free، نوشتن بیرون بلوک. با <code>-fsanitize=address</code> روی PC پیدایشان کن.</li>
+  <li><code>p = realloc(p, n)</code> ممنوع؛ از متغیر موقت استفاده کن.</li>
+  <li><b>Fragmentation:</b> فضای آزاد پراکنده است، پس درخواست پیوستهٔ بزرگ شکست می‌خورد، بی‌آنکه نشتی باشد.</li>
+  <li>روی MCU احتیاط: هیچ‌کس جمع نمی‌کند، RAM کم است، زمان ثابت نیست. MISRA 21.3 ممنوعش می‌کند.</li>
+  <li>جایگزین‌ها: آرایهٔ ایستا با بدترین حالت، و <b>memory pool</b> برای بلوک‌های هم‌اندازه (زمان ثابت، بدون fragmentation).</li>
+</ul></div>
+
+</article>
+</body>
+</html>
