@@ -36,7 +36,7 @@ window.COURSE = {
       { id: "4-6", title: "ماشین حالت (FSM)", min: 55, level: "پیشرفته" },
       { id: "4-7", title: "ریاضی روی میکروکنترلر: عدد ثابت، سرریز و endianness", min: 55, level: "پیشرفته" }
     ]},
-    { n: 5, title: "C روی سخت‌افزار واقعی", color: "#F0508C", ink: "#ffffff", lessons: [
+    { n: 5, title: "C روی سخت‌افزار واقعی", color: "#F0508C", ink: "#2b0016", lessons: [
       { id: "5-1", title: "بوت شدن میکروکنترلر: startup، vector table و linker script", min: 60, level: "پیشرفته" },
       { id: "5-2", title: "Bare-metal روی STM32: GPIO با رجیستر", min: 60, level: "پیشرفته" },
       { id: "5-3", title: "وقفه و ISR", min: 60, level: "پیشرفته" },
@@ -45,7 +45,7 @@ window.COURSE = {
       { id: "5-6", title: "ESP32 با C خالص: ESP-IDF و FreeRTOS", min: 65, level: "پیشرفته" },
       { id: "5-7", title: "معماری لایه‌ای درایور و HAL", min: 55, level: "پیشرفته" }
     ]},
-    { n: 6, title: "حرفه‌ای شدن", color: "#8B5CF6", ink: "#ffffff", lessons: [
+    { n: 6, title: "حرفه‌ای شدن", color: "#7C4DEB", ink: "#ffffff", lessons: [
       { id: "6-1", title: "دیباگ: printf، assert، GDB، تحلیلگر منطقی و HardFault", min: 60, level: "پیشرفته" },
       { id: "6-2", title: "رفتار تعریف‌نشده و تله‌های C", min: 55, level: "پیشرفته" },
       { id: "6-3", title: "کد امن: MISRA C، CERT C و آنالیز ایستا", min: 50, level: "پیشرفته" },

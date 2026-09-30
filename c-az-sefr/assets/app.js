@@ -73,7 +73,8 @@
   function setNav(open) {
     document.body.classList.toggle("nav-open", open); document.documentElement.classList.toggle("nav-lock", open);
     var mb = document.querySelector(".menu-toggle"); if (mb) mb.setAttribute("aria-expanded", open ? "true" : "false");
-    if (open) { var cur = side.querySelector("a.active"); if (cur) cur.scrollIntoView({ block: "center" }); }
+    main.inert = open; top.querySelectorAll(".search-btn,.progress-pill,.theme-btn").forEach(function (x) { x.inert = open; });
+    if (open) { var cur = side.querySelector("a.active") || side.querySelector("a"); if (cur) { cur.scrollIntoView({ block: "center" }); cur.focus(); } } else if (mb) mb.focus();
   }
   document.addEventListener("click", function (e) {
     var a = e.target.closest && e.target.closest("[data-act]");
@@ -280,7 +281,7 @@
     ol.classList.add("walk-inline");
     var byLine = {}; items.forEach(function (it) { it.set.forEach(function (n) { if (!byLine[n] || byLine[n].set.length > it.set.length) byLine[n] = it; }); });
     function makeNote(it) {
-      var n = el("span", { "class": "ln-note" }), tmp = it.li.cloneNode(true); n.innerHTML = tmp.innerHTML;
+      var n = el("span", { "class": "ln-note", role: "note" }), tmp = it.li.cloneNode(true); n.innerHTML = tmp.innerHTML;
       var after = lns[it.last - 1]; while (after.nextSibling && after.nextSibling.classList && after.nextSibling.classList.contains("ln-note")) after = after.nextSibling;
       after.parentNode.insertBefore(n, after.nextSibling); return n;
     }
@@ -291,7 +292,7 @@
     }
     function byLineAttr(it, on) { it.set.forEach(function (n) { if (byLine[n] === it) lns[n - 1].setAttribute("aria-expanded", on ? "true" : "false"); }); }
     Object.keys(byLine).forEach(function (n) {
-      var l = lns[n - 1], it = byLine[n]; l.classList.add("has"); l.setAttribute("tabindex", "0"); l.setAttribute("role", "button"); l.setAttribute("aria-expanded", "false");
+      var l = lns[n - 1], it = byLine[n]; l.classList.add("has"); l.setAttribute("tabindex", "0"); l.setAttribute("role", "button"); l.setAttribute("aria-expanded", "false"); l.setAttribute("aria-label", "توضیح خط " + n);
       var t = function (e) { if (e.target.closest && e.target.closest(".ln-note")) return; show(it, !it.open); };
       l.addEventListener("click", t); l.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); t(e); } });
     });
@@ -306,9 +307,10 @@
   function quizIdx(q) { return Array.prototype.indexOf.call(quizzes, q); }
   quizzes.forEach(function (q, qi) {
     var right = +q.getAttribute("data-answer"), lis = q.querySelectorAll("ol > li"), pid = pageId;
-    function markWrong(li) { li.classList.add("wrong"); var w = li.getAttribute("data-why"); if (w && !li.querySelector(".why-msg")) li.insertAdjacentHTML("beforeend", '<span class="why-msg">' + w + '</span>'); }
+    var live = el("div", { "class": "vh", "aria-live": "polite" }); q.appendChild(live);
+    function markWrong(li) { live.textContent = "پاسخ نادرست: " + (li.getAttribute("data-why") || "دوباره امتحان کن").replace(/<[^>]+>/g, ""); li.classList.add("wrong"); var w = li.getAttribute("data-why"); if (w && !li.querySelector(".why-msg")) li.insertAdjacentHTML("beforeend", '<span class="why-msg">' + w + '</span>'); }
     function solve(save) {
-      q.classList.add("solved"); lis[right - 1].classList.add("right");
+      q.classList.add("solved"); lis[right - 1].classList.add("right"); live.textContent = "پاسخ درست!";
       if (save) { quizSolved[pid] = quizSolved[pid] || []; if (quizSolved[pid].indexOf(qi) < 0) quizSolved[pid].push(qi); store("cazs-quiz", quizSolved); }
       updScore(); document.dispatchEvent(new CustomEvent("cazs-quiz"));
     }
@@ -333,14 +335,14 @@
   function openTerm(sp) {
     closePop(); var g = GL[sp.getAttribute("data-t")]; if (!g) return;
     pop = el("div", { "class": "tip-pop", role: "tooltip" }, '<b>' + esc(g.fa) + (g.en ? ' <span class="en">(' + esc(g.en) + ')</span>' : '') + '</b>' + esc(g.def) + (g.lesson ? ' <a href="' + g.lesson + '.html">درس ' + fa(g.lesson.replace("-", ".")) + '</a>' : '') + ' · <a href="glossary.html#' + esc(sp.getAttribute("data-t")) + '">واژه‌نامه</a>');
-    document.body.appendChild(pop);
+    document.body.appendChild(pop); popY = scrollY;
     var r = sp.getBoundingClientRect(), w = pop.offsetWidth, x = Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2)), y = r.bottom + 8;
     if (y + pop.offsetHeight > innerHeight - 8) y = Math.max(8, r.top - pop.offsetHeight - 8);
     pop.style.left = x + "px"; pop.style.top = y + "px";
   }
-  article.querySelectorAll(".term").forEach(function (s) { s.setAttribute("tabindex", "0"); s.setAttribute("role", "button"); s.addEventListener("click", function (e) { e.stopPropagation(); openTerm(s); }); s.addEventListener("keydown", function (e) { if (e.key === "Enter") openTerm(s); }); });
+  article.querySelectorAll(".term").forEach(function (s) { s.setAttribute("tabindex", "0"); s.setAttribute("role", "button"); s.addEventListener("click", function (e) { e.stopPropagation(); openTerm(s); }); s.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openTerm(s); } }); });
   document.addEventListener("click", function (e) { if (pop && !e.target.closest(".tip-pop,.term")) closePop(); });
-  addEventListener("scroll", closePop, { passive: true });
+  var popY = 0; addEventListener("scroll", function () { if (pop && Math.abs(scrollY - popY) > 60) closePop(); }, { passive: true });
   var glBox = document.getElementById("gl");
   if (glBox) {
     var keys = Object.keys(GL).sort(function (a, b) { return GL[a].fa.localeCompare(GL[b].fa, "fa"); });
@@ -400,6 +402,9 @@
   article.querySelectorAll("[data-mascot]").forEach(function (m) { m.innerHTML = mascot(m.getAttribute("data-mascot")); });
   article.querySelectorAll(".callout.coach").forEach(function (c) { c.insertAdjacentHTML("afterbegin", mascot("think")); });
   article.querySelectorAll(".callout.warn").forEach(function (c) { if (!c.querySelector(".mascot")) { /* هشدار بدون شخصیت می‌ماند تا شلوغ نشود */ } });
+
+  article.querySelectorAll("figure .frame svg").forEach(function (s) { var vb = (s.getAttribute("viewBox") || "").split(/[\s,]+/); if (vb.length === 4 && !s.closest(".hero")) s.style.setProperty("--svg-w", Math.round(+vb[2] * 0.82) + "px"); });
+  article.querySelectorAll(".table-wrap,.code pre").forEach(function (x) { x.setAttribute("tabindex", "0"); x.setAttribute("role", "region"); x.setAttribute("aria-label", x.classList.contains("table-wrap") ? "جدول قابل اسکرول" : "کد قابل اسکرول"); });
 
   /* ---------- ابزارک‌های تعاملی ---------- */
   function bin(n, w) { var s = (n >>> 0).toString(2); while (s.length < w) s = "0" + s; return s.slice(-w); }
