@@ -1,0 +1,793 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>آرایه‌ها · C برای میکروکنترلر</title>
+<meta name="description" content="آرایه در C چیست؟ از مثال ردیف کمدها تا ایندکس، خروج از محدوده، جدول ثابت در Flash و بافر دریافت UART، با کد خط‌به‌خط، آزمون و تمرین.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="2-7">
+
+<p class="lede">فرض کن باید دمای ۱۰۰ نقطه از یک اتاق را نگه داری. با درس ۲.۱ باید صد متغیر با صد اسم مختلف می‌ساختی: <code>t1</code>، <code>t2</code>، ... <code>t100</code>. حتی نوشتن حلقه برای جمع‌کردنشان ناممکن است، چون هر اسم جداست! آرایه دقیقا برای همین است: <b>یک اسم، چندین قفسه پشت سر هم</b>، که با شماره یکی‌یکی به آنها می‌رسی. در این درس یاد می‌گیری آرایه بسازی، با حلقه پیمایش کنی، جدول ثابت در Flash بگذاری و از تله‌ای دوری کنی که بیشترین باگ‌های کد C در جهان را ساخته: رفتن بیرون از مرز آرایه.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>آرایه‌ای از هر نوع بسازی، مقدار بدهی و با ایندکس بخوانی و بنویسی</li>
+    <li>بگویی چرا ایندکس از ۰ شروع می‌شود و آخرین خانهٔ آرایهٔ ۵تایی شماره ۴ است</li>
+    <li>با <code>sizeof</code> تعداد عضوهای آرایه را حساب کنی و آرایه را با طولش به تابع بدهی</li>
+    <li>خطر خارج‌شدن از محدوده را توضیح بدهی و در کد پیدا کنی</li>
+    <li>جدول ثابت (مثل جدول سینوس) و جای موقت برای داده‌های رسیده (مثل <code>rx_buf[64]</code>) بسازی و بدانی هرکدام کجای حافظه می‌نشینند</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="2-5.html">۲.۵</a> (حلقهٔ <code>for</code>) و <a href="2-6.html">۲.۶</a> (تابع و پارامتر)</li>
+    <li>درس <a href="2-1.html">۲.۱</a> (متغیر، آدرس، Flash و RAM)</li>
+    <li>درس <a href="2-2.html">۲.۲</a> (<code>uint8_t</code> و دوستان)</li>
+    <li>فقط یک کامپایلر روی رایانه‌ات</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: ردیف کمدها</h2>
+<p>یادت هست در درس ۲.۱ متغیر را «یک قفسه با برچسب» دیدیم. حالا رختکن باشگاه را تصور کن: <b>یک ردیف بلند کمد</b> که همه هم‌اندازه‌اند و پشت سر هم چیده شده‌اند. برچسب روی کل ردیف می‌خورد («کمدهای مردانه»)، و هر کمد با یک شماره مشخص می‌شود.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>آرایه (<span class="term" data-t="array">array</span>) همان ردیف کمد است: <b>چند قفسهٔ هم‌نوع و هم‌اندازه، بدون فاصله، پشت هم در حافظه</b>. هر قفسه یک «عضو» (<span class="term" data-t="element">element</span>) است و شمارهٔ آن قفسه را «اندیس» یا «ایندکس» (<span class="term" data-t="index">index</span>) می‌نامند. اگر ایندکس را بدانی، به‌جای گشتن، مستقیم می‌روی سراغ همان کمد.</p></div>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 258" role="img" aria-label="آرایه temps با پنج عضو int در پنج خانهٔ چهاربایتی پشت سر هم؛ عضو با ایندکس ۲ رنگی است و آدرس هر عضو ۴ بایت بعد از قبلی است">
+  <text x="380" y="28" text-anchor="middle" class="s-tx mono" font-size="20" font-weight="800">int temps[5] = {21, 23, 22, 25, 24};</text>
+  <path d="M55 52v10H705v-10" stroke="#15120a" stroke-width="3" fill="none"/>
+  <text x="380" y="80" text-anchor="middle" class="s-tx" font-size="14" font-weight="700">یک اسم برای کل ردیف: temps</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="55" y="112" width="130" height="58" fill="#ffd60a"/>
+    <rect x="185" y="112" width="130" height="58" fill="#ffd60a"/>
+    <rect x="315" y="112" width="130" height="58" fill="#ff86b3"/>
+    <rect x="445" y="112" width="130" height="58" fill="#ffd60a"/>
+    <rect x="575" y="112" width="130" height="58" fill="#ffd60a"/>
+  </g>
+  <g class="mono" font-size="28" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="120" y="151">21</text><text x="250" y="151">23</text><text x="380" y="151">22</text><text x="510" y="151">25</text><text x="640" y="151">24</text>
+  </g>
+  <g class="mono s-tx" font-size="18" font-weight="800" text-anchor="middle">
+    <text x="120" y="104">[0]</text><text x="250" y="104">[1]</text><text x="380" y="104">[2]</text><text x="510" y="104">[3]</text><text x="640" y="104">[4]</text>
+  </g>
+  <g class="mono s-tx" font-size="12.5" text-anchor="middle" font-weight="600">
+    <text x="120" y="192">0x20000000</text><text x="250" y="192">0x20000004</text><text x="380" y="192">0x20000008</text><text x="510" y="192">0x2000000C</text><text x="640" y="192">0x20000010</text>
+  </g>
+  <text x="380" y="222" text-anchor="middle" class="s-tx" font-size="14" font-weight="700">هر عضو ۴ بایت است؛ آدرس عضو شمارهٔ i = آدرس شروع + i × ۴</text>
+  <text x="380" y="245" text-anchor="middle" class="s-tx" font-size="13.5">صورتی: ایندکس ۲ یعنی «سومین قفسه»، چون شماره‌گذاری از ۰ شروع می‌شود (آدرس‌ها نمونه‌اند)</text>
+</svg></div>
+<figcaption>پنج <span class="en">int</span> پشت سر هم: مجموعا ۲۰ بایت. کامپایلر فقط آدرس اولین عضو را به‌عنوان «آدرس آرایه» نگه می‌دارد و بقیه را با حساب پیدا می‌کند.</figcaption></figure>
+
+<h2 id="first">اولین آرایه</h2>
+<p>ساخت آرایه مثل متغیر است، با یک تفاوت: بعد از اسم، در <code>[ ]</code> می‌نویسی چند عضو می‌خواهی. مقدارهای اولیه را در <code>{ }</code> و با کاما می‌نویسی:</p>
+
+<div class="code" data-file="temps.c" data-lang="c" data-verify="host" id="code1">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int temps[5] = {21, 23, 22, 25, 24};
+    int sum = 0;
+
+    printf("first = %d, last = %d\n", temps[0], temps[4]);
+    temps[2] = 30;
+
+    for (int i = 0; i &lt; 5; i++) {
+        sum = sum + temps[i];
+    }
+    printf("sum = %d, average = %d\n", sum, sum / 5);
+    return 0;
+}
+</pre></div>
+
+<ol class="walk" data-for="code1">
+  <li data-lines="5"><b class="what">ساخت آرایه.</b> «پنج قفسهٔ <code>int</code> پشت هم به اسم <code>temps</code>، با این مقدارهای اولیه.» عدد داخل <code>[5]</code> <b>تعداد عضوهاست</b>. کامپایلر ۵ × ۴ = ۲۰ بایت جا می‌گیرد.
+    <span class="why">عدد باید در زمان کامپایل معلوم باشد (یا با ثابت‌ها مثل <code>#define</code>). حافظهٔ میکروکنترلر را از قبل می‌شمارند و تعداد را نمی‌شود وسط اجرا عوض کرد.</span></li>
+  <li data-lines="6"><b class="what">متغیر جمع.</b> از صفر شروع می‌کنیم؛ قاعدهٔ «مقدار اولیه بده» درس ۲.۱.</li>
+  <li data-lines="8"><b class="what">خواندن با ایندکس.</b> <code>temps[0]</code> یعنی اولین عضو و <code>temps[4]</code> آخرین. دقت کن: <b>ایندکس از صفر شروع می‌شود</b>، پس آخرین ایندکس یکی کمتر از تعداد است.
+    <span class="why">ایندکس یعنی «چند خانه از اول فاصله دارد». اولین قفسه ۰ خانه از اول فاصله دارد. مثل ساختمان: طبقهٔ همکف صفر پله بالاتر از زمین است و طبقهٔ اول یک طبقه بالاتر. کامپایلر هم آدرس را همین‌طور حساب می‌کند: آدرس شروع + ایندکس × اندازهٔ هر عضو.</span></li>
+  <li data-lines="9"><b class="what">نوشتن روی یک عضو.</b> فقط قفسهٔ شمارهٔ ۲ عوض می‌شود (۲۲ ← ۳۰). بقیه دست‌نخورده‌اند.
+    <span class="why">هر عضو مثل یک متغیر مستقل است؛ فقط اسمش «اسم آرایه + شماره» است.</span></li>
+  <li data-lines="11-13"><b class="what">حلقهٔ پیمایش.</b> <code>i</code> از ۰ تا ۴ می‌رود (شرط <code>i &lt; 5</code>، نه <code>i &lt;= 5</code>) و هر بار عضو <code>i</code>ام را به جمع اضافه می‌کند.
+    <span class="why">اینجاست که آرایه ارزشش را نشان می‌دهد: با صد عضو هم همین سه خط کافی است. با متغیرهای جدا هرگز نمی‌شد حلقه نوشت.</span></li>
+  <li data-lines="14"><b class="what">چاپ.</b> جمع و میانگین (تقسیم صحیح، اعشار دور ریخته می‌شود: ۱۲۳ ÷ ۵ = ۲۴٫۶ ← ۲۴).</li>
+</ol>
+
+<pre class="term" data-from="temps.c">
+$ gcc -std=c11 -Wall -Wextra -o temps temps.c
+$ ./temps
+first = 21, last = 24
+sum = 123, average = 24
+</pre>
+
+<div class="callout tip"><div class="ct">الگوی طلایی پیمایش</div>
+<p>برای آرایه‌ای با <code>N</code> عضو تقریبا همیشه همین را می‌نویسی: <code>for (int i = 0; i &lt; N; i++)</code>. سه چیز را همیشه چک کن: شروع از <b>۰</b>، شرط <b>&lt;</b> (نه &lt;=)، و اینکه <code>N</code> واقعا تعداد عضوهاست. بیشتر باگ‌های حلقه‌ها از این سه‌تا می‌آید.</p></div>
+
+<h2 id="bounds">بیرون از مرز: خطرناک‌ترین اشتباه C</h2>
+<p>آرایهٔ ۳تایی <code>a</code> فقط ایندکس‌های ۰، ۱ و ۲ را دارد. اگر بنویسی <code>a[3]</code> یا <code>a[5]</code>، چه می‌شود؟ (این را <span class="term" data-t="outofbounds">«خارج از محدوده»</span> می‌گویند.) کامپایلر آدرس را با همان فرمول حساب می‌کند: «آدرس شروع + ۵ × ۴». آن آدرس دیگر مال آرایهٔ تو نیست؛ مال متغیر همسایه یا جایی نامعلوم است. C <b>چک نمی‌کند</b> که ایندکس درست باشد. چرا؟ چون چک کردن هر دسترسی وقت می‌گیرد و C را برای سرعت طراحی کرده‌اند؛ مسئولیتش با خود توست.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 250" role="img" aria-label="آرایهٔ سه‌تایی a با ایندکس‌های ۰ تا ۲ مجاز؛ خانه‌های بعد از آن با خط‌چین صورتی، یعنی خارج از آرایه و متعلق به متغیرهای دیگر">
+  <text x="380" y="28" text-anchor="middle" class="s-tx mono" font-size="20" font-weight="800">int a[3] = {5, 6, 7};</text>
+  <path d="M60 50v10H420v-10" stroke="#15120a" stroke-width="3" fill="none"/>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="60" y="88" width="120" height="66" fill="#7ea3ff"/>
+    <rect x="180" y="88" width="120" height="66" fill="#7ea3ff"/>
+    <rect x="300" y="88" width="120" height="66" fill="#7ea3ff"/>
+  </g>
+  <g stroke="#15120a" stroke-width="3" stroke-dasharray="8 6">
+    <rect x="420" y="88" width="120" height="66" fill="#ff86b3"/>
+    <rect x="540" y="88" width="120" height="66" fill="#ff86b3"/>
+  </g>
+  <g class="mono" font-size="18" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="120" y="115">a[0]</text><text x="240" y="115">a[1]</text><text x="360" y="115">a[2]</text><text x="480" y="115">a[3]</text><text x="600" y="115">a[4]</text>
+  </g>
+  <g class="mono" font-size="26" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="120" y="146">5</text><text x="240" y="146">6</text><text x="360" y="146">7</text><text x="480" y="146">؟</text><text x="600" y="146">؟</text>
+  </g>
+  <g class="s-tx" font-size="14" font-weight="800" text-anchor="middle">
+    <text x="240" y="186" fill="#1a9d63">خانه‌های مجاز (۳ تا)</text>
+    <text x="540" y="186">خارج از آرایه</text>
+  </g>
+  <g class="s-tx" font-size="13" text-anchor="middle">
+    <text x="540" y="206">مال متغیر دیگر یا جای نامعلوم</text>
+  </g>
+  <text x="380" y="238" text-anchor="middle" class="s-tx" font-size="14" font-weight="700">C جلوی خواندن یا نوشتن روی خانه‌های خط‌چین را نمی‌گیرد</text>
+</svg></div>
+<figcaption>مرز آرایه فقط در ذهن برنامه‌نویس و کامپایلر است؛ در حافظهٔ واقعی دیواری وجود ندارد.</figcaption></figure>
+
+<p>خودت ببین. در این نمایش <b>فرضی</b>، متغیر <code>x</code> اتفاقا درست بعد از آرایه نشسته است (در برنامهٔ واقعی چیدمان را کامپایلر انتخاب می‌کند و تضمینی نیست، ولی چنین اتفاقی می‌تواند بیفتد):</p>
+
+<div class="widget" data-w="mem" data-config='{"title":"نوشتن روی a[3]: خراب کردن همسایه","code":["int x = 1;                 // همسایهٔ احتمالی","int a[3] = {5, 6, 7};","a[1] = 60;                 // درست","a[3] = 99;                 // خارج از محدوده!"],"intro":"چهار قفسه پشت هم داریم: سه عضو آرایه و یک متغیر x. هنوز هیچ‌کدام ساخته نشده‌اند.","cells":[{"addr":"0x20000ff0","name":"a[0]","val":null,"kind":"var"},{"addr":"0x20000ff4","name":"a[1]","val":null,"kind":"var"},{"addr":"0x20000ff8","name":"a[2]","val":null,"kind":"var"},{"addr":"0x20000ffc","name":"x (بعد از a)","val":null,"kind":"var"}],"steps":[{"line":0,"set":{"3":1},"hot":[3],"say":"x ساخته شد و ۱ گرفت."},{"line":1,"set":{"0":5,"1":6,"2":7},"hot":[0,1,2],"say":"آرایهٔ سه‌تایی ساخته شد. عضوها پشت سر هم‌اند."},{"line":2,"set":{"1":60},"hot":[1],"say":"فقط a[1] عوض شد. ایندکس ۱ داخل مرز است."},{"line":3,"set":{"3":99},"hot":[3],"say":"a[3] یعنی «یک قفسه بعد از آخرین عضو»؛ و آنجا x نشسته بود! x بی‌خبر ۹۹ شد. کامپایلر هیچ شکایتی نکرد."}]}'></div>
+
+<p>و اگر کامپایلر بتواند خطا را ببیند، به شرط روشن‌بودن بهینه‌سازی، گاهی هشدار می‌دهد. این‌جا آن را به خطا تبدیل کرده‌ایم (<code>-Werror=array-bounds</code>) تا ببینی:</p>
+
+<div class="code" data-file="oob.c" data-lang="c" data-verify="host-fail" data-cflags="-O2 -Werror=array-bounds" id="code2">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int a[3] = {1, 2, 3};
+    printf("%d\n", a[5]);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code2">
+  <li data-lines="5"><b class="what">آرایهٔ ۳تایی.</b> ایندکس‌های مجاز: ۰، ۱، ۲.</li>
+  <li data-lines="6"><b class="what">خواندن a[5].</b> سه خانه بعد از آخرین عضو.
+    <span class="why">این کار «رفتار تعریف‌نشده» است: هر اتفاقی ممکن است بیفتد، از خواندن آشغال تا خرابی برنامه. بدترین حالتش این است که <b>همه‌چیز ظاهرا درست</b> کار کند و باگ ماه‌ها بعد ظاهر شود.</span></li>
+</ol>
+<pre class="term" data-kind="err" data-from="oob.c">
+oob.c: In function 'main':
+oob.c:6:5: error: array subscript 5 is above array bounds of 'int[3]' [-Werror=array-bounds=]
+</pre>
+
+<p>بدون آن گزینه‌ها برنامه ساخته می‌شود و فقط یک عدد آشغال چاپ می‌کند (چیزی مثل <code>559426416</code>؛ روی رایانهٔ تو فرق می‌کند):</p>
+<pre class="term" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -o oob oob.c
+$ ./oob
+559426416
+</pre>
+
+<div class="callout warn"><div class="ct">در میکروکنترلر بدتر است</div>
+<p>روی رایانه، سیستم‌عامل گاهی با «segmentation fault» جلوی نوشتن روی حافظهٔ ممنوع را می‌گیرد. روی STM32 و ESP32 معمولا چنین نگهبانی نیست: نوشتن روی a[3] بی‌صدا روی متغیر دیگری می‌نویسد، یا حتی روی <b>رجیستر سخت‌افزار</b>. نتیجه‌اش می‌تواند یک LED که خودبه‌خود روشن می‌شود باشد. راه دفاع: ایندکس را همیشه محدود کن، و هشدارهای <code>-Wall -Wextra</code> را جدی بگیر.</p></div>
+
+<h2 id="size">اندازه و پاس دادن آرایه به تابع</h2>
+<p>«این آرایه چند عضو دارد؟» را نباید حفظ کنی. <code>sizeof</code> (درس <a href="2-1.html#embedded">۲.۱</a>) اندازهٔ کل آرایه را به بایت می‌دهد و اگر تقسیمش کنی بر اندازهٔ یک عضو، <b>تعداد عضوها</b> می‌شود. حالا تابع‌هایی که در درس ۲.۶ یاد گرفتی را روی آرایه امتحان کنیم:</p>
+
+<div class="code" data-file="len.c" data-lang="c" data-verify="host" id="code3">
+<pre>
+#include &lt;stdio.h&gt;
+
+static int sum_of(const int a[], int n)
+{
+    int total = 0;
+    for (int i = 0; i &lt; n; i++) {
+        total += a[i];
+    }
+    return total;
+}
+
+static void fill(int a[], int n, int value)
+{
+    for (int i = 0; i &lt; n; i++) {
+        a[i] = value;
+    }
+}
+
+int main(void)
+{
+    int data[4] = {10, 20, 30, 40};
+    int count = sizeof(data) / sizeof(data[0]);
+
+    printf("bytes = %zu, count = %d\n", sizeof(data), count);
+    printf("sum = %d\n", sum_of(data, count));
+    fill(data, count, 7);
+    printf("after fill: %d %d %d %d\n", data[0], data[1], data[2], data[3]);
+    return 0;
+}
+</pre></div>
+
+<ol class="walk" data-for="code3">
+  <li data-lines="3-4,10"><b class="what">تابع با پارامتر آرایه.</b> <code>int a[]</code> یعنی «آرایه‌ای از <code>int</code>، تعداد نامعلوم». <b>طول را جدا</b> در <code>n</code> می‌گیریم. <code>const</code> (درس ۲.۱) قول می‌دهد این تابع عضوها را تغییر نمی‌دهد.
+    <span class="why">تابع از روی <code>a</code> نمی‌تواند بفهمد آرایه چند عضو دارد (بخش بعد دلیلش را می‌گوید). بنابراین طول را همیشه به‌عنوان پارامتر جدا می‌فرستیم.</span></li>
+  <li data-lines="5-9"><b class="what">جمع‌کردن.</b> حلقهٔ همیشگی تا <code>n</code>. عملگر <code>+=</code> (درس ۲.۳) یعنی «به مقدار فعلی اضافه کن».</li>
+  <li data-lines="12-13,17"><b class="what">تابع fill.</b> بدون <code>const</code>، چون قرار است عضوها را عوض کند.</li>
+  <li data-lines="14-16"><b class="what">نوشتن روی همهٔ عضوها.</b> <code>a[i] = value</code> با هر دور یک عضو را تغییر می‌دهد.</li>
+  <li data-lines="21"><b class="what">ساخت آرایه.</b> ۴ عضو، هرکدام <code>int</code>.</li>
+  <li data-lines="22"><b class="what">تعداد عضوها.</b> اندازهٔ کل ÷ اندازهٔ یک عضو = ۱۶ ÷ ۴ = ۴.
+    <span class="why">اگر فردا عضو پنجم را اضافه کنی، این خط خودکار درست می‌ماند. عدد ۴ را دستی نوشتن یعنی یک جا باید یادت بماند.</span></li>
+  <li data-lines="24-25"><b class="what">چاپ اندازه و جمع.</b> آرایه و طولش را با هم می‌دهیم.</li>
+  <li data-lines="26"><b class="what">پر کردن.</b> بعد از این خط، <b>خود</b> <code>data</code> عوض شده است!
+    <span class="why">فرق با درس ۲.۶: برای آرایه، تابع <b>کپی همهٔ عضوها</b> را نمی‌گیرد؛ آدرس اولین عضو کپی می‌شود (مثل دادن آدرس و کلید کمد به دیگری، نه ساختن کپی از تمام محتوای کمد). پس تابع مستقیم روی آرایهٔ اصلی می‌نویسد. توضیح کاملش در درس ۳.۳ می‌آید.</span></li>
+  <li data-lines="27"><b class="what">نتیجه.</b> هر چهار عضو ۷ شده‌اند.</li>
+</ol>
+
+<pre class="term" data-from="len.c">
+$ ./len
+bytes = 16, count = 4
+sum = 100
+after fill: 7 7 7 7
+</pre>
+
+<p>یک تله: <code>sizeof</code> را <b>داخل تابع</b> روی پارامتر آرایه نزن. همان دلیلی که گفتیم (تابع فقط آدرس را می‌گیرد) باعث می‌شود <code>sizeof(a)</code> اندازهٔ یک آدرس را بدهد نه آرایه را:</p>
+
+<div class="code" data-file="sizeof_param.c" data-lang="c" data-verify="host-fail" data-cflags="-Werror=sizeof-array-argument" id="code4">
+<pre>
+#include &lt;stdio.h&gt;
+
+static int count_items(int a[])
+{
+    return sizeof(a) / sizeof(a[0]);
+}
+
+int main(void)
+{
+    int data[4] = {10, 20, 30, 40};
+    printf("count = %d\n", count_items(data));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code4">
+  <li data-lines="3-4,6"><b class="what">تابع می‌خواهد خودش بشمارد.</b> ولی <code>a</code> فقط «آدرس اولین عضو» است.</li>
+  <li data-lines="5"><b class="what">sizeof روی پارامتر.</b> اندازهٔ یک آدرس را می‌دهد: ۸ بایت روی رایانهٔ ۶۴بیتی (پس ۸ ÷ ۴ = ۲ نه ۴!) و ۴ بایت روی STM32 (پس ۱).
+    <span class="why">جوابی که با پلتفرم عوض می‌شود بدترین نوع باگ است. خوشبختانه gcc این را با هشدار <code>-Wsizeof-array-argument</code> نشان می‌دهد.</span></li>
+</ol>
+<pre class="term" data-kind="err" data-from="sizeof_param.c">
+sizeof_param.c: In function 'count_items':
+sizeof_param.c:5:18: error: 'sizeof' on array function parameter 'a' will return size of 'int *' [-Werror=sizeof-array-argument]
+</pre>
+<p>قاعدهٔ ساده: <b>آرایه را همیشه با طولش بفرست</b>، و <code>sizeof(x)/sizeof(x[0])</code> را فقط جایی بنویس که خود آرایه (نه پارامتر) را می‌بینی.</p>
+
+<h2 id="init">روش‌های مقداردهی اولیه</h2>
+<p>سه شکل کاربردی را با یک برنامه ببین:</p>
+
+<div class="code" data-file="init.c" data-lang="c" data-verify="host" id="code5">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int zeros[4] = {0};
+    int part[5] = {1, 2};
+    int pick[6] = {[1] = 10, [4] = 40};
+
+    for (int i = 0; i &lt; 4; i++) { printf("%d ", zeros[i]); }
+    printf("\n");
+    for (int i = 0; i &lt; 5; i++) { printf("%d ", part[i]); }
+    printf("\n");
+    for (int i = 0; i &lt; 6; i++) { printf("%d ", pick[i]); }
+    printf("\n");
+    return 0;
+}
+</pre></div>
+
+<ol class="walk" data-for="code5">
+  <li data-lines="5"><b class="what">صفر کردن همه.</b> <code>{0}</code> اولی را صفر می‌کند و <b>بقیه هم خودکار صفر</b> می‌شوند. کوتاه‌ترین راه پاک‌سازی یک آرایه.
+    <span class="why">قاعده: وقتی فهرست مقدار از تعداد عضوها کوتاه‌تر باشد، عضوهای باقی‌مانده صفر می‌شوند. ولی اگر هیچ فهرستی ننویسی (<code>int z[4];</code>) عضوها مقدار آشغال دارند (درس ۲.۱).</span></li>
+  <li data-lines="6"><b class="what">مقدار جزئی.</b> دو عضو اول ۱ و ۲؛ سه‌تای بعدی صفر.</li>
+  <li data-lines="7"><b class="what">مقداردهی نامزد (<span class="term" data-t="designated">designated</span>).</b> <code>[1] = 10</code> یعنی «عضو شمارهٔ ۱ را ۱۰ کن». بقیه صفر.
+    <span class="why">وقتی جدولی دارای شکاف است (فقط چند خانه مقدار دارند، مثل جدول کدهای دکمه‌ها)، این روش هم خواناتر است و هم اشتباه در شماره‌گذاری را کم می‌کند.</span></li>
+  <li data-lines="9-14"><b class="what">چاپ سه آرایه.</b> هر کدام با یک حلقه. آکولاد روی همان خط فقط برای کوتاه‌کردن نمونه است.</li>
+</ol>
+<pre class="term" data-from="init.c">
+$ ./init
+0 0 0 0
+1 2 0 0 0
+0 10 0 0 40 0
+</pre>
+
+<h2 id="twod">آرایهٔ دوبعدی: جدول</h2>
+<p>گاهی داده‌ها شکل جدول دارند: نقشهٔ یک بازی، پیکسل‌های یک نمایشگر، یا ماتریس کلیدهای صفحه‌کلید. با دو جفت کروشه می‌سازیشان: <code>grid[۲][۳]</code> یعنی ۲ ردیف و ۳ ستون. ولی حافظه فقط یک ردیف بلند است؛ پس ردیف‌ها پشت هم چیده می‌شوند. به این چیدمان <span class="term" data-t="rowmajor">ردیف‌به‌ردیف</span> (row-major) می‌گویند:</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 286" role="img" aria-label="آرایهٔ دوبعدی ۲ در ۳ در شکل جدول و همان مقدارها در حافظه به‌صورت یک ردیف شش‌خانه‌ای: ردیف صفر پشت ردیف یک">
+  <defs><marker id="ar7" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx mono" font-size="19" font-weight="800">int grid[2][3] = { {1,2,3}, {4,5,6} };</text>
+  <text x="140" y="70" text-anchor="middle" class="s-tx" font-size="14" font-weight="800">در ذهن ما: جدول</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="40" y="86" width="66" height="48" fill="#ffd60a"/><rect x="106" y="86" width="66" height="48" fill="#ffd60a"/><rect x="172" y="86" width="66" height="48" fill="#ffd60a"/>
+    <rect x="40" y="134" width="66" height="48" fill="#7ea3ff"/><rect x="106" y="134" width="66" height="48" fill="#7ea3ff"/><rect x="172" y="134" width="66" height="48" fill="#7ea3ff"/>
+  </g>
+  <g class="mono" font-size="24" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="73" y="119">1</text><text x="139" y="119">2</text><text x="205" y="119">3</text>
+    <text x="73" y="167">4</text><text x="139" y="167">5</text><text x="205" y="167">6</text>
+  </g>
+  <g class="s-tx" font-size="12.5" text-anchor="middle" font-weight="700">
+    <text x="73" y="204">ستون ۰</text><text x="139" y="204">ستون ۱</text><text x="205" y="204">ستون ۲</text>
+  </g>
+  <path d="M250 134H304" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar7)"/>
+  <text x="530" y="70" text-anchor="middle" class="s-tx" font-size="14" font-weight="800">در حافظهٔ واقعی: یک ردیف بلند (ردیف به ردیف)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="320" y="106" width="68" height="56" fill="#ffd60a"/><rect x="388" y="106" width="68" height="56" fill="#ffd60a"/><rect x="456" y="106" width="68" height="56" fill="#ffd60a"/>
+    <rect x="524" y="106" width="68" height="56" fill="#7ea3ff"/><rect x="592" y="106" width="68" height="56" fill="#7ea3ff"/><rect x="660" y="106" width="68" height="56" fill="#7ea3ff"/>
+  </g>
+  <g class="mono" font-size="24" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="354" y="142">1</text><text x="422" y="142">2</text><text x="490" y="142">3</text><text x="558" y="142">4</text><text x="626" y="142">5</text><text x="694" y="142">6</text>
+  </g>
+  <g class="mono s-tx" font-size="13" text-anchor="middle" font-weight="700">
+    <text x="354" y="98">0</text><text x="422" y="98">1</text><text x="490" y="98">2</text><text x="558" y="98">3</text><text x="626" y="98">4</text><text x="694" y="98">5</text>
+  </g>
+  <g class="s-tx" font-size="14" font-weight="800" text-anchor="middle">
+    <text x="422" y="188">ردیف ۰</text><text x="626" y="188">ردیف ۱</text>
+  </g>
+  <text x="380" y="228" text-anchor="middle" class="s-tx" font-size="14" font-weight="800">شمارهٔ خانه در حافظه (r شمارهٔ ردیف، c شمارهٔ ستون):</text>
+  <text x="380" y="252" text-anchor="middle" class="s-tx mono" font-size="17" font-weight="800">cell = r * 3 + c</text>
+  <text x="380" y="274" text-anchor="middle" class="s-tx" font-size="13.5">مثلا ردیف ۱ و ستون ۰ ← خانهٔ ۳ ← مقدار ۴</text>
+</svg></div>
+<figcaption>عددهای بالای نوار پایین شمارهٔ خانه در حافظه‌اند. آرایهٔ دوبعدی در C «ردیف به ردیف» چیده می‌شود.</figcaption></figure>
+
+<div class="code" data-file="grid.c" data-lang="c" data-verify="host" id="code6">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int grid[2][3] = {
+        {1, 2, 3},
+        {4, 5, 6}
+    };
+
+    for (int row = 0; row &lt; 2; row++) {
+        for (int col = 0; col &lt; 3; col++) {
+            printf("%d ", grid[row][col]);
+        }
+        printf("\n");
+    }
+    printf("sizeof(grid) = %zu\n", sizeof(grid));
+    printf("grid[1][0] = %d\n", grid[1][0]);
+    return 0;
+}
+</pre></div>
+
+<ol class="walk" data-for="code6">
+  <li data-lines="5-8"><b class="what">تعریف جدول.</b> اولین عدد تعداد ردیف‌ها، دومی تعداد ستون‌ها. هر ردیف را در آکولاد جدا نوشتیم تا شکل جدول دیده شود.</li>
+  <li data-lines="10-15"><b class="what">دو حلقهٔ تودرتو.</b> حلقهٔ بیرونی ردیف را انتخاب می‌کند و حلقهٔ درونی در آن ردیف جلو می‌رود.
+    <span class="why">حلقهٔ تودرتو در درس ۲.۵ دیدی. حلقهٔ درونی سریع‌تر می‌چرخد، دقیقا مثل کیلومتر‌شمار که رقم یکان زودتر از دهگان عوض می‌شود.</span></li>
+  <li data-lines="14"><b class="what">رفتن به خط بعد.</b> بعد از هر ردیف یک <code>\n</code> چاپ می‌کنیم تا خروجی شکل جدول بگیرد.</li>
+  <li data-lines="16"><b class="what">اندازهٔ کل.</b> ۶ عضو × ۴ بایت = ۲۴ بایت؛ درست همان یک ردیف بلند.</li>
+  <li data-lines="17"><b class="what">دسترسی مستقیم.</b> ردیف ۱، ستون ۰ = خانهٔ شمارهٔ ۳ در حافظه = مقدار ۴.</li>
+</ol>
+<pre class="term" data-from="grid.c">
+$ ./grid
+1 2 3
+4 5 6
+sizeof(grid) = 24
+grid[1][0] = 4
+</pre>
+
+<h2 id="embedded">در STM32 و ESP32 آرایه‌ها کجا می‌نشینند؟</h2>
+<p>در میکروکنترلر دو کاربرد بزرگ آرایه داری، و هرکدام جای متفاوتی از حافظه دارد (درس <a href="2-1.html#embedded">۲.۱</a>: Flash مثل کتاب چاپ‌شده و RAM مثل تخته‌سفید):</p>
+<ul>
+  <li><b><span class="term" data-t="lookuptable">جدول جستجو</span> (lookup table):</b> فهرست مقدارهای <b>ثابت</b> که از پیش حساب شده‌اند. مثل جدول ضرب که به‌جای ضرب‌کردن، از رویش می‌خوانی. مثال: جدول سینوس برای تولید موج. با <code>const</code> اعلام می‌شود و در <b>Flash</b> می‌ماند، نه RAM.</li>
+  <li><b>بافر (<span class="term" data-t="buffer">buffer</span>):</b> جای موقتی برای داده‌هایی که در حال رسیدن‌اند، مثل ۶۴ بایت دریافتی از UART. باید تغییر کند، پس در <b>RAM</b> است.</li>
+</ul>
+
+<p>ببین جدول سینوس ۱۶ نقطه‌ای (مقدارهای ۰ تا ۲۵۵، مناسب یک DAC هشت‌بیتی) چگونه با چرخش ایندکس یک موج می‌سازد:</p>
+
+<div class="code" data-file="sine.c" data-lang="c" data-verify="host" id="code7">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+static const uint8_t sine_table[16] = {
+    128, 176, 218, 245, 255, 245, 218, 176,
+    128,  79,  37,  10,   0,  10,  37,  79
+};
+
+int main(void)
+{
+    unsigned phase = 0;
+
+    for (int step = 0; step &lt; 20; step++) {
+        printf("%u ", (unsigned)sine_table[phase]);
+        phase = (phase + 1) % 16;
+    }
+    printf("\n");
+    printf("table size = %zu bytes\n", sizeof(sine_table));
+    return 0;
+}
+</pre></div>
+
+<ol class="walk" data-for="code7">
+  <li data-lines="4-7"><b class="what">جدول ثابت.</b> <code>static</code> یعنی فقط برای همین فایل (درس ۲.۶)، <code>const</code> یعنی هیچ‌وقت عوض نمی‌شود، و <code>uint8_t</code> یعنی هر عضو ۱ بایت (۰ تا ۲۵۵).
+    <span class="why">ترکیب <code>const</code> + مقدار اولیه به کامپایلر اجازه می‌دهد جدول را در Flash بگذارد. مقدارها را با برنامهٔ دیگری (مثلا پایتون) حساب کرده‌ایم و آماده چسبانده‌ایم؛ نه ریاضی سنگین روی میکروکنترلر.</span></li>
+  <li data-lines="11"><b class="what">فاز.</b> ایندکسی که می‌گوید الان کجای موج هستیم.</li>
+  <li data-lines="13-16"><b class="what">بیست قدم.</b> هر قدم یک مقدار از جدول را می‌خواند و ایندکس را یکی جلو می‌برد.</li>
+  <li data-lines="15"><b class="what">چرخش ایندکس.</b> <code>% 16</code> (باقیمانده، درس ۲.۳): وقتی <code>phase</code> به ۱۶ برسد دوباره ۰ می‌شود. ایندکس هرگز از ۱۵ بالاتر نمی‌رود.
+    <span class="why">این تکنیک هم موج را ادامه می‌دهد و هم مانع خروج از مرز می‌شود: دو سود در یک عملگر.</span></li>
+  <li data-lines="17-18"><b class="what">اندازهٔ جدول.</b> ۱۶ عضو × ۱ بایت = ۱۶ بایت. اگر <code>int</code> می‌گرفتیم، ۶۴ بایت می‌شد.</li>
+</ol>
+<pre class="term" data-from="sine.c">
+$ ./sine
+128 176 218 245 255 245 218 176 128 79 37 10 0 10 37 79 128 176 218 245
+table size = 16 bytes
+</pre>
+
+<p>حالا ببینیم کامپایلر ARM جدول و بافر را <b>کجا</b> می‌گذارد. این فایل را (فقط برای Cortex-M4) کامپایل کردیم و اندازهٔ بخش‌ها را پرسیدیم:</p>
+
+<div class="code" data-file="tables.c" data-lang="c" data-verify="arm" id="code8">
+<pre>
+#include &lt;stdint.h&gt;
+
+const uint8_t sine_table[16] = {
+    128, 176, 218, 245, 255, 245, 218, 176,
+    128,  79,  37,  10,   0,  10,  37,  79
+};
+
+uint8_t  rx_buf[64];
+uint32_t adc_history[100];
+</pre></div>
+
+<ol class="walk" data-for="code8">
+  <li data-lines="3-6"><b class="what">جدول ثابت.</b> <code>const</code> + مقدار اولیه.</li>
+  <li data-lines="8"><b class="what">بافر ۶۴ بایتی.</b> بدون <code>const</code>، بدون مقدار اولیه: برای نوشتن در زمان اجرا.</li>
+  <li data-lines="9"><b class="what">تاریخچهٔ ADC.</b> ۱۰۰ عضو ۴بایتی = ۴۰۰ بایت.
+    <span class="why">یک آرایهٔ بزرگ سراسری پنهان‌ترین مصرف‌کنندهٔ RAM است. این یک خط ۴۰۰ بایت از ۱۲۸ کیلوبایت STM32F411 را برای همیشه اشغال می‌کند.</span></li>
+</ol>
+
+<pre class="term" data-nocheck>
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -ffreestanding -c tables.c
+$ arm-none-eabi-size -A tables.o
+section           size   addr
+.bss               464      0
+.rodata             16      0
+</pre>
+
+<p>خروجی واقعی را بخوان: جدول سینوس ۱۶ بایت در بخش <code>.rodata</code> (داده‌های فقط‌خواندنی، که در Flash می‌مانند) و دو آرایهٔ دیگر جمعا ۶۴ + ۴۰۰ = ۴۶۴ بایت در <code>.bss</code> (متغیرهای RAM که در شروع برنامه صفر می‌شوند) قرار گرفتند. نام و کار این بخش‌ها را در درس <a href="3-5.html">۳.۵</a> کامل می‌آموزی؛ فعلا همین را بدان: <b><code>const</code> = Flash، بدون <code>const</code> = RAM</b>. برای ESP32 هم ایده همین است؛ داده‌های <code>const</code> فقط‌خواندنی‌اند و در حافظهٔ Flash می‌مانند و از آنجا خوانده می‌شوند (جزئیات در مستندات ESP-IDF).</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 250" role="img" aria-label="مقایسهٔ هشت عضو uint8_t که هشت بایت جا می‌گیرد با هشت عضو int که سی‌ودو بایت جا می‌گیرد">
+  <text x="380" y="28" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">نوع عضو، هزینهٔ RAM را تعیین می‌کند (هشت عضو)</text>
+  <text x="28" y="62" class="s-tx mono" font-size="16" font-weight="800">uint8_t v[8]</text>
+  <g stroke="#15120a" stroke-width="2.5" fill="#3ddc97">
+    <rect x="28" y="72" width="22" height="34"/><rect x="50" y="72" width="22" height="34"/><rect x="72" y="72" width="22" height="34"/><rect x="94" y="72" width="22" height="34"/>
+    <rect x="116" y="72" width="22" height="34"/><rect x="138" y="72" width="22" height="34"/><rect x="160" y="72" width="22" height="34"/><rect x="182" y="72" width="22" height="34"/>
+  </g>
+  <text x="330" y="95" text-anchor="middle" class="s-tx" font-size="15" font-weight="800">فقط ۸ بایت</text>
+  <text x="28" y="146" class="s-tx mono" font-size="16" font-weight="800">int v[8]</text>
+  <g stroke="#15120a" stroke-width="3" fill="#ffd60a">
+    <rect x="28" y="156" width="88" height="34"/><rect x="116" y="156" width="88" height="34"/><rect x="204" y="156" width="88" height="34"/><rect x="292" y="156" width="88" height="34"/>
+    <rect x="380" y="156" width="88" height="34"/><rect x="468" y="156" width="88" height="34"/><rect x="556" y="156" width="88" height="34"/><rect x="644" y="156" width="88" height="34"/>
+  </g>
+  <g class="mono" font-size="15" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="72" y="179">4B</text><text x="160" y="179">4B</text><text x="248" y="179">4B</text><text x="336" y="179">4B</text><text x="424" y="179">4B</text><text x="512" y="179">4B</text><text x="600" y="179">4B</text><text x="688" y="179">4B</text>
+  </g>
+  <text x="380" y="216" text-anchor="middle" class="s-tx" font-size="14" font-weight="700">۴ برابر بزرگ‌تر! برای ۱۰۰۰ نمونه: ۱۰۰۰ بایت در برابر ۴۰۰۰ بایت</text>
+  <text x="380" y="238" text-anchor="middle" class="s-tx" font-size="13">اگر مقدارها همه بین ۰ و ۲۵۵ می‌مانند، نوع بزرگ‌تر فقط RAM را هدر می‌دهد</text>
+</svg></div>
+<figcaption>نوع کوچک‌تر یعنی جای بیشتر برای بقیهٔ برنامه. ولی حواست باشد مقدار از محدودهٔ نوع بیرون نزند (درس <a href="2-2.html">۲.۲</a>).</figcaption></figure>
+
+<p>حالا یک بافر دریافت کوچک. فرض کن UART بایت‌ها را یکی‌یکی می‌فرستد. ما آنها را در <code>rx_buf</code> جمع می‌کنیم و باید مطمئن باشیم <b>هرگز از مرز بیرون نمی‌زنیم</b>. این نسخهٔ شبیه‌سازی‌شده روی رایانه است:</p>
+
+<div class="code" data-file="rxbuf.c" data-lang="c" data-verify="host" id="code9">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+#define RX_SIZE 4
+
+int main(void)
+{
+    uint8_t rx_buf[RX_SIZE] = {0};
+    int rx_count = 0;
+    const uint8_t incoming[6] = {'H', 'E', 'L', 'L', 'O', '!'};
+
+    for (int i = 0; i &lt; 6; i++) {
+        if (rx_count &lt; RX_SIZE) {
+            rx_buf[rx_count] = incoming[i];
+            rx_count++;
+        } else {
+            printf("buffer full, dropped '%c'\n", incoming[i]);
+        }
+    }
+    printf("stored %d bytes:", rx_count);
+    for (int i = 0; i &lt; rx_count; i++) {
+        printf(" %c", rx_buf[i]);
+    }
+    printf("\n");
+    return 0;
+}
+</pre></div>
+
+<ol class="walk" data-for="code9">
+  <li data-lines="4"><b class="what">نام برای عدد.</b> <code>#define RX_SIZE 4</code> یعنی «هرجا <code>RX_SIZE</code> نوشتم، قبل از کامپایل با <code>4</code> عوض کن». اگر اندازهٔ بافر را عوض کنی، فقط همین یک خط را عوض می‌کنی. (در درس ۴.۱ کامل می‌آید.)
+    <span class="why">عددی که بدون توضیح وسط کد می‌آید «عدد جادویی» نام دارد و بدترین دشمن نگهداری کد است: شش ماه بعد نمی‌دانی این ۴ اندازهٔ بافر بود یا تعداد دکمه‌ها.</span></li>
+  <li data-lines="8"><b class="what">بافر خالی.</b> چهار بایت، همه صفر.</li>
+  <li data-lines="9"><b class="what">شمارنده.</b> می‌گوید تا الان چند بایت ذخیره کردیم؛ همزمان «ایندکس جای بعدی» است.</li>
+  <li data-lines="10"><b class="what">ورودی شبیه‌سازی‌شده.</b> شش نویسه، بیشتر از ظرفیت بافر! <code>'H'</code> با گیومهٔ تکی یک نویسه است، یعنی همان کد عددی حرف H (درس ۲.۲). آرایهٔ <code>const</code> چون ورودی نباید عوض شود.</li>
+  <li data-lines="12-19"><b class="what">حلقهٔ دریافت.</b> برای هر بایت رسیده تصمیم می‌گیرد.</li>
+  <li data-lines="13-16"><b class="what">نگهبان مرز.</b> فقط اگر <code>rx_count &lt; RX_SIZE</code> باشد می‌نویسیم؛ بعد شمارنده را یکی بالا می‌بریم.
+    <span class="why">بدون این <code>if</code>، بایت پنجم روی <code>rx_buf[4]</code> می‌نشست، یعنی خارج از مرز. در میکروکنترلر این یعنی نوشتن روی متغیر یا رجیستر همسایه. یک بررسی ساده جلوی بدترین باگ‌ها را می‌گیرد.</span></li>
+  <li data-lines="17-18"><b class="what">سرریز بافر.</b> اگر جا نبود، بایت را دور می‌ریزیم و اعلام می‌کنیم؛ بهتر از خراب‌کردن حافظه.</li>
+  <li data-lines="20-24"><b class="what">چاپ محتوا.</b> فقط <code>rx_count</code> عضو اول را چاپ می‌کنیم؛ <code>%c</code> نویسه را چاپ می‌کند.</li>
+</ol>
+<pre class="term" data-from="rxbuf.c">
+$ ./rxbuf
+buffer full, dropped 'O'
+buffer full, dropped '!'
+stored 4 bytes: H E L L
+</pre>
+<p>همین منطق «شمارنده + بررسی ظرفیت» پایهٔ <b>بافر حلقوی</b> است که در درس <a href="4-5.html">۴.۵</a> می‌سازیم و در هر پروژهٔ UART حرفه‌ای هست.</p>
+
+<div class="callout info"><div class="ct">ESP32 و آرایه</div>
+<p>در ESP-IDF هم آرایه‌ها دقیقا همین‌اند. یک تفاوت مهم: آرایهٔ بزرگ <b>داخل تابع</b> (متغیر محلی) روی پشتهٔ آن task ساخته می‌شود و پشتهٔ task اغلب چند کیلوبایت است. آرایهٔ ۴ کیلوبایتی محلی می‌تواند پشته را سرریز کند. آرایه‌های بزرگ را سراسری (یا <code>static</code>) تعریف کن. این موضوع را در درس‌های ۳.۵ و ۵.۶ کامل می‌بینی.</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="3">
+  <p class="q">آرایهٔ <code>int a[5];</code> چه ایندکس‌هایی دارد؟</p>
+  <ol>
+    <li data-why="ایندکس از ۱ شروع نمی‌شود؛ اولین عضو شمارهٔ ۰ دارد.">۱ تا ۵</li>
+    <li data-why="این شش عضو می‌شود؛ ولی آرایه پنج عضو دارد.">۰ تا ۵</li>
+    <li>۰ تا ۴</li>
+    <li data-why="تعداد عضوها ثابت است؛ ایندکس‌ها با شروع از ۰ تعیین می‌شوند.">هر چند ایندکسی که بخواهی</li>
+  </ol>
+  <div class="fb">پنج عضو، شماره‌گذاری از ۰: ۰، ۱، ۲، ۳، ۴. آخرین ایندکس همیشه «تعداد − ۱» است.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">خروجی چیست؟<br><code>int a[4] = {1, 2, 3, 4};</code><br><code>printf("%d", a[1] + a[3]);</code></p>
+  <ol>
+    <li>۶</li>
+    <li data-why="۵ حاصل a[0] + a[3] است. ولی ایندکس ۱ همان عدد ۲ است، نه ۱.">۵</li>
+    <li data-why="این حاصل a[2] + a[3] است. یک بار دیگر ایندکس‌ها را از صفر بشمار.">۷</li>
+    <li data-why="مقدار a[1] برابر ۲ و a[3] برابر ۴ است؛ آنها را جمع می‌کنیم نه کنار هم می‌نویسیم.">۲۴</li>
+  </ol>
+  <div class="fb"><code>a[1]</code> برابر ۲ و <code>a[3]</code> برابر ۴ است، پس ۶.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">کدام حلقه در پیمایش <code>int t[3]</code> باگ دارد؟</p>
+  <ol>
+    <li data-why="این درست است: i برابر ۰، ۱، ۲ می‌شود.">for (int i = 0; i &lt; 3; i++) t[i] = 0;</li>
+    <li data-why="این هم درست است: ایندکس‌ها ۲، ۱، ۰ (از آخر به اول).">for (int i = 2; i &gt;= 0; i--) t[i] = 0;</li>
+    <li data-why="این هم درست است؛ یک خانه را با ایندکس ۱ می‌نویسد که داخل مرز است.">t[1] = 0;</li>
+    <li>for (int i = 0; i &lt;= 3; i++) t[i] = 0;</li>
+  </ol>
+  <div class="fb"><code>i &lt;= 3</code> یعنی i برابر ۳ هم می‌شود و <code>t[3]</code> بیرون از آرایه است. شرط درست: <code>i &lt; 3</code>. به این اشتباه «off-by-one» (یکی رد) می‌گویند.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">روی STM32، آرایهٔ <code>const uint8_t table[256] = {...};</code> (سراسری) کجا می‌نشیند؟</p>
+  <ol>
+    <li data-why="const و مقدار اولیه به کامپایلر اجازه می‌دهد آن را فقط در Flash نگه دارد؛ مصرف RAM لازم نیست.">در RAM و ۲۵۶ بایت از آن را اشغال می‌کند</li>
+    <li>در Flash می‌ماند و RAM مصرف نمی‌کند</li>
+    <li data-why="دلیلی برای پاک‌شدن هنگام خاموشی نیست؛ Flash ماندگار است.">در Flash ولی با هر خاموشی پاک می‌شود</li>
+    <li data-why="خواندن از Flash بدون کپی به RAM ممکن است؛ کپی لازم نیست.">اول باید دستی به RAM کپی شود</li>
+  </ol>
+  <div class="fb">داده‌های <code>const</code> با مقدار اولیه در Flash می‌مانند و مستقیم از آنجا خوانده می‌شوند. ۲۵۶ بایت RAM آزاد می‌ماند.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">چرا تابع <code>sum_of(const int a[], int n)</code> طول را جدا به‌عنوان <code>n</code> می‌گیرد؟</p>
+  <ol>
+    <li data-why="نوع پارامتر هیچ ارتباطی به حافظه ندارد؛ مشکل این است که تابع اندازه را نمی‌داند.">چون int کوچک‌تر از آرایه است</li>
+    <li data-why="sizeof روی پارامتر آرایه اندازهٔ آدرس را می‌دهد و مقدار درست نمی‌دهد.">چون sizeof در تابع دقیق‌تر کار می‌کند</li>
+    <li>چون تابع فقط آدرس اولین عضو را می‌گیرد و از روی آن نمی‌تواند تعداد عضوها را بفهمد</li>
+    <li data-why="طول ثابت نیست؛ همین تابع برای هر اندازه آرایه‌ای کار می‌کند.">چون طول همه آرایه‌ها همیشه ۴ است</li>
+  </ol>
+  <div class="fb">آرایه به تابع که برسد، فقط آدرس شروعش می‌ماند. طول را باید خودمان جدا بفرستیم.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: کمینه و بیشینه</div>
+<p>آرایهٔ <code>{42, 7, 19, 88, 3, 56}</code> را داریم. می‌خواهیم کوچک‌ترین و بزرگ‌ترین مقدار و ایندکس بزرگ‌ترین را پیدا کنیم.</p>
+<ol class="parts">
+  <li><span><b>پیش‌بینی:</b> بدون اجرای کد، کوچک‌ترین و بزرگ‌ترین را حدس بزن و ایندکس بزرگ‌ترین را بگو.</span></li>
+  <li><span><b>حل:</b> برنامه‌ای بنویس که با یک حلقه هر سه را پیدا کند. تعداد عضوها را با <code>sizeof</code> حساب کن.</span></li>
+  <li><span><b>چالش:</b> اگر همهٔ عضوها منفی باشند، آیا برنامه‌ات هنوز درست کار می‌کند؟ مقدار اولیهٔ <code>min</code> و <code>max</code> را چه انتخاب کردی و چرا؟</span></li>
+</ol>
+<details><summary>راهنمایی</summary><p><code>min</code> و <code>max</code> را با <b>اولین عضو</b> شروع کن و حلقه را از ایندکس ۱ بزن. اگر با عددی مثل ۰ شروع کنی، آرایهٔ کاملا منفی جواب اشتباه می‌دهد.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="minmax.c">
+$ ./minmax
+min = 3, max = 88 at index 3
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="minmax.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int values[6] = {42, 7, 19, 88, 3, 56};
+    int count = sizeof(values) / sizeof(values[0]);
+    int min = values[0];
+    int max = values[0];
+    int max_index = 0;
+
+    for (int i = 1; i &lt; count; i++) {
+        if (values[i] &lt; min) {
+            min = values[i];
+        }
+        if (values[i] &gt; max) {
+            max = values[i];
+            max_index = i;
+        }
+    }
+    printf("min = %d, max = %d at index %d\n", min, max, max_index);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="5-6"><b class="what">آرایه و تعداد.</b> شش عضو؛ تعداد را کامپایلر حساب می‌کند.</li>
+  <li data-lines="7-9"><b class="what">شروع با اولین عضو.</b> فعلا بهترین حدس ما اولین عضو است.
+    <span class="why">این کار برای هر آرایه‌ای درست است، حتی اگر همهٔ عضوها منفی یا خیلی بزرگ باشند. شروع با عدد ثابت مثل ۰ یا ۹۹۹ فرضی پنهان دربارهٔ داده‌ها می‌سازد.</span></li>
+  <li data-lines="11"><b class="what">حلقه از ایندکس ۱.</b> عضو صفرم را قبلا دیده‌ایم.</li>
+  <li data-lines="12-14"><b class="what">کوچک‌تر یافتیم؟</b> اگر عضو فعلی کوچک‌تر از <code>min</code> است، جایگزین می‌شود.</li>
+  <li data-lines="15-19"><b class="what">بزرگ‌تر یافتیم؟</b> مقدار و ایندکسش را با هم ذخیره می‌کنیم.</li>
+  <li data-lines="20"><b class="what">چاپ.</b> کوچک‌ترین ۳ و بزرگ‌ترین ۸۸ در ایندکس ۳ است.</li>
+</ol>
+<pre class="term" data-from="minmax.c">
+$ ./minmax
+min = 3, max = 88 at index 3
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: باگ را پیدا کن</div>
+<p>این برنامه باید میانگین پنج خوانش را (۳۰) چاپ کند. اما عدد عجیبی چاپ می‌کند.</p>
+<div class="code" data-lang="c" id="ex2bad"><pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int readings[5] = {10, 20, 30, 40, 50};
+    int sum = 0;
+
+    for (int i = 0; i &lt;= 5; i++) {
+        sum += readings[i];
+    }
+    printf("average = %d\n", sum / 5);
+    return 0;
+}
+</pre></div>
+<ol class="parts">
+  <li><span><b>پیدا کن:</b> کدام خط باگ دارد؟ حلقه چند بار اجرا می‌شود و آخرین بار چه ایندکسی را می‌خواند؟</span></li>
+  <li><span><b>رفع:</b> برنامهٔ درست را بنویس. (ترجیحا تعداد را با <code>sizeof</code> حساب کن.)</span></li>
+  <li><span><b>فکر کن:</b> چرا کامپایلر خطا نداد؟ و چرا ممکن است روی رایانهٔ دوستت عدد دیگری چاپ شود؟</span></li>
+</ol>
+<details><summary>راهنمایی</summary><p>ایندکس‌های مجاز <code>readings</code> کدامند؟ حلقه با <code>i &lt;= 5</code> چه مقدارهایی از <code>i</code> را می‌بیند؟</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>برنامهٔ خراب عددی بی‌ربط چاپ می‌کند (مثلا ۶۵۸۳؛ روی رایانهٔ تو فرق می‌کند) و ممکن است هشدار <code>iteration 5 invokes undefined behavior</code> بدهد. نسخهٔ درست:</p>
+<pre class="term" data-from="average_fixed_arr.c">
+$ ./average_fixed_arr
+average = 30
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>باگ در خط شرط حلقه است: <code>i &lt;= 5</code>. حلقه برای <code>i</code> برابر ۰، ۱، ۲، ۳، ۴ و ۵ اجرا می‌شود (شش بار) و آخرین بار <code>readings[5]</code> را می‌خواند، که بیرون از آرایه است. یک مقدار آشغال به <code>sum</code> اضافه می‌شود و میانگین بی‌معنی می‌شود. C چک نمی‌کند (رفتار تعریف‌نشده)؛ و مقدار آشغال بستگی به چیدمان حافظه دارد، پس روی هر رایانه فرق می‌کند.</p>
+<div class="code" data-file="average_fixed_arr.c" data-lang="c" data-verify="host" id="ex2">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int readings[5] = {10, 20, 30, 40, 50};
+    int count = sizeof(readings) / sizeof(readings[0]);
+    int sum = 0;
+
+    for (int i = 0; i &lt; count; i++) {
+        sum += readings[i];
+    }
+    printf("average = %d\n", sum / count);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="6"><b class="what">تعداد از خود آرایه.</b> دیگر عدد ۵ جادویی در کد نیست.</li>
+  <li data-lines="9-11"><b class="what">شرط درست.</b> <code>i &lt; count</code>: ایندکس‌های ۰ تا ۴.
+    <span class="why">قاعدهٔ طلایی: برای پیمایش <code>&lt;</code> (نه <code>&lt;=</code>) و تعداد از <code>sizeof</code>. اگر بعدا خوانش ششم را اضافه کنی، هر دو خط خودکار درست می‌مانند.</span></li>
+  <li data-lines="12"><b class="what">میانگین.</b> جمع ÷ تعداد.</li>
+</ol>
+<pre class="term" data-from="average_fixed_arr.c">
+$ ./average_fixed_arr
+average = 30
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: میانگین متحرک خوانش ADC</div>
+<p>سنسور خوانش‌های نوسانی می‌دهد. برای نرم‌کردنشان، میانگین <b>آخرین ۴ خوانش</b> را نگه می‌داریم (میانگین متحرک). هر خوانش تازه جای قدیمی‌ترین را می‌گیرد؛ پس آرایه‌ای ۴تایی داریم و یک ایندکس که دور می‌زند.</p>
+<ol class="parts">
+  <li><span><b>پیش‌بینی:</b> خوانش‌های <code>100, 200, 300, 400, 500, 600</code> می‌رسند. بعد از خوانش چهارم، میانگین چند است؟ بعد از ششم؟</span></li>
+  <li><span><b>حل:</b> برنامه را با <code>window[4]</code>، ایندکس <code>next</code> و عملگر <code>%</code> بنویس. بعد از هر خوانش میانگین را چاپ کن.</span></li>
+  <li><span><b>فکر کن:</b> چرا میانگین‌های اول (۲۵، ۷۵، ...) کمتر از حد انتظارند؟ چطور درستش می‌کنی؟</span></li>
+</ol>
+<details><summary>راهنمایی</summary><p>ایندکس نوشتن را با <code>next = (next + 1) % WINDOW;</code> جلو ببر تا از ۳ به ۰ برگردد. قبل از پر شدن پنجره، عضوهای خالی هنوز صفرند و در جمع می‌آیند.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="movavg.c">
+$ ./movavg
+sample 0: raw=100  avg= 25
+sample 1: raw=200  avg= 75
+sample 2: raw=300  avg=150
+sample 3: raw=400  avg=250
+sample 4: raw=500  avg=350
+sample 5: raw=600  avg=450
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="movavg.c" data-lang="c" data-verify="host" id="ex3">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+#define WINDOW 4
+
+int main(void)
+{
+    const uint16_t adc[6] = {100, 200, 300, 400, 500, 600};
+    uint16_t window[WINDOW] = {0};
+    int next = 0;
+
+    for (int i = 0; i &lt; 6; i++) {
+        window[next] = adc[i];
+        next = (next + 1) % WINDOW;
+
+        uint32_t sum = 0;
+        for (int k = 0; k &lt; WINDOW; k++) {
+            sum += window[k];
+        }
+        printf("sample %d: raw=%3u  avg=%3u\n", i, (unsigned)adc[i], (unsigned)(sum / WINDOW));
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="1-2"><b class="what">هدرها.</b> <code>stdint.h</code> برای نوع‌های اندازه‌ثابت.</li>
+  <li data-lines="4"><b class="what">اندازهٔ پنجره.</b> یک اسم برای عدد ۴، تا هیچ ۴ جادویی در کد نباشد.</li>
+  <li data-lines="8"><b class="what">خوانش‌های نمونه.</b> شش عدد ۱۲ بیتی، جایگزین خوانش‌های واقعی ADC. <code>uint16_t</code> چون ADC ۱۲ بیتی در ۱۶ بیت جا می‌شود.</li>
+  <li data-lines="9-10"><b class="what">پنجره و ایندکس.</b> پنجره در ابتدا صفر است؛ <code>next</code> جای نوشتن بعدی را نشان می‌دهد.</li>
+  <li data-lines="13"><b class="what">نوشتن روی قدیمی‌ترین.</b> خوانش تازه جای قدیمی‌ترین را می‌گیرد.</li>
+  <li data-lines="14"><b class="what">چرخش ایندکس.</b> بعد از ۳ دوباره ۰ می‌شود. ایندکس هرگز از مرز بیرون نمی‌زند.
+    <span class="why">همین ایده، «ایندکس چرخان»، در درس ۴.۵ به بافر حلقوی کامل تبدیل می‌شود.</span></li>
+  <li data-lines="16-19"><b class="what">جمع پنجره.</b> با <code>uint32_t</code>، تا با جمع خوانش‌های بزرگ سرریز نکند.</li>
+  <li data-lines="20"><b class="what">چاپ میانگین.</b> جمع ÷ ۴. <code>%3u</code> عدد را در عرض سه رقم تراز می‌کند.</li>
+</ol>
+<pre class="term" data-from="movavg.c">
+$ ./movavg
+sample 0: raw=100  avg= 25
+sample 1: raw=200  avg= 75
+sample 2: raw=300  avg=150
+sample 3: raw=400  avg=250
+sample 4: raw=500  avg=350
+sample 5: raw=600  avg=450
+</pre>
+<p>جواب قسمت پ: تا وقتی چهار خوانش نرسیده، سه خانهٔ خالی (صفر) هم در جمع شرکت می‌کنند و میانگین را پایین می‌کشند. راه‌حل: تعداد خوانش‌های معتبر را جدا بشمار (<code>filled</code>) و به‌جای ۴ بر <code>filled</code> تقسیم کن تا وقتی ۴ شد.</p></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>آرایه ساده به‌نظر می‌رسد و همین سادگی خطرناک است. سه جا معمولا گیر می‌کنند: <b>یکی‌کم‌یکی‌زیاد</b> (off-by-one)، یعنی <code>&lt;=</code> به‌جای <code>&lt;</code> یا فکر کردن اینکه آخرین ایندکس همان تعداد است؛ <b>فراموش‌کردن طول</b> هنگام پاس دادن به تابع؛ و <b>فرض اینکه کامپایلر مراقب مرز است</b>. کامپایلر مراقب نیست. عادت حرفه‌ای: هر بار آرایه‌ای نوشتی، از خودت بپرس «بزرگ‌ترین ایندکسی که این کد می‌سازد چند است؟» و روی کاغذ چک کن. و آرایه‌های بزرگ RAM را بدون توجه می‌خورند: هر آرایه‌ای را که می‌سازی، حجمش را در ذهن بنویس.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li>آرایه = یک اسم، چند قفسهٔ هم‌نوع و پشت سر هم: <code>int a[5]</code> یعنی ۵ × ۴ = ۲۰ بایت.</li>
+  <li>ایندکس از <b>۰</b> شروع می‌شود؛ آخرین ایندکس «تعداد − ۱» است. پیمایش استاندارد: <code>for (int i = 0; i &lt; N; i++)</code>.</li>
+  <li>C مرز آرایه را چک <b>نمی‌کند</b>؛ خارج شدن رفتار تعریف‌نشده است و در MCU بی‌صدا حافظهٔ دیگران را خراب می‌کند.</li>
+  <li>تعداد عضو: <code>sizeof(a) / sizeof(a[0])</code> ولی فقط جایی که خود آرایه دیده می‌شود. به تابع، آرایه را <b>همراه طولش</b> بفرست؛ تابع می‌تواند عضوها را تغییر دهد.</li>
+  <li><code>{0}</code> همه را صفر می‌کند؛ <code>[3] = 5</code> مقدار یک خانهٔ مشخص را می‌دهد؛ آرایهٔ دوبعدی ردیف‌به‌ردیف در حافظه چیده می‌شود.</li>
+  <li>جدول <code>const</code> در Flash می‌ماند؛ بافر معمولی RAM می‌خورد. نوع کوچک‌تر (<code>uint8_t</code>) یعنی RAM کمتر.</li>
+</ul></div>
+
+</article>
+</body>
+</html>
