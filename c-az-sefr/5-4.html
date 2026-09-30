@@ -1,0 +1,1238 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>تایمر، SysTick و زمان‌بندی بدون delay · C برای میکروکنترلر</title>
+<meta name="description" content="SysTick و millis() برای زمان‌بندی بدون بلاک، مقایسهٔ زمان امن از چرخش شمارنده، زمان‌بند همکاری ساده، PWM با TIM2 روی PA5 و معادل‌های ESP32، با کد خط‌به‌خط و خروجی واقعی.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="5-4">
+
+<p class="lede">تا اینجا هر جا لازم بود «کمی صبر کنیم»، یک حلقهٔ خالی نوشتیم که فقط عدد می‌شمرد. کار می‌کند، ولی در آن مدت میکروکنترلر مثل نگهبانی است که چشم‌بسته کنار در ایستاده و هیچ چیز دیگری نمی‌بیند. در این درس یاد می‌گیری زمان را مثل یک <b>ساعت دیواری</b> بخوانی: سخت‌افزار هر ۱ میلی‌ثانیه یک تیک می‌زند، تو فقط تیک‌ها را می‌شماری و بین دو نگاه به ساعت، کارهای دیگر را انجام می‌دهی. آخر درس هم با <b>تایمر سخت‌افزاری</b> LED را کم‌نور و پرنور می‌کنی، بدون اینکه پردازنده حتی یک دستور برایش اجرا کند.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>توضیح بدهی چرا حلقهٔ تأخیر بد است و «بدون بلاک» یعنی چه</li>
+    <li>SysTick را برای تیک ۱ میلی‌ثانیه‌ای تنظیم کنی و <code>LOAD</code> را حساب کنی</li>
+    <li><code>millis()</code> بنویسی و چند کار را با فاصله‌های مختلف همزمان پیش ببری</li>
+    <li>بدانی چرا <code>now - start &gt;= timeout</code> درست است و <code>now &gt;= start + timeout</code> بعد از ۴۹ روز خراب می‌شود</li>
+    <li>با تایمر TIM2 روی PA5 سیگنال PWM بسازی (فرکانس و درصد روشنی را حساب کنی)</li>
+    <li>معادل همه‌این‌ها را در ESP32 بشناسی: <code>vTaskDelay</code>، <code>esp_timer</code> و LEDC</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="3-6.html">۳.۶</a> (رجیستر و <code>volatile</code>) و <a href="5-2.html">۵.۲</a> (GPIO با رجیستر)</li>
+    <li>درس <a href="5-3.html">۵.۳</a> (وقفه و ISR): <code>SysTick_Handler</code> یک ISR است</li>
+    <li>درس <a href="5-1.html">۵.۱</a> (جدول وقفه و startup) برای اینکه بدانی اسم handler از کجا می‌آید</li>
+    <li>درس <a href="4-3.html">۴.۳</a> (اشاره‌گر به تابع) برای بخش زمان‌بند</li>
+    <li><code>gcc</code> و <code>arm-none-eabi-gcc</code>؛ برد Nucleo-F411RE اختیاری است</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: قابلمهٔ برنج و ساعت دیواری</h2>
+<p>فرض کن برنج را روی گاز گذاشته‌ای و باید ۱۰ دقیقه صبر کنی. دو راه داری.</p>
+<ul>
+  <li><b>راه اول:</b> کنار قابلمه بایستی و به ثانیه‌ها زل بزنی. سالاد درست نمی‌شود، ظرف‌ها شسته نمی‌شود و اگر کسی در بزند، نمی‌شنوی. این همان <code>delay(600000)</code> است.</li>
+  <li><b>راه دوم:</b> یک ساعت دیواری در آشپزخانه هست. سالاد درست می‌کنی، هر چند دقیقه یک نگاه به ساعت می‌اندازی: «شروع کردم ساعت ۱۲:۰۰؛ الان ۱۲:۰۷؛ هنوز نه». وقتی ساعت ۱۲:۱۰ شد، گاز را خاموش می‌کنی. این همان <code>millis()</code> است.</li>
+</ul>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>در راه دوم تو <b>ساعت را نمی‌چرخانی</b>. یک نفر یا چیز دیگر (باتری ساعت) آن را می‌چرخاند و تو فقط می‌خوانی. در میکروکنترلر، «باتری ساعت» یک شمارندهٔ سخت‌افزاری به اسم <span class="term" data-t="systick">SysTick</span> است که خودکار می‌شمارد. هر ۱ میلی‌ثانیه یک <span class="term" data-t="tick">تیک</span> (وقفه) می‌فرستد و یک ISR کوچک یک عدد را زیاد می‌کند. آن عدد «ساعت دیواری» ماست.</p></div>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 290" role="img" aria-label="مقایسهٔ delay و millis: در delay پانصد میلی‌ثانیه فقط صبر است و دکمه دیر دیده می‌شود؛ در millis چرخه سریع است و دکمه و LED هر دو به موقع رسیدگی می‌شوند">
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">دو راه صبر کردن ۵۰۰ میلی‌ثانیه</text>
+  <text x="720" y="56" text-anchor="start" class="s-tx" font-size="14" font-weight="800">راه اول: تأخیر بلاک‌کننده</text>
+  <rect x="40" y="66" width="680" height="46" fill="#ffd60a" stroke="#15120a" stroke-width="3"/>
+  <text x="380" y="95" text-anchor="middle" fill="#15120a" font-size="15" font-weight="800">فقط صبر می‌کند؛ هیچ کار دیگری انجام نمی‌شود</text>
+  <g stroke="#15120a" stroke-width="2.5" fill="#ff86b3"><circle cx="250" cy="134" r="9"/><circle cx="520" cy="134" r="9"/></g>
+  <text x="250" y="160" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="700">دکمه زده شد</text>
+  <text x="520" y="160" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="700">دکمه زده شد</text>
+  <text x="385" y="160" text-anchor="middle" class="s-tx" font-size="12.5">← تا پایان صبر دیده نمی‌شوند</text>
+  <text x="720" y="196" text-anchor="start" class="s-tx" font-size="14" font-weight="800">راه دوم: نگاه به ساعت (<tspan class="mono" direction="ltr">millis()</tspan>)</text>
+  <g><rect x="40" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="60" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="80" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="100" y="206" width="16" height="44" fill="#ff86b3" stroke="#15120a" stroke-width="2"/><rect x="120" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="140" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="160" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="180" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="200" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="220" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="240" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="260" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="280" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="300" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="320" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="340" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="360" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="380" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="400" y="206" width="16" height="44" fill="#ff86b3" stroke="#15120a" stroke-width="2"/><rect x="420" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="440" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="460" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="480" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="500" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="520" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="540" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="560" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="580" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="600" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="620" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="640" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="660" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="680" y="206" width="16" height="44" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><rect x="700" y="206" width="16" height="44" fill="#3ddc97" stroke="#15120a" stroke-width="2"/></g>
+  <text x="108" y="278" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="700">دکمه دیده شد</text>
+  <text x="408" y="278" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="700">دکمه دیده شد</text>
+  <text x="708" y="278" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="700">LED عوض شد</text>
+</svg></div>
+<figcaption>هر مربع کوچک یک دور از حلقهٔ اصلی است. در راه دوم، حلقه هر بار فقط نگاه می‌کند «وقتش شد؟» و اگر نه، سراغ کار بعدی می‌رود.</figcaption></figure>
+
+<h2 id="cost">چرا <span class="en">delay</span> حلقه‌ای بد است؟</h2>
+<p>در درس‌های <a href="2-5.html">۲.۵</a> و <a href="3-6.html">۳.۶</a> با <span class="term" data-t="busywait">انتظار مشغول</span> آشنا شدی. سه مشکل دارد:</p>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>حلقهٔ تأخیر (<code>for</code> خالی)</th><th>خواندن <code>millis()</code></th></tr></thead>
+<tbody>
+<tr><td>کارهای دیگر</td><td>تا پایان صبر <b>متوقف</b> می‌شوند (دکمه، UART، سنسور)</td><td>هر دور حلقه می‌توانند انجام شوند</td></tr>
+<tr><td>دقت</td><td>وابسته به کلاک و سطح بهینه‌سازی؛ با <code>-O2</code> عدد عوض می‌شود</td><td>ثابت: از یک کریستال یا HSI می‌آید، نه از سرعت کد</td></tr>
+<tr><td>چند زمان همزمان</td><td>ناممکن (فقط یک «صبر»)</td><td>هر کار ساعت خودش را دارد: فقط یک متغیر <code>last</code></td></tr>
+</tbody></table></div>
+<p>راه‌حل حرفه‌ای‌ها اسمش <b>برنامه‌نویسی بدون بلاک</b> (<span class="term" data-t="nonblocking">non-blocking</span>) است: هیچ تابعی نباید «بایستد». هر تابع یا کارش را همین لحظه انجام می‌دهد یا می‌گوید «هنوز وقتش نیست» و برمی‌گردد. برای این کار به یک منبع زمان قابل‌اعتماد نیاز داریم.</p>
+
+<h2 id="systick">SysTick: تیکِ هر میلی‌ثانیه</h2>
+<p>هر پردازندهٔ Cortex-M یک شمارندهٔ ساده به اسم <b>SysTick</b> در خود هسته دارد (جدا از پریفرال‌های ST). چون بخشی از هستهٔ ARM است، کدش روی هر Cortex-M دیگری هم عینا کار می‌کند. طرز کار آن مثل ساعت شنی است:</p>
+<ol class="steps">
+  <li><b>پر می‌شود.</b> مقدار <code>LOAD</code> در شمارنده گذاشته می‌شود.</li>
+  <li><b>به ازای هر کلاک یکی کم می‌شود.</b> ۳، ۲، ۱، ۰.</li>
+  <li><b>وقتی به ۰ رسید</b>، یک وقفه می‌فرستد (اگر روشنش کرده باشیم) و خودکار دوباره از <code>LOAD</code> شروع می‌کند.</li>
+</ol>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 310" role="img" aria-label="نمودار دندانه‌اره‌ای شمارندهٔ SysTick: از پانزده هزار و نهصد و نود و نه تا صفر پایین می‌آید، هر بار که به صفر می‌رسد وقفه می‌دهد و دوباره پر می‌شود؛ هر دندانه یک میلی‌ثانیه است">
+  <defs><marker id="m54b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">شمارندهٔ SysTick با کلاک ۱۶ مگاهرتز</text>
+  <path d="M70 70H700M70 190H700" stroke="#15120a" stroke-width="1.5" stroke-dasharray="5 5" opacity=".45" fill="none"/>
+  <text x="62" y="62" text-anchor="start" class="mono s-tx" font-size="13" font-weight="700">LOAD = 15999</text>
+  <text x="56" y="195" text-anchor="end" class="mono s-tx" font-size="13" font-weight="700">0</text>
+  <path d="M90 70L280 190V70L470 190V70L660 190V70" stroke="#15120a" stroke-width="4" fill="none" stroke-linejoin="round"/>
+  <g fill="#ff86b3" stroke="#15120a" stroke-width="2.5"><circle cx="280" cy="190" r="9"/><circle cx="470" cy="190" r="9"/><circle cx="660" cy="190" r="9"/></g>
+  <g stroke="#15120a" stroke-width="2.5" fill="none"><path d="M90 214H280" marker-start="url(#m54b)" marker-end="url(#m54b)"/><path d="M280 214H470" marker-start="url(#m54b)" marker-end="url(#m54b)"/></g>
+  <text x="185" y="236" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">۱۶۰۰۰ کلاک = ۱ میلی‌ثانیه</text>
+  <text x="375" y="236" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">۱۶۰۰۰ کلاک = ۱ میلی‌ثانیه</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="235" y="256" width="90" height="34" rx="8" fill="#ffd60a"/><rect x="425" y="256" width="90" height="34" rx="8" fill="#ffd60a"/><rect x="615" y="256" width="90" height="34" rx="8" fill="#ffd60a"/>
+  </g>
+  <g class="mono" font-size="14" font-weight="800" fill="#15120a" text-anchor="middle" direction="ltr"><text x="280" y="278">g_ticks=1</text><text x="470" y="278">g_ticks=2</text><text x="660" y="278">g_ticks=3</text></g>
+  <text x="380" y="52" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">دایرهٔ صورتی = وقفه؛ SysTick_Handler صدا زده می‌شود</text>
+</svg></div>
+<figcaption>شمارنده از <code>LOAD</code> تا ۰ می‌شمارد (یعنی <code>LOAD + 1</code> مقدار). به همین دلیل برای ۱۶۰۰۰ کلاک باید <code>LOAD = 15999</code> بنویسیم.</figcaption></figure>
+
+<p>سه رجیستر لازم داریم. هر سه در «فضای هستهٔ ARM» هستند و آدرس‌شان در همهٔ Cortex-Mها یکی است:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>رجیستر</th><th>آدرس</th><th>کارش</th></tr></thead>
+<tbody>
+<tr><td><code>SYST_CSR</code> (در کد: <code>CTRL</code>)</td><td><code>0xE000E010</code></td><td>کنترل: روشن، وقفه، منبع کلاک، پرچم شمارش</td></tr>
+<tr><td><code>SYST_RVR</code> (<code>LOAD</code>)</td><td><code>0xE000E014</code></td><td>مقداری که شمارنده بعد از رسیدن به ۰ دوباره از آن شروع می‌کند (۲۴ بیت)</td></tr>
+<tr><td><code>SYST_CVR</code> (<code>VAL</code>)</td><td><code>0xE000E018</code></td><td>مقدار جاری شمارنده؛ نوشتن هر عدد آن را صفر می‌کند</td></tr>
+</tbody></table></div>
+
+<div class="table-wrap"><table>
+<thead><tr><th>بیت CTRL</th><th>نام</th><th>معنی</th></tr></thead>
+<tbody>
+<tr><td>۰</td><td><code>ENABLE</code></td><td>۱ = شمارنده کار کند</td></tr>
+<tr><td>۱</td><td><code>TICKINT</code></td><td>۱ = هنگام رسیدن به ۰ وقفه بده</td></tr>
+<tr><td>۲</td><td><code>CLKSOURCE</code></td><td>۱ = کلاک خود پردازنده؛ ۰ = کلاک مرجع (در STM32 برابر کلاک پردازنده ÷ ۸)</td></tr>
+<tr><td>۱۶</td><td><code>COUNTFLAG</code></td><td>فقط‌خواندنی: از آخرین خواندن، یک‌بار به ۰ رسیده؟ (با خواندن پاک می‌شود)</td></tr>
+</tbody></table></div>
+
+<p>با ابزارک زیر مقدار <code>CTRL</code> را بساز. برای تیک ۱ میلی‌ثانیه‌ای با وقفه، هر سه بیت پایین را یک کن؛ عدد نهایی <code>7</code> می‌شود:</p>
+<div class="widget" data-w="bits" data-width="32" data-reg="SYST_CSR" data-value="0" data-title="SysTick CTRL: سه بیت پایین را یک کن" data-fields='[{"name":"ENABLE","hi":0,"lo":0},{"name":"TICKINT","hi":1,"lo":1},{"name":"CLKSOURCE","hi":2,"lo":2},{"name":"COUNTFLAG","hi":16,"lo":16}]'></div>
+
+<div class="callout info"><div class="ct">محاسبهٔ <code>LOAD</code></div>
+<p><b>دورهٔ تیک = (LOAD + 1) ÷ فرکانس کلاک.</b> برای ۱ms با ۱۶ مگاهرتز: <code>LOAD + 1 = 16 000 000 ÷ 1000 = 16000</code> پس <code>LOAD = 15999</code>. چون <code>LOAD</code> فقط ۲۴ بیت است (حداکثر <code>0xFFFFFF</code> = ۱۶٬۷۷۷٬۲۱۵)، بیشترین دورهٔ ممکن با ۱۶ مگاهرتز حدود ۱٫۰۵ ثانیه است. عدد بزرگ‌تر بنویسی، بیت‌های بالا بی‌صدا دور ریخته می‌شوند.</p></div>
+
+<h3 id="systickcode">کد راه‌اندازی SysTick</h3>
+<p>کل ماژول زمان کوچک است: یک شمارنده، یک ISR، تابع <code>millis()</code> و تابع راه‌اندازی. از الگوی <code>struct</code> روی رجیستر (درس <a href="3-6.html">۳.۶</a>) استفاده می‌کنیم:</p>
+
+<div class="code" data-file="systick.c" data-lang="c" data-verify="arm" data-project="stm32t" id="code1">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stddef.h&gt;
+
+typedef struct {
+    volatile uint32_t CTRL;
+    volatile uint32_t LOAD;
+    volatile uint32_t VAL;
+    const volatile uint32_t CALIB;
+} SysTick_Type;
+
+#define SysTick ((SysTick_Type *)0xE000E010u)
+
+_Static_assert(offsetof(SysTick_Type, LOAD) == 0x04, "LOAD must be at +4");
+_Static_assert(offsetof(SysTick_Type, VAL)  == 0x08, "VAL must be at +8");
+
+#define SYSTICK_ENABLE    (1u &lt;&lt; 0)
+#define SYSTICK_TICKINT   (1u &lt;&lt; 1)
+#define SYSTICK_CLKSOURCE (1u &lt;&lt; 2)
+
+#define CPU_HZ 16000000u
+
+static volatile uint32_t g_ticks;
+
+void SysTick_Handler(void)
+{
+    g_ticks++;
+}
+
+uint32_t millis(void)
+{
+    return g_ticks;
+}
+
+void systick_init_1ms(void)
+{
+    SysTick-&gt;CTRL = 0u;
+    SysTick-&gt;LOAD = CPU_HZ / 1000u - 1u;
+    SysTick-&gt;VAL  = 0u;
+    SysTick-&gt;CTRL = SYSTICK_CLKSOURCE | SYSTICK_TICKINT | SYSTICK_ENABLE;
+}
+</pre></div>
+<ol class="walk" data-for="code1">
+  <li data-lines="1-2"><b class="what">هدرها.</b> <code>stdint.h</code> برای <code>uint32_t</code>؛ <code>stddef.h</code> برای <code>offsetof</code> که پایین‌تر آفست‌ها را وارسی می‌کند.</li>
+  <li data-lines="4-9"><b class="what">نقشهٔ رجیسترها.</b> چهار رجیستر پشت‌سرهم: <code>CTRL</code>، <code>LOAD</code>، <code>VAL</code> و <code>CALIB</code>. آخری فقط‌خواندنی است (<code>const volatile</code>).
+    <span class="why">همه <code>volatile</code> اند چون سخت‌افزار مقدارشان را عوض می‌کند (درس ۳.۶). ترتیب باید دقیقا ترتیب آدرس‌ها باشد.</span></li>
+  <li data-lines="11"><b class="what">اشاره‌گر روی سخت‌افزار.</b> «آدرس <code>0xE000E010</code> را مثل یک <code>SysTick_Type</code> ببین.» پایهٔ SysTick همین آدرس CTRL است.</li>
+  <li data-lines="13-14"><b class="what">وارسی زمان کامپایل.</b> <code>_Static_assert</code> (درس ۴.۱) اگر آفست <code>LOAD</code> چهار یا آفست <code>VAL</code> هشت نباشد، کامپایل را متوقف می‌کند.
+    <span class="why">اگر یک رجیستر جا بیفتد، همهٔ دسترسی‌ها یک خانه جابه‌جا می‌شوند و هیچ پیامی نمی‌گیری. این دو خط جلوی آن را می‌گیرند.</span></li>
+  <li data-lines="16-18"><b class="what">ماسک بیت‌ها.</b> اسم می‌دهیم به سه بیتی که لازم داریم تا کد عدد جادویی نداشته باشد.</li>
+  <li data-lines="20"><b class="what">کلاک پردازنده.</b> پیش‌فرض Nucleo-F411RE بعد از reset: نوسان‌ساز داخلی HSI با ۱۶ مگاهرتز. اگر بعدا PLL روشن کنی، این عدد را عوض کن.
+    <span class="why">عدد <code>LOAD</code> از این می‌آید. کلاک را اشتباه بنویسی، همهٔ «میلی‌ثانیه»ها اشتباه می‌شوند.</span></li>
+  <li data-lines="22"><b class="what">شمارندهٔ تیک.</b> <code>static</code> یعنی فقط این فایل آن را می‌بیند؛ <code>volatile</code> چون ISR آن را عوض می‌کند و <code>main</code> می‌خواند.
+    <span class="why">بدون <code>volatile</code> کامپایلر ممکن است در حلقهٔ <code>main</code> مقدار را یک‌بار بخواند و همیشه همان را ببیند (همان دام درس ۳.۶).</span></li>
+  <li data-lines="24-27"><b class="what">ISR تیک.</b> <code>SysTick_Handler</code> هر ۱ms صدا زده می‌شود و فقط یکی اضافه می‌کند.
+    <span class="why">اسم باید <b>دقیقا</b> همین باشد؛ چون در جدول وقفهٔ startup (درس ۵.۱) با همین اسم ثبت شده. اگر اشتباه بنویسی، کامپایل می‌شود ولی وقفه به <code>Default_Handler</code> می‌رود که معمولا یک حلقهٔ بی‌نهایت است و برنامه هنگ می‌کند.</span></li>
+  <li data-lines="29-32"><b class="what">millis.</b> مقدار فعلی شمارنده را می‌دهد؛ از وقتی روشن شده‌ایم چند میلی‌ثانیه گذشته.
+    <span class="why">خواندن یک عدد ۳۲ بیتی تراز‌شده روی Cortex-M یک دستور <code>LDR</code> است و نصفه‌نیمه خوانده نمی‌شود؛ پس بدون قفل کردن وقفه امن است. روی پردازنده‌های ۸ بیتی (مثل AVR) این‌طور نیست.</span></li>
+  <li data-lines="34-40"><b class="what">راه‌اندازی.</b> اول <code>CTRL = 0</code> (خاموش)، بعد <code>LOAD = 15999</code>، بعد <code>VAL = 0</code> (شمارنده را صفر کن تا اولین تیک درست ۱ms بعد بیاید)، و در پایان سه بیت روشن می‌شود: کلاک پردازنده + وقفه + شروع.
+    <span class="why">ترتیب مهم است: اگر اول روشن کنی و بعد <code>LOAD</code> را بنویسی، تیک اول با مقدار قدیمی می‌آید.</span></li>
+</ol>
+<p>این فایل با <code>arm-none-eabi-gcc</code> کامپایل و بی‌هشدار ساخته شد. برای اجرا روی برد، همان startup و linker script درس‌های <a href="5-1.html">۵.۱</a> و <a href="5-2.html">۵.۲</a> را کنارش می‌گذاری.</p>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: چرا <code>SysTick_Handler</code> «اسم جادویی» است؟</div>
+<p>جدول وقفه (درس <a href="5-1.html">۵.۱</a>) آرایه‌ای از اشاره‌گرهای تابع است. خانهٔ شمارهٔ ۱۵ آن (استثنای SysTick) در فایل startup با اسم <code>SysTick_Handler</code> پر می‌شود و آن اسم یک <b>weak alias</b> برای <code>Default_Handler</code> است. وقتی تو تابعی با همین اسم تعریف کنی، لینکر تعریف قوی تو را جای weak می‌گذارد. یعنی هیچ ثبت‌نامی لازم نیست؛ فقط اسم درست.</p></div>
+
+<h2 id="millis">از تیک به «ساعت»: چند کار همزمان</h2>
+<p>حالا یک <span class="term" data-t="millis_fn">millis()</span> داریم که هر میلی‌ثانیه یکی زیاد می‌شود. قبل از رفتن سراغ برد، منطق را روی PC امتحان کنیم؛ همان کد، ولی به‌جای سخت‌افزار، خودمان «یک میلی‌ثانیه گذشت» را صدا می‌زنیم. برنامه دو کار را با دو ریتم مختلف پیش می‌برد: هر ۵۰۰ms یک LED و هر ۷۰۰ms یک سنسور.</p>
+
+<div class="code" data-file="tick_sim.c" data-lang="c" data-verify="host" id="code2">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+static volatile uint32_t g_ticks = 0;   // شمارندهٔ میلی‌ثانیه
+
+void SysTick_Handler(void)              // سخت‌افزار هر ۱ms صدایش می‌زند
+{
+    g_ticks++;
+}
+
+static uint32_t millis(void)
+{
+    return g_ticks;
+}
+
+int main(void)
+{
+    uint32_t last_led = 0;
+    uint32_t last_sensor = 0;
+    int led_on = 0;
+
+    for (int ms = 0; ms &lt; 2000; ms++) {
+        SysTick_Handler();              // شبیه‌سازی: یک میلی‌ثانیه گذشت
+        uint32_t now = millis();
+
+        if (now - last_led &gt;= 500u) {
+            last_led += 500u;
+            led_on = !led_on;
+            printf("t=%4u ms  LED %s\n", (unsigned)now, led_on ? "ON" : "OFF");
+        }
+        if (now - last_sensor &gt;= 700u) {
+            last_sensor += 700u;
+            printf("t=%4u ms  read sensor\n", (unsigned)now);
+        }
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code2">
+  <li data-lines="4"><b class="what">ساعت ما.</b> همان شمارندهٔ <code>volatile</code>.</li>
+  <li data-lines="6-9"><b class="what">ISR شبیه‌سازی‌شده.</b> روی برد سخت‌افزار صدایش می‌زند؛ اینجا خودمان.</li>
+  <li data-lines="11-14"><b class="what">millis.</b> فقط شمارنده را برمی‌گرداند.</li>
+  <li data-lines="18-20"><b class="what">یادداشت زمان.</b> برای هر کار یک متغیر <code>last_...</code> داریم: «آخرین بار کِی انجامش دادم؟». LED هم با <code>led_on</code> وضعیتش را نگه می‌دارد.</li>
+  <li data-lines="22-24"><b class="what">حلقهٔ اصلی.</b> هر دور: یک میلی‌ثانیه بگذر، ساعت را بخوان.
+    <span class="why">روی برد این حلقه <code>for(;;)</code> است و میلی‌ثانیه را سخت‌افزار می‌گذراند؛ اینجا ۲۰۰۰ دور کافی است.</span></li>
+  <li data-lines="26-30"><b class="what">کار اول: LED.</b> اگر از آخرین بار ۵۰۰ms یا بیشتر گذشته: زمان یادداشت را ۵۰۰ جلو ببر، LED را برعکس کن و چاپ کن.
+    <span class="why">این شرط <code>now - last</code> است (تفریق)، نه <code>now &gt;= last + 500</code>. چرا؟ در بخش «چرخش شمارنده» می‌فهمی.</span></li>
+  <li data-lines="31-34"><b class="what">کار دوم: سنسور.</b> همین الگو با ۷۰۰ms و متغیر جدا. دو کار مستقل‌اند و به هم کاری ندارند.</li>
+</ol>
+<pre class="term" data-from="tick_sim.c">
+$ gcc -std=c11 -Wall -Wextra -o tick_sim tick_sim.c
+$ ./tick_sim
+t= 500 ms  LED ON
+t= 700 ms  read sensor
+t=1000 ms  LED OFF
+t=1400 ms  read sensor
+t=1500 ms  LED ON
+t=2000 ms  LED OFF
+</pre>
+<p>ببین: دو ریتم روی هم افتادند (۱۴۰۰ و ۱۵۰۰ نزدیک‌اند) ولی هیچ‌کدام دیگری را نگه نداشت. با <code>delay</code> این ممکن نبود.</p>
+
+<p>حالا همین الگو روی برد. LED یعنی LD2 روی PA5 (درس <a href="5-2.html">۵.۲</a>) هر ۵۰۰ms عوض می‌شود و حلقه بین دو نگاه به ساعت آزاد است:</p>
+
+<div class="code" data-file="blink_ms.c" data-lang="c" data-verify="arm" data-project="stm32t" id="code3">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define RCC_AHB1ENR (*(volatile uint32_t *)0x40023830u)
+#define GPIOA_MODER (*(volatile uint32_t *)0x40020000u)
+#define GPIOA_BSRR  (*(volatile uint32_t *)0x40020018u)
+
+void systick_init_1ms(void);
+uint32_t millis(void);
+
+int main(void)
+{
+    uint32_t last_blink = 0u;
+    int led_on = 0;
+
+    RCC_AHB1ENR |= 1u &lt;&lt; 0;
+    (void)RCC_AHB1ENR;
+    GPIOA_MODER = (GPIOA_MODER &amp; ~(3u &lt;&lt; 10)) | (1u &lt;&lt; 10);
+    systick_init_1ms();
+
+    for (;;) {
+        if (millis() - last_blink &gt;= 500u) {
+            last_blink += 500u;
+            led_on = !led_on;
+            GPIOA_BSRR = led_on ? (1u &lt;&lt; 5) : (1u &lt;&lt; 21);
+        }
+        // اینجا می‌توان کارهای دیگر را هم انجام داد؛ حلقه بلاک نمی‌شود
+    }
+}
+</pre></div>
+<ol class="walk" data-for="code3">
+  <li data-lines="3-5"><b class="what">رجیسترهای GPIO.</b> همان سه رجیستر درس ۳.۶ (ساعت پورت، حالت، BSRR).</li>
+  <li data-lines="7-8"><b class="what">اعلان توابع ماژول زمان.</b> تعریف‌شان در <code>systick.c</code> است؛ اینجا فقط می‌گوییم وجود دارند (درس ۴.۲).</li>
+  <li data-lines="12-13"><b class="what">وضعیت محلی.</b> <code>last_blink</code> یادداشت زمان و <code>led_on</code> وضعیت LED است. هر دو مقدار اولیه دارند.</li>
+  <li data-lines="15-17"><b class="what">PA5 را خروجی کن.</b> ساعت پورت A، سپس دو بیت ۱۱ و ۱۰ از MODER را <code>01</code> می‌کنیم؛ دقیقا مثل درس قبل.</li>
+  <li data-lines="18"><b class="what">تیک را راه بینداز.</b> از این خط به بعد <code>millis()</code> هر میلی‌ثانیه بزرگ‌تر می‌شود.
+    <span class="why">آن را <b>بعد از</b> تنظیم GPIO می‌گذاریم تا اگر وقفه زودتر آمد، همه‌چیز آماده باشد.</span></li>
+  <li data-lines="20-25"><b class="what">حلقهٔ بدون بلاک.</b> اگر ۵۰۰ms گذشته، وضعیت را برعکس کن و با BSRR روی PA5 بنویس (بیت ۵ = روشن، بیت ۲۱ = خاموش). در غیر این صورت هیچ کاری نکن.
+    <span class="why">به‌جای خواندن ODR و برعکس کردنش (خطر خواندن-تغییر-نوشتن)، وضعیت را خودمان در <code>led_on</code> نگه می‌داریم و با BSRR می‌نویسیم.</span></li>
+  <li data-lines="26"><b class="what">جای کارهای دیگر.</b> حلقه بلاک نمی‌شود؛ می‌توانی همین‌جا دکمه بخوانی یا UART را چک کنی.</li>
+</ol>
+
+<h2 id="wrap">چرخش شمارنده: خطای ۴۹ روز</h2>
+<p><code>g_ticks</code> یک عدد ۳۲ بیتی بی‌علامت است و هر میلی‌ثانیه یکی زیاد می‌شود. ماکسیمم آن <code>4294967295</code> است. بعد از آن به <code>0</code> برمی‌گردد. این کار حدود <b>۴۹٫۷ روز</b> طول می‌کشد (۴٬۲۹۴٬۹۶۷٬۲۹۶ ms). دستگاهی که یک ماه روشن بماند، شاید اصلا آن را نبیند، ولی اگر کدت <span class="term" data-t="wrapsafe">امن در برابر چرخش</span> نباشد، در سایت مشتری و بعد از هفت هفته می‌ترکد.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>کیلومتر‌شمار قدیمی ماشین شش رقم دارد. وقتی از <code>999998</code> عبور می‌کنی می‌شود <code>000002</code>. اگر شروع سفر <code>999990</code> بود و الان <code>000002</code> را می‌بینی، مسافتی که رفته‌ای چقدر است؟ همان تفریق ساده به‌شرط اینکه «دور بزنی»: <code>۰۰۰۰۰۲ − ۹۹۹۹۹۰</code> در حساب شش‌رقمی می‌شود ۱۲. همین کار را کامپیوتر برای <code>uint32_t</code> خودکار انجام می‌دهد.</p></div>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 310" role="img" aria-label="خط عددی بین صفر و چهار میلیارد و دویست و نود و چهار میلیون: نقطهٔ شروع نزدیک انتها، نقطهٔ الان بعد از چرخش نزدیک ابتدا؛ فاصله شامل رفتن تا انتها و ادامه از صفر است">
+  <defs><marker id="m54c" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">شمارندهٔ ۳۲ بیتی یک دایره است، نه یک خط بی‌پایان</text>
+  <rect x="50" y="110" width="660" height="52" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/>
+  <text x="50" y="182" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="700" direction="ltr">0</text>
+  <text x="710" y="182" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="700" direction="ltr">4294967295</text>
+  <g stroke="#15120a" stroke-width="3"><rect x="590" y="100" width="12" height="72" fill="#ffd60a"/><rect x="128" y="100" width="12" height="72" fill="#3ddc97"/></g>
+  <text x="596" y="90" text-anchor="middle" class="mono s-tx" font-size="13.5" font-weight="800" direction="ltr">start = 4294967290</text>
+  <text x="134" y="90" text-anchor="middle" class="mono s-tx" font-size="13.5" font-weight="800" direction="ltr">now = 4</text>
+  <path d="M606 136H700" stroke="#15120a" stroke-width="4" fill="none" marker-end="url(#m54c)"/>
+  <path d="M60 136H122" stroke="#15120a" stroke-width="4" fill="none" marker-end="url(#m54c)"/>
+  <text x="655" y="215" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">۵ میلی‌ثانیه تا انتها</text>
+  <text x="92" y="215" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">۵ از صفر</text>
+  <text x="380" y="248" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="800">تفریق بی‌علامت ۳۲ بیتی مسافت را درست می‌دهد:</text>
+  <text x="380" y="268" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">now - start = 10</text>
+  <text x="380" y="290" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">ولی در جمع و مقایسهٔ مطلق، موعد دور می‌زند و جواب غلط می‌شود (<tspan class="mono" direction="ltr">now &gt;= start + dur</tspan>)</text>
+</svg></div>
+<figcaption>چرخش شمارنده ذاتی سخت‌افزار است. تفریق بی‌علامت مسافت را درست می‌دهد؛ جمع و مقایسهٔ مطلق نه.</figcaption></figure>
+
+<p>در C، حساب <code>uint32_t</code> <b>به پیمانهٔ ۲<sup>۳۲</sup></b> تعریف‌شده است (درس <a href="2-2.html">۲.۲</a>: سرریز بی‌علامت خطا نیست، چرخش قانونی است). پس <code>now - start</code> وقتی <code>now</code> دور زده باشد هم پاسخ درست می‌دهد. ولی <code>start + dur</code> ممکن است دور بزند و مقایسه را خراب کند. با یک برنامه ببین:</p>
+
+<div class="code" data-file="wrap.c" data-lang="c" data-verify="host" id="code4">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+static int bad_expired(uint32_t now, uint32_t start, uint32_t dur)
+{
+    return now &gt;= start + dur;          // روش ناامن
+}
+
+static int good_expired(uint32_t now, uint32_t start, uint32_t dur)
+{
+    return (uint32_t)(now - start) &gt;= dur;   // روش امن
+}
+
+int main(void)
+{
+    uint32_t start = 4294967200u;       // ۹۶ms مانده به چرخش شمارنده
+    uint32_t dur = 200u;
+    uint32_t elapsed[] = { 0u, 100u, 199u, 200u, 250u };
+
+    printf("start+dur = %u (wrapped)\n", (unsigned)(start + dur));
+    printf("elapsed  now         bad good\n");
+    for (unsigned i = 0; i &lt; sizeof elapsed / sizeof elapsed[0]; i++) {
+        uint32_t now = start + elapsed[i];
+        printf("%7u  %10u  %d   %d\n", (unsigned)elapsed[i], (unsigned)now,
+               bad_expired(now, start, dur), good_expired(now, start, dur));
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code4">
+  <li data-lines="4-7"><b class="what">روش ناامن.</b> «آیا الان بزرگ‌تر یا مساوی موعد است؟» که موعد را با جمع ساخته‌ایم.
+    <span class="why">اگر <code>start + dur</code> از ۴٬۲۹۴٬۹۶۷٬۲۹۵ رد شود، به عددی کوچک می‌رسد و «موعد» ناگهان در گذشته قرار می‌گیرد.</span></li>
+  <li data-lines="9-12"><b class="what">روش امن.</b> «چقدر گذشته؟ آیا از مدت بیشتر است؟» تفریق را داخل <code>uint32_t</code> نگه می‌داریم.</li>
+  <li data-lines="16"><b class="what">شروع نزدیک لبه.</b> ۹۶ میلی‌ثانیه به چرخش مانده است (۲<sup>۳۲</sup> − ۴۲۹۴۹۶۷۲۰۰ = ۹۶).</li>
+  <li data-lines="17-18"><b class="what">مدت و زمان‌های آزمایشی.</b> مدت ۲۰۰ms؛ می‌خواهیم ببینیم بعد از ۰، ۱۰۰، ۱۹۹، ۲۰۰ و ۲۵۰ میلی‌ثانیه هر روش چه می‌گوید.</li>
+  <li data-lines="20"><b class="what">موعدِ چرخیده.</b> <code>start + dur</code> برابر ۱۰۴ می‌شود، نه یک عدد بزرگ.</li>
+  <li data-lines="22-26"><b class="what">مقایسه.</b> <code>now</code> را با جمع می‌سازیم (که خودش دور می‌زند) و هر دو روش را روی آن اجرا می‌کنیم. ستون <code>bad</code> و <code>good</code> جواب ۱ (تمام شده) یا ۰ (نه).</li>
+</ol>
+<pre class="term" data-from="wrap.c">
+$ gcc -std=c11 -Wall -Wextra -o wrap wrap.c
+$ ./wrap
+start+dur = 104 (wrapped)
+elapsed  now         bad good
+      0  4294967200  1   0
+    100           4  0   0
+    199         103  0   0
+    200         104  1   1
+    250         154  1   1
+</pre>
+<p>ستون <code>bad</code> را نگاه کن: در لحظهٔ شروع (<code>elapsed = 0</code>) می‌گوید «تمام شد!» و بعد تا ۱۹۹ میلی‌ثانیه می‌گوید «هنوز نه». این یعنی چراغ، بدون دلیل، درست وقتی شمارنده دور می‌زند یک‌بار اشتباه می‌زند. ستون <code>good</code> همیشه درست است.</p>
+
+<div class="callout tip"><div class="ct">قانون یک‌خطی</div>
+<p>هرگز زمان را با <code>&gt;=</code> و جمع مقایسه نکن. همیشه بنویس <code>(uint32_t)(now - start) &gt;= مدت</code> و <b>هر دو</b> متغیر را از نوع <code>uint32_t</code> بگیر. تا وقتی زمان واقعی گذشته از ۴٫۲ میلیارد میلی‌ثانیه کمتر باشد (یعنی حداقل هر چند هفته یک‌بار بررسی کنی)، همیشه درست است.</p></div>
+
+<p>همین چرخش را در مقیاس کوچک ببین. ابزارک زیر یک <code>uint8_t</code> است (فقط ۲۵۶ حالت، پس زود دور می‌زند). ۲۵۰ را وارد کن و ۱۰ تا اضافه کن:</p>
+<div class="widget" data-w="overflow" data-type="uint8_t"></div>
+
+<p>و حالا اجرای قدم‌به‌قدم همان تفریق:</p>
+<div class="widget" data-w="mem" data-config='{"title":"تفریق بی‌علامت بعد از چرخش","code":["uint32_t start = 4294967290u;","uint32_t now = start + 10u;","uint32_t elapsed = now - start;"],"intro":"سه متغیر ۳۲ بیتی داریم. روی بعدی بزن.","cells":[{"addr":"0x20000000","name":"start","val":null,"kind":"var"},{"addr":"0x20000004","name":"now","val":null,"kind":"var"},{"addr":"0x20000008","name":"elapsed","val":null,"kind":"var"}],"steps":[{"line":0,"set":{"0":"4294967290"},"hot":[0],"say":"شروع: شش میلی‌ثانیه مانده تا آخر شمارنده."},{"line":1,"set":{"1":"4"},"hot":[1],"say":"۴۲۹۴۹۶۷۲۹۰ + ۱۰ از ۴۲۹۴۹۶۷۲۹۵ رد می‌شود و به ۴ می‌رسد (چرخش قانونی برای بی‌علامت)."},{"line":2,"set":{"2":"10"},"hot":[2],"say":"۴ منهای ۴۲۹۴۹۶۷۲۹۰ در حساب بی‌علامت ۳۲ بیتی دقیقا ۱۰ است: مسافت واقعی. تفریق چرخش را خودکار جبران می‌کند."}]}'></div>
+
+<h2 id="timeout">مهلت (<span class="en">timeout</span>): هیچ‌وقت بی‌پایان منتظر نمان</h2>
+<p>وقتی منتظر سخت‌افزار هستی (سنسور، UART، پرچم آماده‌بودن) و پرچم هرگز نیاید، برنامه برای همیشه در حلقه می‌ماند. راه‌حل استاندارد: <span class="term" data-t="timeout">مهلت</span>. بعد از مدت معین، منتظر ماندن را رها کن و خطا گزارش بده. با <code>millis()</code> ساختنش آسان است:</p>
+
+<div class="code" data-file="timeout.c" data-lang="c" data-verify="host" id="code5">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+static volatile uint32_t g_ticks = 0;
+static uint32_t ready_at = 0;           // شبیه‌سازی: سنسور کی آماده می‌شود
+
+static uint32_t millis(void) { return g_ticks; }
+
+static int sensor_ready(void)
+{
+    g_ticks++;                          // شبیه‌سازی: هر بار پرسیدن ۱ms طول می‌کشد
+    return g_ticks &gt;= ready_at;
+}
+
+/* ۱ = آماده شد، ۰ = مهلت تمام شد */
+static int wait_ready(uint32_t timeout_ms)
+{
+    uint32_t start = millis();
+    while (!sensor_ready()) {
+        if (millis() - start &gt;= timeout_ms) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int main(void)
+{
+    ready_at = 12;
+    printf("fast sensor: %s\n", wait_ready(20) ? "ready" : "timeout");
+    g_ticks = 0;
+    ready_at = 500;
+    int ok = wait_ready(20);
+    printf("dead sensor: %s at t=%u ms\n", ok ? "ready" : "timeout", (unsigned)millis());
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code5">
+  <li data-lines="4-5"><b class="what">ساعت و سنسور شبیه‌سازی‌شده.</b> <code>ready_at</code> می‌گوید سنسور در چه لحظه‌ای آماده می‌شود (۵۰۰ یعنی «هرگز در مهلت ما»).</li>
+  <li data-lines="9-13"><b class="what">پرسیدن «آماده‌ای؟»</b> در واقعیت یک خواندن رجیستر وضعیت است (مثل <code>TXE</code> در درس بعد). اینجا هر پرسش یک ms خرج می‌کند تا زمان بگذرد.</li>
+  <li data-lines="15-25"><b class="what">انتظار با مهلت.</b> زمان شروع را بنویس؛ تا وقتی آماده نیست دور بزن؛ اگر از مهلت گذشت، ۰ (شکست) برگردان؛ وگرنه ۱.
+    <span class="why">این تابع در بدترین حالت بعد از <code>timeout_ms</code> برمی‌گردد. قطعیت زمانی یعنی همین: مطمئنی برنامه گیر نمی‌کند.</span></li>
+  <li data-lines="29-30"><b class="what">سنسور سالم.</b> در ۱۲ms آماده می‌شود، مهلت ۲۰ms کافی است.</li>
+  <li data-lines="31-34"><b class="what">سنسور مرده.</b> شمارنده را صفر می‌کنیم و سنسور را دور از دسترس می‌گذاریم. <code>ok</code> را جدا محاسبه می‌کنیم تا ترتیب ارزیابی آرگومان‌های <code>printf</code> باعث خواندن زمان قبل از انتظار نشود.
+    <span class="why">C ترتیب ارزیابی آرگومان‌های تابع را تضمین نمی‌کند؛ اگر <code>wait_ready()</code> و <code>millis()</code> هر دو در یک <code>printf</code> باشند، ممکن است <code>millis()</code> اول اجرا شود و صفر بدهد.</span></li>
+</ol>
+<pre class="term" data-from="timeout.c">
+$ gcc -std=c11 -Wall -Wextra -o timeout timeout.c
+$ ./timeout
+fast sensor: ready
+dead sensor: timeout at t=20 ms
+</pre>
+
+<h2 id="sched">زمان‌بند همکاری ساده</h2>
+<p>وقتی کارها زیاد شدند، برای هر کدام یک <code>last</code> جدا و یک <code>if</code> نوشتن خسته‌کننده است. راه تمیزتر: کارها را در یک <b>جدول</b> بگذار. هر ردیف: اسم، دوره، آخرین اجرا و <b>اشاره‌گر به تابع</b> (درس <a href="4-3.html">۴.۳</a>). یک تابع کوچک جدول را دور می‌زند و هر کاری را که وقتش رسیده صدا می‌زند. به این روش <span class="term" data-t="coopsched">زمان‌بند همکاری</span> (cooperative scheduler) می‌گویند: «همکاری» چون هر تابع خودش داوطلبانه زود برمی‌گردد و هیچ‌کس وسط کارش را قطع نمی‌کند.</p>
+
+<div class="code" data-file="sched.c" data-lang="c" data-verify="host" id="code6">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+typedef void (*task_fn)(void);
+
+typedef struct {
+    const char *name;
+    uint32_t period_ms;
+    uint32_t last_ms;
+    task_fn run;
+} task_t;
+
+static uint32_t g_now;                  // زمان شبیه‌سازی‌شده
+
+static void task_led(void)    { printf("t=%4u  led toggle\n", (unsigned)g_now); }
+static void task_button(void) { printf("t=%4u  scan button\n", (unsigned)g_now); }
+static void task_report(void) { printf("t=%4u  send report\n", (unsigned)g_now); }
+
+static task_t tasks[] = {
+    { "led",    500u,  0u, task_led    },
+    { "button", 250u,  0u, task_button },
+    { "report", 1000u, 0u, task_report },
+};
+
+static void scheduler_run_once(uint32_t now)
+{
+    for (unsigned i = 0; i &lt; sizeof tasks / sizeof tasks[0]; i++) {
+        task_t *t = &amp;tasks[i];
+        if (now - t-&gt;last_ms &gt;= t-&gt;period_ms) {
+            t-&gt;last_ms += t-&gt;period_ms;
+            t-&gt;run();
+        }
+    }
+}
+
+int main(void)
+{
+    for (g_now = 1; g_now &lt;= 1000; g_now++) {
+        scheduler_run_once(g_now);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code6">
+  <li data-lines="4"><b class="what">نوع تابع کار.</b> <code>task_fn</code> یعنی «اشاره‌گر به تابعی که ورودی ندارد و چیزی برنمی‌گرداند».</li>
+  <li data-lines="6-11"><b class="what">ردیف جدول.</b> اسم (برای دیباگ)، دورهٔ اجرا (ms)، آخرین اجرا و تابع.</li>
+  <li data-lines="13"><b class="what">زمان شبیه‌سازی‌شده.</b> روی برد به‌جای آن <code>millis()</code> می‌خوانیم؛ اینجا با یک متغیر ساده می‌شماریم تا خروجی قطعی شود.</li>
+  <li data-lines="15-17"><b class="what">سه کار.</b> هر کدام فقط چیزی چاپ می‌کند. در واقعیت: عوض‌کردن LED، خواندن دکمه، فرستادن گزارش.</li>
+  <li data-lines="19-23"><b class="what">جدول کارها.</b> LED هر ۵۰۰، دکمه هر ۲۵۰، گزارش هر ۱۰۰۰ میلی‌ثانیه. برای کار جدید فقط یک ردیف اضافه می‌کنی.</li>
+  <li data-lines="25-34"><b class="what">حلقهٔ زمان‌بند.</b> برای هر ردیف: اگر ‌<code>now - last</code> به دوره رسید، <code>last</code> را به‌اندازهٔ دوره جلو ببر و تابع را صدا بزن.
+    <span class="why"><code>sizeof tasks / sizeof tasks[0]</code> تعداد ردیف‌ها را خودکار حساب می‌کند (درس ۲.۷)؛ ردیف تازه که اضافه کنی، جای دیگری را عوض نمی‌کنی.</span></li>
+  <li data-lines="38-40"><b class="what">اجرای ۱۰۰۰ میلی‌ثانیه.</b> هر میلی‌ثانیه یک‌بار زمان‌بند را صدا می‌زنیم. روی برد همین کار در <code>for(;;)</code> بی‌پایان انجام می‌شود.</li>
+</ol>
+<pre class="term" data-from="sched.c">
+$ gcc -std=c11 -Wall -Wextra -o sched sched.c
+$ ./sched
+t= 250  scan button
+t= 500  led toggle
+t= 500  scan button
+t= 750  scan button
+t=1000  led toggle
+t=1000  scan button
+t=1000  send report
+</pre>
+<p>در ۱۰۰۰ میلی‌ثانیه سه کار همزمان رسیده‌اند؛ ترتیب صدا زدن به ترتیب ردیف‌های جدول است.</p>
+
+<div class="callout warn"><div class="ct">شرط همکاری</div>
+<p>در این مدل هیچ کاری نباید <code>delay</code> بزند یا طولانی بشود. اگر <code>task_report</code> ۳۰۰ms کار کند، در آن مدت دکمه هم بررسی نمی‌شود. کارها را کوتاه بنویس و کار طولانی را به چند مرحله بشکن (ماشین حالت درس ۴.۶). برای کارهای واقعا مستقل و زمان‌بحرانی، RTOS (بخش ESP32 و درس‌های بعد) یا ISR لازم است.</p></div>
+
+<h2 id="drift">رانش زمان: <span class="en">last = now</span> یا <span class="en">last += period</span>؟</h2>
+<p>در همهٔ نمونه‌ها نوشتیم <code>last += 500</code>. چرا نه <code>last = now</code>؟ ببین وقتی حلقهٔ اصلی خودش کند است (مثلا هر دور ۷ms طول می‌کشد چون کار دیگری هم می‌کند):</p>
+
+<div class="code" data-file="drift.c" data-lang="c" data-verify="host" id="code7">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    uint32_t last_a = 0, last_b = 0;
+    printf("now   A(last=now)  B(last+=period)\n");
+    for (uint32_t now = 0; now &lt;= 3000; now += 7) {     // حلقهٔ اصلی هر ۷ms یک بار می‌چرخد
+        int a = 0, b = 0;
+        if (now - last_a &gt;= 500u) { last_a = now;   a = 1; }
+        if (now - last_b &gt;= 500u) { last_b += 500u; b = 1; }
+        if (a || b) {
+            printf("%4u  %s          %s\n", (unsigned)now, a ? "fire" : "    ", b ? "fire" : "");
+        }
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code7">
+  <li data-lines="6"><b class="what">دو یادداشت.</b> <code>last_a</code> برای روش «=now» و <code>last_b</code> برای روش «+=period».</li>
+  <li data-lines="8"><b class="what">حلقه‌ای که ۷ms یکی جلو می‌رود.</b> شبیه‌سازی حلقهٔ اصلیِ شلوغ: فقط در لحظه‌های ۰، ۷، ۱۴، ... ساعت را می‌بیند.</li>
+  <li data-lines="10"><b class="what">روش A.</b> هر بار که اجرا شد، زمان <b>فعلی</b> را یادداشت می‌کند (شامل تأخیر ۴ میلی‌ثانیه‌ای دیدن).</li>
+  <li data-lines="11"><b class="what">روش B.</b> به‌اندازهٔ دوره جلو می‌رود؛ خطای دیدن روی رویداد بعدی جمع نمی‌شود.</li>
+  <li data-lines="12-14"><b class="what">چاپ.</b> فقط دورهایی که یکی از دو روش اجرا شده‌اند.</li>
+</ol>
+<pre class="term" data-from="drift.c">
+$ gcc -std=c11 -Wall -Wextra -o drift drift.c
+$ ./drift
+now   A(last=now)  B(last+=period)
+ 504  fire          fire
+1001                fire
+1008  fire
+1505                fire
+1512  fire
+2002                fire
+2016  fire
+2506                fire
+2520  fire
+</pre>
+<p>روش B در ۵۰۴، ۱۰۰۱، ۱۵۰۵، ۲۰۰۲ و ۲۵۰۶ اجرا شد: هر بار حداکثر چند میلی‌ثانیه بعد از مضرب ۵۰۰ (تأخیر دیدن)، ولی خطا جمع نمی‌شود. روش A هر بار ۴ میلی‌ثانیه به دوره اضافه می‌کند (فاصله‌ها ۵۰۴ می‌شود، نه ۵۰۰) و این خطا جمع می‌شود: حدود ۰٫۸٪ کند، یعنی در یک ساعت نزدیک ۲۹ ثانیه عقب. برای ساعت، متر‌ونوم و PWM دستی روش B لازم است. (روش A فقط وقتی مناسب است که «حداقل فاصله بین دو اجرا» مهم باشد، نه ریتم.)</p>
+
+<h2 id="hwtimer">تایمر سخت‌افزاری و PWM</h2>
+<p>SysTick فقط یک کار می‌کند: شمردن. STM32 تایمرهای عمومی دارد (<span class="term" data-t="hwtimer">TIM2</span> و ...) که علاوه بر شمردن، «مقایسه» و «خروجی روی پایه» هم دارند. مهم‌ترین کار آن‌ها <b>PWM</b> است.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>شیر آب را تصور کن. نمی‌توانی نصفه‌باز نگهش داری، فقط باز یا بسته است. ولی اگر ثانیه‌ای هزار بار باز و بسته کنی و ۲۵٪ زمان باز باشد، آب خروجی مثل ۲۵٪ جریان می‌شود. چشم ما هم همین‌طور: LED که خیلی سریع روشن و خاموش می‌شود، مثل نور کم دیده می‌شود. به این <span class="term" data-t="pwm">PWM</span> (مدولاسیون پهنای پالس) می‌گوییم، و نسبت زمان روشن به کل دوره را <span class="term" data-t="dutycycle">duty cycle</span> (درصد روشنی).</p></div>
+
+<p>تایمر سه عدد دارد. با یک شمارندهٔ <b>بالاشمار</b> شروع می‌کنیم:</p>
+<ol class="steps">
+  <li><b>پیش‌تقسیم‌کننده (<span class="term" data-t="prescaler">PSC</span>).</b> کلاک را تقسیم بر <code>PSC + 1</code> می‌کند تا شمارنده کندتر شود. (۱۶ مگاهرتز با <code>PSC = 15</code> می‌شود ۱ مگاهرتز.)</li>
+  <li><b>سقف شمارش (<span class="term" data-t="autoreload">ARR</span>).</b> شمارنده از ۰ تا <code>ARR</code> می‌شمارد و بعد به ۰ برمی‌گردد. یعنی <code>ARR + 1</code> حالت در هر دوره.</li>
+  <li><b>مقایسه (<code>CCR1</code>).</b> خروجی <b>بالا</b> است تا وقتی شمارنده کمتر از <code>CCR1</code> باشد؛ بعد پایین. (این «PWM حالت ۱» است.)</li>
+</ol>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 330" role="img" aria-label="نمودار PWM: شمارنده از صفر تا ARR بالا می‌رود؛ خط CCR1 در یک‌چهارم ارتفاع است؛ خروجی تا وقتی شمارنده کمتر از CCR1 است بالاست و بعد پایین می‌آید؛ سه دوره">
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">ساخت PWM با شمارنده و مقایسه‌کننده (روشنی ۲۵٪)</text>
+  <text x="50" y="66" text-anchor="end" class="mono s-tx" font-size="13" font-weight="700" direction="ltr">ARR</text>
+  <text x="50" y="148" text-anchor="end" class="mono s-tx" font-size="13" font-weight="700" direction="ltr">0</text>
+  <text x="50" y="118" text-anchor="end" class="mono s-tx" font-size="13" font-weight="700" direction="ltr">CCR1</text>
+  <path d="M60 140L260 60V140L460 60V140L660 60" stroke="#15120a" stroke-width="4" fill="none" stroke-linejoin="round"/>
+  <path d="M60 120H700" stroke="#ff86b3" stroke-width="4" stroke-dasharray="8 6" fill="none"/>
+  <text x="380" y="46" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">شمارنده (CNT)</text>
+  <path d="M60 250V200H110V250H260V200H310V250H460V200H510V250H660" stroke="#15120a" stroke-width="4" fill="none" stroke-linejoin="round"/>
+  <g fill="#3ddc97" opacity=".55"><rect x="60" y="200" width="50" height="50"/><rect x="260" y="200" width="50" height="50"/><rect x="460" y="200" width="50" height="50"/></g>
+  <text x="50" y="210" text-anchor="start" class="s-tx" font-size="13" font-weight="700">بالا</text>
+  <text x="50" y="255" text-anchor="start" class="s-tx" font-size="13" font-weight="700">پایین</text>
+  <text x="380" y="186" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">خروجی روی پایه (مثلا PA5)</text>
+  <path d="M60 268H110M60 262V274M110 262V274" stroke="#15120a" stroke-width="2.5" fill="none"/>
+  <text x="85" y="290" text-anchor="middle" class="mono s-tx" font-size="12.5" font-weight="700">CNT &lt; CCR1</text>
+  <path d="M260 268H460M260 262V274M460 262V274" stroke="#15120a" stroke-width="2.5" fill="none"/>
+  <text x="360" y="290" text-anchor="middle" class="mono s-tx" font-size="12.5" font-weight="700">T = (ARR+1) ticks</text>
+  <text x="600" y="280" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">duty = CCR1 / (ARR+1)</text>
+</svg></div>
+<figcaption>هر بار شمارنده از صفر شروع می‌کند، خروجی بالا می‌رود؛ وقتی به <code>CCR1</code> رسید، پایین می‌آید. <code>CCR1</code> را عوض کنی، عرض پالس عوض می‌شود.</figcaption></figure>
+
+<p>پیش از رفتن سراغ رجیستر، همین مکانیسم را با یک برنامهٔ PC ببین: شمارندهٔ ۰ تا ۹ و <code>CCR1 = 3</code>:</p>
+
+<div class="code" data-file="pwm_sim.c" data-lang="c" data-verify="host" id="code8">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    uint32_t arr = 9u;                  // شمارنده از ۰ تا ۹ (ده حالت)
+    uint32_t ccr1 = 3u;                 // مقایسه با ۳
+    uint32_t cnt = 0u;
+
+    printf("CNT:");
+    for (int i = 0; i &lt; 30; i++) {
+        printf(" %u", (unsigned)cnt);
+        cnt = (cnt == arr) ? 0u : cnt + 1u;
+    }
+    printf("\nOUT: ");
+    cnt = 0u;
+    for (int i = 0; i &lt; 30; i++) {
+        putchar(cnt &lt; ccr1 ? '#' : '_');    // PWM حالت ۱: بالا تا وقتی CNT &lt; CCR1
+        putchar(' ');
+        cnt = (cnt == arr) ? 0u : cnt + 1u;
+    }
+    printf("\nduty = %u/%u = %u%%\n", (unsigned)ccr1, (unsigned)(arr + 1u),
+           (unsigned)(100u * ccr1 / (arr + 1u)));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code8">
+  <li data-lines="6-8"><b class="what">سه عدد تایمر.</b> <code>arr = 9</code> یعنی ۱۰ حالت (۰ تا ۹). <code>ccr1 = 3</code> یعنی ۳ حالت از ۱۰ تا بالا. شمارنده از صفر شروع می‌شود.</li>
+  <li data-lines="10-14"><b class="what">چاپ شمارنده.</b> هر «کلاک» یکی زیاد می‌شود و بعد از <code>arr</code> به صفر برمی‌گردد.
+    <span class="why">شرط <code>cnt == arr</code> عمدا مقایسه با <code>arr</code> است، نه <code>arr + 1</code>: شمارنده مقدار <code>arr</code> را هم می‌بیند و در کلاک بعد به صفر می‌رود.</span></li>
+  <li data-lines="15-21"><b class="what">چاپ خروجی.</b> اگر <code>cnt &lt; ccr1</code> بالا (<code>#</code>) وگرنه پایین (<code>_</code>).</li>
+  <li data-lines="22-23"><b class="what">درصد روشنی.</b> <code>ccr1 / (arr + 1)</code> = ۳ / ۱۰ = ۳۰٪. توجه: مخرج <code>ARR + 1</code> است.</li>
+</ol>
+<pre class="term" data-from="pwm_sim.c">
+$ gcc -std=c11 -Wall -Wextra -o pwm_sim pwm_sim.c
+$ ./pwm_sim
+CNT: 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9
+OUT: # # # _ _ _ _ _ _ _ # # # _ _ _ _ _ _ _ # # # _ _ _ _ _ _ _
+duty = 3/10 = 30%
+</pre>
+
+<p>فرمول‌ها را یک‌بار جمع‌بندی کنیم. <code>f_clk</code> کلاک تایمر است (روی TIM2 با تنظیم‌های پیش‌فرض Nucleo، ۱۶ مگاهرتز):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>چیز</th><th>فرمول</th><th>با <code>PSC=15</code>، <code>ARR=999</code>، <code>CCR1=250</code></th></tr></thead>
+<tbody>
+<tr><td>کلاک شمارنده</td><td><code>f_clk / (PSC + 1)</code></td><td>۱ مگاهرتز</td></tr>
+<tr><td>فرکانس PWM</td><td><code>f_clk / ((PSC + 1) × (ARR + 1))</code></td><td>۱ کیلوهرتز</td></tr>
+<tr><td>درصد روشنی</td><td><code>CCR1 / (ARR + 1)</code></td><td>۲۵٪</td></tr>
+</tbody></table></div>
+
+<h3 id="tim2regs">رجیسترهای TIM2 و راه‌اندازی PA5</h3>
+<p>LED چراغ LD2 به PA5 وصل است. PA5 می‌تواند خروجی TIM2 کانال ۱ باشد (تابع جایگزین شمارهٔ ۱، یعنی AF1). ترتیب کار:</p>
+<figure><div class="frame">
+<svg viewBox="0 0 760 170" role="img" aria-label="زنجیرهٔ سیگنال: کلاک TIM2، شمارنده با PSC و ARR، مقایسه با CCR1، خروجی OC1، مالتی‌پلکسر تابع جایگزین AF1، پایهٔ PA5 و LED">
+  <defs><marker id="m54d" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="20" y="50" width="100" height="64" rx="10" fill="#ffd60a"/><rect x="150" y="50" width="110" height="64" rx="10" fill="#7ea3ff"/><rect x="290" y="50" width="110" height="64" rx="10" fill="#3ddc97"/><rect x="430" y="50" width="100" height="64" rx="10" fill="#b394ff"/><rect x="560" y="50" width="90" height="64" rx="10" fill="#ff9a4d"/><rect x="674" y="50" width="70" height="64" rx="10" fill="#ff86b3"/>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none"><path d="M122 82H146" marker-end="url(#m54d)"/><path d="M262 82H286" marker-end="url(#m54d)"/><path d="M402 82H426" marker-end="url(#m54d)"/><path d="M532 82H556" marker-end="url(#m54d)"/><path d="M652 82H670" marker-end="url(#m54d)"/></g>
+  <g font-size="13.5" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="70" y="78">کلاک</text><text x="70" y="98" class="mono" direction="ltr">16 MHz</text>
+    <text x="205" y="76" class="mono" direction="ltr">PSC, ARR</text><text x="205" y="98">شمارنده</text>
+    <text x="345" y="76" class="mono" direction="ltr">CNT &lt; CCR1</text><text x="345" y="98">مقایسه</text>
+    <text x="480" y="76" class="mono" direction="ltr">OC1</text><text x="480" y="98">خروجی</text>
+    <text x="605" y="76" class="mono" direction="ltr">AF1</text><text x="605" y="98">مالتی‌پلکس</text>
+    <text x="709" y="76" class="mono" direction="ltr">PA5</text><text x="709" y="98">LED</text>
+  </g>
+  <text x="380" y="28" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="800">پردازنده فقط <tspan class="mono" direction="ltr">CCR1</tspan> را می‌نویسد؛ بقیه را سخت‌افزار انجام می‌دهد</text>
+  <text x="380" y="150" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">پایه باید در حالت «تابع جایگزین» باشد (MODER = 10) و AFRL شمارهٔ AF را بگوید</text>
+</svg></div>
+<figcaption>از دید کد C، PWM یعنی چند رجیستر را یک‌بار تنظیم کن و بعد فقط یک عدد (<code>CCR1</code>) را عوض کن.</figcaption></figure>
+
+<ol class="steps">
+  <li><b>ساعت GPIOA و TIM2.</b> <code>RCC_AHB1ENR</code> بیت ۰؛ <code>RCC_APB1ENR</code> (آفست <code>0x40</code>) بیت ۰ برای TIM2.</li>
+  <li><b>PA5 را به تایمر بده.</b> <code>MODER</code> پایهٔ ۵ را <code>10</code> (عملکرد جایگزین) کن. در <code>GPIOA_AFRL</code> (آفست <code>0x20</code>) چهار بیت ۲۳..۲۰ مخصوص PA5 اند؛ مقدار <code>1</code> یعنی AF1 = TIM2_CH1.</li>
+  <li><b>سرعت و سقف.</b> <code>PSC</code> و <code>ARR</code>.</li>
+  <li><b>حالت PWM.</b> در <code>CCMR1</code> فیلد <code>OC1M</code> (بیت‌های ۶..۴) را <code>110</code> (PWM حالت ۱) و بیت ۳ (<code>OC1PE</code>، پیش‌بارگذاری CCR1) را ۱ کن.</li>
+  <li><b>خروجی را وصل کن.</b> <code>CCER</code> بیت ۰ (<code>CC1E</code>).</li>
+  <li><b>ثبت مقادیر.</b> <code>EGR</code> بیت ۰ (<code>UG</code>): یک «به‌روزرسانی» ساختگی تا PSC و ARR و CCR1 به شمارنده برسند.</li>
+  <li><b>شروع.</b> <code>CR1</code> بیت ۰ (<code>CEN</code>).</li>
+</ol>
+
+<p>فیلد <code>OC1M</code> را با ابزارک ببین. بیت‌ها را طوری بچین که <code>110</code> شود:</p>
+<div class="widget" data-w="bits" data-width="16" data-reg="TIM2_CCMR1" data-value="0" data-title="TIM2_CCMR1: فیلد OC1M (بیت 6 تا 4) را روی 110 بگذار" data-fields='[{"name":"OC1M","hi":6,"lo":4,"map":["فریز","فعال هنگام تطابق","غیرفعال هنگام تطابق","تغییر حالت","اجبار به پایین","اجبار به بالا","PWM حالت ۱","PWM حالت ۲"]},{"name":"OC1PE","hi":3,"lo":3}]'></div>
+
+<div class="code" data-file="pwm_tim2.c" data-lang="c" data-verify="arm" data-project="stm32t" id="code9">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stddef.h&gt;
+
+typedef struct {
+    volatile uint32_t CR1;
+    volatile uint32_t CR2;
+    volatile uint32_t SMCR;
+    volatile uint32_t DIER;
+    volatile uint32_t SR;
+    volatile uint32_t EGR;
+    volatile uint32_t CCMR1;
+    volatile uint32_t CCMR2;
+    volatile uint32_t CCER;
+    volatile uint32_t CNT;
+    volatile uint32_t PSC;
+    volatile uint32_t ARR;
+    uint32_t RESERVED0;
+    volatile uint32_t CCR1;
+} TIM_TypeDef;
+
+#define TIM2 ((TIM_TypeDef *)0x40000000u)
+
+_Static_assert(offsetof(TIM_TypeDef, EGR)   == 0x14, "EGR");
+_Static_assert(offsetof(TIM_TypeDef, CCMR1) == 0x18, "CCMR1");
+_Static_assert(offsetof(TIM_TypeDef, CCER)  == 0x20, "CCER");
+_Static_assert(offsetof(TIM_TypeDef, PSC)   == 0x28, "PSC");
+_Static_assert(offsetof(TIM_TypeDef, ARR)   == 0x2C, "ARR");
+_Static_assert(offsetof(TIM_TypeDef, CCR1)  == 0x34, "CCR1");
+
+#define RCC_AHB1ENR (*(volatile uint32_t *)0x40023830u)
+#define RCC_APB1ENR (*(volatile uint32_t *)0x40023840u)
+#define GPIOA_MODER (*(volatile uint32_t *)0x40020000u)
+#define GPIOA_AFRL  (*(volatile uint32_t *)0x40020020u)
+
+void pwm_init_1khz(void)
+{
+    RCC_AHB1ENR |= 1u &lt;&lt; 0;
+    RCC_APB1ENR |= 1u &lt;&lt; 0;
+    (void)RCC_APB1ENR;
+
+    GPIOA_MODER = (GPIOA_MODER &amp; ~(3u &lt;&lt; 10)) | (2u &lt;&lt; 10);
+    GPIOA_AFRL  = (GPIOA_AFRL &amp; ~(0xFu &lt;&lt; 20)) | (1u &lt;&lt; 20);
+
+    TIM2-&gt;PSC   = 16u - 1u;
+    TIM2-&gt;ARR   = 1000u - 1u;
+    TIM2-&gt;CCR1  = 0u;
+    TIM2-&gt;CCMR1 = (TIM2-&gt;CCMR1 &amp; ~(7u &lt;&lt; 4)) | (6u &lt;&lt; 4) | (1u &lt;&lt; 3);
+    TIM2-&gt;CCER |= 1u &lt;&lt; 0;
+    TIM2-&gt;EGR   = 1u &lt;&lt; 0;
+    TIM2-&gt;CR1  |= 1u &lt;&lt; 0;
+}
+
+void pwm_set_permille(uint32_t permille)
+{
+    if (permille &gt; 1000u) {
+        permille = 1000u;
+    }
+    TIM2-&gt;CCR1 = permille;
+}
+</pre></div>
+<ol class="walk" data-for="code9">
+  <li data-lines="4-19"><b class="what">نقشهٔ TIM2.</b> رجیسترها به ترتیب آدرس: <code>CR1</code> در ۰x۰۰ تا <code>CCR1</code> در ۰x۳۴. یک خانهٔ <code>RESERVED0</code> جای آدرس ۰x۳۰ را می‌گیرد (رجیستر تعریف‌نشده‌ای که نباید دست بخورد).
+    <span class="why">فقط رجیسترهایی را که لازم داریم تا CCR1 نوشتیم؛ ولی باید همه را بنویسیم تا آفست‌ها درست بیفتند (مثل RCC در درس ۳.۶).</span></li>
+  <li data-lines="21"><b class="what">آدرس پایه.</b> TIM2 در <code>0x40000000</code> است (باس APB1).</li>
+  <li data-lines="23-28"><b class="what">وارسی آفست‌ها.</b> شش <code>_Static_assert</code> که آفست‌های ۰x۱۴، ۰x۱۸، ۰x۲۰، ۰x۲۸، ۰x۲C و ۰x۳۴ را با مرجع (RM0383) تطبیق می‌دهد. اگر struct را اشتباه بنویسی، کامپایل نمی‌شود.</li>
+  <li data-lines="30-33"><b class="what">چهار رجیستر بیرونی.</b> ساعت GPIOA، ساعت TIM2 (آدرس <code>0x40023840</code>)، MODER و AFRL (آدرس <code>0x40020020</code>).</li>
+  <li data-lines="37-39"><b class="what">ساعت‌ها.</b> اول ساعت پورت A و تایمر را روشن می‌کنیم؛ خواندن بی‌مصرف <code>(void)RCC_APB1ENR</code> تأخیر کوچکی می‌دهد تا ساعت برقرار شود.</li>
+  <li data-lines="41"><b class="what">PA5 = عملکرد جایگزین.</b> دو بیت ۱۱..۱۰ را پاک و <code>10</code> (یعنی ۲) می‌گذاریم. اگر <code>01</code> بگذاری، پایه خروجی معمولی می‌شود و تایمر به آن نمی‌رسد.</li>
+  <li data-lines="42"><b class="what">انتخاب AF1.</b> چهار بیت ۲۳..۲۰ (<code>0xF &lt;&lt; 20</code>) پاک و مقدار ۱ گذاشته می‌شود.</li>
+  <li data-lines="44-46"><b class="what">سرعت و سقف.</b> <code>PSC = 15</code> (شمارنده ۱ مگاهرتز)، <code>ARR = 999</code> (هزار حالت)، <code>CCR1 = 0</code> (شروع با LED خاموش). می‌شود PWM با ۱ کیلوهرتز و ۱۰۰۰ سطح روشنی.
+    <span class="why">۱ کیلوهرتز آن‌قدر سریع است که چشم سوسو نمی‌بیند و ۱۰۰۰ سطح هم برای نور کافی است.</span></li>
+  <li data-lines="47"><b class="what">حالت PWM.</b> بیت‌های ۶..۴ اول پاک و بعد <code>110</code> نوشته می‌شود (<code>6u &lt;&lt; 4</code>)، و بیت ۳ (<code>OC1PE</code>) یک می‌شود.
+    <span class="why">با <code>OC1PE</code>، مقدار جدید <code>CCR1</code> فقط در پایان دورهٔ جاری اعمال می‌شود؛ وسط دوره عوض نمی‌شود و پالس ناقص نمی‌بینی.</span></li>
+  <li data-lines="48"><b class="what">وصل خروجی.</b> <code>CC1E</code> را یک می‌کنیم تا سیگنال به پایه برسد.</li>
+  <li data-lines="49"><b class="what">به‌روزرسانی دستی.</b> بیت <code>UG</code>: PSC و بقیه از رجیستر «پیش‌بار» به شمارنده منتقل می‌شوند.
+    <span class="why">PSC فقط در رویداد به‌روزرسانی اعمال می‌شود. بدون <code>UG</code>، اولین دوره با PSC قدیمی (صفر) کار می‌کند.</span></li>
+  <li data-lines="50"><b class="what">شروع.</b> <code>CEN</code> شمارنده را روشن می‌کند. از این لحظه سخت‌افزار خودش می‌شمارد.</li>
+  <li data-lines="53-59"><b class="what">تغییر روشنی.</b> ورودی از ۰ تا ۱۰۰۰ (هزارم). بیشتر از ۱۰۰۰ ممنوع است؛ <code>CCR1 = 1000</code> با <code>ARR = 999</code> یعنی همیشه بالا (۱۰۰٪).
+    <span class="why">هر مقدار بزرگ‌تر از <code>ARR + 1</code> هم همیشه بالاست، ولی محدود کردنش ورودی نامعتبر را از منطق برنامه بیرون می‌ماند.</span></li>
+</ol>
+
+<p>حالا «چراغ تنفسی»: هر ۱۰ میلی‌ثانیه روشنی ۱٪ زیاد و بعد کم می‌شود. همین SysTick و PWM کنار هم:</p>
+
+<div class="code" data-file="breathe.c" data-lang="c" data-verify="arm" data-project="stm32t" id="code10">
+<pre>
+#include &lt;stdint.h&gt;
+
+void systick_init_1ms(void);
+uint32_t millis(void);
+void pwm_init_1khz(void);
+void pwm_set_permille(uint32_t permille);
+
+int main(void)
+{
+    uint32_t last = 0u;
+    int32_t level = 0;
+    int32_t step = 10;
+
+    systick_init_1ms();
+    pwm_init_1khz();
+
+    for (;;) {
+        if (millis() - last &gt;= 10u) {
+            last += 10u;
+            level += step;
+            if (level &gt;= 1000) {
+                level = 1000;
+                step = -step;
+            } else if (level &lt;= 0) {
+                level = 0;
+                step = -step;
+            }
+            pwm_set_permille((uint32_t)level);
+        }
+    }
+}
+</pre></div>
+<ol class="walk" data-for="code10">
+  <li data-lines="3-6"><b class="what">اعلان توابع دو ماژول.</b> زمان (<code>systick.c</code>) و PWM (<code>pwm_tim2.c</code>).</li>
+  <li data-lines="10-12"><b class="what">وضعیت.</b> <code>level</code> روشنی فعلی (۰ تا ۱۰۰۰)، <code>step</code> گام تغییر (+۱۰ یا −۱۰). از نوع علامت‌دار چون منفی می‌شود.</li>
+  <li data-lines="14-15"><b class="what">راه‌اندازی.</b> هر دو ماژول یک‌بار.</li>
+  <li data-lines="17-19"><b class="what">هر ۱۰ms.</b> بدون <code>delay</code>: فقط نگاه به ساعت و <code>last += 10</code>.</li>
+  <li data-lines="20-27"><b class="what">مثلث.</b> روشنی را جلو ببر؛ به ۱۰۰۰ که رسید جهت را برعکس کن و روی ۱۰۰۰ نگه دار؛ به ۰ که رسید دوباره برعکس.
+    <span class="why">قفل‌کردن روی مرز، از رفتن به ۱۰۱۰ یا −۱۰ جلوگیری می‌کند. <code>level</code> علامت‌دار است تا منفی‌شدن دیده شود.</span></li>
+  <li data-lines="28"><b class="what">اعمال.</b> <code>(uint32_t)level</code> را در CCR1 بنویس. یک ثانیه بالا، یک ثانیه پایین.</li>
+</ol>
+<p>پردازنده بین دو ۱۰ms عملا بیکار است، و PWM بدون کمک او ادامه دارد. اگر بخواهی همان لحظه دکمه یا UART را هم بررسی کنی، در همان حلقه می‌گذاری.</p>
+
+<div class="callout tip"><div class="ct">تایمر فقط PWM نیست</div>
+<p>همین سخت‌افزار (شمارنده + مقایسه + پایه) چند کار دیگر هم می‌کند: <b>اندازه‌گیری پالس</b> (Input Capture: زمان دقیق لبهٔ ورودی را ذخیره می‌کند؛ مثلا برای فاصله‌سنج)، <b>تولید پالس تک</b> (One Pulse)، <b>وقفهٔ دوره‌ای</b> (هر <code>ARR + 1</code> کلاک یک وقفه) و <b>خواندن انکودر موتور</b> (Encoder). جزئیات هر کدام در فصل تایمر RM0383 است؛ همان چهار رجیستر پایه را می‌شناسی.</p></div>
+
+<h2 id="esp32">در ESP32 چه؟</h2>
+<p>ESP32 هستهٔ Xtensa است و SysTick ندارد؛ ولی ESP-IDF همه‌چیز را از پیش داده. هر مفهوم این درس معادلی دارد:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>در STM32 (این درس)</th><th>در ESP32 (ESP-IDF)</th></tr></thead>
+<tbody>
+<tr><td>حلقهٔ تأخیر <code>delay</code></td><td><code>vTaskDelay(pdMS_TO_TICKS(500))</code>: فقط <b>همین task</b> می‌خوابد؛ پردازنده به taskهای دیگر داده می‌شود</td></tr>
+<tr><td><code>millis()</code></td><td><code>esp_timer_get_time()</code>: میکروثانیه از روشن‌شدن، نوع <code>int64_t</code> (تقریبا هرگز دور نمی‌زند)</td></tr>
+<tr><td>SysTick + ISR</td><td>تیک FreeRTOS (معمولا ۱۰۰ بار در ثانیه؛ <code>CONFIG_FREERTOS_HZ</code> در <code>menuconfig</code>)</td></tr>
+<tr><td>زمان‌بند همکاری با جدول</td><td><code>esp_timer_start_periodic()</code> یا چند task</td></tr>
+<tr><td>TIM2 و PWM دستی</td><td>درایور LEDC (<code>driver/ledc.h</code>)</td></tr>
+</tbody></table></div>
+
+<p>نسخهٔ ESP32 چشمک بدون بلاک با <code>esp_timer_get_time()</code>. توجه: این‌ها قطعه‌کد هستند (در این محیط کامپایل نمی‌شوند)؛ نام‌ها را با مستندات ESP-IDF نسخهٔ ۵ تطبیق بده:</p>
+
+<div class="code" data-file="esp_timing.c" data-lang="c" data-verify="frag" id="code11">
+<pre>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_timer.h"
+#include "esp_log.h"
+
+static const char *TAG = "timing";
+
+void app_main(void)
+{
+    int64_t last_us = esp_timer_get_time();
+
+    while (1) {
+        int64_t now_us = esp_timer_get_time();
+        if (now_us - last_us &gt;= 500000) {
+            last_us += 500000;
+            ESP_LOGI(TAG, "half second passed");
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+</pre></div>
+<ol class="walk" data-for="code11">
+  <li data-lines="1-4"><b class="what">هدرها.</b> FreeRTOS برای <code>vTaskDelay</code>، <code>esp_timer.h</code> برای زمان، <code>esp_log.h</code> برای <code>ESP_LOGI</code>.</li>
+  <li data-lines="8-10"><b class="what">نقطهٔ شروع.</b> <code>app_main</code> خودش یک task است. زمان شروع را به میکروثانیه می‌گیریم.</li>
+  <li data-lines="14-17"><b class="what">همان الگوی <code>last += period</code>.</b> فقط واحد میکروثانیه است: ۵۰۰٬۰۰۰ µs = ۵۰۰ ms. تفریق روی <code>int64_t</code> است و چرخش عملا هرگز رخ نمی‌دهد (بیش از ۲۹۰ هزار سال).</li>
+  <li data-lines="18"><b class="what">خواب کوتاه.</b> ۱۰ میلی‌ثانیه <code>vTaskDelay</code>: این task می‌خوابد و بقیهٔ سیستم (Wi-Fi، taskهای دیگر) کار می‌کنند.
+    <span class="why">این با حلقهٔ خالی فرق اساسی دارد: CPU برای دیگران آزاد می‌شود و برق کمتر مصرف می‌شود.</span></li>
+</ol>
+
+<div class="callout warn"><div class="ct">دام <code>pdMS_TO_TICKS</code></div>
+<p>اگر تیک FreeRTOS ۱۰۰ هرتز باشد (۱۰ms)، آنگاه <code>pdMS_TO_TICKS(5)</code> برابر <b>۰</b> تیک می‌شود، چون تقسیم صحیح است. <code>vTaskDelay(0)</code> عملا صبر نمی‌کند. کمترین صبر واقعی برابر یک تیک است. برای دقت‌های زیر ۱۰ میلی‌ثانیه از <code>esp_timer</code> یا تایمر سخت‌افزاری استفاده کن، یا تیک را در <code>menuconfig</code> تندتر کن (هزینه: سربار بیشتر).</p></div>
+
+<p>ساخت <span class="term" data-t="softtimer">تایمر نرم‌افزاری</span> دوره‌ای با <code>esp_timer</code>: تابع callback هر ۵۰۰ms صدا زده می‌شود (نه در ISR؛ در یک task مخصوص، پس می‌تواند <code>ESP_LOGI</code> هم صدا بزند، ولی باز هم باید کوتاه باشد):</p>
+
+<div class="code" data-file="esp_periodic.c" data-lang="c" data-verify="frag" id="code12">
+<pre>
+#include "esp_timer.h"
+#include "esp_log.h"
+
+static const char *TAG = "periodic";
+
+static void on_timer(void *arg)
+{
+    ESP_LOGI(TAG, "tick");
+}
+
+void start_periodic(void)
+{
+    const esp_timer_create_args_t args = {
+        .callback = on_timer,
+        .arg = NULL,
+        .name = "half_sec",
+    };
+    esp_timer_handle_t timer;
+
+    ESP_ERROR_CHECK(esp_timer_create(&amp;args, &amp;timer));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(timer, 500000));
+}
+</pre></div>
+<ol class="walk" data-for="code12">
+  <li data-lines="6-9"><b class="what">تابع callback.</b> امضایش <code>void f(void *arg)</code> است؛ اشاره‌گر به تابع (درس ۴.۳).</li>
+  <li data-lines="13-17"><b class="what">ساختار پیکربندی.</b> با مقداردهی نامزد: تابع، آرگومان و یک اسم برای لاگ.</li>
+  <li data-lines="18"><b class="what">دستگیرهٔ تایمر.</b> <code>esp_timer_handle_t</code> یک handle مات است (درس ۴.۲).</li>
+  <li data-lines="20-21"><b class="what">ساخت و شروع.</b> <code>esp_timer_start_periodic</code> دوره را به <b>میکروثانیه</b> می‌گیرد: ۵۰۰٬۰۰۰. <code>ESP_ERROR_CHECK</code> اگر خطا باشد برنامه را با پیام متوقف می‌کند.</li>
+</ol>
+
+<p>PWM در ESP32 با <b>LEDC</b> (کنترل‌کنندهٔ PWM مخصوص LED) انجام می‌شود. همان مفاهیم: یک تایمر (فرکانس و دقت) و یک کانال (پایه و روشنی):</p>
+
+<div class="code" data-file="esp_ledc.c" data-lang="c" data-verify="frag" id="code13">
+<pre>
+#include "driver/ledc.h"
+
+void pwm_start(void)
+{
+    ledc_timer_config_t timer = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .duty_resolution = LEDC_TIMER_10_BIT,
+        .timer_num = LEDC_TIMER_0,
+        .freq_hz = 1000,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    ledc_channel_config_t channel = {
+        .gpio_num = 2,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = LEDC_CHANNEL_0,
+        .timer_sel = LEDC_TIMER_0,
+        .duty = 256,
+        .hpoint = 0,
+    };
+
+    ledc_timer_config(&amp;timer);
+    ledc_channel_config(&amp;channel);
+}
+
+void pwm_set(uint32_t duty)
+{
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+}
+</pre></div>
+<ol class="walk" data-for="code13">
+  <li data-lines="5-11"><b class="what">تایمر LEDC.</b> فرکانس ۱ کیلوهرتز و دقت ۱۰ بیت (یعنی ۱۰۲۴ سطح، مثل <code>ARR + 1</code> ما). <code>LEDC_AUTO_CLK</code> منبع کلاک را خودش انتخاب می‌کند.</li>
+  <li data-lines="12-19"><b class="what">کانال.</b> پایهٔ <code>GPIO2</code> (روی بسیاری از بردهای DevKit همان LED است؛ برد خودت را چک کن)، تایمر ۰، روشنی اولیه ۲۵۶ از ۱۰۲۴ = ۲۵٪.</li>
+  <li data-lines="21-22"><b class="what">اعمال پیکربندی.</b> اول تایمر، بعد کانال.
+    <span class="why">ترتیب مهم است: کانال به تایمری که هنوز ساخته نشده نمی‌تواند وصل شود.</span></li>
+  <li data-lines="25-29"><b class="what">تغییر روشنی.</b> <code>ledc_set_duty</code> عدد را می‌نویسد و <code>ledc_update_duty</code> آن را اعمال می‌کند (همان نقش <code>CCR1</code> و <code>UG</code> ما).</li>
+</ol>
+<p>برای فرکانس ثابت‌تر در <code>vTaskDelayUntil</code> هم (مثل <code>last += period</code> ما) نگاه کن: <code>TickType_t last = xTaskGetTickCount(); vTaskDelayUntil(&amp;last, pdMS_TO_TICKS(500));</code>. مستندات رسمی: <a href="https://docs.espressif.com/projects/esp-idf/" target="_blank" rel="noopener">ESP-IDF Programming Guide</a> (بخش‌های ESP Timer، LEDC و FreeRTOS). ESP32 و Wi-Fi در درس <a href="5-6.html">۵.۶</a> می‌آید.</p>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+
+<div class="quiz" data-answer="2">
+  <p class="q">با کلاک ۱۶ مگاهرتز می‌خواهیم SysTick هر ۱ میلی‌ثانیه وقفه بدهد. <code>LOAD</code> چه باشد؟</p>
+  <ol>
+    <li data-why="۱۶۰۰۰ کلاک درست است، ولی شمارنده از LOAD تا ۰ می‌شمارد یعنی LOAD+1 مقدار؛ اگر ۱۶۰۰۰ بنویسی دوره ۱۶۰۰۱ کلاک می‌شود.">۱۶۰۰۰</li>
+    <li>۱۵۹۹۹</li>
+    <li data-why="۱۰۰۰ کلاک یعنی ۶۲٫۵ میکروثانیه؛ عدد فرکانس تیک (۱ کیلوهرتز) را با تعداد کلاک اشتباه گرفته‌ای.">۱۰۰۰</li>
+    <li data-why="۱۶ میلیون کلاک یک ثانیه است، نه یک میلی‌ثانیه؛ ضمن اینکه از حداکثر ۲۴ بیت (۱۶٬۷۷۷٬۲۱۵) هم بیشتر می‌شود.">۱۵۹۹۹۹۹۹</li>
+  </ol>
+  <div class="fb">دورهٔ تیک = (LOAD + 1) ÷ فرکانس. برای ۱ms: ۱۶٬۰۰۰٬۰۰۰ ÷ ۱۰۰۰ = ۱۶۰۰۰ کلاک، پس <code>LOAD = 15999</code>.</div>
+</div>
+
+<div class="quiz" data-answer="4">
+  <p class="q">اگر <code>uint32_t start = 4294967290u;</code> باشد و بعد از چرخش شمارنده <code>uint32_t now = 4u;</code>، مقدار <code>now - start</code> چند است؟</p>
+  <ol>
+    <li data-why="این مقدار خود start است؛ تفریق آن را برنمی‌گرداند.">۴۲۹۴۹۶۷۲۹۰</li>
+    <li data-why="نتیجهٔ «ریاضی معمولی» است. ولی نوع بی‌علامت منفی ندارد و به‌جای منفی، به پیمانهٔ ۲^۳۲ دور می‌زند.">−۴۲۹۴۹۶۷۲۸۶</li>
+    <li data-why="بی‌علامت رفتار تعریف‌نشده ندارد؛ چرخش برایش قانونی و کاملا تعریف‌شده است (UB مال علامت‌دار است).">رفتار تعریف‌نشده</li>
+    <li>۱۰</li>
+  </ol>
+  <div class="fb">حساب <code>uint32_t</code> به پیمانهٔ ۲<sup>۳۲</sup> است: ۴ − ۴۲۹۴۹۶۷۲۹۰ + ۴۲۹۴۹۶۷۲۹۶ = ۱۰. یعنی ۶ میلی‌ثانیه تا چرخش و ۴ بعد از آن.</div>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="q">در این کد کدام خط بعد از حدود ۴۹ روز کار روشن‌ماندن دستگاه رفتار عجیب می‌دهد؟
+  <br><code>1: uint32_t last = 0;</code>
+  <br><code>2: for (;;) {</code>
+  <br><code>3:   if (millis() &gt;= last + 500u) {</code>
+  <br><code>4:     last = millis();</code>
+  <br><code>5:     toggle_led();  }  }</code></p>
+  <ol>
+    <li>خط ۳: چون <code>last + 500u</code> می‌تواند دور بزند و مقایسه را خراب کند</li>
+    <li data-why="مقداردهی اولیهٔ ۰ درست است؛ مشکل در جمع داخل مقایسه است.">خط ۱: <code>last</code> باید بزرگ‌تر از صفر شروع شود</li>
+    <li data-why="این خط مشکل رانش دارد (خطای ریتم جمع می‌شود)، ولی ربطی به ۴۹ روز ندارد.">خط ۴: <code>last = millis()</code>، چون رانش می‌کند</li>
+    <li data-why="toggle_led فقط LED را عوض می‌کند و به زمان کاری ندارد.">خط ۵: <code>toggle_led()</code></li>
+  </ol>
+  <div class="fb">مشکل چرخش در خط ۳ است (به‌جای آن <code>millis() - last &gt;= 500u</code> بنویس). خط ۴ مشکل دیگری دارد: رانش. با <code>last += 500u</code> هر دو درست می‌شوند.</div>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="q">چرا <code>g_ticks</code> که ISR آن را زیاد می‌کند و <code>main</code> می‌خواند، باید <code>volatile</code> باشد؟</p>
+  <ol>
+    <li data-why="volatile سرعت خواندن را کم نمی‌کند و ربطی به اندازه ندارد؛ فقط به کامپایلر می‌گوید هر خواندن را واقعا انجام بده.">تا متغیر در Flash قرار بگیرد</li>
+    <li data-why="volatile اتمی‌بودن نمی‌دهد. برای ۳۲ بیتیِ تراز‌شدهٔ Cortex-M خواندن یک دستور است، ولی این ربطی به volatile ندارد (درس ۳.۶).">تا خواندن و نوشتن آن اتمی شود</li>
+    <li>چون کامپایلر از وجود ISR خبر ندارد و ممکن است مقدار را یک‌بار در حلقه بخواند و همیشه همان را ببیند</li>
+    <li data-why="volatile فقط جلوی بهینه‌سازی حذف/ترکیب دسترسی را می‌گیرد؛ چرخش ۳۲ بیتی را تغییر نمی‌دهد.">تا از چرخش شمارنده جلوگیری کند</li>
+  </ol>
+  <div class="fb">کامپایلر در تحلیل <code>main</code> هیچ جای برنامه را نمی‌بیند که <code>g_ticks</code> را عوض کند (ISR را هیچ‌کس صدا نمی‌زند). <code>volatile</code> می‌گوید هر خواندن را واقعا انجام بده.</div>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="q">تایمر: <code>PSC = 15</code>، <code>ARR = 999</code>، <code>CCR1 = 250</code> و کلاک ۱۶ مگاهرتز. فرکانس و درصد روشنی؟</p>
+  <ol>
+    <li data-why="۱۶ مگاهرتز ÷ ۱۰۰۰ را حساب کرده‌ای ولی PSC را فراموش کرده‌ای؛ ضمنا CCR1 ÷ ARR هم غلط است (مخرج ARR+1).">۱۶ کیلوهرتز، ۲۵٪</li>
+    <li>۱ کیلوهرتز، ۲۵٪</li>
+    <li data-why="فرکانس درست است، ولی درصد روشنی CCR1 ÷ (ARR+1) = ۲۵۰ ÷ ۱۰۰۰ است، نه ۲۵۰ ÷ ۱۰۰.">۱ کیلوهرتز، ۲۵۰٪</li>
+    <li data-why="۷۵٪ درصد «خاموشی» است. در PWM حالت ۱ خروجی تا وقتی CNT &lt; CCR1 بالاست.">۱ کیلوهرتز، ۷۵٪</li>
+  </ol>
+  <div class="fb">f = ۱۶ مگاهرتز ÷ (۱۶ × ۱۰۰۰) = ۱ کیلوهرتز. duty = ۲۵۰ ÷ ۱۰۰۰ = ۲۵٪.</div>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="q">در ESP-IDF با تیک ۱۰۰ هرتز، <code>vTaskDelay(pdMS_TO_TICKS(5))</code> چه می‌کند؟</p>
+  <ol>
+    <li data-why="۵ میلی‌ثانیه از یک تیک (۱۰ms) کوچک‌تر است؛ FreeRTOS نمی‌تواند نیم‌تیک صبر کند.">دقیقا ۵ میلی‌ثانیه صبر می‌کند</li>
+    <li data-why="گرد به بالا نمی‌شود؛ pdMS_TO_TICKS تقسیم صحیح می‌کند و به پایین گرد می‌شود.">۱۰ میلی‌ثانیه صبر می‌کند (گرد به بالا)</li>
+    <li>عملا صبر نمی‌کند، چون <code>pdMS_TO_TICKS(5)</code> برابر ۰ تیک است</li>
+    <li data-why="کامپایل درست است؛ فقط نتیجه همان ۰ تیک است و خطا نمی‌دهد.">خطای کامپایل می‌دهد</li>
+  </ol>
+  <div class="fb">۵ × ۱۰۰ ÷ ۱۰۰۰ = ۰ (تقسیم صحیح). برای زیر ۱۰ms از <code>esp_timer</code> یا تایمر سخت‌افزاری استفاده کن.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: <code>LOAD</code> برای کلاک‌های مختلف</div>
+<p>برنامه‌ات را از HSI (۱۶ مگاهرتز) به PLL می‌بری و کلاک بالاتر می‌رود. باید <code>LOAD</code> را عوض کنی.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> برای کلاک ۱۰۰ مگاهرتز (حداکثر STM32F411) و تیک ۱ms، مقدار <code>LOAD</code> چند می‌شود؟</li>
+  <li><b>حل:</b> برنامه‌ای بنویس که برای سه کلاک ۱۶، ۴۸ و ۱۰۰ مگاهرتز مقدار <code>LOAD</code> را حساب کند و بگوید در ۲۴ بیت جا می‌شود یا نه.</li>
+  <li><b>فکر کن:</b> بیشترین دورهٔ ممکن SysTick (بدون تقسیم‌بر-۸) روی ۱۰۰ مگاهرتز چند میلی‌ثانیه است؟ برای تأخیر ۵۰۰ میلی‌ثانیه‌ای چه باید کرد؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p><code>LOAD = f_clk / 1000 - 1</code>. بیشترین: <code>2^24 = 16777216</code> کلاک تقسیم بر (کلاک در هر میلی‌ثانیه).</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="load_calc.c">
+$ ./load_calc
+ 16000000 Hz: LOAD =  15999, fits 24 bits, max period = 1048 ms
+ 48000000 Hz: LOAD =  47999, fits 24 bits, max period = 349 ms
+100000000 Hz: LOAD =  99999, fits 24 bits, max period = 167 ms
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="load_calc.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    uint32_t clocks[] = { 16000000u, 48000000u, 100000000u };
+
+    for (unsigned i = 0; i &lt; sizeof clocks / sizeof clocks[0]; i++) {
+        uint32_t hz = clocks[i];
+        uint32_t load = hz / 1000u - 1u;
+        uint32_t max_ms = 16777216u / (hz / 1000u);
+
+        printf("%9u Hz: LOAD = %6u, %s, max period = %u ms\n",
+               (unsigned)hz, (unsigned)load,
+               load &lt;= 0xFFFFFFu ? "fits 24 bits" : "TOO BIG",
+               (unsigned)max_ms);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="6"><b class="what">کلاک‌های آزمایشی.</b> آرایه‌ای از سه عدد؛ پسوند <code>u</code> چون بی‌علامت‌اند.</li>
+  <li data-lines="10"><b class="what">LOAD.</b> تعداد کلاک در یک میلی‌ثانیه منهای یک.</li>
+  <li data-lines="11"><b class="what">بیشترین دوره.</b> ۲<sup>۲۴</sup> کلاک تقسیم بر کلاک در هر میلی‌ثانیه (تقسیم صحیح).
+    <span class="why">۲<sup>۲۴</sup> = ۱۶٬۷۷۷٬۲۱۶ کلاک ماکسیمم است؛ ۱۰۰ مگاهرتز یعنی ۱۰۰٬۰۰۰ کلاک در هر ms.</span></li>
+  <li data-lines="13-16"><b class="what">چاپ.</b> اگر <code>load &gt; 0xFFFFFF</code> بود «TOO BIG» می‌نویسیم.</li>
+</ol>
+<pre class="term" data-from="load_calc.c">
+$ gcc -std=c11 -Wall -Wextra -o load_calc load_calc.c
+$ ./load_calc
+ 16000000 Hz: LOAD =  15999, fits 24 bits, max period = 1048 ms
+ 48000000 Hz: LOAD =  47999, fits 24 bits, max period = 349 ms
+100000000 Hz: LOAD =  99999, fits 24 bits, max period = 167 ms
+</pre>
+<p>جواب قسمت ب: ۱۶۷ میلی‌ثانیه؛ برای ۵۰۰ میلی‌ثانیه SysTick را روی ۱ms نگه می‌داری و <code>millis()</code> را می‌شماری (همان کاری که کردیم)، یا از تایمر ۳۲ بیتی TIM2 استفاده می‌کنی.</p></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: باگی که فقط هر ۴۹ روز ظاهر می‌شود</div>
+<p>این تابع انتظار با مهلت ۲۰ میلی‌ثانیه را شبیه‌سازی می‌کند؛ ولی شمارنده نزدیک چرخش است (فقط ۵ میلی‌ثانیه تا آخر).</p>
+<div class="code" data-file="wait_bug.c" data-lang="c" data-verify="host" id="ex2bad">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+static volatile uint32_t g_ticks = 4294967290u;   // ۵ms مانده به چرخش
+
+static uint32_t millis(void) { return g_ticks; }
+
+static void sim_wait_step(void) { g_ticks++; }
+
+int main(void)
+{
+    uint32_t start = millis();
+    uint32_t timeout_ms = 20u;
+
+    while (millis() &lt; start + timeout_ms) {    // منتظر می‌مانیم
+        sim_wait_step();
+    }
+    printf("waited %u ms\n", (unsigned)(millis() - start));
+    return 0;
+}
+</pre></div>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> فکر می‌کنی چه چاپ می‌شود؟ (بدون اجرا حدس بزن.)</li>
+  <li><b>باگ‌یابی:</b> برنامه را اجرا کن. چرا مهلت اصلا صبر نکرد؟ عدد <code>start + timeout_ms</code> چند است؟</li>
+  <li><b>اصلاح:</b> شرط حلقه را طوری عوض کن که با چرخش هم درست کار کند.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>جمع <code>4294967290 + 20</code> از ۴۲۹۴۹۶۷۲۹۵ رد می‌شود. نتیجهٔ چرخیده را حساب کن و با <code>millis()</code> مقایسه کن. راه‌حل: به‌جای مقایسهٔ زمان مطلق، «مقدار گذشته» را مقایسه کن.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="wait_bug.c">
+$ ./wait_bug
+waited 0 ms
+</pre>
+<p>نسخهٔ اصلاح‌شده باید <code>waited 20 ms</code> چاپ کند.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="wait_fix.c" data-lang="c" data-verify="host" id="ex2">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+static volatile uint32_t g_ticks = 4294967290u;   // ۵ms مانده به چرخش
+
+static uint32_t millis(void) { return g_ticks; }
+
+static void sim_wait_step(void) { g_ticks++; }
+
+int main(void)
+{
+    uint32_t start = millis();
+    uint32_t timeout_ms = 20u;
+
+    while (millis() - start &lt; timeout_ms) {    // تفریق بی‌علامت: امن در برابر چرخش
+        sim_wait_step();
+    }
+    printf("waited %u ms\n", (unsigned)(millis() - start));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="4"><b class="what">شمارنده نزدیک لبه.</b> با <code>4294967290</code> شروع می‌کنیم تا چرخش را در ۲۰ میلی‌ثانیه ببینیم.</li>
+  <li data-lines="12-13"><b class="what">شروع و مهلت.</b> <code>start = 4294967290</code>؛ <code>start + 20</code> می‌شود ۱۴ (چرخیده).</li>
+  <li data-lines="15"><b class="what">شرط اصلاح‌شده.</b> «چقدر گذشته؟» را با تفریق بی‌علامت می‌گیریم و با مهلت مقایسه می‌کنیم.
+    <span class="why">در نسخهٔ باگ‌دار، <code>millis() &lt; 14</code> از همان اول نادرست است چون <code>millis()</code> برابر ۴٬۲۹۴٬۹۶۷٬۲۹۰ است؛ حلقه اصلا وارد نمی‌شود و مهلت ۰ می‌شود.</span></li>
+  <li data-lines="18"><b class="what">نتیجه.</b> بعد از ۲۰ میلی‌ثانیه (که در آن شمارنده دور زد) حلقه تمام می‌شود.</li>
+</ol>
+<pre class="term" data-from="wait_fix.c">
+$ gcc -std=c11 -Wall -Wextra -o wait_fix wait_fix.c
+$ ./wait_fix
+waited 20 ms
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: PWM برای LED و سروو (ارتباط با سخت‌افزار)</div>
+<p>برای تایمر ۱۶ مگاهرتز می‌خواهیم سه پیکربندی حساب کنیم و در <code>pwm_tim2.c</code> پیاده کنیم.</p>
+<ol class="parts">
+  <li><b>حساب:</b> فرکانس ۱ کیلوهرتز و روشنی ۲۵٪ با <code>PSC = 15</code>: مقدار <code>ARR</code> و <code>CCR1</code> چند است؟</li>
+  <li><b>تغییر:</b> فرکانس ۲۰ کیلوهرتز (بالاتر از شنوایی) با <code>PSC = 0</code> و روشنی ۲۵٪؛ <code>ARR</code> و <code>CCR1</code> چند می‌شوند؟</li>
+  <li><b>چالش:</b> سروو معمولا سیگنال ۵۰ هرتز (دورهٔ ۲۰ میلی‌ثانیه) می‌خواهد و عرض پالس ۱٫۵ ms یعنی وسط. با <code>PSC = 15</code> مقدار <code>ARR</code> و <code>CCR1</code> را حساب کن.</li>
+</ol>
+<details><summary>راهنمایی</summary><p><code>tick = 16 MHz / (PSC+1)</code>؛ <code>ARR = tick / f - 1</code>؛ <code>CCR1 = (ARR+1) × درصد</code>. برای سروو ۱٫۵ms از ۲۰ms یعنی ۷٫۵٪.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="pwm_calc.c">
+$ ./pwm_calc
+1kHz 25%   PSC=15 ARR=  999 CCR1=  250
+20kHz 25%  PSC= 0 ARR=  799 CCR1=  200
+servo 1.5ms PSC=15 ARR=19999 CCR1= 1500
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="pwm_calc.c" data-lang="c" data-verify="host" id="ex3">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+#define TIM_CLK 16000000u
+
+static void calc(const char *what, uint32_t freq_hz, uint32_t psc, uint32_t high_permille)
+{
+    uint32_t tick_hz = TIM_CLK / (psc + 1u);
+    uint32_t arr = tick_hz / freq_hz - 1u;
+    uint32_t ccr = (arr + 1u) * high_permille / 1000u;
+
+    printf("%-10s PSC=%2u ARR=%5u CCR1=%5u\n", what,
+           (unsigned)psc, (unsigned)arr, (unsigned)ccr);
+}
+
+int main(void)
+{
+    calc("1kHz 25%", 1000u, 15u, 250u);
+    calc("20kHz 25%", 20000u, 0u, 250u);
+    calc("servo 1.5ms", 50u, 15u, 75u);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="4"><b class="what">کلاک تایمر.</b> ۱۶ مگاهرتز (تنظیم پیش‌فرض).</li>
+  <li data-lines="8"><b class="what">سرعت شمارنده.</b> کلاک تقسیم بر <code>PSC + 1</code>.</li>
+  <li data-lines="9"><b class="what">ARR.</b> تعداد تیک در یک دوره منهای یک.</li>
+  <li data-lines="10"><b class="what">CCR1.</b> تعداد تیک‌های بالا: <code>(ARR + 1)</code> ضرب در هزارم روشنی، تقسیم بر ۱۰۰۰.
+    <span class="why">هزارم به‌جای درصد تا عدد اعشاری نداشته باشیم (سروو ۷٫۵٪ = ۷۵ هزارم).</span></li>
+  <li data-lines="12-13"><b class="what">چاپ.</b> عرض ستون‌ها با <code>%-10s</code>، <code>%2u</code> و <code>%5u</code>.</li>
+  <li data-lines="18-20"><b class="what">سه پیکربندی.</b> LED، PWM بالا و سروو.</li>
+</ol>
+<pre class="term" data-from="pwm_calc.c">
+$ gcc -std=c11 -Wall -Wextra -o pwm_calc pwm_calc.c
+$ ./pwm_calc
+1kHz 25%   PSC=15 ARR=  999 CCR1=  250
+20kHz 25%  PSC= 0 ARR=  799 CCR1=  200
+servo 1.5ms PSC=15 ARR=19999 CCR1= 1500
+</pre>
+<p>برای اجرا روی برد، در <code>pwm_init_1khz</code> فقط دو عدد را عوض می‌کنی (<code>TIM2-&gt;PSC</code> و <code>TIM2-&gt;ARR</code>)؛ و <code>pwm_set_permille</code> را برای مقیاس جدید باز‌تعریف می‌کنی.</p></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>سه جا معمولا گیر می‌کنند. اول: <b>LOAD یا PSC/ARR را بدون «منهای یک» می‌نویسند</b> و همه‌چیز یک‌واحد خطا دارد؛ فرمول را روی کاغذ بنویس و سه‌بار بررسی کن. دوم: <b>هنوز ذهنشان «delay» است</b> و داخل تابع‌ها صبر می‌گذارند؛ هر تابعت باید زود برگردد. سوم: <b>مقایسهٔ زمان با جمع</b> که هفت‌هفته بعد می‌ترکد. اگر PWM پایه‌ات هیچ چیزی نشان نمی‌دهد، به ترتیب این را بپرس: ساعت TIM2 روشن است؟ پایه AF است؟ شمارهٔ AF درست است؟ <code>CC1E</code> و <code>CEN</code> یک‌اند؟ ۹۰٪ مواقع یکی از این چهار جواب می‌دهد.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li>حلقهٔ تأخیر بلاک می‌کند و دقتش به کد بستگی دارد؛ راه حرفه‌ای: خواندن ساعت (<code>millis()</code>) و «کار را در صورت رسیدن وقتش انجام بده».</li>
+  <li>SysTick شمارندهٔ ۲۴ بیتی هستهٔ Cortex-M است (<code>CTRL</code> <code>0xE000E010</code>، <code>LOAD</code> +4، <code>VAL</code> +8). <code>LOAD = f/1000 - 1</code> برای ۱ms؛ <code>CTRL = 7</code> یعنی کلاک پردازنده + وقفه + شروع.</li>
+  <li>ISR فقط <code>g_ticks++</code> می‌کند؛ اسم <code>SysTick_Handler</code> باید دقیقا با جدول وقفه یکی باشد؛ <code>g_ticks</code> باید <code>volatile</code> باشد.</li>
+  <li>زمان را همیشه با <code>(uint32_t)(now - start) &gt;= مدت</code> مقایسه کن، نه با جمع؛ ۳۲ بیت بعد از ۴۹٫۷ روز دور می‌زند.</li>
+  <li>برای دوره‌ای‌ها <code>last += period</code> (نه <code>last = now</code>)؛ برای انتظار سخت‌افزار همیشه مهلت (timeout).</li>
+  <li>زمان‌بند همکاری: جدول <code>{دوره، آخرین، تابع}</code>؛ هر کار کوتاه، هرگز <code>delay</code> در آن نیست.</li>
+  <li>PWM با TIM2: <code>f = f_clk/((PSC+1)(ARR+1))</code>، <code>duty = CCR1/(ARR+1)</code>؛ PA5 = AF1؛ مراحل: ساعت، AF، PSC/ARR، <code>OC1M=110</code>، <code>CC1E</code>، <code>UG</code>، <code>CEN</code>.</li>
+  <li>در ESP32: <code>vTaskDelay(pdMS_TO_TICKS())</code> (دقت‌اش یک تیک)، <code>esp_timer_get_time()</code> (µs، ۶۴ بیتی) و LEDC برای PWM.</li>
+</ul></div>
+
+</article>
+</body>
+</html>
