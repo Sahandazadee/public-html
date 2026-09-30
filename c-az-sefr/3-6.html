@@ -106,7 +106,7 @@
 </tbody></table></div>
 
 <div class="callout info"><div class="ct">چرا اینقدر «واقعی»؟</div>
-<p>این عددها را از حافظه ندارم و از خودم درنیاورده‌ام؛ در مستند رسمی <b>RM0383</b> (Reference Manual تراشهٔ STM32F411، درس <a href="1-3.html">۱.۳</a>) در بخش GPIO و نقشهٔ حافظه هستند. هر بار که با تراشهٔ تازه‌ای کار می‌کنی، اولین کارت باز کردن همین مستند و پیدا کردن «آدرس پایه» و «آفست رجیستر» است. اشتباه در یک رقم = رجیستر دیگر.</p></div>
+<p>این عددها از خود من نیستند و از مستند رسمی <b>RM0383</b> (Reference Manual تراشهٔ STM32F411، درس <a href="1-3.html">۱.۳</a>) در بخش GPIO و نقشهٔ حافظه آمده‌اند. هر بار که با تراشهٔ تازه‌ای کار می‌کنی، اولین کارت باز کردن همین مستند و پیدا کردن «آدرس پایه» و «آفست رجیستر» است. اشتباه در یک رقم = رجیستر دیگر.</p></div>
 
 <h2 id="pointer">رجیستر با اشاره‌گر: یک خط با سه تکه</h2>
 <p>در درس <a href="3-2.html">۳.۲</a> یاد گرفتی اشاره‌گر یعنی «آدرس یک قفسه»، و با <code>*</code> به خودِ قفسه می‌رسی. رجیستر هم یک قفسه است که آدرسش را از پیش می‌دانیم. پس کافی است آدرس را به اشاره‌گر تبدیل کنیم و <code>*</code> بزنیم:</p>
@@ -298,7 +298,32 @@ wait_volatile:
 <h3>دو بلای دیگر که <span class="en">volatile</span> جلویشان را می‌گیرد</h3>
 <p>خواندن تکراری تنها بهینه‌سازی خطرناک نیست. دو مورد دیگر، این بار با دو رجیستر داده‌ای UART که هر بایت نوشته‌شده را به خط سریال می‌فرستد (خانهٔ <code>0x40004404</code> در USART2 روی STM32F411، در درس <a href="5-5.html">۵.۵</a> کامل می‌شود). ما دو بایت «H» و «i» می‌فرستیم. یک بار بدون <code>volatile</code> و یک بار با آن:</p>
 
+<div class="code" data-file="twice.c" data-lang="c" data-verify="arm" data-cflags="-O2" id="srcTwice">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define DR_PLAIN    (*(uint32_t *)0x40004404u)
+#define DR_VOLATILE (*(volatile uint32_t *)0x40004404u)
+
+void send_plain(void)
+{
+    DR_PLAIN = 'H';
+    DR_PLAIN = 'i';
+}
+
+void send_volatile(void)
+{
+    DR_VOLATILE = 'H';
+    DR_VOLATILE = 'i';
+}
+</pre></div>
+<ol class="walk" data-for="srcTwice">
+  <li data-lines="3-4"><b class="what">دو ماکرو برای یک رجیستر.</b> هر دو به آدرس <code>0x40004404</code> (USART2_DR) اشاره می‌کنند؛ یکی معمولی و یکی <code>volatile</code>.</li>
+  <li data-lines="6-16"><b class="what">دو نوشتن پشت هم.</b> هر تابع اول «H» و بعد «i» را می‌نویسد. فرمان زیر هر دو را با <code>-O2</code> کامپایل و اسمبلی‌شان را نشان می‌دهد.
+    <span class="why">فقط <code>volatile</code> فرق دارد؛ بقیهٔ کد یکی است.</span></li>
+</ol>
 <pre class="term" data-kind="cmd">
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -O2 -c twice.c
 $ arm-none-eabi-objdump -d twice.o          # کد با -O2 ساخته شده
 send_plain:
    mov.w  r3, #0x40004000
@@ -316,7 +341,27 @@ send_volatile:
 <p><b>نتیجه:</b> نسخهٔ معمولی فقط <code>'i'</code> را می‌فرستد. کامپایلر گفته «نوشتن اول را بعدی روی آن می‌نویسد؛ پس اولی بی‌اثر است و حذفش می‌کنم». روی قفسهٔ کتاب منطقی است؛ روی UART یعنی بایت «H» هرگز فرستاده نمی‌شود! با <code>volatile</code> هر دو <code>str</code> باقی می‌مانند، به همان ترتیب.</p>
 
 <p>مورد سوم: <b>تأخیر با حلقهٔ خالی</b>. ساده‌ترین «صبر کردن» در برنامه‌های اولیه:</p>
+<div class="code" data-file="delay.c" data-lang="c" data-verify="arm" data-cflags="-O2" id="srcDelay">
+<pre>
+#include &lt;stdint.h&gt;
+
+void delay_plain(void)
+{
+    for (uint32_t i = 0; i &lt; 1000000u; i++) {
+    }
+}
+
+void delay_volatile(void)
+{
+    for (volatile uint32_t i = 0; i &lt; 1000000u; i++) {
+    }
+}
+</pre></div>
+<ol class="walk" data-for="srcDelay">
+  <li data-lines="3-13"><b class="what">دو حلقهٔ خالی.</b> یکی با شمارندهٔ معمولی و یکی با شمارندهٔ <code>volatile</code>؛ هر دو یک میلیون بار می‌شمارند و کاری بیرون از خود انجام نمی‌دهند.</li>
+</ol>
 <pre class="term" data-kind="cmd">
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -O2 -c delay.c
 $ arm-none-eabi-objdump -d delay.o          # -O2؛ حلقه از ۰ تا ۱۰۰۰۰۰۰
 delay_plain:
    bx     lr                       @ کل حلقه حذف شد!
@@ -347,8 +392,23 @@ delay_volatile:
   <li><b>قفل و اتمی نیست.</b> ببین <code>g_events++</code> روی یک متغیر <code>volatile</code> چه می‌شود:</li>
 </ul>
 
+<div class="code" data-file="incr.c" data-lang="c" data-verify="arm" data-cflags="-O2" id="srcIncr">
+<pre>
+#include &lt;stdint.h&gt;
+
+volatile uint32_t g_events;
+
+void on_event(void)
+{
+    g_events++;
+}
+</pre></div>
+<ol class="walk" data-for="srcIncr">
+  <li data-lines="3-8"><b class="what">شمارندهٔ رویداد.</b> <code>g_events++</code> روی متغیر <code>volatile</code>: فرمان زیر نشان می‌دهد این یک خط C به چند دستور ماشین تبدیل می‌شود.</li>
+</ol>
 <pre class="term" data-kind="cmd">
-$ arm-none-eabi-objdump -d incr.o          # volatile uint32_t g_events; g_events++;
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -O2 -c incr.c
+$ arm-none-eabi-objdump -d incr.o          # g_events از نوع volatile uint32_t
 on_event:
    ldr    r2, [pc, #8]          @ آدرس g_events
    ldr    r3, [r2, #0]          @ ۱) خواندن
@@ -653,18 +713,21 @@ int main(void)
 </pre></div>
 <ol class="walk" data-for="code7">
   <li data-lines="3-5"><b class="what">سه رجیستر.</b> RCC_AHB1ENR (روشن‌کردن ساعت)، GPIOA_MODER (حالت پایه‌ها)، GPIOA_BSRR (روشن/خاموش‌کردن). آدرس هر کدام = پایه + آفست از مستندات.</li>
-  <li data-lines="7-11"><b class="what">تأخیر خام.</b> حلقه‌ای که ۴۰۰ هزار بار می‌شمارد. شمارنده <code>volatile</code> است تا کامپایلر حلقه را حذف نکند (همان دام بخش قبل). زمان تقریبی آن به بهینه‌سازی و کلاک (پیش‌فرض ۱۶ مگاهرتز HSI) بستگی دارد و در حد چند دهم ثانیه است.
+  <li data-lines="7-11"><b class="what">تأخیر خام.</b> حلقه‌ای که ۴۰۰ هزار بار می‌شمارد. شمارنده <code>volatile</code> است تا کامپایلر حلقه را حذف نکند (همان دام بخش قبل). زمان آن به بهینه‌سازی و کلاک (پیش‌فرض ۱۶ مگاهرتز HSI) بستگی دارد: با <code>-O0</code> تقریبا ۰٫۲ ثانیه است و با <code>-O2</code> کد کوتاه‌تر است و چشمک تندتر دیده می‌شود (این‌ها برآورد تقریبی‌اند، اندازه‌گیری نشده‌اند).
     <span class="why">این یک راه بد ولی ساده است؛ زمان‌بندی درست با SysTick در درس ۵.۴ می‌آید.</span></li>
   <li data-lines="15"><b class="what">main بدون <code>void</code> برگشتی.</b> <code>int main(void)</code>؛ ولی روی برد هرگز برنمی‌گردد (حلقهٔ بی‌نهایت پایین).</li>
   <li data-lines="16"><b class="what">ساعت GPIOA.</b> بیت ۰ رجیستر <code>RCC_AHB1ENR</code> را یک می‌کنیم. بدون این، همهٔ نوشتن‌های بعدی روی GPIOA بی‌اثر است.
     <span class="why">این متداول‌ترین علت «LED من چشمک نمی‌زند»: ساعت پورت فراموش شده.</span></li>
-  <li data-lines="17"><b class="what">خواندن بی‌مصرف.</b> <code>(void)RCC_AHB1ENR;</code> فقط یک بار رجیستر را می‌خواند و نتیجه را دور می‌ریزد. چون رجیستر <code>volatile</code> است، کامپایلر این خواندن را حذف <b>نمی‌کند</b>. خوانده‌شدن، تأخیر کوچکی می‌دهد تا ساعت پورت واقعا برقرار شود (ST در مستندات خود توصیه می‌کند؛ جزئیات را در errata/مستندات تراشه ببین).</li>
+  <li data-lines="17"><b class="what">خواندن بی‌مصرف.</b> <code>(void)RCC_AHB1ENR;</code> فقط یک بار رجیستر را می‌خواند و نتیجه را دور می‌ریزد. چون رجیستر <code>volatile</code> است، کامپایلر این خواندن را حذف <b>نمی‌کند</b>. خوانده‌شدن، تأخیر کوچکی می‌دهد تا ساعت پورت واقعا برقرار شود (طبق errata تراشه‌های STM32F4، پس از فعال‌سازی کلاک یک پریفرال، دسترسی‌ای که بلافاصله بعدش بیاید ممکن است یک یا دو سیکل کلاک بگیرد و خراب شود؛ خواندن رجیستر آن تأخیر را فراهم می‌کند. برای شمارهٔ دقیق سند، «STM32F411xC/E errata sheet» را در <a href="https://www.st.com" target="_blank" rel="noopener">st.com</a> جست‌وجو کن؛ شماره‌اش را اینجا حدس نمی‌زنم).</li>
   <li data-lines="18"><b class="what">PA5 خروجی.</b> اول دو بیت ۱۱ و ۱۰ را پاک می‌کنیم (<code>3u &lt;&lt; 10</code> = <code>0b11</code> در بیت‌های ۱۰ و ۱۱)، بعد <code>01</code> می‌گذاریم. بقیهٔ پایه‌ها دست‌نخورده می‌مانند.</li>
   <li data-lines="20-25"><b class="what">حلقهٔ چشمک.</b> بیت ۵ در BSRR: LED روشن؛ صبر؛ بیت ۲۱: LED خاموش؛ صبر. برای همیشه.
     <span class="why">LD2 روی Nucleo با ۱ روشن و با ۰ خاموش می‌شود (منطق مثبت). اگر به LED دیگری وصل کنی که به زمین وصل باشد، ممکن است برعکس باشد.</span></li>
 </ol>
 
 <p>این برنامه بدون startup و linker script روی برد اجرا نمی‌شود (خود <code>main</code> را کسی صدا نمی‌زند؛ درس <a href="5-1.html">۵.۱</a>). ولی همین فایل با <code>arm-none-eabi-gcc -c</code> کامپایل و بی‌هشدار ساخته شد. در درس <a href="5-2.html">۵.۲</a> آن را کامل و اجرایی می‌کنیم.</p>
+
+<div class="callout tip"><div class="ct">مسیر سریع اگر برد داری</div>
+<p>اگر همین حالا برد Nucleo داری و نمی‌خواهی تا درس ۵.۲ صبر کنی: در STM32CubeIDE یا PlatformIO یک پروژهٔ خالی برای NUCLEO-F411RE بساز (startup و linker script را خودش می‌آورد) و <code>main</code> همین نسخه را جایگزین کن. هدر ST هم تعریف‌های <code>GPIOA</code> و <code>RCC</code> را دارد؛ پس ماکروهای خودت را حذف کن تا تعریف دوباره نشود.</p></div>
 
 <p>حالا همین برنامه، این بار با <code>struct</code>. مقایسه کن که چقدر خواناتر شد:</p>
 
@@ -732,7 +795,7 @@ int main(void)
 <p>هر دو نسخه، کد ماشین یکسانی می‌سازند: مثلا نوشتن در BSRR در هر دو <code>str r6, [r4, #24]</code> است (آفست ۲۴ = <code>0x18</code>). <code>struct</code> هزینه‌ای ندارد؛ فقط خوانایی می‌دهد.</p>
 
 <h2 id="esp32">در ESP32 چه؟</h2>
-<p>ESP32 هم رجیستر memory-mapped دارد و کارش همان است. ولی چون تراشه پیچیده‌تر است (مثلا ماتریس GPIO که هر پایه را به هر پریفرالی وصل می‌کند)، Espressif اصرار دارد که از توابع <b>درایور</b> ESP-IDF استفاده کنی. آن توابع در داخل، همین کار (نوشتن در رجیستر با <code>volatile</code>) را می‌کنند. برای برنامهٔ کاربردی همان چشمک این‌طور نوشته می‌شود:</p>
+<p>ESP32 هم رجیستر memory-mapped دارد و کارش همان است. ولی چون تراشه پیچیده‌تر است (مثلا ماتریس GPIO که هر پایه را به هر پریفرالی وصل می‌کند)، Espressif اصرار دارد که از توابع <b>درایور</b> ESP-IDF استفاده کنی. آن توابع در داخل، همین کار (نوشتن در رجیستر با <code>volatile</code>) را می‌کنند. برای برنامهٔ کاربردی همان چشمک این‌طور نوشته می‌شود (نکته: <code>gpio_set_level</code> از نظر مفهوم شبیه BSRR است؛ خود سخت‌افزار ESP32 هم رجیسترهای «W1TS/W1TC» دارد که نوشتن ۱ در آن‌ها بیت را اتمی ۱ یا ۰ می‌کند و نوشتن ۰ اثری ندارد. ضمنا GPIO2 یک پین strapping است، یعنی ولتاژش هنگام بوت روی حالت راه‌اندازی اثر دارد؛ وصل‌کردن یک LED معمولا مشکلی نمی‌سازد):</p>
 
 <div class="code" data-file="blink_esp.c" data-lang="c" data-verify="frag" id="code9">
 <pre>
@@ -930,7 +993,8 @@ uint32_t wait_for_button(void)
 <details><summary>راهنمایی</summary><p>حلقه فقط <code>button_pressed</code> را می‌خواند و خودش هرگز آن را عوض نمی‌کند. کامپایلر <code>ISR</code> را در این تابع نمی‌بیند. یک کلمه بعد از <code>static</code> لازم است.</p></details>
 <details class="expect"><summary>چه باید ببینی؟</summary>
 <pre class="term" data-nocheck>
-$ arm-none-eabi-objdump -d ex2_bug.o     # (نسخهٔ خراب)
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -ffreestanding -O2 -c ex2_bug.c    # و همین برای ex2_fix.c
+$ arm-none-eabi-objdump -d ex2_bug.o     # (نسخهٔ خراب؛ عدد آفست‌ها به نسخهٔ gcc بستگی دارد و ممکن است فرق کند)
 wait_for_button:
    ldr    r3, [pc, #8]
    ldr    r3, [r3, #0]          @ یک بار
