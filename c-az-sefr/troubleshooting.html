@@ -1,0 +1,1234 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>عیب‌یابی: رمزگشای خطاها · C برای میکروکنترلر</title>
+<meta name="description" content="رمزگشای خطاهای واقعی gcc، لینکر و arm-none-eabi، خطاهای زمان اجرا، فهرست علت‌های HardFault و علائم بی‌پیام روی ESP32 و STM32، هر کدام با علت و راه‌حل.">
+<link rel="stylesheet" href="assets/style.css">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="troubleshooting">
+<header class="lesson-head" style="--chap:#FF9A4D"><span class="eyebrow">صفحه همراه</span><h1>عیب‌یابی: رمزگشای خطاها</h1></header>
+<p class="lede">وقتی کامپایلر می‌نویسد <code>error</code>، آدم‌ها اولین‌بار فکر می‌کنند «کامپیوتر با من قهر کرده». در واقع پیام خطا یک <b>گزارش دقیق</b> است، به زبان خشک ولی قابل‌فهم. این صفحه رمزگشایش است: هر پیام با <b>متن واقعی</b> که خودمان با gcc 13.3 و arm-none-eabi-gcc 13.2 ساختیم، علت و راه‌حل. برای علائم بی‌پیام (مثل «LED چشمک نمی‌زند») هم بخش جدا هست.</p>
+
+<div class="callout tip"><div class="ct">چطور از این صفحه استفاده کنم؟</div>
+<p>پیامت را کپی کن و با Ctrl+F یک تکهٔ ثابتش (مثل <code>undefined reference</code>) را اینجا بگرد؛ یا از جدول «فهرست سریع» زیر برو. اگر متن دقیقا یکی نبود ولی شبیه بود، خوب است: اسم متغیر، شماره خط و نام فایل هر بار فرق می‌کنند، ولی <b>ساختار</b> پیام همان است.</p></div>
+
+<h2 id="read">چطور یک پیام خطا را بخوانیم</h2>
+<p>قبل از دیدن نمونه‌ها، دو مهارت: بدانیم پیام از <b>کدام ایستگاه</b> ساخت آمده، و اجزای پیام را بشناسیم. ایستگاه‌ها را در درس <a href="1-4.html">۱.۴</a> دیده‌ای.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="چهار ایستگاه ساخت و نوع پیام هر ایستگاه، و بعد از آن خطای زمان اجرا">
+  <defs><marker id="tsa" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="600" y="30" width="140" height="64" rx="12" fill="#ffd60a"/>
+    <rect x="440" y="30" width="140" height="64" rx="12" fill="#7ea3ff"/>
+    <rect x="280" y="30" width="140" height="64" rx="12" fill="#ff86b3"/>
+    <rect x="120" y="30" width="140" height="64" rx="12" fill="#3ddc97"/>
+    <rect x="20" y="30" width="80" height="64" rx="12" fill="#ff9a4d"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-weight="800" font-size="15">
+    <text x="670" y="58">پیش‌پردازنده</text><text x="670" y="80" class="mono" font-size="12.5">#include #define</text>
+    <text x="510" y="58">کامپایلر</text><text x="510" y="80" class="mono" font-size="12.5">.c → .s</text>
+    <text x="350" y="58">اسمبلر</text><text x="350" y="80" class="mono" font-size="12.5">.s → .o</text>
+    <text x="190" y="58">لینکر</text><text x="190" y="80" class="mono" font-size="12.5">.o → .elf</text>
+    <text x="60" y="58">اجرا</text><text x="60" y="80" font-size="12.5">روی PC/MCU</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#tsa)"><path d="M598 62H584"/><path d="M438 62H424"/><path d="M278 62H264"/><path d="M118 62H104"/></g>
+  <g class="s-tx" text-anchor="middle" font-size="13.5">
+    <text x="670" y="130" font-weight="800">No such file or directory</text><text x="670" y="150">فایل include نیست</text>
+    <text x="510" y="130" font-weight="800">error / warning</text><text x="510" y="150">نحو، نوع، هشدارها</text>
+    <text x="350" y="130" font-weight="800">Error: ...</text><text x="350" y="150">(کم؛ اسمبلی دستی)</text>
+    <text x="190" y="130" font-weight="800">undefined reference</text><text x="190" y="150">multiple definition</text><text x="190" y="170">region overflowed</text>
+    <text x="60" y="130" font-weight="800">Segfault</text><text x="60" y="150">HardFault</text><text x="60" y="170">علائم بی‌پیام</text>
+  </g>
+  <g stroke="#15120a" stroke-width="2" stroke-dasharray="5 4"><path d="M670 98V112"/><path d="M510 98V112"/><path d="M350 98V112"/><path d="M190 98V112"/><path d="M60 98V112"/></g>
+  <text x="380" y="222" text-anchor="middle" class="s-tx" font-size="15" font-weight="800">هر ایستگاه پیام‌های خودش را دارد؛ اول بفهم پیام از کدام ایستگاه است</text>
+  <text x="380" y="248" text-anchor="middle" class="s-tx" font-size="13.5">شمارهٔ خط: ایستگاه‌های اول و دوم دارند. لینکر «فایل و تابع» می‌گوید و اجرا هیچ خطی ندارد</text>
+  <text x="380" y="272" text-anchor="middle" class="s-tx" font-size="13.5">(برای اجرا دیباگر و sanitizer لازم است)</text>
+</svg></div>
+<figcaption>مسیر ساخت و نوع پیامی که هر ایستگاه می‌دهد. جهت پیکان از راست به چپ، مثل خواندن فارسی.</figcaption></figure>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 250" role="img" aria-label="اجزای یک پیام خطای gcc: فایل، خط، ستون، شدت، متن و پرچم هشدار">
+  <text x="380" y="34" text-anchor="middle" class="s-tx" font-size="15" font-weight="800">اجزای یک پیام gcc</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="14" y="56" width="84" height="46" rx="10" fill="#ffd60a"/>
+    <rect x="104" y="56" width="26" height="46" rx="10" fill="#7ea3ff"/>
+    <rect x="136" y="56" width="34" height="46" rx="10" fill="#ff86b3"/>
+    <rect x="176" y="56" width="66" height="46" rx="10" fill="#ff9a4d"/>
+    <rect x="248" y="56" width="288" height="46" rx="10" fill="#3ddc97"/>
+    <rect x="542" y="56" width="204" height="46" rx="10" fill="#b394ff"/>
+  </g>
+  <g class="mono" fill="#15120a" font-size="15" font-weight="700" text-anchor="middle">
+    <text x="56" y="86">e4.c</text><text x="117" y="86">8</text><text x="153" y="86">11</text><text x="209" y="86">warning</text>
+    <text x="392" y="86" font-size="13.5">passing argument 1 of 'store' ...</text><text x="644" y="86" font-size="13.5">[-Wincompatible-pointer-types]</text>
+  </g>
+  <g stroke="#15120a" stroke-width="2" fill="none"><path d="M56 106v22"/><path d="M117 106v40"/><path d="M153 106v58"/><path d="M209 106v76"/><path d="M392 106v94"/><path d="M644 106v58"/></g>
+  <g class="s-tx" font-size="13.5" font-weight="700">
+    <text x="56" y="142" text-anchor="start">نام فایل</text>
+    <text x="123" y="160" text-anchor="start">شمارهٔ خط</text>
+    <text x="159" y="178" text-anchor="start">شمارهٔ ستون</text>
+    <text x="215" y="196" text-anchor="start">شدت</text>
+    <text x="398" y="216" text-anchor="start">شرح مشکل، به انگلیسی ساده</text>
+    <text x="650" y="178" text-anchor="start">کدام پرچم این هشدار را ساخت</text>
+  </g>
+</svg></div>
+<figcaption><b>error</b> ساخت را متوقف می‌کند. <b>warning</b> نه، ولی اغلب باگ واقعی است. <b>note</b> توضیح اضافه برای پیام قبلی است.</figcaption></figure>
+
+<div class="callout warn"><div class="ct">دو قانون که نصف مشکل‌ها را حل می‌کند</div>
+<p><b>۱.</b> فقط اولین خطا (از بالا) را حل کن و دوباره کامپایل کن؛ بقیه اغلب زنجیرهٔ همان‌اند. <b>۲.</b> جای واقعی اشتباه اغلب <b>همان خط یا یکی دو خط بالاتر</b> است، نه لزوما خطی که گزارش شده. و هشدار (warning) را هم مثل خطا حل کن؛ با <code>-Wall -Wextra</code> هر کدامشان یک باگ احتمالی است.</p></div>
+
+<h2 id="index">فهرست سریع: از متن پیام به توضیح</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>بخشی از پیام</th><th>یعنی چه</th><th>برو به</th></tr></thead>
+<tbody>
+<tr><td><code>expected ';' before</code></td><td>سمیکالن یا پرانتز جا افتاده</td><td><a href="#e-semi">سمیکالن ۱</a>، <a href="#e-semi2">سمیکالن ۲</a>، <a href="#e-brace">آکولاد</a></td></tr>
+<tr><td><code>undeclared (first use…)</code></td><td>اسم ناشناخته / خارج از محدوده</td><td><a href="#e-undeclared">ناشناخته</a>، <a href="#e-scope">محدوده</a></td></tr>
+<tr><td><code>implicit declaration of function</code></td><td>تابع پیش از استفاده اعلان نشده</td><td><a href="#e-implicit">implicit</a>، <a href="#e-typo">حرف بزرگ/کوچک</a></td></tr>
+<tr><td><code>incompatible pointer type</code>، <code>makes integer from pointer</code></td><td>نوع اشاره‌گرها نمی‌خواند</td><td><a href="#e-incptr">اشاره‌گر ناسازگار</a>، <a href="#e-intconv">اشاره‌گر به int</a></td></tr>
+<tr><td><code>read-only variable</code></td><td>نوشتن روی <code>const</code></td><td><a href="#e-const">const</a></td></tr>
+<tr><td><code>format '%d' expects</code></td><td>مشخصهٔ printf با نوع نمی‌خواند</td><td><a href="#e-format">printf</a></td></tr>
+<tr><td><code>control reaches end</code></td><td><code>return</code> در همهٔ مسیرها نیست</td><td><a href="#e-return">return</a></td></tr>
+<tr><td><code>undefined reference to</code></td><td>تعریف تابع/متغیر پیدا نشد</td><td><a href="#e-undef">undefined</a>، <a href="#e-libm">-lm</a>، <a href="#e-nomain">main</a></td></tr>
+<tr><td><code>multiple definition of</code></td><td>دو تعریف برای یک اسم</td><td><a href="#e-multi">تابع تکراری</a>، <a href="#e-hdrdef">متغیر در header</a></td></tr>
+<tr><td><code>region 'RAM' overflowed</code></td><td>RAM (یا Flash) پر شد</td><td><a href="#e-ram">RAM</a>، <a href="#e-flash">Flash</a></td></tr>
+<tr><td><code>Segmentation fault</code></td><td>دسترسی غیرمجاز به حافظه</td><td><a href="#e-segv">segfault</a>، <a href="#e-asan">sanitizer</a></td></tr>
+<tr><td>HardFault، برنامه می‌ایستد، ریست مداوم</td><td>علائم روی میکروکنترلر</td><td><a href="#hardfault">HardFault</a>، <a href="#symptoms">علائم</a>، <a href="#esp32">ESP32</a></td></tr>
+</tbody></table></div>
+
+<h2 id="compile">۱. خطاهای کامپایلر (gcc)</h2>
+<p>قبل از ساخت فایل شیء رخ می‌دهند. هر پیام <code>فایل:خط:ستون: error/warning</code> دارد.</p>
+<h3 id="e-semi"><code>expected ';' before ...</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e17.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int x = 5;
+    x++
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e17.c
+e17.c: In function 'main':
+e17.c:6:8: error: expected ';' before 'return'
+    6 |     x++
+      |        ^
+      |        ;
+    7 |     return 0;
+      |     ~~~~~~
+</pre>
+<p><b>چرا؟</b> کامپایلر می‌بیند دستور <code>x++</code> تمام نشده و کلمهٔ بعدی (<code>return</code>) شروع شده است. برای همین خطا را <b>در خط بعدی</b> (خط ۶) و روی کلمهٔ بعدی نشان می‌دهد، ولی جای غلط، آخر خط ۵ است. کامپایلر حتی جای <code>;</code> را با یک علامت کوچک زیر خط نشان داده است.</p>
+<p><b>چه کنم؟</b> وقتی خطای «expected ';'» را دیدی، به <b>خط بالاتر از خط گزارش‌شده</b> نگاه کن و <code>;</code> را آخرش بگذار. همین‌طور اگر <code>)</code> یا <code>}</code> بسته‌نشده باشد، پیام مشابهی می‌آید.</p>
+</div>
+<h3 id="e-semi2"><code>expected ',' or ';' before ...</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e1.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int count = 3
+    printf("%d\n", count);
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e1.c
+e1.c: In function 'main':
+e1.c:6:5: error: expected ',' or ';' before 'printf'
+    6 |     printf("%d\n", count);
+      |     ^~~~~~
+e1.c:5:9: warning: unused variable 'count' [-Wunused-variable]
+    5 |     int count = 3
+      |         ^~~~~
+</pre>
+<p><b>چرا؟</b> این بار سمت چپِ <code>;</code> یک تعریف متغیر با مقدار اولیه است (<code>int count = 3</code>). کامپایلر بعد از <code>3</code> انتظار <code>,</code> (برای متغیر بعدی) یا <code>;</code> داشت. دقت کن هشدار دوم (<code>unused variable</code>) <b>نتیجهٔ</b> همین خطاست: چون دستور نیمه‌کاره ماند، کامپایلر نفهمید <code>count</code> جایی استفاده شده.</p>
+<p><b>چه کنم؟</b> <code>;</code> را اضافه کن. قانون طلایی: <b>فقط اولین خطا را درست کن و دوباره کامپایل کن</b>. خطاهای بعدی اغلب اثر همان یکی هستند.</p>
+</div>
+<h3 id="e-undeclared"><code>'x' undeclared (first use in this function)</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e2.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int total = 5;
+    printf("%d\n", totl);
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e2.c
+e2.c: In function 'main':
+e2.c:6:20: error: 'totl' undeclared (first use in this function); did you mean 'total'?
+    6 |     printf("%d\n", totl);
+      |                    ^~~~
+      |                    total
+e2.c:6:20: note: each undeclared identifier is reported only once for each function it appears in
+e2.c:5:9: warning: unused variable 'total' [-Wunused-variable]
+    5 |     int total = 5;
+      |         ^~~~~
+</pre>
+<p><b>چرا؟</b> اسمی نوشته‌ای که کامپایلر تا آن خط ندیده است. اینجا <code>totl</code> غلط املایی <code>total</code> است. gcc حتی حدس می‌زند («did you mean»). جمله «each undeclared identifier is reported only once» فقط یعنی برای هر اسم ناشناخته، خطا را یک بار می‌نویسد.</p>
+<p><b>چه کنم؟</b> املا و حرف بزرگ/کوچک را وارسی کن (<code>Total</code> با <code>total</code> فرق دارد). اگر اسم از فایل دیگری می‌آید، <code>#include</code> آن را فراموش نکرده‌ای؟</p>
+</div>
+<h3 id="e-scope"><code>'i' undeclared: متغیر بیرون از محدوده</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e18.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    for (int i = 0; i &lt; 3; i++) {
+        printf("%d\n", i);
+    }
+    printf("%d\n", i);
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e18.c
+e18.c: In function 'main':
+e18.c:8:20: error: 'i' undeclared (first use in this function)
+    8 |     printf("%d\n", i);
+      |                    ^
+e18.c:8:20: note: each undeclared identifier is reported only once for each function it appears in
+</pre>
+<p><b>چرا؟</b> پیام همان است ولی علت فرق دارد: <code>i</code> در سر حلقهٔ <code>for</code> ساخته شده و فقط تا آخر همان حلقه زنده است (درس <a href="3-5.html">۳.۵</a>). بعد از <code>}</code> دیگر وجود ندارد.</p>
+<p><b>چه کنم؟</b> متغیر را قبل از حلقه تعریف کن، اگر بعد از حلقه هم لازمش داری: <code>int i; for (i = 0; ...)</code>.</p>
+</div>
+<h3 id="e-implicit"><code>implicit declaration of function</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e3.c" data-lang="c"><pre>
+int main(void)
+{
+    int x = 1;
+    int y = square(x);
+    return y;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e3.c
+e3.c: In function 'main':
+e3.c:4:13: warning: implicit declaration of function 'square' [-Wimplicit-function-declaration]
+    4 |     int y = square(x);
+      |             ^~~~~~
+</pre>
+<p><b>چرا؟</b> تابعی صدا زده‌ای که کامپایلر پیش از آن خط ندیده است: نه تعریفش را، نه پروتوتایپش را. در C قدیمی کامپایلر «حدس می‌زد» تابع <code>int</code> برمی‌گرداند. در gcc 13 این فقط هشدار است، ولی از gcc 14 و C99 به بعد در حالت استاندارد <b>خطاست</b> و هیچ کد جدیدی نباید به آن تکیه کند. اگر آن تابع اصلا وجود نداشته باشد، بعدش خطای لینک هم می‌گیری (مثال «Blink» در بخش لینکر).</p>
+<p><b>چه کنم؟</b> یا <code>#include</code> درست را بگذار (مثلا <code>&lt;stdio.h&gt;</code> برای <code>printf</code>)، یا پروتوتایپ تابع را بالای فایل بنویس (درس <a href="2-6.html">۲.۶</a>).</p>
+<div class="callout info"><div class="ct">توجه</div><p>نسخهٔ کامپایلر همین صفحه: gcc 13.3 (Ubuntu 24.04). با نسخهٔ جدیدتر ممکن است <code>warning</code> به <code>error</code> تبدیل شود؛ متن بقیهٔ پیام یکسان است.</p></div>
+</div>
+<h3 id="e-incptr"><code>passing argument … from incompatible pointer type</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e4.c" data-lang="c"><pre>
+#include &lt;stdint.h&gt;
+
+static void store(uint8_t *dst) { *dst = 1; }
+
+int main(void)
+{
+    uint32_t value = 0;
+    store(&amp;value);
+    return (int)value;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e4.c
+e4.c: In function 'main':
+e4.c:8:11: warning: passing argument 1 of 'store' from incompatible pointer type [-Wincompatible-pointer-types]
+    8 |     store(&amp;value);
+      |           ^~~~~~
+      |           |
+      |           uint32_t * {aka unsigned int *}
+e4.c:3:28: note: expected 'uint8_t *' {aka 'unsigned char *'} but argument is of type 'uint32_t *' {aka 'unsigned int *'}
+    3 | static void store(uint8_t *dst) { *dst = 1; }
+      |                   ~~~~~~~~~^~~
+</pre>
+<p><b>چرا؟</b> تابع <code>store</code> اشاره‌گر به <code>uint8_t</code> می‌خواهد ولی اشاره‌گر به <code>uint32_t</code> فرستاده‌ای. اشاره‌گرها فقط وقتی سازگارند که «به چه نوعی اشاره می‌کنند» یکی باشد. اینجا خطر واقعی است: تابع فقط <b>یک بایت</b> از چهار بایت متغیر را می‌نویسد. پیام <code>note</code> زیر هشدار هر دو نوع را کنار هم می‌گذارد؛ <code>{aka ...}</code> یعنی «نام واقعی‌تر همین نوع».</p>
+<p><b>چه کنم؟</b> نوع پارامتر را با نوع متغیر یکی کن، یا اگر واقعا بایت‌بایت کار داری، عمدی و با <code>(uint8_t *)</code> تبدیل کن و دلیلش را بنویس. این هشدار را هرگز نادیده نگیر: از gcc 14 به بعد به‌صورت پیش‌فرض خطاست.</p>
+<div class="callout info"><div class="ct">توجه</div><p>در gcc 13 هشدار است؛ gcc 14 آن را به خطا تبدیل کرده است.</p></div>
+</div>
+<h3 id="e-const"><code>assignment of read-only variable</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e5.c" data-lang="c"><pre>
+int main(void)
+{
+    const int limit = 10;
+    limit = 20;
+    return limit;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e5.c
+e5.c: In function 'main':
+e5.c:4:11: error: assignment of read-only variable 'limit'
+    4 |     limit = 20;
+      |           ^
+</pre>
+<p><b>چرا؟</b> متغیری که با <code>const</code> ساخته شده مقدارش بعد از تعریف عوض نمی‌شود، و کامپایلر جلوی نوشتن روی آن را می‌گیرد (درس <a href="2-1.html">۲.۱</a>). این خطا همان چیزی است که <code>const</code> قرار است به تو بدهد.</p>
+<p><b>چه کنم؟</b> اگر مقدار باید عوض شود، <code>const</code> را بردار. اگر نباید عوض شود، برنامه‌ات جایی اشتباه فکر کرده است. هرگز با تبدیل نوع (cast) دور زدنش نکن.</p>
+</div>
+<h3 id="e-format"><code>format '%d' expects argument of type 'int', but argument 2 has type ...</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e6.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    long big = 5000000000L;
+    printf("%d\n", big);
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e6.c
+e6.c: In function 'main':
+e6.c:6:14: warning: format '%d' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
+    6 |     printf("%d\n", big);
+      |             ~^     ~~~
+      |              |     |
+      |              int   long int
+      |             %ld
+</pre>
+<p><b>چرا؟</b> مشخصهٔ فرمت <code>printf</code> با نوع واقعی آرگومان نمی‌خواند. <code>%d</code> برای <code>int</code> است و <code>big</code> از نوع <code>long</code>. gcc پیشنهاد هم می‌دهد (<code>%ld</code>). اگر هشدار را نبینی، چاپ عدد اشتباه یا حتی خرابی برنامه می‌شود. جدولش را در <a href="cheatsheet.html#printf">برگهٔ خلاصه</a> ببین.</p>
+<p><b>چه کنم؟</b> مشخصه را با نوع بخوان: <code>%ld</code> برای <code>long</code>، <code>%u</code> برای <code>unsigned</code>، <code>%zu</code> برای <code>size_t</code>. برای انواع <code>stdint.h</code> از ماکروهای <code>PRIu32</code> و مشابهش در <code>inttypes.h</code> استفاده می‌شود.</p>
+</div>
+<h3 id="e-return"><code>control reaches end of non-void function</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e7.c" data-lang="c"><pre>
+int sign(int v)
+{
+    if (v &gt; 0) {
+        return 1;
+    } else if (v &lt; 0) {
+        return -1;
+    }
+}
+
+int main(void) { return sign(3); }
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e7.c
+e7.c: In function 'sign':
+e7.c:8:1: warning: control reaches end of non-void function [-Wreturn-type]
+    8 | }
+      | ^
+</pre>
+<p><b>چرا؟</b> تابعی که باید <code>int</code> برگرداند، یک مسیر دارد که به <code>return</code> نمی‌رسد (اینجا وقتی <code>v == 0</code>). در C استفادهٔ نتیجه از چنین مسیری رفتار تعریف‌نشده است (درس <a href="6-2.html">۶.۲</a>).</p>
+<p><b>چه کنم؟</b> همهٔ مسیرها را با <code>return</code> ببند، مثلا یک <code>return 0;</code> در آخر. این هشدار را جدی بگیر؛ در <code>-O2</code> کامپایلر گاهی کد بعد از آن را خراب می‌کند.</p>
+</div>
+<h3 id="e-toofew"><code>too few arguments to function</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e8.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int add(int a, int b) { return a + b; }
+
+int main(void)
+{
+    printf("%d\n", add(1));
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e8.c
+e8.c: In function 'main':
+e8.c:7:20: error: too few arguments to function 'add'
+    7 |     printf("%d\n", add(1));
+      |                    ^~~
+e8.c:3:5: note: declared here
+    3 | int add(int a, int b) { return a + b; }
+      |     ^~~
+</pre>
+<p><b>چرا؟</b> تعداد آرگومان‌ها با تعریف تابع نمی‌خواند. پیام <code>note: declared here</code> نشانت می‌دهد تابع کجا و با چه پارامترهایی تعریف شده. برعکسش هم <code>too many arguments</code> است.</p>
+<p><b>چه کنم؟</b> آرگومان‌ها را با امضای تابع تطبیق بده (تعداد، ترتیب و نوع).</p>
+</div>
+<h3 id="e-nofile"><code>fatal error: xxx.h: No such file or directory</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e9.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+#include "sensor.h"
+
+int main(void)
+{
+    printf("hi\n");
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e9.c
+e9.c:2:10: fatal error: sensor.h: No such file or directory
+    2 | #include "sensor.h"
+      |          ^~~~~~~~~~
+compilation terminated.
+</pre>
+<p><b>چرا؟</b> کامپایلر فایلی به اسم <code>sensor.h</code> پیدا نمی‌کند. <code>fatal</code> یعنی کامپایل همان‌جا متوقف شد (پس خطای دیگری نمی‌بینی). <code>#include "..."</code> اول کنار فایل جاری می‌گردد، بعد در مسیرهای <code>-I</code>؛ <code>&lt;...&gt;</code> فقط در مسیرهای سیستم.</p>
+<p><b>چه کنم؟</b> اسم و پوشهٔ فایل را وارسی کن (حرف بزرگ و کوچک روی لینوکس مهم است)، یا مسیرش را با <code>-Ipath</code> بده. اگر <code>&lt;stdio.h&gt;</code> در کامپایل ARM پیدا نشد، بخش «arm-none-eabi» را ببین.</p>
+</div>
+<h3 id="e-quote"><code>missing terminating " character</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e10.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    printf("hello);
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e10.c
+e10.c: In function 'main':
+e10.c:5:12: warning: missing terminating " character
+    5 |     printf("hello);
+      |            ^
+e10.c:5:12: error: missing terminating " character
+    5 |     printf("hello);
+      |            ^~~~~~~~
+e10.c:6:5: error: expected expression before 'return'
+    6 |     return 0;
+      |     ^~~~~~
+e10.c:6:14: error: expected ';' before '}' token
+    6 |     return 0;
+      |              ^
+      |              ;
+    7 | }
+      | ~             
+</pre>
+<p><b>چرا؟</b> رشته را با <code>"</code> باز کرده‌ای ولی نبسته‌ای. این نمونهٔ خوبی از «آبشار خطا» است: یک اشتباه، سه خطا. اولین پیام علت واقعی است و دو تای بعدی نتیجهٔ گیج‌شدن کامپایلر.</p>
+<p><b>چه کنم؟</b> گیومه را ببند. هر وقت چند خطا ناگهان با هم آمد، فقط اولی را بخوان.</p>
+</div>
+<h3 id="e-brace"><code>expected declaration or statement at end of input</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e20.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    for (int i = 0; i &lt; 3; i++) {
+        printf("%d\n", i);
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e20.c
+e20.c: In function 'main':
+e20.c:8:1: error: expected declaration or statement at end of input
+    8 | }
+      | ^
+</pre>
+<p><b>چرا؟</b> به آخر فایل رسیدیم و هنوز یک <code>{</code> باز مانده است. کامپایلر شماره خط آخر را گزارش می‌کند، نه خطی که <code>}</code> جا افتاده (اینجا حلقهٔ <code>for</code>).</p>
+<p><b>چه کنم؟</b> ویرایشگرت را روی «Match brace» یا تورفتگی خودکار بگذار. آکولادها را با تورفتگی درست بنویس تا جای بستهٔ ناقص با چشم دیده شود.</p>
+</div>
+<h3 id="e-intconv"><code>makes integer from pointer without a cast</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e19.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    char *msg = "hi";
+    int n = msg;
+    printf("%d\n", n);
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e19.c
+e19.c: In function 'main':
+e19.c:6:13: warning: initialization of 'int' from 'char *' makes integer from pointer without a cast [-Wint-conversion]
+    6 |     int n = msg;
+      |             ^~~
+</pre>
+<p><b>چرا؟</b> اشاره‌گر (<code>char *</code>) را داخل عدد (<code>int</code>) ریخته‌ای. روی MCU 32 بیتی حتی اندازه‌ها برابرند و «ظاهرا» کار می‌کند، ولی روی سیستم 64 بیتی بخشی از آدرس از بین می‌رود.</p>
+<p><b>چه کنم؟</b> معمولا یعنی نوع متغیر یا * جا افتاده است: <code>char *n = msg;</code> یا با <code>*msg</code> اولین حرف را بخوان. اگر واقعا آدرس را می‌خواهی، از <code>uintptr_t</code> استفاده کن.</p>
+</div>
+<h3 id="e-assignif"><code>suggest parentheses around assignment used as truth value</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e11.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int a = 1;
+    int b = 2;
+    if (a = b) {
+        printf("equal\n");
+    }
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e11.c
+e11.c: In function 'main':
+e11.c:7:9: warning: suggest parentheses around assignment used as truth value [-Wparentheses]
+    7 |     if (a = b) {
+      |         ^
+</pre>
+<p><b>چرا؟</b> در <code>if (a = b)</code> علامت <code>=</code> <b>انتساب</b> است، نه مقایسه. مقدار <code>b</code> در <code>a</code> ریخته می‌شود و نتیجه (۲، یعنی «درست») شرط را می‌سازد. یکی از قدیمی‌ترین باگ‌های C است.</p>
+<p><b>چه کنم؟</b> اگر مقایسه می‌خواستی بنویس <code>a == b</code>. اگر انتساب عمدی است، دو پرانتز بگذار: <code>if ((a = b))</code>.</p>
+</div>
+<h3 id="e-signcmp"><code>comparison of integer expressions of different signedness</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e12.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    unsigned int n = 5;
+    int i = -1;
+    if (i &lt; n) {
+        printf("yes\n");
+    }
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e12.c
+e12.c: In function 'main':
+e12.c:7:11: warning: comparison of integer expressions of different signedness: 'int' and 'unsigned int' [-Wsign-compare]
+    7 |     if (i &lt; n) {
+      |           ^
+</pre>
+<p><b>چرا؟</b> مقایسهٔ عدد علامت‌دار (<code>int</code>) با بی‌علامت (<code>unsigned</code>): عدد <code>-1</code> قبل از مقایسه به بزرگ‌ترین عدد بی‌علامت (4294967295) تبدیل می‌شود و <code>i &lt; n</code> غلط از آب درمی‌آید (درس <a href="2-3.html">۲.۳</a> و <a href="2-2.html">۲.۲</a>).</p>
+<p><b>چه کنم؟</b> دو طرف را از یک نوع کن (یا با تبدیل صریح و آگاهانه). حلقه‌های روی اندیس آرایه را با <code>size_t</code> بنویس، ولی حواست به شمارش معکوس باشد.</p>
+</div>
+<h3 id="e-uninit"><code>'x' is used uninitialized</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e13.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int n;
+    if (n &gt; 3) { printf("big\n"); }
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e13.c
+e13.c: In function 'main':
+e13.c:6:8: warning: 'n' is used uninitialized [-Wuninitialized]
+    6 |     if (n &gt; 3) { printf("big\n"); }
+      |        ^
+e13.c:5:9: note: 'n' was declared here
+    5 |     int n;
+      |         ^
+</pre>
+<p><b>چرا؟</b> متغیر محلی بدون مقدار اولیه خوانده شده است. مقدارش همان بایت‌های ماندهٔ قبلیِ پشته (آشغال) است. gcc همیشه این را نمی‌بیند؛ گاهی فقط با <code>-O2</code> هشدار می‌دهد.</p>
+<p><b>چه کنم؟</b> همیشه مقدار اولیه بده: <code>int n = 0;</code>. با <code>-O2 -Wall -Wextra</code> هم گهگاه کامپایل کن تا هشدارهای بیشتری ببینی.</p>
+</div>
+<h3 id="e-voidval"><code>void value not ignored as it ought to be</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e14.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+void tick(void);
+
+int main(void)
+{
+    int r = tick();
+    printf("%d\n", r);
+    return 0;
+}
+
+void tick(void) { }
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e14.c
+e14.c: In function 'main':
+e14.c:7:13: error: void value not ignored as it ought to be
+    7 |     int r = tick();
+      |             ^~~~
+</pre>
+<p><b>چرا؟</b> تابع <code>void</code> است (چیزی برنمی‌گرداند) ولی نتیجه‌اش را در <code>int</code> ریخته‌ای.</p>
+<p><b>چه کنم؟</b> یا تابع را به <code>int</code> تغییر بده، یا از نتیجه‌اش استفاده نکن. اعلان و تعریف تابع هم باید یکی باشند.</p>
+</div>
+<h3 id="e-excess"><code>excess elements in array initializer</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e15.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int arr[3] = {1, 2, 3, 4};
+    printf("%d\n", arr[0]);
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e15.c
+e15.c: In function 'main':
+e15.c:5:28: warning: excess elements in array initializer
+    5 |     int arr[3] = {1, 2, 3, 4};
+      |                            ^
+e15.c:5:28: note: (near initialization for 'arr')
+</pre>
+<p><b>چرا؟</b> آرایه سه خانه دارد ولی چهار مقدار داده‌ای. عنصر چهارم دور ریخته می‌شود. در C اگر مقدارها کمتر از اندازه باشند، بقیه صفر می‌شوند؛ ولی بیشتر از اندازه هشدار است.</p>
+<p><b>چه کنم؟</b> اندازه را درست کن یا آن را خالی بگذار تا کامپایلر بشمارد: <code>int arr[] = {1, 2, 3, 4};</code>.</p>
+</div>
+<h3 id="e-vla"><code>variably modified 'x' at file scope</code></h3>
+<div class="ts-case">
+<div class="code" data-file="e16.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int limit = 5;
+int table[limit];
+
+int main(void) { printf("%d\n", table[0]); return 0; }
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c e16.c
+e16.c:4:5: error: variably modified 'table' at file scope
+    4 | int table[limit];
+      |     ^~~~~
+</pre>
+<p><b>چرا؟</b> اندازهٔ آرایهٔ سراسری باید در زمان کامپایل معلوم باشد. متغیر <code>limit</code> حتی با مقدار ۵ «ثابت زمان کامپایل» به‌حساب نمی‌آید (در C، برخلاف C++).</p>
+<p><b>چه کنم؟</b> از <code>#define LIMIT 5</code> یا <code>enum { LIMIT = 5 };</code> استفاده کن (درس <a href="4-1.html">۴.۱</a>).</p>
+</div>
+<h2 id="link">۲. خطاهای لینکر روی PC</h2>
+<p>بعد از کامپایل موفق، وقتی تکه‌ها را به هم می‌چسبانیم. <b>شمارهٔ خط ندارند</b> چون لینکر متن نمی‌بیند.</p>
+<h3 id="e-undef"><code>undefined reference to `foo'</code></h3>
+<div class="ts-case">
+<div class="code" data-file="main.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int add(int a, int b);
+
+int main(void)
+{
+    printf("%d\n", add(2, 3));
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c main.c
+$ gcc main.o -o prog
+/usr/bin/ld: main.o: in function `main':
+main.c:(.text+0x13): undefined reference to `add'
+collect2: error: ld returned 1 exit status
+</pre>
+<p><b>چرا؟</b> کامپایل خوب پیش رفت (پروتوتایپ <code>add</code> هست)، ولی لینکر هیچ فایل شیء‌ای پیدا نکرد که خود <code>add</code> را <b>تعریف</b> کرده باشد. لینکر شمارهٔ خط ندارد: می‌گوید در چه تابعی و در چه فایلی به چه نامی نیاز داشته است. <code>(.text+0x13)</code> جابه‌جایی داخل کد است و به کارت نمی‌آید.</p>
+<p><b>چه کنم؟</b> سه علت رایج: ۱) فایل <code>add.c</code> در دستور ساخت نیامده (باید <code>gcc main.c add.c</code> باشد)؛ ۲) تابع اصلا نوشته نشده یا اسمش فرق دارد؛ ۳) تابع <code>static</code> است یا داخل <code>#if</code> که خاموش است. درس <a href="4-2.html">۴.۲</a> را ببین.</p>
+<div class="callout info"><div class="ct">توجه</div><p>در دستور یک‌خطی <code>gcc main.c</code> به‌جای <code>main.o</code> یک نام موقت مثل <code>/tmp/ccB3iyJ6.o</code> می‌بینی؛ معنی‌اش همان است.</p></div>
+</div>
+<h3 id="e-typo"><code>implicit declaration + undefined reference (یک اشتباه، دو پیام)</code></h3>
+<div class="ts-case">
+<div class="code" data-file="typo.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+void blink(void);
+
+int main(void)
+{
+    Blink();
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c typo.c
+typo.c: In function 'main':
+typo.c:7:5: warning: implicit declaration of function 'Blink'; did you mean 'blink'? [-Wimplicit-function-declaration]
+    7 |     Blink();
+      |     ^~~~~
+      |     blink
+$ gcc typo.o -o prog
+/usr/bin/ld: typo.o: in function `main':
+typo.c:(.text+0xe): undefined reference to `Blink'
+collect2: error: ld returned 1 exit status
+</pre>
+<p><b>چرا؟</b> تابع را با حرف بزرگ (<code>Blink</code>) صدا زده‌ای ولی <code>blink</code> کوچک اعلان شده. کامپایلر هشدار «implicit declaration» می‌دهد و حتی حدس درست می‌زند (<code>did you mean 'blink'</code>). چون هشدار را نخواندی و ادامه دادی، لینکر <code>Blink</code> را پیدا نمی‌کند.</p>
+<p><b>چه کنم؟</b> هشدارها را جدی بگیر. با <code>-Werror=implicit-function-declaration</code> همین هشدار را خطا کن تا کار به لینکر نرسد.</p>
+</div>
+<h3 id="e-multi"><code>multiple definition of `foo'</code></h3>
+<div class="ts-case">
+<div class="code" data-file="m2.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int add(int a, int b);
+
+int main(void)
+{
+    printf("%d\n", add(2, 3));
+    return 0;
+}
+</pre></div><div class="code" data-file="add.c" data-lang="c"><pre>
+int add(int a, int b) { return a + b; }
+</pre></div><div class="code" data-file="add2.c" data-lang="c"><pre>
+int add(int a, int b) { return a + b; }
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -c m2.c add.c add2.c
+$ gcc m2.o add.o add2.o -o prog
+/usr/bin/ld: add2.o: in function `add':
+add2.c:(.text+0x0): multiple definition of `add'; add.o:add.c:(.text+0x0): first defined here
+collect2: error: ld returned 1 exit status
+</pre>
+<p><b>چرا؟</b> دو فایل شیء هر دو تابع <code>add</code> را <b>تعریف</b> کرده‌اند. لینکر می‌گوید اولی از کدام فایل بوده. هر تابع یا متغیر سراسری فقط باید یک تعریف در کل برنامه داشته باشد (اعلان‌ها هر قدر بخواهی).</p>
+<p><b>چه کنم؟</b> یکی از دو تعریف را حذف کن، یا اگر باید در هر فایل جدا باشند آن را <code>static</code> کن (درس <a href="4-2.html">۴.۲</a>).</p>
+</div>
+<h3 id="e-hdrdef"><code>multiple definition of `counter' (متغیر در header)</code></h3>
+<div class="ts-case">
+<div class="code" data-file="a.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+#include "counter.h"
+
+void bump(void);
+
+int main(void)
+{
+    bump();
+    printf("%d\n", counter);
+    return 0;
+}
+</pre></div><div class="code" data-file="b.c" data-lang="c"><pre>
+#include "counter.h"
+
+void bump(void) { counter++; }
+</pre></div><div class="code" data-file="counter.h" data-lang="c"><pre>
+int counter = 0;
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -c a.c
+$ gcc -c b.c
+$ gcc a.o b.o -o prog
+/usr/bin/ld: b.o:(.bss+0x0): multiple definition of `counter'; a.o:(.bss+0x0): first defined here
+collect2: error: ld returned 1 exit status
+</pre>
+<p><b>چرا؟</b> در <code>counter.h</code> نوشته‌ای <code>int counter = 0;</code>، یعنی <b>تعریف</b> (نه اعلان). هر فایل <code>.c</code> که این header را include کند، نسخهٔ خودش از <code>counter</code> را می‌سازد و لینکر با دو نسخه روبه‌رو می‌شود. اینجا آدرس‌ها <code>.bss+0x0</code> هستند، یعنی خود متغیر.</p>
+<p><b>چه کنم؟</b> در header فقط اعلان: <code>extern int counter;</code> و تعریف را در دقیقا یک فایل <code>.c</code> بنویس. (gcc از نسخهٔ ۱۰ به بعد <code>-fno-common</code> را پیش‌فرض دارد؛ قبلا این خطا پنهان می‌ماند.)</p>
+</div>
+<h3 id="e-nomain"><code>undefined reference to `main'</code></h3>
+<div class="ts-case">
+<div class="code" data-file="nomain.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+void run(void) { printf("hi\n"); }
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -c nomain.c
+$ gcc nomain.o -o prog
+/usr/bin/ld: /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o: in function `_start':
+(.text+0x1b): undefined reference to `main'
+collect2: error: ld returned 1 exit status
+</pre>
+<p><b>چرا؟</b> لینکر کدی می‌خواهد که برنامه را شروع کند (<code>_start</code> از کتابخانهٔ سیستم) و آن کد <code>main</code> را صدا می‌زند. هیچ فایلی <code>main</code> ندارد. مسیر طولانی <code>Scrt1.o</code> فقط مال سیستم توست.</p>
+<p><b>چه کنم؟</b> فایلی که <code>main</code> دارد را به دستور ساخت اضافه کن، یا اگر کتابخانه می‌سازی، از <code>-c</code> استفاده کن (فقط شیء بساز، لینک نکن).</p>
+</div>
+<h3 id="e-libm"><code>undefined reference to `sqrt' (کتابخانهٔ math)</code></h3>
+<div class="ts-case">
+<div class="code" data-file="mathx.c" data-lang="c"><pre>
+#include &lt;math.h&gt;
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    volatile double v = 2.0;
+    printf("%f\n", sqrt(v));
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -c mathx.c -o mathx.o
+$ gcc mathx.o -o prog
+/usr/bin/ld: mathx.o: in function `main':
+mathx.c:(.text+0x23): undefined reference to `sqrt'
+collect2: error: ld returned 1 exit status
+</pre>
+<p><b>چرا؟</b> توابع <code>&lt;math.h&gt;</code> در کتابخانهٔ جدای <code>libm</code> هستند و روی لینوکس باید صریحا خواسته شوند. هدر فقط اعلان می‌دهد، تعریف نه.</p>
+<p><b>چه کنم؟</b> در انتهای دستور <code>-lm</code> بگذار: <code>gcc mathx.c -o prog -lm</code>. (ترتیب مهم است: کتابخانه بعد از فایل‌هایی که لازمش دارند بیاید.) روی MCU معمولا <code>-lm</code> با toolchain همراه است ولی اندازهٔ کد را بالا می‌برد.</p>
+</div>
+<h2 id="arm">۳. arm-none-eabi-gcc و لینکر MCU</h2>
+<p>همان‌ها ولی برای تراشه‌ای که حافظهٔ محدود دارد. متن‌ها را با toolchain نسخهٔ ۱۳٫۲ Arm گرفتیم.</p>
+<h3 id="e-ram"><code>region `RAM' overflowed by N bytes</code></h3>
+<div class="ts-case">
+<div class="code" data-file="startup.c" data-lang="c"><pre>
+#include &lt;stdint.h&gt;
+
+extern uint32_t _estack;
+int main(void);
+
+void Reset_Handler(void)
+{
+    main();
+    for (;;) { }
+}
+
+__attribute__((section(".isr_vector"), used))
+const uint32_t vectors[2] = { (uint32_t)&amp;_estack, (uint32_t)&amp;Reset_Handler };
+</pre></div><div class="code" data-file="bigram.c" data-lang="c"><pre>
+#include &lt;stdint.h&gt;
+
+static uint8_t frame[150 * 1024];
+
+int main(void)
+{
+    for (uint32_t i = 0; i &lt; sizeof frame; i++) {
+        frame[i] = (uint8_t)i;
+    }
+    return frame[100];
+}
+</pre></div><div class="code" data-file="link.ld" data-lang="ld"><pre>
+ENTRY(Reset_Handler)
+
+MEMORY
+{
+    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 512K
+    RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
+}
+
+SECTIONS
+{
+    .isr_vector : { KEEP(*(.isr_vector)) } &gt; FLASH
+    .text : { *(.text*) *(.rodata*) . = ALIGN(4); _etext = .; } &gt; FLASH
+    .data : { _sdata = .; *(.data*) . = ALIGN(4); _edata = .; } &gt; RAM AT &gt; FLASH
+    _sidata = LOADADDR(.data);
+    .bss : { _sbss = .; *(.bss*) *(COMMON) . = ALIGN(4); _ebss = .; } &gt; RAM
+    _estack = ORIGIN(RAM) + LENGTH(RAM);
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -nostdlib -T link.ld -o x.elf startup.c bigram.c
+/usr/lib/gcc/arm-none-eabi/13.2.1/../../../arm-none-eabi/bin/ld: x.elf section `.bss' will not fit in region `RAM'
+/usr/lib/gcc/arm-none-eabi/13.2.1/../../../arm-none-eabi/bin/ld: region `RAM' overflowed by 22528 bytes
+collect2: error: ld returned 1 exit status
+</pre>
+<p><b>چرا؟</b> متغیرها در جمع از RAM تراشه بیشترند: اینجا آرایهٔ ۱۵۰ کیلوبایتی، در حالی که <code>link.ld</code> فقط ۱۲۸ کیلوبایت RAM (مثل STM32F411) تعریف کرده است. عدد ۲۲۵۲۸ همان کمبود است (۱۵۰ − ۱۲۸ = ۲۲ کیلوبایت = ۲۲۵۲۸ بایت). خط اول می‌گوید کدام بخش (<code>.bss</code>) جا نمی‌شود. مسیر <code>ld</code> در ابتدای خط‌ها بسته به نصب فرق می‌کند.</p>
+<p><b>چه کنم؟</b> متغیر بزرگ را کوچک کن، به <code>const</code> در Flash ببر، یا از بافر کوچک‌تر/مشترک استفاده کن. با <code>arm-none-eabi-size</code> و فایل <code>.map</code> ببین چه چیزی بزرگ‌ترین است (درس <a href="6-5.html">۶.۵</a>). و توجه کن: پشته (stack) و heap هم از همین RAM می‌آیند و لینکر همیشه بیش‌ازحدشان را نمی‌بیند.</p>
+</div>
+<h3 id="e-flash"><code>region `FLASH' overflowed by N bytes</code></h3>
+<div class="ts-case">
+<div class="code" data-file="startup.c" data-lang="c"><pre>
+#include &lt;stdint.h&gt;
+
+extern uint32_t _estack;
+int main(void);
+
+void Reset_Handler(void)
+{
+    main();
+    for (;;) { }
+}
+
+__attribute__((section(".isr_vector"), used))
+const uint32_t vectors[2] = { (uint32_t)&amp;_estack, (uint32_t)&amp;Reset_Handler };
+</pre></div><div class="code" data-file="bigflash.c" data-lang="c"><pre>
+#include &lt;stdint.h&gt;
+
+static const uint8_t table[600 * 1024] = { 1, 2, 3 };
+
+int main(void)
+{
+    return table[2];
+}
+</pre></div><div class="code" data-file="link.ld" data-lang="ld"><pre>
+ENTRY(Reset_Handler)
+
+MEMORY
+{
+    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 512K
+    RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
+}
+
+SECTIONS
+{
+    .isr_vector : { KEEP(*(.isr_vector)) } &gt; FLASH
+    .text : { *(.text*) *(.rodata*) . = ALIGN(4); _etext = .; } &gt; FLASH
+    .data : { _sdata = .; *(.data*) . = ALIGN(4); _edata = .; } &gt; RAM AT &gt; FLASH
+    _sidata = LOADADDR(.data);
+    .bss : { _sbss = .; *(.bss*) *(COMMON) . = ALIGN(4); _ebss = .; } &gt; RAM
+    _estack = ORIGIN(RAM) + LENGTH(RAM);
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -nostdlib -T link.ld -o x.elf startup.c bigflash.c
+/usr/lib/gcc/arm-none-eabi/13.2.1/../../../arm-none-eabi/bin/ld: x.elf section `.text' will not fit in region `FLASH'
+/usr/lib/gcc/arm-none-eabi/13.2.1/../../../arm-none-eabi/bin/ld: region `FLASH' overflowed by 90148 bytes
+collect2: error: ld returned 1 exit status
+</pre>
+<p><b>چرا؟</b> کد و دادهٔ ثابت (<code>.text</code> و <code>.rodata</code> و مقدار اولیهٔ <code>.data</code>) از Flash بزرگ‌ترند. اینجا جدول ۶۰۰ کیلوبایتی <code>const</code> بیش از ۵۱۲ کیلوبایت Flash است.</p>
+<p><b>چه کنم؟</b> بهینه‌سازی اندازه (<code>-Os</code>)، حذف کد استفاده‌نشده (<code>-ffunction-sections -Wl,--gc-sections</code>)، <code>--specs=nano.specs</code> و کوچک‌کردن جدول‌ها. جزئیات در <a href="6-5.html">۶.۵</a>.</p>
+</div>
+<h3 id="e-stdio"><code>fatal error: stdio.h: No such file or directory (روی ARM)</code></h3>
+<div class="ts-case">
+<div class="code" data-file="startup.c" data-lang="c"><pre>
+#include &lt;stdint.h&gt;
+
+extern uint32_t _estack;
+int main(void);
+
+void Reset_Handler(void)
+{
+    main();
+    for (;;) { }
+}
+
+__attribute__((section(".isr_vector"), used))
+const uint32_t vectors[2] = { (uint32_t)&amp;_estack, (uint32_t)&amp;Reset_Handler };
+</pre></div><div class="code" data-file="pf.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    printf("hello\n");
+    return 0;
+}
+</pre></div><div class="code" data-file="link.ld" data-lang="ld"><pre>
+ENTRY(Reset_Handler)
+
+MEMORY
+{
+    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 512K
+    RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
+}
+
+SECTIONS
+{
+    .isr_vector : { KEEP(*(.isr_vector)) } &gt; FLASH
+    .text : { *(.text*) *(.rodata*) . = ALIGN(4); _etext = .; } &gt; FLASH
+    .data : { _sdata = .; *(.data*) . = ALIGN(4); _edata = .; } &gt; RAM AT &gt; FLASH
+    _sidata = LOADADDR(.data);
+    .bss : { _sbss = .; *(.bss*) *(COMMON) . = ALIGN(4); _ebss = .; } &gt; RAM
+    _estack = ORIGIN(RAM) + LENGTH(RAM);
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -T link.ld -o x.elf startup.c pf.c
+pf.c:1:10: fatal error: stdio.h: No such file or directory
+    1 | #include &lt;stdio.h&gt;
+      |          ^~~~~~~~~
+compilation terminated.
+</pre>
+<p><b>چرا؟</b> کامپایلر ARM تنها است و کتابخانهٔ C (newlib) بستهٔ جدایی است. روی اوبونتو باید <code>libnewlib-arm-none-eabi</code> نصب باشد؛ در «Arm GNU Toolchain» رسمی همراه است. همین‌طور <code>--specs=nano.specs</code> و <code>--specs=nosys.specs</code> فایل‌هایی از newlib هستند. (پیام «cannot read spec file nosys.specs» همین علت را دارد.)</p>
+<p><b>چه کنم؟</b> <code>sudo apt install libnewlib-arm-none-eabi</code> یا toolchain رسمی Arm را نصب کن. اگر <code>-ffreestanding -nostdlib</code> کار می‌کنی، از <code>&lt;stdio.h&gt;</code> استفاده نکن؛ فقط هدرهای «freestanding» مثل <code>&lt;stdint.h&gt;</code>، <code>&lt;stddef.h&gt;</code>، <code>&lt;stdbool.h&gt;</code> و <code>&lt;limits.h&gt;</code> در دسترس‌اند.</p>
+<div class="callout info"><div class="ct">توجه</div><p>روی سیستم ما newlib نصب نبود؛ به همین دلیل خطاهای معروف <code>undefined reference to `_write'</code>، <code>_sbrk</code>، <code>_close</code>، <code>_read</code>، <code>_fstat</code>، <code>_isatty</code>، <code>_lseek</code> را نتوانستیم بازتولید کنیم. علتشان: newlib برای <code>printf</code>/<code>malloc</code> به این «فراخوان‌های سیستمی» نیاز دارد و باید خودت تعریفشان کنی (درس <a href="5-5.html">۵.۵</a>) یا <code>--specs=nosys.specs</code> بدهی که نسخهٔ خالی‌شان را می‌آورد.</p></div>
+</div>
+<h3 id="e-entry"><code>warning: cannot find entry symbol _start; defaulting to ...</code></h3>
+<div class="ts-case">
+<div class="code" data-file="ok.c" data-lang="c"><pre>
+int main(void)
+{
+    volatile int x = 1;
+    return x;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -ffreestanding -nostdlib -o x.elf ok.c
+/usr/lib/gcc/arm-none-eabi/13.2.1/../../../arm-none-eabi/bin/ld: warning: cannot find entry symbol _start; defaulting to 00008000
+</pre>
+<p><b>چرا؟</b> بدون <code>-T link.ld</code> و بدون <code>ENTRY(Reset_Handler)</code>، لینکر نمی‌داند اجرا از کجا شروع شود و آدرس پیش‌فرض (<code>0x8000</code>) را می‌گذارد. این فایل ELF هرگز روی STM32 (Flash از <code>0x08000000</code>) بوت نمی‌شود، هرچند لینکر «موفق» گزارش می‌دهد. یعنی هشدار را نباید ندیده گرفت.</p>
+<p><b>چه کنم؟</b> <code>-T link.ld</code> را بده و در linker script <code>ENTRY(Reset_Handler)</code> را داشته باش (درس <a href="5-1.html">۵.۱</a>).</p>
+</div>
+<h3 id="e-abi"><code>error: x.o uses VFP register arguments, x.elf does not</code></h3>
+<div class="ts-case">
+<div class="code" data-file="startup.c" data-lang="c"><pre>
+#include &lt;stdint.h&gt;
+
+extern uint32_t _estack;
+int main(void);
+
+void Reset_Handler(void)
+{
+    main();
+    for (;;) { }
+}
+
+__attribute__((section(".isr_vector"), used))
+const uint32_t vectors[2] = { (uint32_t)&amp;_estack, (uint32_t)&amp;Reset_Handler };
+</pre></div><div class="code" data-file="fl.c" data-lang="c"><pre>
+float scale(float v) { return v * 2.5f; }
+</pre></div><div class="code" data-file="flmain.c" data-lang="c"><pre>
+float scale(float v);
+int main(void) { return (int)scale(3.0f); }
+</pre></div><div class="code" data-file="link.ld" data-lang="ld"><pre>
+ENTRY(Reset_Handler)
+
+MEMORY
+{
+    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 512K
+    RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
+}
+
+SECTIONS
+{
+    .isr_vector : { KEEP(*(.isr_vector)) } &gt; FLASH
+    .text : { *(.text*) *(.rodata*) . = ALIGN(4); _etext = .; } &gt; FLASH
+    .data : { _sdata = .; *(.data*) . = ALIGN(4); _edata = .; } &gt; RAM AT &gt; FLASH
+    _sidata = LOADADDR(.data);
+    .bss : { _sbss = .; *(.bss*) *(COMMON) . = ALIGN(4); _ebss = .; } &gt; RAM
+    _estack = ORIGIN(RAM) + LENGTH(RAM);
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16 -c fl.c -o fl.o
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -mfloat-abi=soft -c flmain.c -o flmain.o
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -nostdlib -T link.ld -o x.elf startup.c flmain.o fl.o
+/usr/lib/gcc/arm-none-eabi/13.2.1/../../../arm-none-eabi/bin/ld: error: fl.o uses VFP register arguments, x.elf does not
+/usr/lib/gcc/arm-none-eabi/13.2.1/../../../arm-none-eabi/bin/ld: failed to merge target specific data of file fl.o
+/usr/lib/gcc/arm-none-eabi/13.2.1/../../../arm-none-eabi/bin/ld: flmain.o: in function `main':
+flmain.c:(.text+0xe): undefined reference to `__aeabi_f2iz'
+collect2: error: ld returned 1 exit status
+</pre>
+<p><b>چرا؟</b> دو فایل با «قرارداد اعداد اعشاری» متفاوت ساخته شده‌اند: یکی با FPU سخت‌افزاری (<code>hard</code>) و دیگری نرم‌افزاری (<code>soft</code>). ممکن نیست این‌ها را به هم لینک کرد چون آرگومان‌های <code>float</code> در ثبات‌های متفاوت رد و بدل می‌شوند. خط سوم (<code>__aeabi_f2iz</code>) فقط اثر جانبی همین است.</p>
+<p><b>چه کنم؟</b> برای <b>همهٔ</b> فایل‌ها و کتابخانه‌ها و هنگام لینک، یک مجموعهٔ ثابت بده: <code>-mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16</code> (Cortex-M4 با FPU مثل F411) یا <code>-mfloat-abi=soft</code>. آن‌ها را در یک متغیر <code>ARCH_FLAGS</code> در Makefile نگه دار.</p>
+</div>
+<h2 id="runtime">۴. خطاهای زمان اجرا روی PC</h2>
+<p>برنامه ساخته شد ولی هنگام اجرا افتاد. این‌ها را روی PC می‌توانی با sanitizer و دیباگر صید کنی، قبل از رسیدن به سخت‌افزار.</p>
+<h3 id="e-segv"><code>Segmentation fault</code></h3>
+<div class="ts-case">
+<div class="code" data-file="seg.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int *p = NULL;
+    printf("about to write\n");
+    fflush(stdout);
+    *p = 42;
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -g -o seg seg.c
+$ ./seg
+about to write
+Segmentation fault
+</pre>
+<p><b>چرا؟</b> برنامه به آدرسی دست زد که سیستم‌عامل اجازه نداده (اینجا: نوشتن در <code>NULL</code>). خط چاپ‌شده قبلش دیده می‌شود چون <code>fflush</code> کرده‌ایم؛ بدون آن ممکن است اصلا در خروجی نبینی و فکر کنی خطا زودتر رخ داده (درس <a href="2-8.html">۲.۸</a>). بعضی سیستم‌ها بعد از پیام «(core dumped)» هم می‌نویسند.</p>
+<p><b>چه کنم؟</b> با دیباگر (<code>gdb ./seg</code>، سپس <code>run</code> و <code>bt</code>) ببین در کدام خط افتاد. اشاره‌گرها را قبل از استفاده با <code>NULL</code> مقایسه کن (درس <a href="3-2.html">۳.۲</a>).</p>
+</div>
+<h3 id="e-fpe"><code>Floating point exception (تقسیم صحیح بر صفر)</code></h3>
+<div class="ts-case">
+<div class="code" data-file="fpe.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    volatile int total = 100;
+    volatile int count = 0;
+    printf("%d\n", total / count);
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -o fpe fpe.c
+$ ./fpe
+Floating point exception
+</pre>
+<p><b>چرا؟</b> اسمش گمراه‌کننده است: خطای تقسیم <b>صحیح</b> بر صفر روی x86 با سیگنال SIGFPE کشته می‌شود. روی Cortex-M نتیجهٔ چنین تقسیمی معمولا صفر است، مگر آن که تله (<code>DIV_0_TRP</code>) را روشن کنی؛ یعنی همان کد در MCU بی‌سروصدا نتیجهٔ غلط می‌دهد.</p>
+<p><b>چه کنم؟</b> مخرج را قبل از تقسیم بررسی کن. تقسیم <code>float</code> بر صفر خطا نمی‌دهد و <code>inf</code> می‌شود.</p>
+</div>
+<h3 id="e-assert"><code>Assertion `...' failed</code></h3>
+<div class="ts-case">
+<div class="code" data-file="as.c" data-lang="c"><pre>
+#include &lt;assert.h&gt;
+
+int main(void)
+{
+    int n = 0;
+    assert(n &gt; 0);
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -o as as.c
+$ ./as
+as: as.c:6: main: Assertion `n &gt; 0' failed.
+Aborted
+</pre>
+<p><b>چرا؟</b> <code>assert</code> شرط را می‌سنجد و اگر غلط بود برنامه را با نام فایل و خط و خود شرط متوقف می‌کند. این خطا نیست، «نگهبانی» است که خودت گذاشته‌ای.</p>
+<p><b>چه کنم؟</b> بررسی کن چرا شرط برقرار نیست. در نسخهٔ نهایی <code>-DNDEBUG</code> همهٔ assertها را حذف می‌کند؛ پس در آن‌ها کاری که <b>لازم است</b> انجام شود ننویس.</p>
+</div>
+<h3 id="e-ubsan"><code>runtime error: signed integer overflow</code></h3>
+<div class="ts-case">
+<div class="code" data-file="ub.c" data-lang="c"><pre>
+#include &lt;limits.h&gt;
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int x = INT_MAX;
+    x = x + 1;
+    printf("%d\n", x);
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -g -fsanitize=undefined -o ub ub.c
+$ ./ub
+ub.c:7:7: runtime error: signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'
+-2147483648
+</pre>
+<p><b>چرا؟</b> بدون <code>-fsanitize=undefined</code> این برنامه هیچ نمی‌گوید و فقط عدد غلط چاپ می‌کند. سرریز عدد علامت‌دار رفتار تعریف‌نشده است و کامپایلر می‌تواند فرض کند هرگز رخ نمی‌دهد (درس <a href="6-2.html">۶.۲</a>).</p>
+<p><b>چه کنم؟</b> روی PC تست‌هایت را با <code>-fsanitize=address,undefined</code> اجرا کن. سرریز را با نوع بزرگ‌تر، بی‌علامت (که حساب دورانی دارد) یا بررسی قبلی مهار کن.</p>
+</div>
+<h3 id="e-asan"><code>AddressSanitizer: stack-buffer-overflow</code></h3>
+<div class="ts-case">
+<div class="code" data-file="asan.c" data-lang="c"><pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int data[4] = {1, 2, 3, 4};
+    int idx = 4;
+    printf("%d\n", data[idx]);
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -o asan asan.c
+$ ./asan
+asan.c:7:24: runtime error: index 4 out of bounds for type 'int [4]'
+asan.c:7:5: runtime error: load of address 0x7fc28e500030 with insufficient space for an object of type 'int'
+0x7fc28e500030: note: pointer points here
+ 04 00 00 00  00 00 00 00 00 00 00 00  00 80 4f 8e c2 7f 00 00  00 00 00 00 00 00 00 00  00 00 00 00
+              ^ 
+=================================================================
+==3568==ERROR: AddressSanitizer: stack-buffer-overflow on address 0x7fc28e500030 at pc 0x55d78e1b5528 bp 0x7ffcb75406f0 sp 0x7ffcb75406e0
+READ of size 4 at 0x7fc28e500030 thread T0
+    #0 0x55d78e1b5527 in main asan.c:7
+    ... (چند خط حذف شد)
+SUMMARY: AddressSanitizer: stack-buffer-overflow asan.c:7 in main
+</pre>
+<p><b>چرا؟</b> اندیس ۴ روی آرایهٔ چهارخانه‌ای (اندیس‌های ۰ تا ۳). sanitizer هم علت (<code>index 4 out of bounds</code>) و هم محل را در فایل می‌گوید. آدرس‌ها هر بار فرق می‌کنند؛ فقط نوع خطا و شماره خط مهم‌اند.</p>
+<p><b>چه کنم؟</b> اندیس را قبل از استفاده با اندازهٔ آرایه بسنج؛ اندازه را از <code>sizeof arr / sizeof arr[0]</code> بگیر، نه عدد ثابت.</p>
+</div>
+<h2 id="hardfault">HardFault روی Cortex-M: فهرست علت‌ها</h2>
+<p><span class="en">HardFault</span> یعنی پردازنده کاری دید که ممنوع است و راه‌حلی برایش ندارد. مثل آژیر ساختمان: می‌گوید «مشکلی هست»، نه «مشکل کجاست». خوب‌ترین کارت نوشتن یک <span class="en">HardFault_Handler</span> است که <b>ثبات‌های ذخیره‌شده</b> را نشان بدهد. اطلاعات همه در ثبات‌های وضعیت خطا هستند:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>ثبات</th><th>آدرس</th><th>چه می‌گوید</th></tr></thead>
+<tbody>
+<tr><td><code>CFSR</code></td><td><code>0xE000ED28</code></td><td>سه بخش: MMFSR (بیت ۰ تا ۷)، BFSR (۸ تا ۱۵)، UFSR (۱۶ تا ۳۱). نوع دقیق خطا اینجاست.</td></tr>
+<tr><td><code>HFSR</code></td><td><code>0xE000ED2C</code></td><td>بیت ۳۰ (<code>FORCED</code>): یک خطای دیگر به HardFault ارتقا یافته است. بیت ۱ (<code>VECTTBL</code>): خواندن جدول وقفه شکست خورد.</td></tr>
+<tr><td><code>MMFAR</code></td><td><code>0xE000ED34</code></td><td>آدرس دسترسی وقتی <code>MMARVALID</code> (بیت ۷ CFSR) برقرار است.</td></tr>
+<tr><td><code>BFAR</code></td><td><code>0xE000ED38</code></td><td>آدرس دسترسی خطادار وقتی <code>BFARVALID</code> (بیت ۱۵ CFSR) برقرار است.</td></tr>
+</tbody></table></div>
+<p>و این‌ها بیت‌های پرتکرار CFSR هستند (شمارهٔ بیت در خود ثبات 32 بیتی):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>بیت</th><th>نام</th><th>معنی ساده</th></tr></thead>
+<tbody>
+<tr><td>۱</td><td><code>DACCVIOL</code></td><td>دسترسی به داده در ناحیهٔ ممنوع (فقط با MPU)</td></tr>
+<tr><td>۸</td><td><code>IBUSERR</code></td><td>خطای گذرگاه هنگام <b>واکشی دستور</b> (پرش به آدرس بی‌معنی)</td></tr>
+<tr><td>۹</td><td><code>PRECISERR</code></td><td>خطای گذرگاه دقیق؛ <code>BFAR</code> آدرس را دارد و PC ذخیره‌شده همان دستور خطاست</td></tr>
+<tr><td>۱۰</td><td><code>IMPRECISERR</code></td><td>خطای گذرگاه نادقیق؛ نوشتن بافر شده و خطا بعد از چند دستور اعلام شد (PC دقیق نیست)</td></tr>
+<tr><td>۱۱ و ۱۲</td><td><code>UNSTKERR</code>، <code>STKERR</code></td><td>خطا هنگام برداشتن یا ذخیرهٔ ثبات‌ها روی پشته: پشته خراب یا خیلی پر است</td></tr>
+<tr><td>۱۶</td><td><code>UNDEFINSTR</code></td><td>دستور تعریف‌نشده؛ معمولا پرش به داده یا حافظهٔ خراب</td></tr>
+<tr><td>۱۷</td><td><code>INVSTATE</code></td><td>تلاش برای رفتن به حالت ARM؛ مثلا اشاره‌گر تابعی که بیت صفرش ۰ است</td></tr>
+<tr><td>۱۸</td><td><code>INVPC</code></td><td>مقدار نامعتبر <span class="en">EXC_RETURN</span> هنگام بازگشت از وقفه</td></tr>
+<tr><td>۱۹</td><td><code>NOCP</code></td><td>استفاده از واحد اعشاری (FPU) که روشن نشده</td></tr>
+<tr><td>۲۴</td><td><code>UNALIGNED</code></td><td>دسترسی ناهم‌تراز از نوعی که مجاز نیست</td></tr>
+<tr><td>۲۵</td><td><code>DIVBYZERO</code></td><td>تقسیم بر صفر (فقط اگر تلهٔ آن روشن شده باشد)</td></tr>
+</tbody></table></div>
+
+<p>حالا فهرست علت‌های واقعی، به ترتیب شیوع در پروژه‌های مبتدی:</p>
+<ol class="steps">
+<li><b>اشاره‌گر خراب یا نامقداردهی‌شده.</b> اشاره‌گر به آدرسی که هیچ حافظه‌ای پشتش نیست (منطقهٔ رزرو) <code>PRECISERR</code> می‌دهد. <b>نکته:</b> روی بسیاری از STM32 آدرس <code>0</code> حافظهٔ معتبر (نگاشت Flash) است و خواندن <code>NULL</code> خطا نمی‌دهد! پس باگ می‌ماند و بی‌صدا مقدار غلط برمی‌گردد. برای همین پیش از استفاده باید اشاره‌گر را خودت بسنجی.</li>
+<li><b>پرش به اشاره‌گر تابع نامعتبر.</b> اشاره‌گر تابع <code>NULL</code> یا مقداردهی‌نشده: <code>INVSTATE</code> (چون بیت صفر ۰ است) یا <code>IBUSERR</code>. فراموش‌شدن ثبت callback (درس <a href="4-3.html">۴.۳</a>) کلاسیک است.</li>
+<li><b>سرریز پشته (stack overflow).</b> آرایهٔ محلی بزرگ یا بازگشت عمیق پشته را به داده‌های دیگر می‌رساند. آدرس‌های بازگشت خراب می‌شوند و تابع به جای بی‌معنی برمی‌گردد. علامت: HardFault در جاهای «غیرممکن» و متغیرهای سراسری که خودبه‌خود عوض می‌شوند.</li>
+<li><b>استفاده از FPU بدون روشن‌کردن آن.</b> اگر با <code>-mfloat-abi=hard</code> ساخته‌ای، ثبات <code>CPACR</code> (آدرس <code>0xE000ED88</code>) باید بیت‌های ۲۰ تا ۲۳ را ۱ کند. کد راه‌انداز (<code>SystemInit</code> در CMSIS) این کار را می‌کند؛ در پروژهٔ دست‌نویس فراموش می‌شود و اولین عملیات <code>float</code> <code>NOCP</code> می‌دهد.</li>
+<li><b>خطای وقفه‌ها.</b> ISR با نام غلط (به <code>Default_Handler</code> می‌رود، که معمولا حلقهٔ بی‌نهایت است، نه HardFault)، یا بازگشت اشتباه از ISR. اگر جدول وقفه درست چیده نشده باشد، <code>HFSR.VECTTBL</code> را می‌بینی (درس <a href="5-1.html">۵.۱</a> و <a href="5-3.html">۵.۳</a>).</li>
+<li><b>دسترسی ناهم‌تراز.</b> تبدیل اشاره‌گر بایت به <code>uint32_t *</code> روی آدرس فرد. روی Cortex-M4 <code>LDR</code>/<code>STR</code> ساده معمولا مجاز است ولی دستورهایی مثل <code>LDM</code>/<code>LDRD</code> ناهم‌تراز خطا می‌دهند، و کامپایلر هم ممکن است آن‌ها را بسازد. راه امن: <code>memcpy</code> (درس <a href="3-4.html">۳.۴</a>).</li>
+<li><b>تقسیم بر صفر</b> با تله روشن: <code>DIVBYZERO</code>. بدون تله، نتیجه صفر می‌شود و اصلا خطایی نمی‌بینی.</li>
+<li><b>پیکربندی غلط یا فراموش‌شدهٔ پریفرال.</b> دسترسی به رجیستر پریفرالی که کلاکش روشن نشده روی خانواده‌های مختلف رفتار متفاوت دارد؛ بسیار وقت‌ها فقط «کار نمی‌کند» و گاهی خطای گذرگاه می‌دهد. Reference Manual تراشه‌ات را ببین.</li>
+<li><b>حافظهٔ پویای خراب:</b> <code>free</code> دوباره، نوشتن بعد از <code>free</code>، سرریز بافر <code>malloc</code>. علامت‌ها در زمان‌های تصادفی و دور از علت (درس <a href="4-4.html">۴.۴</a>).</li>
+</ol>
+
+<h3 id="hf-handler">یک HardFault_Handler که PC را نشان می‌دهد</h3>
+<p>وقتی خطا رخ می‌دهد، پردازنده ۸ ثبات را روی پشته می‌ریزد: <code>R0 R1 R2 R3 R12 LR PC xPSR</code>. پس اگر <code>frame</code> اشاره‌گر به ابتدای آن‌ها باشد، <code>frame[6]</code> همان <code>PC</code> در لحظهٔ خطاست. آدرس PC را با <code>arm-none-eabi-addr2line -e firmware.elf 0x08001234</code> به خط کد تبدیل می‌کنی. کد زیر با <code>arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -Wall -Wextra -ffreestanding -c</code> کامپایل شد.</p>
+<div class="code" data-file="hf.c" data-lang="c" id="hf"><pre>
+#include &lt;stdint.h&gt;
+
+void hardfault_c(uint32_t *frame)
+{
+    volatile uint32_t stacked_pc = frame[6];
+    volatile uint32_t cfsr = *(volatile uint32_t *)0xE000ED28u;
+    (void)stacked_pc;
+    (void)cfsr;
+    for (;;) { }
+}
+
+__attribute__((naked)) void HardFault_Handler(void)
+{
+    __asm volatile(
+        "tst lr, #4      \n"
+        "ite eq          \n"
+        "mrseq r0, msp   \n"
+        "mrsne r0, psp   \n"
+        "b hardfault_c   \n"
+    );
+}
+</pre></div>
+<ol class="walk" data-for="hf">
+  <li data-lines="3-10"><b class="what">تابع C که فریم را می‌خواند.</b> ورودی: اشاره‌گر به ثبات‌های ذخیره‌شده. <code>frame[6]</code> همان PC است و CFSR را از آدرس ثبات می‌خوانیم. <span class="why">دلیل: <code>volatile</code> تا کامپایلر متغیرها را در <code>-O2</code> حذف نکند و در دیباگر ببینی؛ حلقهٔ بی‌نهایت هم برنامه را همان‌جا نگه می‌دارد تا دیباگر وصل شود.</span></li>
+  <li data-lines="12-21"><b class="what">ورودی <code>naked</code> به زبان اسمبلی.</b> ما نمی‌دانیم پشتهٔ فعال MSP بود یا PSP (اگر RTOS داری، PSP). بیت ۲ ثبات <code>LR</code> در ورود به استثنا این را می‌گوید: ۰ یعنی MSP و ۱ یعنی PSP. سپس اشاره‌گر درست را در <code>R0</code> می‌گذاریم (اولین آرگومان تابع) و به تابع C می‌پریم. <span class="why">دلیل <code>naked</code>: پیش‌درآمد تابع معمولی پشته را دست می‌زند و <code>SP</code> را جابه‌جا می‌کند، پیش از آنکه بخوانیمش.</span></li>
+</ol>
+
+<div class="callout info"><div class="ct">راه سریع‌تر با دیباگر</div>
+<p>اگر به GDB وصل هستی، بعد از ایستادن در <code>HardFault_Handler</code> این‌ها را بزن: <code>x/8wx $sp</code> (هشت ثبات ذخیره‌شده) و <code>x/wx 0xE000ED28</code> (CFSR). روش کامل در درس <a href="6-1.html">۶.۱</a> است.</p></div>
+
+<h2 id="symptoms">علائم بی‌پیام روی میکروکنترلر</h2>
+<p>گاهی هیچ پیامی نیست: برنامه ساخته می‌شود ولی برد «کار نمی‌کند». در این جدول از علامت شروع کن. هر ردیف به ترتیب شیوع نوشته شده.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>علامت</th><th>محتمل‌ترین علت‌ها</th><th>چه وارسی کنم</th></tr></thead>
+<tbody>
+<tr><td>LED (یا خروجی) هیچ‌وقت روشن نمی‌شود</td><td>کلاک پورت روشن نشده؛ پایه خروجی نشده؛ پایهٔ اشتباه (LED روی برد شما PA5 نیست)؛ LED فعال-پایین است</td><td>ترتیب: کلاک ← MODER ← ODR/BSRR (درس <a href="5-2.html">۵.۲</a>). دیاگرام برد. با مولتی‌متر ولتاژ پایه را بسنج.</td></tr>
+<tr><td>با <code>-O0</code> کار می‌کند، با <code>-O2</code> نه</td><td>ناتمام‌بودن <code>volatile</code>؛ رفتار تعریف‌نشده؛ حلقهٔ انتظار که کامپایلر حذفش کرد</td><td>متغیرهای مشترک با ISR و رجیسترها <code>volatile</code> باشند (درس <a href="3-6.html">۳.۶</a>). با <code>-fsanitize=undefined</code> روی PC تست کن.</td></tr>
+<tr><td>پرچم ISR عوض می‌شود ولی حلقهٔ اصلی نمی‌فهمد</td><td>متغیر <code>volatile</code> نیست؛ ISR با نام غلط؛ وقفه در NVIC فعال نشده</td><td>نام ISR را با فایل startup مقایسه کن (درس <a href="5-3.html">۵.۳</a>).</td></tr>
+<tr><td>برنامه ریست می‌شود و از نو شروع می‌کند</td><td>WatchDog؛ سرریز پشته؛ افت ولتاژ (brownout)؛ HardFault که ریست می‌کند</td><td>علت آخرین ریست را از ثبات وضعیت ریست بخوان؛ پشته را بزرگ‌تر کن؛ منبع تغذیه را بسنج.</td></tr>
+<tr><td>روی خط <code>while (1)</code> ایستاده و هرگز جلو نمی‌رود</td><td>ISR تعریف‌نشده به <code>Default_Handler</code> رفته؛ منتظر پرچمی هستی که هیچ‌وقت ۱ نمی‌شود</td><td>در دیباگر <b>Pause</b> بزن و call stack را ببین: در کدام تابع هستی؟</td></tr>
+<tr><td><code>printf</code> هیچ چاپ نمی‌کند</td><td>خروجی به UART یا semihosting وصل نشده؛ خروجی بافر شده و <code>\n</code> ندارد؛ baud اشتباه</td><td><code>_write</code> را به UART وصل کن (درس <a href="5-5.html">۵.۵</a>)؛ <code>\n</code> بزن یا <code>fflush(stdout)</code>؛ baud و کلاک را بسنج.</td></tr>
+<tr><td>UART کاراکترهای <b>مزخرف</b> می‌فرستد</td><td>baud گیرنده و فرستنده یکی نیست؛ کلاک پیش‌فرض متفاوت؛ 8N1 در برابر تنظیم دیگر</td><td>با تحلیلگر منطقی طول یک بیت را اندازه بگیر و baud را حساب کن.</td></tr>
+<tr><td>مقدارها بعد از مدتی خودبه‌خود عوض می‌شوند</td><td>سرریز بافر یا پشته؛ برخورد پشته و heap؛ نوشتن در اندیس خارج از آرایه</td><td>پشته را با الگوی شناخته پر کن و بعد از اجرا ببین چقدر دست خورده؛ <code>-fstack-usage</code> (درس <a href="6-5.html">۶.۵</a>).</td></tr>
+<tr><td>زمان‌بندی (مثلا <code>delay</code>) اشتباه است</td><td>کلاک واقعی (HSI 16 مگاهرتز) با چیزی که فرض کرده‌ای فرق دارد؛ PLL تنظیم نشده</td><td>یک پایه را toggle کن و با اسیلوسکوپ فرکانسش را بخوان.</td></tr>
+<tr><td>فلش می‌شود ولی برد چیزی نشان نمی‌دهد</td><td>آدرس شروع Flash یا جدول وقفه غلط است؛ boot پین‌ها؛ فایل ELF برای تراشهٔ دیگر ساخته شده</td><td>کلمهٔ اول و دوم Flash باید SP و آدرس Reset_Handler باشد (درس <a href="5-1.html">۵.۱</a>).</td></tr>
+</tbody></table></div>
+
+<h2 id="esp32">ESP32: پیام‌هایی که در مانیتور سریال می‌بینی</h2>
+<div class="callout warn"><div class="ct">صادقانه دربارهٔ این بخش</div>
+<p>ما این پیام‌ها را روی سخت‌افزار واقعی بازتولید نکردیم (ابزار ESP-IDF در محیط نوشتن این صفحه نبود). متن‌ها بر پایهٔ قالب مستندات ESP-IDF نسخهٔ ۵ نوشته شده‌اند؛ <b>عبارت دقیق و شماره‌ها بین نسخه‌ها فرق می‌کند</b>. اگر متن برد تو کمی فرق داشت، ساختار را تطبیق بده و صفحهٔ «Fatal Errors» در راهنمای ESP-IDF را ببین.</p></div>
+<div class="table-wrap"><table>
+<thead><tr><th>پیام (مضمون)</th><th>معنی</th><th>گام اول</th></tr></thead>
+<tbody>
+<tr><td><code>Guru Meditation Error: Core 0 panic'ed (LoadProhibited)</code>، یا <code>(StoreProhibited)</code></td><td>خواندن یا نوشتن روی آدرس ممنوع؛ در عمل معمولا اشاره‌گر <code>NULL</code> یا خراب. ESP32 برخلاف بسیاری از STM32ها روی <code>NULL</code> واقعا خطا می‌دهد.</td><td>خط <code>Backtrace:</code> را با <code>idf.py monitor</code> رمزگشایی کن (خودش نام تابع را نشان می‌دهد)؛ اشاره‌گرها را بسنج.</td></tr>
+<tr><td><code>Guru Meditation Error … (IllegalInstruction)</code></td><td>پرش به داده یا حافظهٔ خراب؛ اغلب اشاره‌گر تابع خراب یا سرریز پشته</td><td>همان backtrace؛ اندازهٔ پشتهٔ task را بیشتر کن.</td></tr>
+<tr><td><code>***ERROR*** A stack overflow in task … has been detected</code></td><td>پشتهٔ آن task تمام شد (FreeRTOS بررسی‌اش می‌کند)</td><td>عمق پشته در <code>xTaskCreate</code> را زیاد کن؛ آرایه‌های بزرگ محلی را <code>static</code> یا heap کن.</td></tr>
+<tr><td><code>Task watchdog got triggered. The following tasks/users did not reset the watchdog in time</code></td><td>یک task زمان زیادی CPU را نگه داشته و اجازه نداده task بیکار اجرا شود</td><td>در حلقه‌ها <code>vTaskDelay</code> بگذار؛ انتظار فعال (busy-wait) طولانی نداشته باش.</td></tr>
+<tr><td><code>Brownout detector was triggered</code></td><td>ولتاژ تغذیه لحظه‌ای افت کرد؛ اغلب کابل یا پورت USB ضعیف یا Wi-Fi روشن</td><td>کابل و پورت دیگر، خازن نزدیک تغذیه؛ منبع قوی‌تر.</td></tr>
+<tr><td><code>ESP_ERROR_CHECK failed: esp_err_t 0x… (ESP_ERR_…)</code></td><td>تابعی که <code>esp_err_t</code> برمی‌گرداند خطا داده و <code>ESP_ERROR_CHECK</code> برنامه را متوقف کرد. برای نمونه <code>0x101</code> = <code>ESP_ERR_NO_MEM</code>، <code>0x102</code> = <code>ESP_ERR_INVALID_ARG</code>، <code>0x103</code> = <code>ESP_ERR_INVALID_STATE</code>، <code>0x107</code> = <code>ESP_ERR_TIMEOUT</code></td><td>پیام نام خطا را می‌نویسد؛ آرگومان‌ها و ترتیب فراخوانی (مثلا init قبل از استفاده) را بسنج.</td></tr>
+<tr><td>در بوت‌لوپ: <code>rst:0x… (…)</code> و <code>boot:0x…</code> پشت سر هم</td><td>ESP32 دائم ریست می‌شود؛ علت را داخل پرانتز <code>rst:</code> می‌نویسد (مثلا واچ‌داگ یا ریست تغذیه)</td><td>اولین پیام قبل از تکرار را بخوان؛ برنامه را با یک <code>app_main</code> خالی امتحان کن.</td></tr>
+<tr><td><code>A fatal error occurred: Failed to connect to ESP32: Timed out waiting for packet header</code></td><td>ابزار فلش (esptool) با تراشه ارتباط نگرفت: کابل فقط-شارژ، درایور USB، پورت اشتباه، یا برد در حالت boot نرفته</td><td>کابل داده‌دار؛ پورت درست (<code>idf.py -p PORT flash</code>)؛ دکمهٔ BOOT را هنگام شروع فلش نگه دار.</td></tr>
+</tbody></table></div>
+
+<h2 id="method">روش کلی: وقتی هیچ‌کدام از این‌ها نبود</h2>
+<ol class="steps">
+<li><b>بازتولید کن.</b> بدون تکرار قابل‌اعتماد، رفع‌کردن حدس است. مسئله را کوچک کن تا تنها چند خط بماند.</li>
+<li><b>ببین آخرین چه چیزی عوض شد.</b> با git بین دو نسخه (کارا و ناکارا) فرق بگیر (<code>git diff</code>، <code>git bisect</code>).</li>
+<li><b>دو نیمه کن.</b> نیمی از برنامه را غیرفعال کن؛ مشکل هست یا نه؟ همین‌طور ادامه بده.</li>
+<li><b>قبل از سخت‌افزار، PC.</b> منطق را (بدون رجیستر) با sanitizer و تست واحد (درس <a href="6-4.html">۶.۴</a>) وارسی کن.</li>
+<li><b>ببین، حدس نزن.</b> یک چاپ، یک پایهٔ توگل‌شونده با اسیلوسکوپ یا تحلیلگر منطقی، یا یک breakpoint. ابزارها را در <a href="tools.html">جعبه‌ابزار</a> ببین.</li>
+<li><b>مشکل را با یک آدم (یا اردک لاستیکی) توضیح بده.</b> بلندبلند توضیح‌دادن اغلب خودش جواب را می‌دهد.</li>
+</ol>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>آدم‌ها به‌جای خواندن پیام، فقط عصبانی می‌شوند و کد را دست‌کاری می‌کنند تا «چیزی عوض شود». این تنها راهی است که کارت را طولانی می‌کند. عادت کن پیام را از اول تا آخر بخوانی، اولین خطا را ببینی، و فقط <b>یک چیز</b> را در هر بار عوض کنی. در ۹۵٪ موارد جواب توی پیام است.</p></div>
+
+<div class="sum"><h2>خلاصهٔ یک‌دقیقه‌ای</h2><ul>
+<li>اول ایستگاه پیام را بشناس: پیش‌پردازنده، کامپایلر، لینکر یا اجرا.</li>
+<li>فقط اولین خطا را رفع کن؛ جایش اغلب خط بالاتر است.</li>
+<li>هشدارها را رفع کن؛ <code>implicit declaration</code>، <code>incompatible pointer</code> و <code>control reaches end</code> باگ‌های واقعی‌اند.</li>
+<li>خطای لینکر: تعریف نیست (<code>undefined</code>) یا دوتاست (<code>multiple</code>)؛ شمارهٔ خط ندارد.</li>
+<li><code>region overflowed</code> یعنی RAM/Flash پر است؛ اندازهٔ حافظه‌ها را بسنج.</li>
+<li>HardFault: <code>CFSR</code> و PC ذخیره‌شده را بخوان و با <code>addr2line</code> به خط کد ببر.</li>
+</ul></div>
+
+</article>
+</body>
+</html>
