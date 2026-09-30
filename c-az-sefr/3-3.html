@@ -1,0 +1,1041 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>اشاره‌گر (۲): آرایه، حساب آدرس و const · C برای میکروکنترلر</title>
+<meta name="description" content="رابطهٔ آرایه و اشاره‌گر، حساب اشاره‌گر، const در دو جای مختلف، void*، رشته‌ها، تراز حافظه و بایت‌ترتیب؛ با کد خط‌به‌خط، آزمون و تمرین برای STM32 و ESP32.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="3-3">
+
+<p class="lede">در درس قبل یاد گرفتی اشاره‌گر یعنی «یک عدد که آدرس یک خانه است». حالا می‌رسیم به جایی که اشاره‌گر واقعا به درد می‌خورد: <b>راه رفتن روی حافظه</b>. با یک اشاره‌گر می‌توانی از اولین عنصر آرایه شروع کنی، قدم‌به‌قدم جلو بروی، یک بافر ۲۵۶ بایتی را به تابع بدهی، یک رشته را تا آخرش بخوانی و حتی بایت‌های یک عدد ۳۲ بیتی را یکی‌یکی ببینی. همین مهارت است که کدهای درایور و پروتکل را ممکن می‌کند. و همین‌جا هم هست که مبتدی‌ها بیشترین باگ‌های «یک‌بار در ماه خراب می‌شود» را می‌سازند؛ پس هر قاعده را با دلیلش می‌آموزیم.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>بگویی چرا <code>a[i]</code> و <code>*(a + i)</code> دقیقا یک چیزند</li>
+    <li>با اشاره‌گر روی آرایه راه بروی و بدانی <code>p + 1</code> چند بایت جلو می‌رود</li>
+    <li>فرق <code>const int *p</code> و <code>int *const p</code> را از روی نوشتن بخوانی</li>
+    <li>بافر و طولش را درست به تابع بدهی و از تله <code>sizeof</code> در پارامتر بپرهیزی</li>
+    <li>بدانی چرا آدرس متغیر محلی را نباید برگرداند و چرا داده ناهم‌تراز خطرناک است</li>
+    <li>بایت‌های یک عدد را در حافظه ببینی (little-endian) و پکت را امن بخوانی</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="3-2.html">۳.۲</a> (آدرس، <code>&amp;</code>، <code>*</code> و <code>NULL</code>)</li>
+    <li>درس <a href="2-7.html">۲.۷</a> (آرایه و ایندکس) و <a href="2-6.html">۲.۶</a> (توابع و پارامتر)</li>
+    <li>درس <a href="2-2.html">۲.۲</a> برای <code>uint8_t</code> و <code>uint32_t</code></li>
+    <li>فقط یک کامپایلر روی رایانه؛ هیچ سخت‌افزاری لازم نیست</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایده اصلی: خیابان پلاک‌دار</h2>
+<p>یک خیابان را تصور کن که ۴ خانه پشت سر هم دارد و پلاک‌ها از ۱۰۰ شروع می‌شود. اگر به تو بگویند «از پلاک ۱۰۰ شروع کن و ۲ خانه جلوتر برو»، بی‌آنکه هیچ نقشه‌ای ببینی می‌دانی مقصد کجاست. آرایه در حافظه دقیقا همین خیابان است: عنصرها <b>پشت سر هم</b> و بی‌فاصله چیده شده‌اند. پس اگر آدرس اولین خانه را داشته باشی، به همه خانه‌های دیگر می‌رسی، فقط با جمع و تفریق.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>تصور کن خانه‌های آن خیابان همه هم‌اندازه‌اند، ولی «پلاک» شماره بایت است و هر خانه ۴ بایت جا دارد. پس پلاک‌ها ۱۰۰، ۱۰۴، ۱۰۸، ۱۱۲ هستند. وقتی می‌گویی «یک خانه جلوتر»، منظورت ۱ پلاک نیست، ۴ پلاک است. C همین کار را برایت می‌کند: <code>p + 1</code> یعنی «یک <b>عنصر</b> جلوتر»، نه «یک <b>بایت</b> جلوتر». اندازه یک عنصر را از نوع اشاره‌گر می‌فهمد.</p></div>
+
+<h2 id="arrays">آرایه و اشاره‌گر: دو روی یک سکه</h2>
+<p>در C اگر اسم یک آرایه را در بیشتر جاها بنویسی، کامپایلر آن را به <b>آدرس اولین عنصر</b> تبدیل می‌کند. یعنی <code>a</code> همان <code>&amp;a[0]</code> می‌شود. به این تبدیل خودکار می‌گویند <span class="term" data-t="array_decay">تبدیل آرایه به اشاره‌گر</span> (به انگلیسی <span class="en">array decay</span>). استثناها را کمی بعد می‌بینی؛ فعلا مهم این است که می‌شود نوشت:</p>
+<pre class="term" data-kind="cmd">
+int a[4] = {10, 20, 30, 40};
+int *p = a;        /* یعنی int *p = &amp;a[0]; */
+</pre>
+<p>و از آن لحظه <code>p</code> به اولین قفسه اشاره می‌کند. حالا سه راه برای رسیدن به عنصر شماره ۲ داری، و هر سه یک چیزند:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>نوشتار</th><th>معنی</th><th>مقدار</th></tr></thead>
+<tbody>
+<tr><td><code>a[2]</code></td><td>عنصر شماره ۲ آرایه</td><td>۳۰</td></tr>
+<tr><td><code>*(a + 2)</code></td><td>دو عنصر جلوتر از آدرس <code>a</code> برو، آنجا را بخوان</td><td>۳۰</td></tr>
+<tr><td><code>*(p + 2)</code></td><td>همان کار، با اشاره‌گر <code>p</code></td><td>۳۰</td></tr>
+<tr><td><code>p[2]</code></td><td>براکت روی اشاره‌گر هم کار می‌کند</td><td>۳۰</td></tr>
+</tbody></table></div>
+<p>در واقع کامپایلر <code>a[i]</code> را <b>همان لحظه</b> به <code>*(a + i)</code> ترجمه می‌کند. براکت فقط یک نوشتار کوتاه و خوانا است. حالا ببین با کد واقعی:</p>
+
+<div class="code" data-file="arr_ptr.c" data-lang="c" data-verify="host" id="code1">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int a[4] = {10, 20, 30, 40};
+    int *p = a;                    // اشاره‌گر به عنصر اول
+
+    printf("a[2]     = %d\n", a[2]);
+    printf("*(a + 2) = %d\n", *(a + 2));
+    printf("*(p + 2) = %d\n", *(p + 2));
+    printf("p[2]     = %d\n", p[2]);
+    printf("bytes between p and p+1: %d\n", (int)((char *)(p + 1) - (char *)p));
+    printf("elements between p and p+3: %d\n", (int)((p + 3) - p));
+    return 0;
+}
+</pre></div>
+
+<ol class="walk" data-for="code1">
+  <li data-lines="1"><b class="what">کتابخانه چاپ.</b> فقط برای <code>printf</code> لازم است.</li>
+  <li data-lines="3-4,15"><b class="what">تابع main.</b> همه کد بین آکولادها به ترتیب از بالا به پایین اجرا می‌شود.</li>
+  <li data-lines="5"><b class="what">آرایه چهارتایی.</b> چهار قفسه <code>int</code> پشت سر هم در حافظه، با مقدارهای ۱۰ تا ۴۰.
+    <span class="why">«پشت سر هم» تضمین C است. بدون این تضمین حساب اشاره‌گر معنی نداشت.</span></li>
+  <li data-lines="6"><b class="what">اشاره‌گر به اولین عنصر.</b> اسم <code>a</code> به آدرس <code>a[0]</code> تبدیل می‌شود و در <code>p</code> می‌نشیند. نیازی به <code>&amp;</code> نیست.
+    <span class="why">اگر <code>&amp;a</code> می‌نوشتی، آدرس <b>کل آرایه</b> بود که نوع دیگری دارد (اشاره‌گر به آرایه چهارتایی). اشتباه رایج است.</span></li>
+  <li data-lines="8"><b class="what">راه اول: براکت.</b> عنصر شماره ۲ (سومین قفسه).</li>
+  <li data-lines="9"><b class="what">راه دوم: حساب روی اسم آرایه.</b> <code>a + 2</code> آدرس عنصر ۲ است و ستاره مقدار آن را می‌خواند.
+    <span class="why">پرانتز لازم است. <code>*a + 2</code> یعنی «مقدار a[0] را بخوان، بعد ۲ تا جمع کن» که ۱۲ می‌شود، نه ۳۰.</span></li>
+  <li data-lines="10"><b class="what">راه سوم: حساب روی p.</b> همان چیز با اشاره‌گر.</li>
+  <li data-lines="11"><b class="what">راه چهارم: براکت روی اشاره‌گر.</b> <code>p[2]</code> یعنی <code>*(p + 2)</code>.
+    <span class="why">به همین دلیل می‌توانی تابعی که اشاره‌گر می‌گیرد را مثل آرایه استفاده کنی.</span></li>
+  <li data-lines="12"><b class="what">فاصله بر حسب بایت.</b> هر دو اشاره‌گر را به <code>char *</code> تبدیل می‌کنیم (<code>char</code> یک بایت است)، پس تفاضل آنها بایت می‌شود: ۴.
+    <span class="why">این‌جا نشان می‌دهد <code>p + 1</code> یک بایت نیست، یک <code>int</code> است.</span></li>
+  <li data-lines="13"><b class="what">فاصله بر حسب عنصر.</b> تفاضل دو اشاره‌گر از یک نوع، «چند عنصر فاصله» است: ۳، نه ۱۲.</li>
+  <li data-lines="14"><b class="what">پایان.</b></li>
+</ol>
+
+<pre class="term" data-from="arr_ptr.c">
+$ gcc -std=c11 -Wall -Wextra -o arr_ptr arr_ptr.c
+$ ./arr_ptr
+a[2]     = 30
+*(a + 2) = 30
+*(p + 2) = 30
+p[2]     = 30
+bytes between p and p+1: 4
+elements between p and p+3: 3
+</pre>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="چهار خانه int پشت سر هم؛ اشاره‌گر p روی خانه اول و p+2 روی خانه سوم؛ هر گام چهار بایت است">
+  <defs><marker id="ar2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">آرایه = خانه‌های هم‌اندازه پشت سر هم؛ اندازه گام را نوع تعیین می‌کند</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="40" y="110" width="160" height="60" fill="#ffd60a"/><rect x="200" y="110" width="160" height="60" fill="#7ea3ff"/><rect x="360" y="110" width="160" height="60" fill="#ff86b3"/><rect x="520" y="110" width="160" height="60" fill="#3ddc97"/>
+  </g>
+  <g class="mono" font-size="24" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="120" y="148">10</text><text x="280" y="148">20</text><text x="440" y="148">30</text><text x="600" y="148">40</text>
+  </g>
+  <g class="mono s-tx" font-size="13" text-anchor="middle" font-weight="700">
+    <text x="120" y="192">0x20000000</text><text x="280" y="192">0x20000004</text><text x="440" y="192">0x20000008</text><text x="600" y="192">0x2000000C</text>
+  </g>
+  <g class="mono s-tx" font-size="14" text-anchor="middle" font-weight="700">
+    <text x="120" y="214">a[0]  p</text><text x="280" y="214">a[1]  p+1</text><text x="440" y="214">a[2]  p+2</text><text x="600" y="214">a[3]  p+3</text>
+  </g>
+  <path d="M120 100V62" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar2)"/>
+  <text x="120" y="52" text-anchor="middle" class="s-tx mono" font-size="16" font-weight="800">int *p = a;</text>
+  <path d="M440 100V62" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar2)"/>
+  <text x="440" y="52" text-anchor="middle" class="s-tx mono" font-size="16" font-weight="800">*(p + 2)</text>
+  <path d="M124 250H276" stroke="#15120a" stroke-width="3" fill="none" marker-start="url(#ar2)" marker-end="url(#ar2)"/>
+  <text x="200" y="272" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="700">یک گام = ۴ بایت (چون int)</text>
+  <text x="560" y="272" text-anchor="middle" class="s-tx" font-size="14.5">با <tspan class="mono">⁦uint8_t *⁩</tspan> گام ۱ بایت است</text>
+</svg></div>
+<figcaption>عنصر <span class="en">i</span> ام در آدرس «آدرس اول + i × اندازه یک عنصر» است. آدرس‌های شکل نمونه‌اند.</figcaption></figure>
+
+<h2 id="arith">حساب اشاره‌گر: جمع و تفریق مقیاس‌دار</h2>
+<p>روی اشاره‌گر فقط چند عمل معنی دارد، و همه از قانون «گام = اندازه یک عنصر» می‌آیند:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>عمل</th><th>معنی</th><th>مثال (p از نوع <code>int *</code>)</th></tr></thead>
+<tbody>
+<tr><td><code>p + n</code>، <code>p - n</code></td><td>n عنصر جلو یا عقب</td><td>آدرس <code>p</code> به‌اضافه ۴n بایت</td></tr>
+<tr><td><code>p++</code>، <code>p--</code></td><td>یک عنصر جلو یا عقب (خود p عوض می‌شود)</td><td>۴ بایت جلو</td></tr>
+<tr><td><code>p2 - p1</code></td><td>چند عنصر بین دو اشاره‌گر (هر دو در یک آرایه)</td><td>نتیجه عدد صحیح</td></tr>
+<tr><td><code>p1 &lt; p2</code>، <code>==</code></td><td>مقایسه آدرس‌ها (هر دو در یک آرایه)</td><td>۰ یا ۱</td></tr>
+<tr><td><code>p1 + p2</code></td><td>معنی ندارد و کامپایل نمی‌شود</td><td>جمع دو آدرس چه چیزی است؟</td></tr>
+</tbody></table></div>
+
+<div class="table-wrap"><table>
+<thead><tr><th>نوع اشاره‌گر</th><th>اندازه عنصر</th><th><code>p + 1</code> چند بایت جلو می‌رود؟</th></tr></thead>
+<tbody>
+<tr><td><code>uint8_t *</code> یا <code>char *</code></td><td>۱ بایت</td><td>۱</td></tr>
+<tr><td><code>uint16_t *</code></td><td>۲ بایت</td><td>۲</td></tr>
+<tr><td><code>uint32_t *</code> یا <code>int *</code> (روی STM32 و ESP32)</td><td>۴ بایت</td><td>۴</td></tr>
+<tr><td><code>double *</code></td><td>۸ بایت</td><td>۸</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><div class="ct">قانون «یکی بعد از آخر»</div>
+<p>فقط این آدرس‌ها مجازند: عنصرهای خود آرایه، و <b>یک خانه بعد از آخرین عنصر</b> (فقط برای مقایسه؛ خواندنش ممنوع است). مثلا برای <code>int a[4]</code> آدرس <code>a + 4</code> را می‌شود ساخت و با آن مقایسه کرد، ولی <code>*(a + 4)</code> خواندن بیرون آرایه است. رفتن به <code>a + 5</code> یا <code>a - 1</code> حتی بدون خواندن هم طبق استاندارد C رفتار تعریف‌نشده است. دلیل: کامپایلر مجاز است فرض کند اشاره‌گر هیچ‌وقت از آرایه‌اش بیرون نمی‌رود و بر اساس همین فرض بهینه‌سازی کند.</p></div>
+
+<p>نمونه‌ای ببین که این قانون را عملا به کار می‌برد: اشاره‌گر <code>end</code> را «یکی بعد از آخر» می‌گیریم و تا وقتی <code>p &lt; end</code> جلو می‌رویم. این الگو در کد C حرفه‌ای بسیار رایج است چون شماره ایندکس لازم ندارد.</p>
+
+<div class="code" data-file="walk_ptr.c" data-lang="c" data-verify="host" id="code2">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int data[5] = {3, 8, 1, 9, 4};
+    int *end = data + 5;           // یکی بعد از آخرین عنصر
+    int sum = 0;
+    int max = data[0];
+
+    for (int *p = data; p &lt; end; p++) {
+        sum += *p;
+        if (*p &gt; max) {
+            max = *p;
+        }
+    }
+    printf("sum = %d, max = %d\n", sum, max);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code2">
+  <li data-lines="5"><b class="what">داده.</b> آرایه پنج‌تایی.</li>
+  <li data-lines="6"><b class="what">اشاره‌گر پایان.</b> <code>data + 5</code> یعنی آدرسی که یک قفسه بعد از آخرین عنصر است. فقط برای مقایسه به‌کار می‌رود.
+    <span class="why">ما هرگز <code>*end</code> را نمی‌خوانیم. همین «یکی بعد از آخر» تنها آدرس بیرونی است که استاندارد می‌گذارد بسازی.</span></li>
+  <li data-lines="7-8"><b class="what">مجموع و بیشینه.</b> <code>max</code> را با اولین عنصر شروع می‌کنیم، نه با صفر.
+    <span class="why">اگر همه عددها منفی باشند، شروع با صفر جواب غلط می‌دهد.</span></li>
+  <li data-lines="10,14-15"><b class="what">حلقه با اشاره‌گر.</b> <code>p</code> از اول شروع می‌کند، تا وقتی به <code>end</code> نرسیده ادامه می‌دهد و هر دور یک عنصر جلو می‌رود (<code>p++</code>).
+    <span class="why">شرط <code>&lt;</code> است نه <code>&lt;=</code>. با <code>&lt;=</code> یک دور اضافه اجرا می‌شود و <code>*end</code> خوانده می‌شود، یعنی خواندن بیرون آرایه.</span></li>
+  <li data-lines="11"><b class="what">مقدار عنصر جاری.</b> <code>*p</code> عنصری است که p الان روی آن ایستاده.</li>
+  <li data-lines="12-14"><b class="what">به‌روز کردن بیشینه.</b> اگر عنصر جاری بزرگ‌تر بود جایگزین می‌شود.</li>
+  <li data-lines="16"><b class="what">چاپ.</b> ۳+۸+۱+۹+۴ = ۲۵ و بزرگ‌ترین ۹.</li>
+</ol>
+<pre class="term" data-from="walk_ptr.c">
+$ ./walk_ptr
+sum = 25, max = 9
+</pre>
+
+<p>حالا خودت قدم‌به‌قدم ببین اشاره‌گر چطور جلو می‌رود و بعد یک قفسه را از راه آن عوض می‌کند:</p>
+
+<div class="widget" data-w="mem" data-config='{"title":"p یک گام جلو می‌رود و قفسه را عوض می‌کند","code":["int a[3] = {10, 20, 30};","int *p = a;","p = p + 1;","*p = 99;"],"intro":"سه قفسه int داریم که هر کدام ۴ بایت است. اشاره‌گر p هم خودش یک قفسه است. روی بعدی بزن.","cells":[{"addr":"0x20000000","name":"a[0]","val":null,"kind":"var"},{"addr":"0x20000004","name":"a[1]","val":null,"kind":"var"},{"addr":"0x20000008","name":"a[2]","val":null,"kind":"var"},{"addr":"0x2000000C","name":"p","val":null,"kind":"ptr"}],"steps":[{"line":0,"set":{"0":10,"1":20,"2":30},"hot":[0,1,2],"say":"آرایه ساخته شد؛ سه قفسه پشت سر هم با فاصله ۴ بایت."},{"line":1,"set":{"3":"0x20000000"},"hot":[3,0],"say":"p آدرس اولین عنصر را گرفت. خودش هم یک قفسه است که مقدارش یک آدرس است."},{"line":2,"set":{"3":"0x20000004"},"hot":[3,1],"say":"p + 1 یعنی یک <b>عنصر</b> جلوتر، پس آدرس ۴ بایت زیاد شد (نه ۱ بایت). حالا p به a[1] اشاره می‌کند."},{"line":3,"set":{"1":99},"hot":[1],"say":"ستاره یعنی «برو به قفسه‌ای که p نشان می‌دهد». مقدار a[1] از ۲۰ به ۹۹ عوض شد، بی‌آنکه اسم a[1] را بنویسیم."}]}'></div>
+
+<h2 id="decay">وقتی آرایه را به تابع می‌دهی، فقط آدرس می‌رود</h2>
+<p>در درس ۲.۶ دیدی پارامتر تابع <b>کپی</b> آرگومان است. اگر آرایه ۲۵۶ بایتی را کپی می‌کرد، در میکروکنترلر (که RAM کم دارد) گران بود. C این کار را نمی‌کند: وقتی اسم آرایه را به تابع می‌دهی، همان تبدیل به اشاره‌گر رخ می‌دهد و <b>فقط آدرس اولین عنصر کپی می‌شود</b>. یعنی تابع روی خود آرایه اصلی کار می‌کند، نه یک کپی.</p>
+<p>نتیجه‌اش یک تله بزرگ است: تابع دیگر <b>نمی‌داند آرایه چند عنصر دارد</b>. یک اشاره‌گر فقط یک آدرس است. ببین کامپایلر چه می‌گوید وقتی داخل تابع از <code>sizeof</code> استفاده می‌کنیم:</p>
+
+<div class="code" data-file="sizeof_param.c" data-lang="c" data-verify="host-fail" data-cflags="-Werror=sizeof-array-argument" id="code3">
+<pre>
+#include &lt;stdio.h&gt;
+
+static void show(int arr[4])
+{
+    printf("inside function: %zu\n", sizeof(arr));
+}
+
+int main(void)
+{
+    int a[4] = {1, 2, 3, 4};
+    printf("in main: %zu\n", sizeof(a));
+    show(a);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code3">
+  <li data-lines="3-6"><b class="what">پارامتر به شکل آرایه.</b> <code>int arr[4]</code> در پارامتر تابع فقط ظاهر آرایه دارد؛ کامپایلر آن را <code>int *arr</code> می‌بیند. عدد ۴ نادیده گرفته می‌شود.
+    <span class="why">پارامتر آرایه‌ای وجود ندارد چون کپی کردن آرایه گران است. این نوشتار فقط یک «راهنمای خواننده» است.</span></li>
+  <li data-lines="5"><b class="what">sizeof روی اشاره‌گر.</b> جواب اندازه <b>اشاره‌گر</b> است (۴ بایت روی STM32 و ESP32، ۸ روی PC ۶۴ بیتی)، نه ۱۶ بایت آرایه.
+    <span class="why">gcc این اشتباه را می‌شناسد و هشدار می‌دهد. ما هشدار را با <code>-Werror=sizeof-array-argument</code> به خطا تبدیل کردیم تا آن را ببینی.</span></li>
+  <li data-lines="10-11"><b class="what">در تابع صاحب آرایه.</b> اینجا <code>a</code> واقعا آرایه است و <code>sizeof(a)</code> می‌شود ۱۶ (چهار <code>int</code> چهار بایتی).</li>
+  <li data-lines="12"><b class="what">صدا زدن.</b> <code>show(a)</code> فقط آدرس اولین عنصر را می‌فرستد.</li>
+</ol>
+<pre class="term" data-kind="err" data-from="sizeof_param.c">
+sizeof_param.c: In function 'show':
+sizeof_param.c:5:44: error: 'sizeof' on array function parameter 'arr' will return size of 'int *' [-Werror=sizeof-array-argument]
+</pre>
+
+<div class="callout tip"><div class="ct">قاعده: بافر را همیشه همراه طولش بفرست</div>
+<p>هر تابعی که آرایه یا بافر می‌گیرد باید <b>دو پارامتر</b> داشته باشد: اشاره‌گر و تعداد عنصرها، مثل <code>(const uint8_t *data, size_t len)</code>. نوع <span class="term" data-t="size_t">size_t</span> نوع مخصوص اندازه و شمارش است (بی‌علامت). طول را همان جایی حساب کن که آرایه واقعی است، با <code>sizeof a / sizeof a[0]</code> برای تعداد عنصر یا <code>sizeof a</code> برای تعداد بایت.</p></div>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 270" role="img" aria-label="در main آرایه ۱۶ بایتی است؛ هنگام فراخوانی فقط آدرس کپی می‌شود و در تابع پارامتر یک اشاره‌گر است">
+  <defs><marker id="ar3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">آرایه کپی نمی‌شود؛ فقط آدرسش</text>
+  <text x="200" y="58" text-anchor="middle" class="s-tx mono" font-size="15" font-weight="800">main: int a[4]</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="40" y="72" width="80" height="54" fill="#ffd60a"/><rect x="120" y="72" width="80" height="54" fill="#ffd60a"/><rect x="200" y="72" width="80" height="54" fill="#ffd60a"/><rect x="280" y="72" width="80" height="54" fill="#ffd60a"/>
+    <rect x="500" y="72" width="160" height="54" fill="#ff86b3"/>
+  </g>
+  <g class="mono" font-size="20" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="80" y="107">1</text><text x="160" y="107">2</text><text x="240" y="107">3</text><text x="320" y="107">4</text>
+    <text x="580" y="107" font-size="16">0x20000000</text>
+  </g>
+  <text x="580" y="58" text-anchor="middle" class="s-tx mono" font-size="15" font-weight="800">show: int *arr</text>
+  <path d="M80 136V170H500" stroke="#15120a" stroke-width="3" fill="none"/>
+  <path d="M580 170V136" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar3)"/>
+  <text x="290" y="196" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="700">آدرس اولین قفسه کپی می‌شود (۴ بایت)</text>
+  <text x="200" y="232" text-anchor="middle" class="s-tx" font-size="14.5"><tspan class="mono">⁦sizeof(a)⁩</tspan> = ۱۶ بایت</text>
+  <text x="580" y="232" text-anchor="middle" class="s-tx" font-size="14.5"><tspan class="mono">⁦sizeof(arr)⁩</tspan> = ۴ بایت (اندازه اشاره‌گر)</text>
+  <text x="380" y="256" text-anchor="middle" class="s-tx" font-size="13">تابع طول را نمی‌داند؛ باید جدا بگیرد</text>
+</svg></div>
+<figcaption>تابع روی خود داده کار می‌کند (نه کپی)، ولی اندازه آرایه در راه گم می‌شود.</figcaption></figure>
+
+<h2 id="const">const و اشاره‌گر: دو قفل متفاوت</h2>
+<p>در درس ۲.۱ دیدی <code>const</code> قفسه را قفل می‌کند. با اشاره‌گر <b>دو چیز</b> داریم که می‌شود قفل کرد: خود اشاره‌گر (که آدرس دارد) و <b>چیزی که به آن اشاره می‌کند</b>. مثل کارت دسترسی: یکی می‌گوید «به این اتاق فقط نگاه کن، چیزی را جابه‌جا نکن» و دیگری می‌گوید «این کارت فقط به همین یک اتاق می‌خورد و به اتاق دیگر عوض نمی‌شود».</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>نوشتار</th><th>خواندن از راست به چپ</th><th>عوض کردن <code>*p</code></th><th>عوض کردن <code>p</code></th></tr></thead>
+<tbody>
+<tr><td><code>int *p</code></td><td>p اشاره‌گر است به int</td><td>مجاز</td><td>مجاز</td></tr>
+<tr><td><code>const int *p</code></td><td>p اشاره‌گر است به int که فقط‌خواندنی است</td><td><b>ممنوع</b></td><td>مجاز</td></tr>
+<tr><td><code>int *const p</code></td><td>p یک اشاره‌گر ثابت است به int</td><td>مجاز</td><td><b>ممنوع</b></td></tr>
+<tr><td><code>const int *const p</code></td><td>اشاره‌گر ثابت به int فقط‌خواندنی</td><td><b>ممنوع</b></td><td><b>ممنوع</b></td></tr>
+</tbody></table></div>
+<p>ترفند حفظ کردن: <b>هر <code>const</code> به چیزی که «سمت چپش» است می‌چسبد</b> (اگر چیزی سمت چپش نبود، به سمت راست). در <code>int *const p</code> کلمه <code>const</code> به <code>*</code> چسبیده، یعنی خود اشاره‌گر ثابت است. در <code>const int *p</code> چیزی سمت چپ نیست، پس به <code>int</code> می‌چسبد؛ داده فقط‌خواندنی است. نوشتن <code>int const *p</code> هم دقیقا همان <code>const int *p</code> است.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="دو حالت: در const int* داده قفل است و اشاره‌گر آزاد؛ در int* const اشاره‌گر قفل است و داده آزاد">
+  <defs><marker id="ar4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="190" y="28" text-anchor="middle" class="s-tx mono" font-size="17" font-weight="800">const int *p</text>
+  <text x="570" y="28" text-anchor="middle" class="s-tx mono" font-size="17" font-weight="800">int *const p</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="30" y="70" width="110" height="56" rx="10" fill="#7ea3ff"/>
+    <rect x="240" y="70" width="110" height="56" rx="10" fill="#ff86b3"/>
+    <rect x="410" y="70" width="110" height="56" rx="10" fill="#ff86b3"/>
+    <rect x="620" y="70" width="110" height="56" rx="10" fill="#7ea3ff"/>
+  </g>
+  <g class="mono" font-size="20" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="85" y="106">p</text><text x="295" y="106">x = 5</text><text x="465" y="106">p</text><text x="675" y="106">x = 5</text>
+  </g>
+  <path d="M140 98H236" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar4)"/>
+  <path d="M520 98H616" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar4)"/>
+  <text x="295" y="60" text-anchor="middle" font-size="26">🔒</text>
+  <text x="465" y="60" text-anchor="middle" font-size="26">🔒</text>
+  <g class="s-tx" font-size="14.5" text-anchor="middle" font-weight="700">
+    <text x="190" y="164">داده قفل است</text><text x="190" y="186" font-weight="400"><tspan class="mono">⁦*p = 9;⁩</tspan> ← خطا</text><text x="190" y="208" font-weight="400"><tspan class="mono">⁦p = &amp;y;⁩</tspan> ← مجاز</text>
+    <text x="570" y="164">اشاره‌گر قفل است</text><text x="570" y="186" font-weight="400"><tspan class="mono">⁦*p = 9;⁩</tspan> ← مجاز</text><text x="570" y="208" font-weight="400"><tspan class="mono">⁦p = &amp;y;⁩</tspan> ← خطا</text>
+  </g>
+  <text x="380" y="258" text-anchor="middle" class="s-tx" font-size="14.5">قفل کنار همان چیزی است که تغییرش ممنوع است</text>
+  <text x="380" y="280" text-anchor="middle" class="s-tx" font-size="13">در embedded بیشتر <tspan class="mono">⁦const T *⁩</tspan> می‌بینی: «این تابع فقط می‌خواند»</text>
+</svg></div>
+<figcaption>سمت چپ: چیزی که به آن اشاره می‌شود فقط‌خواندنی است. سمت راست: خود اشاره‌گر تا آخر یک آدرس دارد.</figcaption></figure>
+
+<p>ببین کامپایلر هر کدام را چطور می‌گیرد:</p>
+<div class="code" data-file="const_data.c" data-lang="c" data-verify="host-fail" id="code4">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int x = 1;
+    const int *p = &amp;x;
+    *p = 5;
+    printf("%d\n", x);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code4">
+  <li data-lines="5-6"><b class="what">اشاره‌گر به داده فقط‌خواندنی.</b> <code>x</code> خودش const نیست، ولی از راه <code>p</code> فقط اجازه خواندن داریم.
+    <span class="why">const اینجا یک «قول» است: تابع یا کدی که فقط <code>p</code> را دارد، قول می‌دهد چیزی را عوض نکند.</span></li>
+  <li data-lines="7"><b class="what">نوشتن از راه p.</b> کامپایلر رد می‌کند.
+    <span class="why">اگر نبود، هر تابعی که فقط باید «بخواند» می‌توانست بی‌صدا داده تو را خراب کند.</span></li>
+</ol>
+<pre class="term" data-kind="err" data-from="const_data.c">
+const_data.c: In function 'main':
+const_data.c:7:8: error: assignment of read-only location '*p'
+</pre>
+
+<div class="code" data-file="const_ptr.c" data-lang="c" data-verify="host-fail" id="code5">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int x = 1;
+    int y = 2;
+    int *const p = &amp;x;
+    p = &amp;y;
+    printf("%d\n", *p);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code5">
+  <li data-lines="7"><b class="what">اشاره‌گر ثابت.</b> <code>p</code> برای همیشه به <code>x</code> وصل می‌ماند؛ ولی محتوای <code>x</code> از راه <code>*p</code> قابل عوض شدن است.
+    <span class="why">این حالت برای «آدرس رجیستر» مفید است: آدرس سخت‌افزار عوض نمی‌شود ولی مقدارش عوض می‌شود. در درس ۳.۶ می‌بینی.</span></li>
+  <li data-lines="8"><b class="what">عوض کردن خود p.</b> رد می‌شود.</li>
+</ol>
+<pre class="term" data-kind="err" data-from="const_ptr.c">
+const_ptr.c: In function 'main':
+const_ptr.c:8:7: error: assignment of read-only variable 'p'
+</pre>
+
+<p>پیام‌ها را مقایسه کن: «read-only <b>location</b> <code>*p</code>» یعنی محتوا قفل است و «read-only <b>variable</b> <code>p</code>» یعنی خود اشاره‌گر. حالا کاربرد اصلی: تابعی که فقط می‌خواند. همیشه <code>const</code> بگذار.</p>
+
+<div class="code" data-file="checksum.c" data-lang="c" data-verify="host" id="code6">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+static uint8_t checksum(const uint8_t *data, size_t len)
+{
+    uint8_t sum = 0;
+    for (size_t i = 0; i &lt; len; i++) {
+        sum = (uint8_t)(sum + data[i]);
+    }
+    return sum;
+}
+
+int main(void)
+{
+    const uint8_t packet[] = {0x01, 0x02, 0xFF, 0x10};
+    uint8_t cs = checksum(packet, sizeof packet);
+    printf("checksum = 0x%02X\n", cs);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code6">
+  <li data-lines="4"><b class="what">بافر به‌علاوه طول.</b> <code>const uint8_t *data</code> یعنی «آدرس بایت‌هایی که فقط می‌خوانم» و <code>size_t len</code> تعدادشان. <code>static</code> یعنی تابع فقط در همین فایل دیده می‌شود.
+    <span class="why">const در امضای تابع مثل برچسب روی جعبه است: هرکس ببیند می‌داند این تابع داده‌اش را نمی‌شکند. کامپایلر هم اگر خودت اشتباها بنویسی <code>data[i] = 0</code> خطا می‌دهد.</span></li>
+  <li data-lines="5,11"><b class="what">بدنه تابع.</b></li>
+  <li data-lines="6"><b class="what">مجموع اولیه.</b> صفر؛ مثل همیشه متغیر بدون مقدار اولیه نمی‌گذاریم.</li>
+  <li data-lines="7-9"><b class="what">جمع بایت‌ها.</b> هر بایت با <code>data[i]</code> خوانده می‌شود (همان <code>*(data + i)</code>). حاصل جمع به <code>uint8_t</code> برمی‌گردد، پس از ۲۵۵ که بگذرد دور می‌زند (مثل ساعت).
+    <span class="why">cast صریح <code>(uint8_t)</code> نشان می‌دهد این کوتاه شدن عمدی است. جمع دو <code>uint8_t</code> در C ابتدا به <code>int</code> تبدیل می‌شود (درس ۲.۲).</span></li>
+  <li data-lines="15"><b class="what">آرایه const.</b> بسته چهار بایتی. روی MCU چنین جدول ثابتی می‌تواند در Flash بماند.</li>
+  <li data-lines="16"><b class="what">صدا زدن با sizeof.</b> اینجا <code>packet</code> واقعا آرایه است و <code>sizeof packet</code> می‌شود ۴. آرایه به <code>const uint8_t *</code> تبدیل می‌شود.
+    <span class="why">طول را در جایی حساب کردیم که آرایه هنوز آرایه است، نه اشاره‌گر.</span></li>
+  <li data-lines="17"><b class="what">چاپ.</b> ۱+۲+۲۵۵+۱۶ = ۲۷۴ = 0x112 و فقط بایت پایین می‌ماند: 0x12.</li>
+</ol>
+<pre class="term" data-from="checksum.c">
+$ ./checksum
+checksum = 0x12
+</pre>
+
+<h2 id="voidptr"><span class="en">void *</span>: اشاره‌گر بدون نوع</h2>
+<p>گاهی تابعی می‌خواهی که «هر نوع بافری» بگیرد: کپی بایت‌ها، ارسال روی UART، پر کردن با صفر. کتابخانه استاندارد برای این کار <code>void *</code> دارد. <span class="term" data-t="void_ptr">اشاره‌گر <code>void *</code></span> یعنی «آدرس چیزی، ولی نمی‌گویم چه نوعی». چون نوع ندارد، اندازه گام هم ندارد: نه می‌شود با آن ستاره زد (<code>*p</code>) و نه <code>p + 1</code> نوشت (در استاندارد C مجاز نیست). برای کار کردن با محتوایش باید اول آن را به اشاره‌گر بایتی تبدیل کنی. در C این تبدیل از <code>void *</code> به هر اشاره‌گر دیگر خودکار است.</p>
+
+<div class="code" data-file="void_ptr.c" data-lang="c" data-verify="host" id="code7">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+static void copy_bytes(void *dst, const void *src, size_t n)
+{
+    uint8_t *d = dst;
+    const uint8_t *s = src;
+    while (n &gt; 0) {
+        *d++ = *s++;
+        n--;
+    }
+}
+
+int main(void)
+{
+    int32_t from[3] = {7, 8, 9};
+    int32_t to[3] = {0, 0, 0};
+    copy_bytes(to, from, sizeof from);
+    printf("%d %d %d\n", (int)to[0], (int)to[1], (int)to[2]);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code7">
+  <li data-lines="4"><b class="what">امضای تابع.</b> مقصد <code>void *dst</code> (هر نوع)، مبدأ <code>const void *src</code> (هر نوع، فقط‌خواندنی) و <code>n</code> تعداد <b>بایت</b>.
+    <span class="why">const فقط روی مبدأ است چون تابع آن را نمی‌نویسد. این دقیقا شبیه امضای <code>memcpy</code> در <code>string.h</code> است.</span></li>
+  <li data-lines="5,12"><b class="what">بدنه تابع.</b></li>
+  <li data-lines="6-7"><b class="what">دید بایتی.</b> دو اشاره‌گر بایتی می‌سازیم تا بتوانیم یکی‌یکی جلو برویم. <code>uint8_t *</code> گام ۱ بایتی دارد.
+    <span class="why">فقط با اشاره‌گری که اندازه عنصرش را می‌داند می‌توان جلو رفت؛ <code>void *</code> این را نمی‌داند. توجه کن <code>const</code> را در <code>s</code> نگه داشتیم تا از داده مبدأ محافظت شود.</span></li>
+  <li data-lines="8-11"><b class="what">حلقه کپی.</b> تا وقتی بایتی مانده: <code>*d++ = *s++;</code> یعنی «بایت جاری s را در جای جاری d بنویس، بعد هر دو یک قدم جلو برو». <code>n--</code> شمارنده را کم می‌کند.
+    <span class="why"><code>*d++</code> یعنی <code>*(d++)</code>: اول مقدار قبلی اشاره‌گر برای ستاره استفاده می‌شود، بعد اشاره‌گر جلو می‌رود. این عبارت کوتاه در کد C خیلی رایج است.</span></li>
+  <li data-lines="16-17"><b class="what">دو آرایه.</b> از نوع <code>int32_t</code>؛ هر کدام ۳ عنصر ۴ بایتی = ۱۲ بایت.</li>
+  <li data-lines="18"><b class="what">صدا زدن.</b> <code>to</code> و <code>from</code> خودکار به <code>void *</code> تبدیل می‌شوند و طول را به <b>بایت</b> می‌دهیم: <code>sizeof from</code> = ۱۲.
+    <span class="why">اشتباه رایج: گذاشتن تعداد عنصرها (۳) به‌جای تعداد بایت‌ها؛ آن‌وقت فقط ۳ بایت (یک عنصر و کمی بیشتر) کپی می‌شود.</span></li>
+  <li data-lines="19"><b class="what">چاپ.</b> نشان می‌دهد هر سه عنصر رسیده‌اند.</li>
+</ol>
+<pre class="term" data-from="void_ptr.c">
+$ ./void_ptr
+7 8 9
+</pre>
+<p>هزینه <code>void *</code>: کامپایلر دیگر نمی‌تواند نوع را چک کند. اگر آدرس یک <code>float</code> را بدهی و فکر کنی <code>int</code> است، هیچ هشداری نمی‌گیری. پس فقط وقتی به آن پناه ببر که واقعا «هر نوعی» می‌خواهی.</p>
+
+<h2 id="strings">رشته‌ها: <span class="en">char *</span> در برابر <span class="en">char[]</span></h2>
+<p>در درس ۲.۸ دیدی رشته آرایه‌ای از <code>char</code> است که با <code>'\0'</code> تمام می‌شود. حالا می‌فهمی چرا توابعی مثل <code>strlen</code> فقط یک اشاره‌گر می‌گیرند: از همان آدرس جلو می‌روند تا به <code>'\0'</code> برسند. طول را از خود داده می‌فهمند، نه از پارامتر جدا.</p>
+<p>ولی دو نوشتار شبیه هم دو چیز کاملا متفاوت‌اند:</p>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th><code>const char *name = "STM32";</code></th><th><code>char buf[] = "ESP32";</code></th></tr></thead>
+<tbody>
+<tr><td>چیست</td><td>یک اشاره‌گر (۴ بایت) به متنی که در حافظه ثابت است</td><td>یک آرایه ۶ بایتی (۵ حرف + <code>'\0'</code>) که متن در آن <b>کپی</b> شده</td></tr>
+<tr><td>متن کجاست</td><td>معمولا در Flash (فقط‌خواندنی)</td><td>در RAM (قابل تغییر)</td></tr>
+<tr><td>تغییر حرف</td><td><b>ممنوع</b> (رفتار تعریف‌نشده)</td><td>مجاز</td></tr>
+<tr><td>عوض کردن مقصد</td><td>مجاز: <code>name = "other";</code></td><td>ممکن نیست (آرایه را نمی‌شود دوباره داد)</td></tr>
+</tbody></table></div>
+
+<div class="code" data-file="str_ptr.c" data-lang="c" data-verify="host" id="code8">
+<pre>
+#include &lt;stdio.h&gt;
+
+static size_t my_strlen(const char *s)
+{
+    const char *p = s;
+    while (*p != '\0') {
+        p++;
+    }
+    return (size_t)(p - s);
+}
+
+int main(void)
+{
+    const char *name = "STM32";
+    char buf[] = "ESP32";
+    buf[0] = 'e';
+    printf("%s has %zu chars\n", name, my_strlen(name));
+    printf("%s has %zu chars\n", buf, my_strlen(buf));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code8">
+  <li data-lines="3-10"><b class="what">strlen خودمان.</b> اشاره‌گر <code>s</code> را نگه می‌داریم و یک کپی <code>p</code> از آن جلو می‌بریم؛ آخر فاصله <code>p - s</code> همان طول است.
+    <span class="why">چون <code>s</code> را عوض نمی‌کنیم، فاصله را می‌توان حساب کرد. تفاضل دو اشاره‌گر در همان آرایه، تعداد عنصر است و نوعش <code>ptrdiff_t</code> (علامت‌دار) است؛ با cast به <code>size_t</code> می‌بریمش.</span></li>
+  <li data-lines="5"><b class="what">شروع.</b> <code>const char *p = s;</code>: دومین اشاره‌گر به همان جا؛ const چون فقط می‌خوانیم.</li>
+  <li data-lines="6-8"><b class="what">تا رسیدن به NUL.</b> تا وقتی حرف جاری <code>'\0'</code> نیست، یک گام جلو.
+    <span class="why">اگر رشته <code>'\0'</code> نداشته باشد (مثلا بافری که کامل پر شده)، حلقه از آرایه بیرون می‌رود و هر چیزی را می‌خواند تا به یک صفر برسد؛ سرریز خواندن.</span></li>
+  <li data-lines="14"><b class="what">اشاره‌گر به literal.</b> <code>name</code> فقط به متن ثابت اشاره می‌کند و <code>const</code> جلوی نوشتن اشتباهی را می‌گیرد.</li>
+  <li data-lines="15-16"><b class="what">آرایه قابل‌تغییر.</b> متن در <code>buf</code> کپی می‌شود و حرف اول را عوض می‌کنیم؛ اشکالی ندارد.
+    <span class="why">اگر همین کار را روی <code>name</code> می‌کردی (بدون const هم کامپایل می‌شود!)، روی PC معمولا برنامه می‌افتد و روی میکروکنترلر متن در Flash است و نوشتن بی‌اثر یا HardFault می‌شود.</span></li>
+  <li data-lines="17-18"><b class="what">چاپ.</b> هر دو طول ۵ است؛ <code>'\0'</code> شمرده نمی‌شود.</li>
+</ol>
+<pre class="term" data-from="str_ptr.c">
+$ ./str_ptr
+STM32 has 5 chars
+eSP32 has 5 chars
+</pre>
+
+<div class="widget" data-w="mem" data-config='{"title":"اشاره‌گر روی رشته Hi جلو می‌رود تا به NUL برسد","code":["const char *p = s;","while (*p != 0) p++;","len = p - s;"],"intro":"رشته Hi سه بایت دارد: H و i و بایت پایانی NUL. اشاره‌گر p هنوز مقدار ندارد.","cells":[{"addr":"0x20000000","name":"s[0]","val":"H","kind":"var"},{"addr":"0x20000001","name":"s[1]","val":"i","kind":"var"},{"addr":"0x20000002","name":"s[2]","val":"NUL","kind":"var"},{"addr":"0x20000004","name":"p","val":null,"kind":"ptr"},{"addr":"0x20000008","name":"len","val":null,"kind":"var"}],"steps":[{"line":0,"set":{"3":"0x20000000"},"hot":[3,0],"say":"p از اولین حرف شروع می‌کند."},{"line":1,"set":{"3":"0x20000001"},"hot":[3,1],"say":"حرف جاری H است، NUL نیست. یک گام جلو: فقط <b>یک بایت</b> چون char است."},{"line":1,"set":{"3":"0x20000002"},"hot":[3,2],"say":"حرف جاری i است. باز هم جلو می‌رویم."},{"line":1,"set":{"3":"0x20000002"},"hot":[2],"say":"حالا حرف جاری NUL است. شرط while نادرست می‌شود و حلقه تمام می‌شود."},{"line":2,"set":{"4":2},"hot":[4],"say":"p منهای s دو عنصر است، پس طول رشته ۲ است. NUL جزو طول شمرده نمی‌شود."}]}'></div>
+
+<h2 id="endian">بایت‌های یک عدد را ببین</h2>
+<p>یک <code>uint32_t</code> چهار بایت است. در حافظه کدام بایت اول می‌آید؟ در STM32، ESP32 و PC (x86) <b>کم‌ارزش‌ترین بایت اول</b> می‌آید. به این ترتیب <span class="term" data-t="little_endian">little-endian</span> می‌گویند (در درس ۱.۲ اسمش را شنیدی). اشاره‌گر بایتی راهی است که این را با چشم خودت ببینی: آدرس عدد را می‌گیری و به‌جای یک <code>uint32_t</code>، چهار <code>uint8_t</code> می‌خوانی.</p>
+
+<div class="code" data-file="endian.c" data-lang="c" data-verify="host" id="code9">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    uint32_t value = 0x12345678;
+    const uint8_t *b = (const uint8_t *)&amp;value;
+
+    for (int i = 0; i &lt; 4; i++) {
+        printf("byte %d = 0x%02X\n", i, b[i]);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code9">
+  <li data-lines="6"><b class="what">عدد آزمایشی.</b> هگز 0x12345678؛ بایت‌ها از پرارزش به کم‌ارزش: 12، 34، 56، 78.</li>
+  <li data-lines="7"><b class="what">دید بایتی.</b> <code>&amp;value</code> آدرس چهار بایتی است؛ آن را به <code>const uint8_t *</code> تبدیل می‌کنیم تا بشود بایت‌به‌بایت خواند.
+    <span class="why">خواندن یک شیء از راه اشاره‌گر بایتی (<code>char</code>، <code>unsigned char</code>، <code>uint8_t</code>) همیشه مجاز است. این تنها استثنای مطمئن قانون aliasing است که پایین‌تر می‌آید.</span></li>
+  <li data-lines="9-11"><b class="what">چاپ بایت‌ها.</b> <code>b[i]</code> همان <code>*(b + i)</code> است، پس بایت شماره i از آدرس عدد.</li>
+</ol>
+<pre class="term" data-from="endian.c">
+$ ./endian
+byte 0 = 0x78
+byte 1 = 0x56
+byte 2 = 0x34
+byte 3 = 0x12
+</pre>
+<p>اول 0x78 آمد، یعنی کم‌ارزش‌ترین بایت در پایین‌ترین آدرس است.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 240" role="img" aria-label="عدد 0x12345678 در حافظه little-endian به ترتیب بایت‌های 78 56 34 12 ذخیره می‌شود">
+  <defs><marker id="ar5" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">uint32_t value = 0x12345678;  ← چهار بایت در RAM</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="60" y="50" width="160" height="50" fill="#ff86b3"/><rect x="220" y="50" width="160" height="50" fill="#ffd60a"/><rect x="380" y="50" width="160" height="50" fill="#3ddc97"/><rect x="540" y="50" width="160" height="50" fill="#7ea3ff"/>
+  </g>
+  <g class="mono" font-size="24" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="140" y="85">12</text><text x="300" y="85">34</text><text x="460" y="85">56</text><text x="620" y="85">78</text>
+  </g>
+  <text x="380" y="122" text-anchor="middle" class="s-tx" font-size="14" font-weight="700">در نوشتن روی کاغذ: پرارزش‌ترین رقم‌ها اول (چپ)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="60" y="150" width="160" height="50" fill="#7ea3ff"/><rect x="220" y="150" width="160" height="50" fill="#3ddc97"/><rect x="380" y="150" width="160" height="50" fill="#ffd60a"/><rect x="540" y="150" width="160" height="50" fill="#ff86b3"/>
+  </g>
+  <g class="mono" font-size="24" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="140" y="185">78</text><text x="300" y="185">56</text><text x="460" y="185">34</text><text x="620" y="185">12</text>
+  </g>
+  <g class="mono s-tx" font-size="12.5" text-anchor="middle" font-weight="700">
+    <text x="140" y="218">b[0] آدرس پایین</text><text x="300" y="218">b[1]</text><text x="460" y="218">b[2]</text><text x="620" y="218">b[3] آدرس بالا</text>
+  </g>
+  <path d="M140 104V146" stroke="#15120a" stroke-width="2.5" fill="none" marker-end="url(#ar5)" stroke-dasharray="6 5"/>
+  <path d="M620 104V146" stroke="#15120a" stroke-width="2.5" fill="none" marker-end="url(#ar5)" stroke-dasharray="6 5"/>
+  <text x="380" y="140" text-anchor="middle" class="s-tx" font-size="13" >در حافظه little-endian: کم‌ارزش‌ترین بایت اول</text>
+</svg></div>
+<figcaption>ردیف بالا: عدد آن‌طور که می‌نویسیم. ردیف پایین: بایت‌ها آن‌طور که در RAM STM32 و ESP32 می‌نشینند. رنگ‌ها هر بایت را دنبال می‌کنند.</figcaption></figure>
+
+<div class="callout info"><div class="ct">چرا این مهم است؟</div>
+<p>هر جا داده را از بیرون می‌گیری (پکت شبکه، ثبات سنسور روی I2C، فایل)، ترتیب بایت‌ها قرارداد بین دو طرف است، نه سلیقه پردازنده تو. کد امن ترتیب را <b>صریح</b> با شیفت می‌نویسد، همان کاری که پایین در تمرین ۳ می‌کنیم.</p></div>
+
+<h2 id="align">تراز حافظه: هر داده جای مناسب خودش را می‌خواهد</h2>
+<p>پردازنده حافظه را در تکه‌های ۴ بایتی می‌خواند (روی این پردازنده‌ها). فرض کن قفسه‌های انبار چهارتایی گروه‌بندی شده‌اند. اگر یک عدد ۴ بایتی دقیقا در یک گروه بنشیند، یک دسترسی کافی است. اگر وسط دو گروه بیفتد، باید دو گروه خوانده و بایت‌ها چسبانده شوند. به این می‌گویند <span class="term" data-t="alignment">تراز (alignment)</span>: عدد N بایتی باید در آدرسی باشد که بر N بخش‌پذیر است. یعنی <code>uint16_t</code> در آدرس زوج، <code>uint32_t</code> در آدرس مضرب ۴.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 270" role="img" aria-label="ردیف حافظه با گروه‌های چهاربایتی؛ عدد ۴ بایتی هم‌تراز داخل یک گروه و عدد ناهم‌تراز وسط دو گروه">
+  <text x="380" y="22" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">آدرس مضرب ۴ = هم‌تراز؛ غیر آن = ناهم‌تراز</text>
+  <g stroke="#15120a" stroke-width="2.5" fill="#fff">
+    <rect x="40" y="56" width="80" height="44"/><rect x="120" y="56" width="80" height="44"/><rect x="200" y="56" width="80" height="44"/><rect x="280" y="56" width="80" height="44"/><rect x="360" y="56" width="80" height="44"/><rect x="440" y="56" width="80" height="44"/><rect x="520" y="56" width="80" height="44"/><rect x="600" y="56" width="80" height="44"/>
+  </g>
+  <g stroke="#15120a" stroke-width="5" fill="none"><path d="M40 50V108M360 50V108M680 50V108"/></g>
+  <g class="mono s-tx" font-size="13" text-anchor="middle" font-weight="700">
+    <text x="80" y="122">+0</text><text x="160" y="122">+1</text><text x="240" y="122">+2</text><text x="320" y="122">+3</text><text x="400" y="122">+4</text><text x="480" y="122">+5</text><text x="560" y="122">+6</text><text x="640" y="122">+7</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="40" y="146" width="320" height="40" fill="#3ddc97"/>
+    <rect x="120" y="206" width="320" height="40" fill="#ff9a4d"/>
+  </g>
+  <g class="mono" font-size="16" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="200" y="172">uint32_t در +0 ✔</text><text x="280" y="232">uint32_t در +1 ✘</text>
+  </g>
+  <text x="560" y="168" text-anchor="middle" class="s-tx" font-size="14" font-weight="700">یک گروه، یک دسترسی</text>
+  <text x="590" y="226" text-anchor="middle" class="s-tx" font-size="14" font-weight="700">وسط دو گروه: دو دسترسی</text>
+  <text x="590" y="244" text-anchor="middle" class="s-tx" font-size="12.5">یا روی بعضی CPUها خطا</text>
+</svg></div>
+<figcaption>خط‌های ضخیم مرز گروه‌های چهاربایتی‌اند. ناهم‌تراز بودن یعنی داده از مرز رد شود.</figcaption></figure>
+
+<div class="table-wrap"><table>
+<thead><tr><th>پردازنده</th><th>دسترسی ناهم‌تراز به <code>uint32_t</code> با دستور معمولی</th></tr></thead>
+<tbody>
+<tr><td>x86 (PC)</td><td>کار می‌کند، کمی کندتر</td></tr>
+<tr><td>Cortex-M3 / M4 (مثل STM32F411)</td><td>برای بارگذاری‌های ساده کار می‌کند ولی چند سیکل بیشتر می‌برد؛ بعضی دستورها (مثل <code>LDM</code>/<code>STM</code>/<code>LDRD</code>) همچنان ناهم‌تراز را قبول نمی‌کنند</td></tr>
+<tr><td>Cortex-M0 / M0+</td><td>خطا می‌دهد: HardFault</td></tr>
+<tr><td>ESP32 (Xtensa)</td><td>ممکن است استثنا بدهد؛ کد عملا باید هم‌تراز بماند. در مستندات ESP-IDF و مرجع فنی بخوان</td></tr>
+</tbody></table></div>
+<p>نتیجه عملی: کدی که روی PC و STM32F4 «کار می‌کند» ممکن است روی M0 یا ESP32 بیفتد. راه امن برای خواندن عددی از وسط یک بافر بایتی: <b>هرگز آدرس را cast نکن</b>؛ بایت‌ها را با <code>memcpy</code> در یک متغیر واقعی کپی کن. کامپایلر می‌داند چه کار کند و روی پردازنده‌ای که اجازه می‌دهد آن را به یک دستور تبدیل می‌کند.</p>
+
+<div class="code" data-file="align.c" data-lang="c" data-verify="host" id="code10">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+static uint32_t read_u32(const uint8_t *p)
+{
+    uint32_t v;
+    memcpy(&amp;v, p, sizeof v);
+    return v;
+}
+
+int main(void)
+{
+    uint8_t buf[8] = {0, 0x78, 0x56, 0x34, 0x12, 0, 0, 0};
+    printf("value = 0x%08X\n", (unsigned)read_u32(buf + 1));
+    printf("alignof(uint32_t) = %zu\n", _Alignof(uint32_t));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code10">
+  <li data-lines="5-10"><b class="what">خواندن امن عدد ۳۲ بیتی.</b> بافر را با <code>const uint8_t *</code> می‌گیریم و ۴ بایت را در متغیر واقعی <code>v</code> کپی می‌کنیم.
+    <span class="why">به‌جای <code>*(const uint32_t *)p</code> که اگر <code>p</code> ناهم‌تراز باشد رفتار تعریف‌نشده است (و مشکل aliasing هم دارد). <code>memcpy</code> به هر آدرسی قانونی است.</span></li>
+  <li data-lines="14"><b class="what">بافر آزمایشی.</b> بایت‌های 78 56 34 12 از اندیس ۱ شروع می‌شوند، یعنی درست همان جایی که ناهم‌تراز است.</li>
+  <li data-lines="15"><b class="what">خواندن از اندیس ۱.</b> <code>buf + 1</code> آدرس فرد است. نتیجه 0x12345678 چون این دستگاه little-endian است.
+    <span class="why">این خط روی ماشین big-endian نتیجه دیگری می‌داد. برای پروتکل‌های واقعی باید ترتیب را صریح بنویسی (تمرین ۳).</span></li>
+  <li data-lines="16"><b class="what">پرسش از کامپایلر.</b> <code>_Alignof</code> تراز مورد نیاز نوع را می‌دهد (در C11).</li>
+</ol>
+<pre class="term" data-from="align.c">
+$ ./align
+value = 0x12345678
+alignof(uint32_t) = 4
+</pre>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: aliasing</div>
+<p>قانون <span class="term" data-t="strict_aliasing">strict aliasing</span> در C می‌گوید: کامپایلر می‌تواند فرض کند دو اشاره‌گر از انواع ناسازگار (مثلا <code>float *</code> و <code>uint32_t *</code>) هیچ‌وقت به یک حافظه اشاره نمی‌کنند، و بر همین اساس دستورها را جابه‌جا یا حذف کند. اگر با cast اشاره‌گر، همان حافظه را با نوع دیگر بخوانی، طبق استاندارد رفتار تعریف‌نشده است و <code>-O2</code> ممکن است کد را «خراب» کند. استثنا: خواندن هر شیء از راه <code>char</code>، <code>unsigned char</code> یا <code>uint8_t</code> (که روی MCUها یک نوع <code>unsigned char</code> است). برای دیدن بیت‌های یک float راه درست <code>memcpy</code> است:</p></div>
+<div class="code" data-file="alias.c" data-lang="c" data-verify="host" id="code11">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+int main(void)
+{
+    float f = 1.0f;
+    uint32_t bits;
+    memcpy(&amp;bits, &amp;f, sizeof bits);
+    printf("1.0f = 0x%08X\n", (unsigned)bits);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code11">
+  <li data-lines="7-8"><b class="what">دو متغیر مستقل.</b> عدد اعشاری و یک عدد صحیح ۳۲ بیتی که بیت‌ها را می‌گیرد.</li>
+  <li data-lines="9"><b class="what">کپی بایت‌ها.</b> بیت‌های <code>f</code> بی‌تغییر به <code>bits</code> می‌روند. این کار قانونی است و کامپایلرهای بهینه معمولا آن را به یک دستور ساده تبدیل می‌کنند.
+    <span class="why">نوشتن <code>*(uint32_t *)&amp;f</code> همان کار را ظاهرا می‌کند، ولی تعریف‌نشده است و ممکن است با بهینه‌سازی نتیجه غلط بدهد.</span></li>
+  <li data-lines="10"><b class="what">چاپ.</b> بیت‌های استاندارد IEEE 754 برای ۱٫۰ تک‌دقت: 0x3F800000.</li>
+</ol>
+<pre class="term" data-from="alias.c">
+$ ./alias
+1.0f = 0x3F800000
+</pre>
+
+<h2 id="dangling">هرگز آدرس متغیر محلی را برنگردان</h2>
+<p>متغیرهای محلی تابع روی پشته می‌نشینند و وقتی تابع تمام شد، آن قفسه‌ها به بقیه برنامه پس داده می‌شوند (درس ۲.۶ و بعدا ۳.۵). اگر آدرس یکی از آنها را برگردانی، آدرسی به «مکان خراب‌شده» در دست کسی می‌ماند که صدا زده است: <span class="en">dangling pointer</span> (اشاره‌گر آویزان). مثل اینکه شماره اتاقی در هتل را به دوستت بدهی که همین الان تخلیه‌اش کرده‌ای؛ فردا مسافر دیگری آنجاست.</p>
+
+<div class="code" data-file="dangling.c" data-lang="c" data-verify="host-fail" data-cflags="-Werror=return-local-addr" id="code12">
+<pre>
+#include &lt;stdio.h&gt;
+
+static int *make_id(void)
+{
+    int id = 7;
+    return &amp;id;
+}
+
+int main(void)
+{
+    int *p = make_id();
+    printf("%d\n", *p);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code12">
+  <li data-lines="3-7"><b class="what">تابع بد.</b> <code>id</code> متغیر محلی است و فقط تا پایان <code>make_id</code> زنده می‌ماند.</li>
+  <li data-lines="6"><b class="what">برگرداندن آدرس محلی.</b> بعد از <code>return</code>، آن قفسه پشته دوباره قابل‌استفاده است.
+    <span class="why">gcc اینجا معمولا هشدار می‌دهد؛ ما آن را به خطا تبدیل کردیم. ولی هر جا مسیر پیچیده‌تر باشد، ممکن است هشدار نیاید. باید خودت بدانی.</span></li>
+  <li data-lines="11-12"><b class="what">استفاده در main.</b> اگر برنامه ساخته می‌شد، <code>*p</code> مقدار آشغال یا مقدار یک تابع دیگر بود.</li>
+</ol>
+<pre class="term" data-kind="err" data-from="dangling.c">
+dangling.c: In function 'make_id':
+dangling.c:6:12: error: function returns address of local variable [-Werror=return-local-addr]
+</pre>
+<p>سه راه درست: (۱) جواب را به <b>مقدار</b> برگردان (<code>int</code>)؛ (۲) از صدا زننده بخواه <b>فضا بدهد</b> و آدرسش را بگیر؛ (۳) متغیر را <code>static</code> کن (هزینه: یک نسخه مشترک برای همه فراخوانی‌ها). روش ۲ در embedded محبوب‌ترین است:</p>
+<div class="code" data-file="dangling_fixed.c" data-lang="c" data-verify="host" id="code13">
+<pre>
+#include &lt;stdio.h&gt;
+
+static void make_id(int *out)
+{
+    *out = 7;
+}
+
+int main(void)
+{
+    int id;
+    make_id(&amp;id);
+    printf("%d\n", id);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code13">
+  <li data-lines="3-6"><b class="what">خروجی از راه اشاره‌گر.</b> تابع آدرس قفسه‌ای را می‌گیرد که مال صدا زننده است و مقدار را داخلش می‌نویسد. به این پارامتر «پارامتر خروجی» می‌گویند.
+    <span class="why">قفسه <code>id</code> در main زنده است و بعد از برگشتن تابع هم می‌ماند.</span></li>
+  <li data-lines="10-11"><b class="what">ساختن و فرستادن آدرس.</b> با <code>&amp;id</code> آدرس قفسه محلی main داده می‌شود.</li>
+  <li data-lines="12"><b class="what">چاپ.</b></li>
+</ol>
+<pre class="term" data-from="dangling_fixed.c">
+$ ./dangling_fixed
+7
+</pre>
+
+<h2 id="mcu">در STM32 و ESP32 یعنی چه؟</h2>
+<p>هر درایور ارتباطی شکل «بافر + طول» دارد. مثال STM32: تابعی که بایت‌ها را روی USART2 می‌فرستد. اعداد این کد از درس ۵.۵ می‌آیند؛ اینجا فقط ببین اشاره‌گر چه نقشی دارد. ثبات‌ها آدرس ثابت دارند و ما از راه اشاره‌گر به آنها می‌رسیم (جزئیاتش درس ۳.۶ است؛ <code>volatile</code> را هم آنجا می‌فهمی).</p>
+
+<div class="code" data-file="send_bytes.c" data-lang="c" data-verify="arm" id="code14">
+<pre>
+#include &lt;stddef.h&gt;
+#include &lt;stdint.h&gt;
+
+#define USART2_BASE 0x40004400u
+#define USART2_SR   ((volatile uint32_t *)(USART2_BASE + 0x00u))
+#define USART2_DR   ((volatile uint32_t *)(USART2_BASE + 0x04u))
+#define TXE_BIT     (1u &lt;&lt; 7)
+
+static void uart_send(const uint8_t *data, size_t len)
+{
+    for (size_t i = 0; i &lt; len; i++) {
+        while ((*USART2_SR &amp; TXE_BIT) == 0u) {
+            // منتظر خالی شدن ثبات ارسال
+        }
+        *USART2_DR = data[i];
+    }
+}
+
+void app_send_hello(void)
+{
+    static const uint8_t msg[] = {'H', 'i', '\r', '\n'};
+    uart_send(msg, sizeof msg);
+}
+</pre></div>
+<ol class="walk" data-for="code14">
+  <li data-lines="4-7"><b class="what">آدرس ثبات‌ها.</b> پایه USART2 روی STM32F411 برابر <code>0x40004400</code> است. ثبات وضعیت (SR) آفست ۰ و ثبات داده (DR) آفست ۴ دارد. بیت ۷ در SR یعنی «ثبات ارسال خالی است» (TXE).
+    <span class="why">هر ماکرو یک اشاره‌گر به آدرس ثابت می‌سازد. <code>volatile</code> می‌گوید مقدار این آدرس بدون اطلاع برنامه هم عوض می‌شود (سخت‌افزار). دلیل کامل در ۳.۶ می‌آید.</span></li>
+  <li data-lines="9,17"><b class="what">تابع ارسال.</b> بافر فقط‌خواندنی و طول: همان الگوی این درس.
+    <span class="why">const داده را محافظت می‌کند. اگر <code>msg</code> در Flash باشد، بدون const نمی‌توانستی آن را بدهی.</span></li>
+  <li data-lines="11,16"><b class="what">حلقه روی بایت‌ها.</b> ایندکس <code>i</code> هر بار یک بایت را انتخاب می‌کند: <code>data[i]</code>.</li>
+  <li data-lines="12-14"><b class="what">انتظار برای آماده شدن.</b> تا وقتی بیت TXE صفر است صبر کن.
+    <span class="why">اگر بایت بعدی را زودتر بنویسی، بایت قبلی بی‌صدا گم می‌شود.</span></li>
+  <li data-lines="15"><b class="what">نوشتن روی ثبات داده.</b> نوشتن بایت روی DR سخت‌افزار را روشن می‌کند تا آن را بفرستد.</li>
+  <li data-lines="19-23"><b class="what">استفاده.</b> پیام ثابت در <code>static const</code> (معمولا در Flash) و ارسال با <code>sizeof msg</code>.</li>
+</ol>
+<p>همین الگو در کتابخانه‌های رسمی هم هست. در ESP-IDF تابع <code>uart_write_bytes</code> یک <code>const void *</code> و یک طول می‌گیرد؛ در HAL شرکت ST تابع <code>HAL_UART_Transmit</code> یک اشاره‌گر به بایت‌ها (<code>uint8_t *</code>) و یک طول می‌گیرد. امضای دقیق و نسخه را در مستندات رسمی هر کدام ببین.</p>
+
+<div class="callout info"><div class="ct">خلاصه سخت‌افزاری</div>
+<p>بافر UART، بسته شبکه، جدول رنگ صفحه: همه «آدرس + طول‌اند». تابع‌هایی که فقط می‌خوانند <code>const</code> می‌گیرند. تبدیل به عددهای چندبایتی با شیفت یا <code>memcpy</code> انجام می‌شود، نه cast اشاره‌گر. آدرس متغیر محلی هرگز از تابع بیرون نمی‌رود.</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">اگر <code>int a[5];</code> تعریف شده باشد، کدام عبارت با <code>a[3]</code> دقیقا یکی است؟</p>
+  <ol>
+    <li data-why="پرانتز ندارد: ستاره فقط به a می‌چسبد، یعنی a[0] + 3. مقدار عنصر اول به‌اضافه ۳ می‌شود، نه عنصر شماره ۳.">*a + 3</li>
+    <li>*(a + 3)</li>
+    <li data-why="a + 3 خودش آدرس است، نه مقدار. بدون ستاره فقط جایی را نشان می‌دهد.">a + 3</li>
+    <li data-why="این آدرس عنصر شماره ۳ است. مقدار a[3] با ستاره به‌دست می‌آید.">&amp;a[3]</li>
+  </ol>
+  <div class="fb">کامپایلر <code>a[i]</code> را به <code>*(a + i)</code> ترجمه می‌کند. پرانتز لازم است چون ستاره تقدم بالاتری از جمع دارد.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">خروجی چیست؟<br><code>int a[] = {5, 6, 7, 8}; int *p = a + 1; printf("%d", *(p + 2));</code></p>
+  <ol>
+    <li data-why="۶ مقدار *p است (a[1])، نه *(p + 2).">۶</li>
+    <li data-why="۷ عنصر a[2] است؛ ولی p از قبل روی a[1] بوده و دو عنصر دیگر جلو می‌رود.">۷</li>
+    <li>۸</li>
+    <li data-why="۵ مقدار a[0] است؛ p که از a + 1 شروع شده و جلو می‌رود، عقب نمی‌آید.">۵</li>
+  </ol>
+  <div class="fb">p روی a[1] است؛ p + 2 می‌شود a[3] که مقدارش ۸ است. اشاره‌گرها با هم جمع می‌شوند: ۱ + ۲ = ۳.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">اشاره‌گر <code>uint16_t *p</code> روی آدرس <code>0x1000</code> است. <code>p + 3</code> کدام آدرس است؟</p>
+  <ol>
+    <li>0x1006</li>
+    <li data-why="این یعنی ۳ بایت جلو رفته‌ای. حساب اشاره‌گر بر حسب عنصر است و هر uint16_t دو بایت است.">0x1003</li>
+    <li data-why="0x100C یعنی ۱۲ بایت جلو رفته‌ای. این جواب uint32_t با ۳ گام بود، نه uint16_t.">0x100C</li>
+    <li data-why="0x1012 یعنی ۱۸ بایت جلو رفته‌ای، انگار هر گام ۶ بایت است. گام هر uint16_t دو بایت است.">0x1012</li>
+  </ol>
+  <div class="fb">هر گام ۲ بایت است، پس ۳ گام = ۶ بایت: 0x1000 + 6 = 0x1006.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">در این قطعه کدام خط خطای کامپایل می‌دهد؟<br><code>int x = 1, y = 2;<br>int *const p = &amp;x;<br>*p = 3;<br>p = &amp;y;</code></p>
+  <ol>
+    <li data-why="اعلان با مقدار اولیه همین‌جا اجازه دارد؛ const فقط بعد از این تغییر را ممنوع می‌کند.">خط ۲: <code>int *const p = &amp;x;</code></li>
+    <li data-why="const بعد از ستاره است، پس خود اشاره‌گر قفل است، نه داده‌ای که به آن اشاره می‌شود. نوشتن روی x مجاز است.">خط ۳: <code>*p = 3;</code></li>
+    <li data-why="خط ۴ رد می‌شود؛ پس قطعه بی‌خطا نیست.">هیچ‌کدام</li>
+    <li>خط ۴: <code>p = &amp;y;</code></li>
+  </ol>
+  <div class="fb"><code>int *const p</code> یعنی خود اشاره‌گر ثابت است؛ نمی‌توانی آدرسش را عوض کنی ولی می‌توانی از راه آن روی x بنویسی.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">تابع <code>void f(int a[])</code> داخل خودش <code>sizeof(a) / sizeof(a[0])</code> را برای شمردن عنصرها به‌کار برده است. چرا غلط است؟</p>
+  <ol>
+    <li data-why="نوع sizeof مشکلی ندارد. مشکل اینجاست که a داخل تابع دیگر آرایه نیست.">چون sizeof فقط برای متغیرهای محلی کار می‌کند</li>
+    <li>چون a داخل تابع در واقع <code>int *</code> است و sizeof اندازه اشاره‌گر را می‌دهد، نه آرایه</li>
+    <li data-why="تقسیم بر sizeof(a[0]) درست است؛ صورت کسر اشتباه است.">چون نمی‌شود sizeof را تقسیم کرد</li>
+    <li data-why="داخل تابع این‌طور نیست؛ آرایه کپی نمی‌شود و فقط آدرسش می‌رسد.">چون آرایه هنگام صدا زدن کپی می‌شود و اندازه‌اش عوض می‌شود</li>
+  </ol>
+  <div class="fb">پارامتر آرایه‌ای در واقع اشاره‌گر است. طول را باید جدا بفرستی: <code>void f(const int *a, size_t n)</code>.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">چرا برای خواندن یک <code>uint32_t</code> از وسط بافر پکت، توصیه می‌شود از <code>memcpy</code> یا شیفت بایت‌ها استفاده کنیم، نه cast اشاره‌گر؟</p>
+  <ol>
+    <li data-why="cast کند نیست؛ مسئله درستی است (تراز، aliasing و ترتیب بایت).">چون cast خیلی کند است</li>
+    <li data-why="cast در C مجاز است و کامپایل می‌شود؛ خطر در زمان اجرا یا بهینه‌سازی رخ می‌دهد.">چون cast اشاره‌گر در C کامپایل نمی‌شود</li>
+    <li data-why="ترتیب بایت یکی از دلیل‌هاست، ولی تنها دلیل نیست: ناهم‌ترازی و aliasing هم مشکل‌اند.">فقط چون ترتیب بایت‌ها عوض می‌شود</li>
+    <li>چون آدرس ممکن است ناهم‌تراز باشد (روی Cortex-M0 خطا)، cast قانون aliasing را می‌شکند و ترتیب بایت هم به پردازنده بستگی دارد</li>
+  </ol>
+  <div class="fb">هر سه مشکل واقعی‌اند: تراز، aliasing و بایت‌ترتیب. <code>memcpy</code> اولی و دومی را حل می‌کند و شیفت صریح، سومی را.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: برعکس کردن آرایه با دو اشاره‌گر</div>
+<p>می‌خواهیم آرایه <code>{1, 2, 3, 4, 5}</code> را در جا برعکس کنیم (بدون آرایه دوم). ایده: یک اشاره‌گر از اول و یکی از آخر، عنصرها را عوض کنند و به هم نزدیک شوند.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> در شروع، <code>lo</code> و <code>hi</code> به کدام عنصرها اشاره می‌کنند؟ برای ۵ عنصر چند بار جابه‌جایی لازم است؟</li>
+  <li><b>حل:</b> تابع <code>reverse(int *v, size_t n)</code> بنویس و در main آرایه را چاپ کن.</li>
+  <li><b>فکر کن:</b> اگر <code>n</code> صفر باشد <code>v + n - 1</code> به کجا اشاره می‌کند؟ چرا باید تابع قبل از آن برگردد؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>حلقه را تا وقتی ادامه بده که <code>lo &lt; hi</code>. هر دور: دو مقدار را با متغیر موقت عوض کن (همان الگوی تمرین ۱ در درس ۲.۱)، بعد <code>lo++</code> و <code>hi--</code>.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="reverse.c">
+$ ./reverse
+data[0] = 5
+data[1] = 4
+data[2] = 3
+data[3] = 2
+data[4] = 1
+</pre>
+<p>جواب الف: <code>lo</code> روی <code>data[0]</code> و <code>hi</code> روی <code>data[4]</code>. فقط ۲ جابه‌جایی لازم است (عنصر وسط سر جای خودش می‌ماند). جواب پ: <code>v + 0 - 1</code> یعنی یک خانه قبل از شروع آرایه، که طبق قانون «یکی بعد از آخر» ساختنش هم رفتار تعریف‌نشده است.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="reverse.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stdio.h&gt;
+
+static void reverse(int *v, size_t n)
+{
+    if (n &lt; 2) {
+        return;                    // چیزی برای برعکس کردن نیست
+    }
+    int *lo = v;                   // اشاره‌گر به اولین عنصر
+    int *hi = v + n - 1;           // اشاره‌گر به آخرین عنصر
+    while (lo &lt; hi) {
+        int tmp = *lo;
+        *lo = *hi;
+        *hi = tmp;
+        lo++;
+        hi--;
+    }
+}
+
+int main(void)
+{
+    int data[5] = {1, 2, 3, 4, 5};
+    reverse(data, 5);
+    for (int i = 0; i &lt; 5; i++) {
+        printf("data[%d] = %d\n", i, data[i]);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="5-7"><b class="what">نگهبان.</b> آرایه خالی یا تک‌عنصری چیزی برای عوض کردن ندارد؛ زودتر برمی‌گردیم.
+    <span class="why">بدون این خط، با n برابر صفر، <code>v + n - 1</code> قبل از شروع آرایه می‌رود.</span></li>
+  <li data-lines="8-9"><b class="what">دو سر آرایه.</b> <code>lo</code> اولین عنصر و <code>hi</code> آخرین عنصر.</li>
+  <li data-lines="10,16"><b class="what">شرط ادامه.</b> تا وقتی <code>lo</code> قبل از <code>hi</code> است. وقتی به هم رسیدند یا رد شدند، تمام است.
+    <span class="why">اگر شرط <code>lo != hi</code> بود، برای تعداد زوج عنصر هیچ‌وقت برابر نمی‌شدند و از آرایه بیرون می‌رفتند.</span></li>
+  <li data-lines="11-13"><b class="what">عوض کردن.</b> مقدار <code>*lo</code> را نگه می‌داریم، <code>*hi</code> را جایش می‌گذاریم و مقدار نگه‌داشته را به <code>*hi</code> می‌دهیم.</li>
+  <li data-lines="14-15"><b class="what">نزدیک شدن.</b> <code>lo</code> یک عنصر جلو و <code>hi</code> یک عنصر عقب.</li>
+  <li data-lines="21-26"><b class="what">امتحان.</b> آرایه پنج‌تایی را برعکس و چاپ می‌کنیم.</li>
+</ol>
+<pre class="term" data-from="reverse.c">
+$ ./reverse
+data[0] = 5
+data[1] = 4
+data[2] = 3
+data[3] = 2
+data[4] = 1
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: سه باگ در یک تابع</div>
+<p>این تابع باید بشمارد چند عدد از <code>limit</code> بزرگ‌ترند. سه اشتباه دارد که هر کدام با یک قاعده همین درس ارتباط دارد. پیدایشان کن.</p>
+<div class="code" data-lang="c" id="ex2bad"><pre>
+static int count_over(const int v[], int limit)
+{
+    int n = sizeof(v) / sizeof(v[0]);
+    int count = 0;
+    for (const int *p = v; p &lt;= v + n; p++) {
+        if (*p &gt; limit) {
+            *p = limit;
+            count++;
+        }
+    }
+    return count;
+}
+</pre></div>
+<ol class="parts">
+  <li><b>خط ۳:</b> چه اشتباهی دارد؟ چه چیزی را باید عوض کنی؟</li>
+  <li><b>خط ۵:</b> شرط حلقه چه می‌کند وقتی p به <code>v + n</code> می‌رسد؟</li>
+  <li><b>خط ۷:</b> این خط با <code>const</code> چه تناقضی دارد و کامپایلر چه می‌گوید؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>پارامتر آرایه‌ای در واقع چیست؟ آخرین عنصر معتبر کجاست؟ تابعی که فقط می‌شمارد باید چیزی را عوض کند؟</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>اگر نسخه غلط را با <code>-Wall -Wextra</code> کامپایل کنی، برای <code>sizeof</code> هشدار و برای خط ۷ خطای «assignment of read-only location» می‌گیری. نسخه درست، روی آرایه ۶ عنصری زیر، این را چاپ می‌کند:</p>
+<pre class="term" data-from="count_over.c">
+$ ./count_over
+over 30: 3
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="table-wrap"><table><thead><tr><th>بخش</th><th>مشکل</th><th>اصلاح</th></tr></thead><tbody>
+<tr><td>الف</td><td><code>sizeof(v)</code> اندازه اشاره‌گر است (۴ یا ۸)، نه آرایه</td><td>طول را پارامتر کن: <code>size_t n</code></td></tr>
+<tr><td>ب</td><td><code>&lt;=</code> باعث می‌شود <code>*(v + n)</code> (بیرون آرایه) هم خوانده شود</td><td>شرط را <code>p &lt; v + n</code> کن</td></tr>
+<tr><td>پ</td><td>تابع فقط‌خواندنی است ولی روی <code>*p</code> می‌نویسد</td><td>خط را حذف کن؛ شمردن نیاز به نوشتن ندارد</td></tr>
+</tbody></table></div>
+<div class="code" data-file="count_over.c" data-lang="c" data-verify="host" id="ex2">
+<pre>
+#include &lt;stdio.h&gt;
+
+static int count_over(const int *v, size_t n, int limit)
+{
+    int count = 0;
+    for (const int *p = v; p &lt; v + n; p++) {
+        if (*p &gt; limit) {
+            count++;
+        }
+    }
+    return count;
+}
+
+int main(void)
+{
+    int temps[6] = {21, 35, 28, 40, 19, 33};
+    size_t n = sizeof temps / sizeof temps[0];
+    printf("over 30: %d\n", count_over(temps, n, 30));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="3"><b class="what">امضای درست.</b> بافر و طولش جدا می‌آیند. <code>const</code> می‌ماند چون تابع فقط می‌خواند.</li>
+  <li data-lines="6,10"><b class="what">حلقه کامل.</b> <code>p</code> از <code>v</code> تا یکی مانده به <code>v + n</code>؛ شرط <code>&lt;</code>.</li>
+  <li data-lines="7-9"><b class="what">فقط شمارش.</b> دیگر روی <code>*p</code> نمی‌نویسیم.</li>
+  <li data-lines="16-18"><b class="what">طول در جای درست.</b> در main <code>temps</code> واقعا آرایه است، پس <code>sizeof temps / sizeof temps[0]</code> می‌شود ۶؛ ۳۵ و ۴۰ و ۳۳ از ۳۰ بزرگ‌ترند.</li>
+</ol>
+<pre class="term" data-from="count_over.c">
+$ ./count_over
+over 30: 3
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: نوشتن و خواندن امن پکت (کار با سخت‌افزار)</div>
+<p>یک فریم ۶ بایتی داریم: بایت شروع <code>0xAA</code>، بعد یک شناسه ۳۲ بیتی، بعد بایت پایان <code>0x55</code>. قرارداد پروتکل: شناسه با <b>little-endian</b> فرستاده می‌شود، در هر پردازنده‌ای.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> اگر شناسه <code>0xDEADBEEF</code> باشد، بایت‌های فریم به ترتیب چه هستند؟</li>
+  <li><b>حل:</b> دو تابع <code>write_u32_le(uint8_t *p, uint32_t v)</code> و <code>read_u32_le(const uint8_t *p)</code> بنویس که فقط از شیفت و ماسک استفاده کنند، و رفت‌وبرگشت را امتحان کن.</li>
+  <li><b>چالش:</b> سه دلیل بیاور که چرا <code>*(uint32_t *)(frame + 1)</code> بد است.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>بایت i ام از v برابر <code>(v &gt;&gt; (8*i)) &amp; 0xFF</code> است (درس ۳.۱). برای خواندن، هر بایت را به <code>uint32_t</code> تبدیل کن، به اندازه لازم شیفت بده و با <code>|</code> بچسبان.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="packet.c">
+$ ./packet
+AA EF BE AD DE 55 
+back = 0xDEADBEEF
+</pre>
+<p>جواب پ: (۱) شناسه از <code>frame + 1</code> شروع می‌شود که فرد است، پس ناهم‌تراز است؛ (۲) خواندن <code>uint8_t</code> آرایه با نوع <code>uint32_t</code> قانون aliasing را می‌شکند؛ (۳) ترتیب بایت‌ها را پردازنده تعیین می‌کند، نه قرارداد پروتکل.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="packet.c" data-lang="c" data-verify="host" id="ex3">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+static void write_u32_le(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)(v &amp; 0xFFu);
+    p[1] = (uint8_t)((v &gt;&gt; 8) &amp; 0xFFu);
+    p[2] = (uint8_t)((v &gt;&gt; 16) &amp; 0xFFu);
+    p[3] = (uint8_t)((v &gt;&gt; 24) &amp; 0xFFu);
+}
+
+static uint32_t read_u32_le(const uint8_t *p)
+{
+    return (uint32_t)p[0]
+         | ((uint32_t)p[1] &lt;&lt; 8)
+         | ((uint32_t)p[2] &lt;&lt; 16)
+         | ((uint32_t)p[3] &lt;&lt; 24);
+}
+
+int main(void)
+{
+    uint8_t frame[6] = {0xAA, 0, 0, 0, 0, 0x55};
+    write_u32_le(frame + 1, 0xDEADBEEFu);
+    for (int i = 0; i &lt; 6; i++) {
+        printf("%02X ", frame[i]);
+    }
+    printf("\n");
+    printf("back = 0x%08X\n", (unsigned)read_u32_le(frame + 1));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="4-10"><b class="what">نوشتن.</b> هر بایت شناسه جدا از عدد بیرون کشیده می‌شود: شیفت به راست، ماسک <code>0xFF</code>، تبدیل به <code>uint8_t</code>. بایت کم‌ارزش‌تر در آدرس پایین‌تر.
+    <span class="why">ترتیب را کد تعیین می‌کند، نه پردازنده. این کد روی little-endian و big-endian یکسان کار می‌کند.</span></li>
+  <li data-lines="12-18"><b class="what">خواندن.</b> هر بایت اول به <code>uint32_t</code> تبدیل می‌شود، بعد شیفت.
+    <span class="why">اگر cast نمی‌کردی، <code>p[3] &lt;&lt; 24</code> در حساب <code>int</code> انجام می‌شد و برای بایت‌های ≥ 0x80 به علامت ۳۲ بیتی می‌خورد (تعریف‌نشده). درس ۳.۱ را ببین.</span></li>
+  <li data-lines="22"><b class="what">فریم.</b> بایت شروع و پایان ثابت‌اند و چهار بایت میانی خالی.</li>
+  <li data-lines="23"><b class="what">نوشتن در وسط فریم.</b> <code>frame + 1</code> آدرس بایت شماره ۱ است.</li>
+  <li data-lines="24-27"><b class="what">چاپ فریم.</b> <code>%02X</code> هر بایت را دو رقمی هگز می‌نویسد.</li>
+  <li data-lines="28"><b class="what">خواندن دوباره.</b> باید همان مقدار اول برگردد.</li>
+</ol>
+<pre class="term" data-from="packet.c">
+$ ./packet
+AA EF BE AD DE 55 
+back = 0xDEADBEEF
+</pre></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>دو جا معمولا گیر می‌کنند. اول، <b>فراموش کردن اینکه p + 1 «یک عنصر» است</b>: وقتی نوع را عوض می‌کنی (مثلا از <code>uint8_t *</code> به <code>uint32_t *</code>) گام هم عوض می‌شود. اگر واقعا بایت می‌خواهی، اشاره‌گر بایتی بساز. دوم، <b>constهای زیاد</b> در امضای تابع: اول غافلگیرت می‌کنند، بعد عادت می‌شود. قاعده ساده: تابعی که فقط می‌خواند، <code>const</code> می‌گیرد. اگر کامپایلر اعتراض کرد، یک بار جدی فکر کن که آیا تابع واقعا فقط می‌خواند. اشکال‌های اشاره‌گر معمولا فوراً نمی‌ترکند؛ چند ساعت بعد، روی برد، یک مقدار عجیب ظاهر می‌شود. برای همین، هر بار با <code>-Wall -Wextra</code> کامپایل کن.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li>اسم آرایه (در بیشتر جاها) می‌شود آدرس اولین عنصر. <code>a[i]</code> یعنی <code>*(a + i)</code>.</li>
+  <li><code>p + n</code> یعنی n <b>عنصر</b> جلو، یعنی n × اندازه نوع بایت. تفاضل دو اشاره‌گر، تعداد عنصر است. فقط تا «یکی بعد از آخر» مجاز است.</li>
+  <li>آرایه را به تابع بدهی، فقط آدرس می‌رود؛ طول را جدا بفرست و <code>sizeof</code> را همان جایی که آرایه واقعی است حساب کن.</li>
+  <li><code>const T *p</code>: داده قفل. <code>T *const p</code>: اشاره‌گر قفل. تابع فقط‌خوان، <code>const</code> می‌گیرد.</li>
+  <li><code>void *</code> یعنی «هر نوع»؛ برای کار کردن باید به اشاره‌گر بایتی تبدیل شود.</li>
+  <li>رشته‌ها تا <code>'\0'</code> ادامه دارند؛ <code>char *</code> به literal فقط‌خواندنی است، <code>char[]</code> کپی قابل‌تغییر.</li>
+  <li>عددهای چندبایتی را با <code>memcpy</code> یا شیفت صریح بخوان (تراز، aliasing و بایت‌ترتیب). آدرس متغیر محلی را برنگردان.</li>
+</ul>
+<p>درس بعد: <a href="3-4.html">۳.۴ struct، union، enum و typedef</a>؛ آنجا چند مقدار را در یک بسته می‌ریزیم.</p></div>
+
+</article>
+</body>
+</html>

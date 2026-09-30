@@ -1,0 +1,958 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>نقشه حافظه و طول عمر متغیر · C برای میکروکنترلر</title>
+<meta name="description" content="هر متغیر در کدام بخش حافظه می‌نشیند؟ نقشهٔ Flash و RAM در STM32 و ESP32، بخش‌های .text .rodata .data .bss، پشته و heap، و طول عمر متغیرها، با خروجی واقعی کامپایلر.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="3-5">
+
+<p class="lede">تا حالا گفتیم «متغیر یک قفسه در حافظه است». ولی حافظهٔ میکروکنترلر یک اتاق بزرگ و یکدست نیست؛ چند <b>منطقه</b> با قانون‌های متفاوت دارد. بعضی متغیرها با خاموشی می‌مانند، بعضی با هر تابع ساخته و خراب می‌شوند، و بعضی هرگز در RAM نمی‌نشینند. در این درس نقشهٔ کامل را می‌کشیم تا هر بار متغیری می‌نویسی، بدانی <b>کجا زندگی می‌کند، چه زمانی متولد می‌شود و کی می‌میرد</b>.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>نقشهٔ Flash و RAM در STM32F411 را بکشی و بگویی هر بخش چه چیزی نگه می‌دارد</li>
+    <li>برای هر متغیر بگویی در <code>.text</code>، <code>.rodata</code>، <code>.data</code>، <code>.bss</code> یا پشته است</li>
+    <li>فرق «دیده‌شدن» (scope) و «زنده‌بودن» (lifetime) را توضیح بدهی</li>
+    <li>با <code>static</code> محلی، متغیری بسازی که بین صدا زدن‌ها زنده بماند</li>
+    <li>با <code>arm-none-eabi-size</code> و <code>nm</code> مصرف حافظهٔ برنامه‌ات را اندازه بگیری</li>
+    <li>بفهمی چرا سرریز پشته در میکروکنترلر بی‌صدا خرابکاری می‌کند و چرا هرگز آدرس متغیر محلی را برنمی‌گردانیم</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="2-1.html">۲.۱</a> (متغیر) و <a href="2-6.html">۲.۶</a> (توابع و پشتهٔ فراخوانی)</li>
+    <li>درس <a href="3-2.html">۳.۲</a> و <a href="3-3.html">۳.۳</a> (اشاره‌گر: در چند مثال آدرس می‌بینی)</li>
+    <li>کامپایلر <code>gcc</code> روی PC؛ برای بخش‌های STM32 هم <code>arm-none-eabi-gcc</code> (درس <a href="1-3.html">۱.۳</a>). اگر نصب نکرده‌ای، فقط خروجی‌ها را بخوان</li>
+    <li>هیچ سخت‌افزاری لازم نیست</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: آشپزخانهٔ یک رستوران</h2>
+<p>یک آشپزخانهٔ شلوغ را در نظر بگیر. همه‌چیز یک‌جا نیست، هر چیزی جای خودش را دارد:</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<ul>
+<li><b>دفتر دستور پخت (چاپ‌شده):</b> با خاموش‌شدن برق هم می‌ماند و هیچ‌کس در آن خط نمی‌زند. این «برنامه» است.</li>
+<li><b>منوی چاپی روی دیوار:</b> قیمت‌ها و اسم غذاها. فقط خواندنی. این «ثابت‌ها» هستند.</li>
+<li><b>تختهٔ سفید با اعداد اولیه:</b> هر صبح مدیر عددهای شروع (موجودی برنج = ۵۰) را از روی یک کاغذ چاپی رویش می‌نویسد. بعد کارکنان مدام پاک و بازنویسی می‌کنند. این «متغیرهای سراسری با مقدار اولیه» است.</li>
+<li><b>تختهٔ سفید تمیز:</b> هر صبح کامل پاک می‌شود و همه‌چیز صفر است. این «متغیرهای سراسری بدون مقدار» است.</li>
+<li><b>سینی کارهای در جریان:</b> آشپز هر کار تازه را روی سینی می‌گذارد و تمام که شد برمی‌دارد. آخرین کاری که آمده اولین کاری است که تمام می‌شود. این «پشته» است.</li>
+<li><b>انبار:</b> هر وقت خواستی یک جعبه می‌گیری و خودت باید پس بدهی. این «heap» است (درس <a href="4-4.html">۴.۴</a>).</li>
+</ul></div>
+
+<p>حافظهٔ میکروکنترلر دقیقا همین‌طور تقسیم شده. هر متغیری که می‌نویسی، کامپایلر یکی از این جاها را برایش انتخاب می‌کند. اگر ندانی کدام، دو جا غافلگیر می‌شوی: اول وقتی RAM بی‌دلیل پر می‌شود، و دوم وقتی مقدار یک متغیر ناگهان «آشغال» می‌شود.</p>
+
+<h2 id="map">نقشهٔ حافظهٔ STM32F411</h2>
+<p>یادت هست میکروکنترلر دو حافظهٔ اصلی دارد (درس <a href="2-1.html">۲.۱</a>): <span class="term" data-t="flash">Flash</span> که با خاموشی می‌ماند و <span class="term" data-t="ram">RAM</span> که پاک می‌شود. هر دو یک <span class="term" data-t="addrspace">فضای آدرس</span> مشترک دارند؛ یعنی هر بایت یک شماره دارد و CPU با شماره صدایش می‌کند. در STM32F411 (برد Nucleo-F411RE):</p>
+<ul>
+  <li>Flash از <code>0x08000000</code> شروع می‌شود و ۵۱۲ کیلوبایت است.</li>
+  <li>RAM از <code>0x20000000</code> شروع می‌شود و ۱۲۸ کیلوبایت است.</li>
+</ul>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 440" role="img" aria-label="نقشهٔ حافظهٔ STM32F411: Flash با بخش‌های isr_vector، text، rodata و data؛ RAM با data، bss، heap، فضای آزاد و stack؛ پیکان کپی از Flash به RAM">
+  <defs><marker id="m5a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">دو انبار، یک فضای آدرس</text>
+  <text x="220" y="50" text-anchor="middle" class="s-tx" font-size="14" font-weight="800">Flash (۵۱۲ کیلوبایت)</text>
+  <text x="570" y="50" text-anchor="middle" class="s-tx" font-size="14" font-weight="800">RAM (۱۲۸ کیلوبایت)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="120" y="60" width="200" height="44" fill="#ff86b3"/>
+    <rect x="120" y="104" width="200" height="100" fill="#ffd60a"/>
+    <rect x="120" y="204" width="200" height="50" fill="#7ea3ff"/>
+    <rect x="120" y="254" width="200" height="50" fill="#3ddc97"/>
+    <rect x="120" y="304" width="200" height="86" fill="none" stroke-dasharray="7 6" stroke-width="2.5"/>
+    <rect x="470" y="60" width="200" height="50" fill="#3ddc97"/>
+    <rect x="470" y="110" width="200" height="50" fill="#3fd3e6"/>
+    <rect x="470" y="160" width="200" height="70" fill="#ff9a4d"/>
+    <rect x="470" y="230" width="200" height="90" fill="none" stroke-dasharray="7 6" stroke-width="2.5"/>
+    <rect x="470" y="320" width="200" height="70" fill="#b394ff"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle">
+    <text class="mono" x="220" y="78" font-size="14" font-weight="800">.isr_vector</text><text x="220" y="96" font-size="12.5">جدول وقفه‌ها</text>
+    <text class="mono" x="220" y="146" font-size="15" font-weight="800">.text</text><text x="220" y="167" font-size="13">کد برنامه (دستورها)</text>
+    <text class="mono" x="220" y="223" font-size="15" font-weight="800">.rodata</text><text x="220" y="242" font-size="12.5">ثابت‌ها و رشته‌ها</text>
+    <text class="mono" x="220" y="273" font-size="15" font-weight="800">.data</text><text x="220" y="292" font-size="12.5">نسخهٔ مقدارهای اولیه</text>
+    <text class="mono" x="570" y="79" font-size="15" font-weight="800">.data</text><text x="570" y="98" font-size="12.5">سراسری‌های دارای مقدار</text>
+    <text class="mono" x="570" y="129" font-size="15" font-weight="800">.bss</text><text x="570" y="148" font-size="12.5">سراسری‌های بدون مقدار (صفر)</text>
+    <text class="mono" x="570" y="184" font-size="15" font-weight="800">heap</text><text x="570" y="204" font-size="12.5">انبار (به سمت پایین رشد)</text>
+    <text class="mono" x="570" y="350" font-size="15" font-weight="800">stack</text><text x="570" y="370" font-size="12.5">پشته (به سمت بالا رشد)</text>
+  </g>
+  <g class="s-tx" text-anchor="middle" font-size="13"><text x="220" y="352">فضای خالی Flash</text><text x="570" y="280">فضای آزاد RAM</text></g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M320 279C395 279 395 85 466 85" marker-end="url(#m5a)"/>
+    <path d="M648 236V266" marker-end="url(#m5a)"/>
+    <path d="M648 314V284" marker-end="url(#m5a)"/>
+  </g>
+  <text x="365" y="150" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">کپی در بوت</text>
+  <g class="mono s-tx" font-size="12">
+    <text x="110" y="70" text-anchor="end">0x08000000</text><text x="110" y="388" text-anchor="end">0x0807FFFF</text>
+    <text x="680" y="70">0x20000000</text><text x="680" y="388">0x20020000</text>
+  </g>
+  <text x="712" y="406" text-anchor="middle" class="s-tx" font-size="12.5">شروع پشته</text>
+  <text x="380" y="428" text-anchor="middle" class="s-tx" font-size="13.5">حافظهٔ Flash با خاموشی می‌ماند؛ حافظهٔ RAM با خاموشی پاک می‌شود</text>
+</svg></div>
+<figcaption>هر بخش رنگ خودش را دارد. پیکان وسط نشان می‌دهد مقدارهای اولیهٔ <code>.data</code> در Flash نگهداری و هنگام بوت به RAM کپی می‌شوند. اندازهٔ بخش‌ها نمونه است؛ آدرس شروع و پایان Flash و RAM مطابق مستندات STM32F411 است.</figcaption></figure>
+
+<p>«SP اولیه» یعنی جایی که پشته از آن شروع می‌شود: خانهٔ بعد از آخرین بایت RAM. یادت باشد پشته <b>از بالای RAM به سمت پایین</b> می‌آید. این را کمی بعد در بخش پشته می‌بینی، و در درس <a href="5-1.html">۵.۱</a> می‌بینی که چطور این عدد به CPU داده می‌شود.</p>
+
+<h2 id="sections">شش بخش، شش قانون</h2>
+<p>کامپایلر خروجی‌اش را در «تکه‌هایی» به اسم <span class="term" data-t="section">بخش</span> (section) می‌ریزد. اسم‌ها از قدیم مانده و باید حفظ شوند، چون در هر پروژهٔ embedded و در فایل linker script می‌بینی‌شان:</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>بخش</th><th>چه چیزی داخلش است؟</th><th>کجا؟</th><th>مثال</th></tr></thead>
+<tbody>
+<tr><td><code>.text</code></td><td>دستورهای ماشین (کد توابع)</td><td>Flash</td><td>بدنهٔ <code>main</code></td></tr>
+<tr><td><span class="term" data-t="rodata"><code>.rodata</code></span></td><td>داده‌های فقط‌خواندنی</td><td>Flash</td><td><code>const</code> سراسری، رشتهٔ <code>"hello"</code></td></tr>
+<tr><td><span class="term" data-t="dotdata"><code>.data</code></span></td><td>سراسری و static با <b>مقدار اولیهٔ غیرصفر</b></td><td>RAM (و یک نسخه در Flash)</td><td><code>int g = 5;</code></td></tr>
+<tr><td><span class="term" data-t="bss"><code>.bss</code></span></td><td>سراسری و static <b>بدون مقدار</b> یا با مقدار صفر</td><td>RAM (در Flash فقط اندازه‌اش ثبت می‌شود)</td><td><code>int g;</code></td></tr>
+<tr><td>پشته (stack)</td><td>متغیرهای محلی، پارامترها، آدرس برگشت</td><td>RAM</td><td><code>int step = 2;</code> داخل تابع</td></tr>
+<tr><td><span class="term" data-t="heap">heap</span></td><td>حافظه‌ای که با <code>malloc</code> می‌گیری</td><td>RAM</td><td>درس ۴.۴</td></tr>
+</tbody></table></div>
+
+<div class="callout info"><div class="ct">اسم عجیب <code>.bss</code> از کجاست؟</div>
+<p>اسمش از یک اسمبلر قدیمی می‌آید (Block Started by Symbol). لازم نیست معنی اسمش را بدانی؛ فقط بدان «متغیرهای سراسری که با صفر شروع می‌شوند». مهم‌ترین نکته: چون قرار است همه صفر باشند، لازم نیست در Flash نسخه‌ای از صفرها نگه داشت، فقط اندازه‌شان ثبت می‌شود. برنامه‌ای با آرایهٔ سراسری ۱۰۰۰ بایتی و بدون مقدار، Flash را ۱۰۰۰ بایت بزرگ‌تر نمی‌کند.</p></div>
+
+<p>حالا با یک برنامهٔ کوچک ببینیم کدام متغیر به کدام بخش می‌رود. این فایل را برای Cortex-M4 (پردازندهٔ STM32F411) کامپایل می‌کنیم:</p>
+
+<div class="code" data-file="sections.c" data-lang="c" data-verify="arm" id="code1">
+<pre>
+#include &lt;stdint.h&gt;
+
+int g_counter = 5;              // سراسری با مقدار اولیه
+int g_total;                    // سراسری بدون مقدار
+const int g_limit = 100;        // سراسری const
+static uint8_t s_buf[64];       // سراسری خصوصی فایل، بدون مقدار
+
+int bump(void)
+{
+    static int calls = 0;       // static محلی
+    int step = 2;               // محلی معمولی
+    calls = calls + 1;
+    g_total = g_total + step;
+    s_buf[0] = (uint8_t)calls;
+    return g_counter + g_limit + calls;
+}
+</pre></div>
+<ol class="walk" data-for="code1">
+  <li data-lines="3"><b class="what">سراسری با مقدار.</b> <code>g_counter</code> بیرون هر تابع تعریف شده و مقدار اولیه‌اش ۵ است (غیرصفر). می‌رود به <code>.data</code>.
+    <span class="why">ماشین باید بداند «۵» کجا نوشته شده: پس یک نسخه از آن در Flash می‌ماند و هنگام بوت به RAM کپی می‌شود.</span></li>
+  <li data-lines="4"><b class="what">سراسری بدون مقدار.</b> می‌رود به <code>.bss</code>. C تضمین می‌کند مقدار اولیهٔ هر متغیر سراسری، صفر است.
+    <span class="why">پس نیازی به ذخیرهٔ مقدار نیست؛ کد بوت کل این ناحیه را با صفر پر می‌کند.</span></li>
+  <li data-lines="5"><b class="what"><code>const</code> سراسری.</b> می‌رود به <code>.rodata</code> در Flash و اصلا RAM مصرف نمی‌کند.
+    <span class="why">چون هرگز عوض نمی‌شود، لازم نیست کپی قابل‌تغییری در RAM داشته باشد. برای همین در میکروکنترلر جدول‌های بزرگ را <code>const</code> می‌کنیم.</span></li>
+  <li data-lines="6"><b class="what">سراسری <code>static</code>.</b> ۶۴ بایت، بدون مقدار: <code>.bss</code>. <code>static</code> فقط این را می‌گوید که نامش برای فایل‌های دیگر دیده نشود، جایش را عوض نمی‌کند.</li>
+  <li data-lines="8-9,15-16"><b class="what">خود تابع.</b> دستورهای <code>bump</code> در <code>.text</code> (Flash) هستند، نه RAM.</li>
+  <li data-lines="10"><b class="what"><code>static</code> محلی.</b> اسمش فقط داخل تابع دیده می‌شود، ولی خودش مثل سراسری در RAM ثابت می‌ماند (اینجا صفر است: <code>.bss</code>).
+    <span class="why">پس با برگشتن از تابع نمی‌میرد. بخش بعد دقیق‌تر می‌گوید.</span></li>
+  <li data-lines="11"><b class="what">محلی معمولی.</b> <code>step</code> روی پشته (یا حتی در یک رجیستر CPU) است و با برگشتن از تابع از بین می‌رود. در هیچ‌یک از بخش‌های بالا نیست.</li>
+  <li data-lines="12-14"><b class="what">استفاده.</b> خواندن و نوشتن سراسری‌ها از RAM (<code>.data</code>/<code>.bss</code>) انجام می‌شود.</li>
+</ol>
+
+<p>حالا از خود ابزارها بپرس. <code>nm</code> فهرست نمادها (اسم‌ها) را می‌دهد و حرف وسط نوع بخش را نشان می‌دهد؛ <code>size -A</code> اندازهٔ هر بخش را:</p>
+<pre class="term" data-kind="cmd">
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -c sections.c
+$ arm-none-eabi-nm -S sections.o
+00000000 00000054 T bump
+00000044 00000004 b calls.0
+00000000 00000004 D g_counter
+00000000 00000004 R g_limit
+00000000 00000004 B g_total
+00000004 00000040 b s_buf
+$ arm-none-eabi-size -A sections.o
+sections.o  :
+section           size   addr
+.text               84      0
+.data                4      0
+.bss                72      0
+.rodata              4      0
+.comment            39      0
+.ARM.attributes     46      0
+Total              249
+</pre>
+
+<div class="table-wrap"><table>
+<thead><tr><th>حرف <code>nm</code></th><th>یعنی</th><th>نمونه در خروجی</th></tr></thead>
+<tbody>
+<tr><td><code>T</code></td><td>کد در <code>.text</code></td><td><code>bump</code> (۸۴ بایت = ۰x۵۴)</td></tr>
+<tr><td><code>D</code></td><td>داده در <code>.data</code></td><td><code>g_counter</code> (۴ بایت)</td></tr>
+<tr><td><code>B</code> و <code>b</code></td><td>داده در <code>.bss</code> (حرف کوچک = خصوصی فایل)</td><td><code>g_total</code>؛ <code>s_buf</code> (۶۴) و <code>calls</code> (۴) = ۷۲ بایت</td></tr>
+<tr><td><code>R</code></td><td>داده در <code>.rodata</code></td><td><code>g_limit</code> (۴ بایت)</td></tr>
+</tbody></table></div>
+<p>عددها را چک کن: <code>.bss</code> = ۶۴ + ۴ (<code>calls</code>) + ۴ (<code>g_total</code>) = ۷۲. <code>.data</code> فقط <code>g_counter</code> است (۴). دو ردیف آخر (<code>.comment</code> و <code>.ARM.attributes</code>) اطلاعات ابزار هستند و در حافظهٔ میکروکنترلر نمی‌روند. نکته: اسم <code>calls.0</code> را کامپایلر خودش ساخته تا با <code>static</code>‌های همنام در توابع دیگر قاطی نشود؛ نسخهٔ کامپایلر ممکن است شمارهٔ آخرش را عوض کند.</p>
+
+<div class="callout tip"><div class="ct">دستور <code>size</code> روی فایل کامل</div>
+<p>وقتی پروژهٔ کامل لینک شد (درس <a href="5-1.html">۵.۱</a>)، <code>arm-none-eabi-size firmware.elf</code> سه عدد می‌دهد: <code>text</code> (کد + ثابت‌ها؛ در Flash)، <code>data</code> و <code>bss</code>. مصرف Flash تقریبا <code>text + data</code> است و مصرف RAM ایستا <code>data + bss</code>. (در فایل تنها با <code>-c</code> مثل بالا، ستون <code>text</code> شامل <code>.rodata</code> هم می‌شود و ۸۸ = ۸۴ + ۴ را نشان می‌دهد.) این سه عدد اولین چیزی است که یک مهندس حرفه‌ای بعد از هر ساخت نگاه می‌کند.</p></div>
+
+<h2 id="boot">قبل از <code>main</code> چه می‌گذرد؟</h2>
+<p>وقتی برق وصل می‌شود، RAM پر از آشغال است (مثل تختهٔ سفید نانوشته‌ای که کسی رویش خط‌خطی کرده). ولی ما قول داده‌ایم <code>g_counter</code> برابر ۵ و <code>g_total</code> برابر ۰ باشد. کی این قول عملی می‌شود؟ <b>قبل از <code>main</code></b>، توسط تکه‌کدی به اسم «<span class="term" data-t="startup">کد استارت‌آپ</span>» که با هر reset اول از همه اجرا می‌شود.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="کد استارت‌آپ مقدار ۵ را از Flash به g_counter در RAM کپی می‌کند و g_total را با صفر پر می‌کند">
+  <defs><marker id="m5b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">بعد از reset و قبل از main</text>
+  <text x="140" y="60" text-anchor="middle" class="s-tx" font-size="14" font-weight="800">Flash (می‌ماند)</text>
+  <text x="620" y="60" text-anchor="middle" class="s-tx" font-size="14" font-weight="800">RAM (تازه روشن‌شده)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="40" y="72" width="200" height="150" fill="#fff"/>
+    <rect x="520" y="72" width="200" height="210" fill="#fff"/>
+    <rect x="70" y="102" width="140" height="56" rx="8" fill="#3ddc97"/>
+    <rect x="290" y="206" width="110" height="44" rx="8" fill="#3fd3e6"/>
+    <rect x="540" y="98" width="160" height="50" rx="8" fill="#3ddc97"/>
+    <rect x="540" y="158" width="160" height="50" rx="8" fill="#3fd3e6"/>
+    <rect x="540" y="218" width="160" height="50" rx="8" fill="#fff" stroke-dasharray="6 5" stroke-width="2.5"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle">
+    <text class="mono" x="140" y="138" font-size="26" font-weight="800">5</text>
+    <text x="140" y="184" font-size="13" class="s-tx">نسخهٔ اولیهٔ g_counter</text>
+    <text x="345" y="234" font-size="14" font-weight="800">صفر</text>
+  </g>
+  <g class="mono" fill="#15120a" font-size="14" font-weight="700">
+    <text x="556" y="128">g_counter</text><text x="688" y="128" text-anchor="end">5</text>
+    <text x="556" y="188">g_total</text><text x="688" y="188" text-anchor="end">0</text>
+  </g>
+  <text x="620" y="248" text-anchor="middle" class="s-tx" font-size="13">بقیهٔ RAM: آشغال</text>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M212 130C340 130 400 122 536 122" marker-end="url(#m5b)"/>
+    <path d="M402 228C460 228 480 190 536 184" marker-end="url(#m5b)"/>
+  </g>
+  <text x="375" y="108" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">۱) کپی: حلقهٔ while</text>
+  <text x="345" y="272" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">۲) صفر کردن: حلقهٔ for</text>
+  <text x="140" y="256" text-anchor="middle" class="s-tx" font-size="12.5">این مقدار روی خود تراشه برنامه‌ریزی شده</text>
+</svg></div>
+<figcaption>کد استارت‌آپ دو کار می‌کند: مقدارهای اولیهٔ <code>.data</code> را از Flash به RAM کپی می‌کند و <code>.bss</code> را با صفر پر می‌کند. بعد <code>main</code> را صدا می‌زند.</figcaption></figure>
+
+<p>ببین همین کار چقدر ساده است. این نسخهٔ کوچک‌شده از کد استارت‌آپ واقعی است (نسخهٔ کامل و تنظیم آدرس‌ها در درس <a href="5-1.html">۵.۱</a> می‌آید):</p>
+
+<div class="code" data-file="startup_copy.c" data-lang="c" data-verify="arm" id="code2">
+<pre>
+#include &lt;stdint.h&gt;
+
+extern uint32_t _sidata;        // شروع مقدارهای اولیه در Flash
+extern uint32_t _sdata;         // شروع .data در RAM
+extern uint32_t _edata;         // پایان .data در RAM
+extern uint32_t _sbss;          // شروع .bss
+extern uint32_t _ebss;          // پایان .bss
+
+int main(void);
+
+void Reset_Handler(void)
+{
+    uint32_t *src = &amp;_sidata;
+    uint32_t *dst = &amp;_sdata;
+    while (dst &lt; &amp;_edata) {
+        *dst++ = *src++;        // کپی از Flash به RAM
+    }
+    for (dst = &amp;_sbss; dst &lt; &amp;_ebss; dst++) {
+        *dst = 0;               // صفر کردن .bss
+    }
+    main();
+    for (;;) { }
+}
+</pre></div>
+<ol class="walk" data-for="code2">
+  <li data-lines="3-7"><b class="what">نمادهای مرزی.</b> <code>extern</code> یعنی «این نام جای دیگری تعریف شده» (جزئیاتش در درس <a href="4-2.html">۴.۲</a>). اینجا این پنج نام را برنامه‌ات تعریف نمی‌کند؛ <b>لینکر</b> (linker script) می‌سازد و آدرس‌های شروع و پایان بخش‌ها را در آنها می‌گذارد.
+    <span class="why">فقط لینکر می‌داند بعد از چیدن همهٔ فایل‌ها، <code>.data</code> دقیقا کجای RAM افتاده. پس خودش نشانه‌گذاری می‌کند و کد ما با <code>&amp;</code> (آدرسِ) این نشانه‌ها کار می‌کند، نه با مقدارشان.</span></li>
+  <li data-lines="9"><b class="what">پروتوتایپ main.</b> تا کامپایلر بداند <code>main</code> چیست (درس <a href="2-6.html">۲.۶</a>).</li>
+  <li data-lines="11-12,23"><b class="what">اولین تابع برنامه.</b> پس از reset، CPU مستقیم اینجا می‌آید (نه به <code>main</code>). چرا و چطور، در درس ۵.۱.</li>
+  <li data-lines="13-14"><b class="what">دو اشاره‌گر.</b> <code>src</code> جایی در Flash که مقدارهای اولیه‌اند؛ <code>dst</code> جایی در RAM که باید کپی شوند (اشاره‌گر: درس <a href="3-2.html">۳.۲</a>).</li>
+  <li data-lines="15-17"><b class="what">حلقهٔ کپی.</b> تا وقتی <code>dst</code> به پایان <code>.data</code> نرسیده: یک کلمهٔ ۳۲ بیتی کپی کن (<code>*dst++ = *src++</code>: «مقدار <code>src</code> را در خانهٔ <code>dst</code> بگذار، بعد هر دو را یک خانه جلو ببر»).
+    <span class="why">بعد از این حلقه <code>g_counter</code> واقعا ۵ است. بدون آن، مقدار اولیه‌ای که در کدت نوشتی هرگز به RAM نمی‌رسید.</span></li>
+  <li data-lines="18-20"><b class="what">حلقهٔ صفر کردن.</b> از ابتدا تا انتهای <code>.bss</code> صفر می‌نویسد. به همین دلیل «سراسری بدون مقدار = صفر» تضمین می‌شود.
+    <span class="why">این ضمانت مفت به دست نمی‌آید؛ کسی باید RAM را پاک کند و آن کس، همین کد استارت‌آپ است. (در برنامه‌های خیلی بزرگ، این صفر کردن چند میکروثانیه زمان می‌برد.)</span></li>
+  <li data-lines="21"><b class="what">حالا برنامهٔ تو.</b> <code>main</code> صدا زده می‌شود و می‌داند همهٔ سراسری‌ها آماده‌اند.</li>
+  <li data-lines="22"><b class="what">اگر main برگشت.</b> روی میکروکنترلر جایی برای برگشتن نیست (سیستم‌عاملی نیست)؛ پس اینجا برای همیشه می‌چرخد (درس <a href="1-4.html">۱.۴</a>).</li>
+</ol>
+
+<div class="widget" data-w="mem" data-config='{"title":"بوت گام‌به‌گام: RAM از آشغال تا آماده","code":["// reset: RAM پر از آشغال است","dst = &amp;_sdata; // کپی .data از Flash","dst = &amp;_sbss;  // صفر کردن .bss","main();           // برنامهٔ تو شروع می‌شود"],"intro":"همهٔ خانه‌های RAM آشغال دارند (علامت ؟). روی بعدی بزن.","cells":[{"addr":"Flash","name":"مقدار اولیهٔ g_counter","val":5,"kind":"var"},{"addr":"RAM 0x20000000","name":"g_counter","val":null,"kind":"var"},{"addr":"RAM 0x20000004","name":"g_total","val":null,"kind":"var"}],"steps":[{"line":0,"set":{},"hot":[1,2],"say":"برق وصل شد. محتوای RAM نامعلوم است: <b>g_counter</b> و <b>g_total</b> هر دو آشغال‌اند. Flash اما مقدار ۵ را نگه داشته."},{"line":1,"set":{"1":5},"hot":[0,1],"say":"حلقهٔ کپی: مقدار ۵ از Flash به <b>g_counter</b> رفت. Flash دست‌نخورده ماند."},{"line":2,"set":{"2":0},"hot":[2],"say":"حلقهٔ صفر: <b>g_total</b> صفر شد. برای همین سراسری‌های بدون مقدار همیشه با صفر شروع می‌کنند."},{"line":3,"set":{},"hot":[1,2],"say":"حالا <code>main</code> اجرا می‌شود. تا اینجا نه کسی <b>printf</b> زده نه <b>main</b> را دیده؛ ولی همه‌چیز آماده است."}]}'></div>
+
+<h2 id="scope">دیده‌شدن و زنده‌بودن، دو سؤال جدا</h2>
+<p>دربارهٔ هر متغیر دو سؤال کاملا جدا داریم:</p>
+<ul>
+  <li><b>کجا دیده می‌شود؟</b> (<span class="term" data-t="scope">scope</span>، یعنی «حوزه»): از کدام خط‌ها می‌توانی اسمش را بنویسی؟</li>
+  <li><b>کی زنده است؟</b> (<span class="term" data-t="lifetime">lifetime</span>، یعنی «طول عمر»): چه مدت قفسه‌اش در RAM وجود دارد و مقدارش حفظ می‌شود؟</li>
+</ul>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>هتل را ببین. <b>شمارهٔ اتاق</b> فقط برای مهمانِ همان اتاق معنی دارد (دیده‌شدن محدود). ولی <b>اتاق</b> هست چه مهمان در آن باشد چه نباشد (زنده‌بودن). حالا فرض کن اتاقی فقط وقتی ساخته می‌شود که مهمان می‌رسد و وقتی می‌رود خراب می‌شود: این «متغیر محلی» است. اتاقی که همیشه هست ولی کلیدش فقط دست مهمان است: «static محلی». و لابی که همه می‌بینند: «سراسری».</p></div>
+
+<div class="table-wrap"><table>
+<thead><tr><th>نوع متغیر</th><th>کجا تعریف می‌شود</th><th>دیده می‌شود</th><th>زنده است</th><th>جا</th></tr></thead>
+<tbody>
+<tr><td>محلی (پیش‌فرض)</td><td>داخل تابع یا بلوک <code>{ }</code></td><td>فقط همان بلوک</td><td>از ورود تا خروج</td><td>پشته (یا رجیستر CPU)</td></tr>
+<tr><td>پارامتر تابع</td><td>سر تابع</td><td>فقط همان تابع</td><td>از صدا زدن تا برگشت</td><td>پشته (یا رجیستر)</td></tr>
+<tr><td><code>static</code> محلی</td><td>داخل تابع</td><td>فقط همان تابع</td><td>کل برنامه</td><td><code>.data</code> یا <code>.bss</code></td></tr>
+<tr><td>سراسری</td><td>بیرون هر تابع</td><td>کل پروژه (با <code>extern</code>، درس ۴.۲)</td><td>کل برنامه</td><td><code>.data</code>، <code>.bss</code>، یا <code>.rodata</code> اگر <code>const</code></td></tr>
+<tr><td><code>static</code> سراسری</td><td>بیرون هر تابع</td><td>فقط همین فایل</td><td>کل برنامه</td><td>مثل سراسری</td></tr>
+</tbody></table></div>
+
+<p>کلمهٔ <code>static</code> در C دو معنی دارد که به هم شبیه‌اند ولی یکی نیستند. این جدول را با دقت بخوان:</p>
+<ul>
+  <li><code>static</code> <b>بیرون تابع</b>: فقط «دیده‌شدن» را محدود می‌کند (فقط در همین فایل). طول عمرش از قبل هم کل برنامه بود.</li>
+  <li><code>static</code> <b>داخل تابع</b>: «طول عمر» را عوض می‌کند: متغیر از محلی معمولی به «زنده تا آخر برنامه» می‌رود. دیده‌شدنش همان تابع می‌ماند.</li>
+</ul>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 320" role="img" aria-label="نمودار زمانی: متغیر سراسری از بوت تا پایان زنده است، محلی main تا وقتی main اجرا می‌شود، و محلی f فقط در دو بازهٔ کوتاه فراخوانی">
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">نوار عمر متغیرها روی محور زمان</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="40" y="50" width="680" height="34" fill="#3ddc97"/>
+    <rect x="90" y="120" width="630" height="34" fill="#7ea3ff"/>
+    <rect x="250" y="190" width="90" height="34" fill="#ff86b3"/>
+    <rect x="470" y="190" width="90" height="34" fill="#ff86b3"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-size="13" font-weight="700">
+    <text x="380" y="72">سراسری و static: از قبل از main تا آخر برنامه</text>
+    <text x="405" y="142">محلی main: تا وقتی main اجرا می‌شود</text>
+    <text x="295" y="212">فراخوانی ۱</text><text x="515" y="212">فراخوانی ۲</text>
+  </g>
+  <g class="s-tx" font-size="13" font-weight="700" text-anchor="middle">
+    <text x="380" y="184">محلی تابع f: در هر فراخوانی از نو ساخته و بعد خراب می‌شود</text>
+  </g>
+  <g stroke="#15120a" stroke-width="2" stroke-dasharray="5 5"><path d="M250 232V262"/><path d="M340 232V262"/><path d="M470 232V262"/><path d="M560 232V262"/></g>
+  <path d="M40 262H735" stroke="#15120a" stroke-width="3" fill="none"/>
+  <g class="s-tx" font-size="12.5" text-anchor="middle">
+    <text x="40" y="284">بوت</text><text x="90" y="300">شروع main</text><text x="295" y="284">f صدا زده شد</text><text x="515" y="284">دوباره f</text><text x="700" y="284">پایان</text>
+  </g>
+</svg></div>
+<figcaption>محلی‌های <code>f</code> دو بار ساخته و دو بار نابود می‌شوند؛ مقدار بار اول در بار دوم <b>نیست</b>. سراسری‌ها و <code>static</code>ها اما از اول تا آخر زنده‌اند.</figcaption></figure>
+
+<h2 id="staticlocal"><span class="en">static</span> محلی: حافظه‌ای که تابع دارد</h2>
+<p>گاهی تابع باید چیزی را از یک بار صدا شدن به بار بعد <b>یادش بماند</b>: شمارندهٔ فراخوانی، مقدار قبلی سنسور، شمارهٔ بستهٔ بعدی. دو راه داری: یک متغیر سراسری (که همه‌جا دیده می‌شود و ممکن است کسی خرابش کند)، یا یک <span class="term" data-t="staticlocal"><code>static</code> محلی</span> (که فقط خود تابع می‌بیند). دومی تمیزتر است. مقایسه:</p>
+
+<div class="code" data-file="life.c" data-lang="c" data-verify="host" id="code3">
+<pre>
+#include &lt;stdio.h&gt;
+
+static int next_id(void)
+{
+    static int last = 100;      // فقط یک بار ساخته می‌شود
+    last = last + 1;
+    return last;
+}
+
+static int next_local(void)
+{
+    int last = 100;             // هر بار از نو
+    last = last + 1;
+    return last;
+}
+
+int main(void)
+{
+    for (int i = 0; i &lt; 3; i++) {
+        int a = next_id();
+        int b = next_local();
+        printf("call %d: static=%d local=%d\n", i + 1, a, b);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code3">
+  <li data-lines="3-8"><b class="what">تابع با حافظه.</b> <code>static int last = 100;</code> فقط <b>یک بار</b> مقدار می‌گیرد: نه هر بار که تابع صدا زده می‌شود، بلکه یک بار برای همیشه، قبل از اجرای برنامه (در <code>.data</code>). صدا زدن‌های بعدی از این خط رد می‌شوند.
+    <span class="why">تصور غلط رایج: «خط <code>static int last = 100;</code> هر بار اجرا می‌شود و مقدار را ۱۰۰ می‌کند». نه! مقدار ۱۰۰ قبل از <code>main</code> در قفسه گذاشته شده و بعدا فقط <code>last = last + 1</code> عوضش می‌کند.</span></li>
+  <li data-lines="10-15"><b class="what">نسخهٔ معمولی.</b> <code>last</code> محلی است. هر بار که تابع صدا زده می‌شود، قفسهٔ تازه روی پشته ساخته و با ۱۰۰ پر می‌شود، ۱ اضافه می‌شود و تابع که تمام شد، قفسه از بین می‌رود.</li>
+  <li data-lines="19-24"><b class="what">سه بار صدا زدن.</b> هر دو تابع را سه بار صدا می‌زنیم و هر بار جواب هر دو را می‌گیریم و چاپ می‌کنیم. (هر تابع را در یک خط جدا صدا زدیم تا ترتیب اجرایشان معلوم باشد.)
+    <span class="why">اگر هر دو را داخل یک <code>printf</code> می‌نوشتی، C ترتیب ارزیابی آرگومان‌ها را تضمین نمی‌کند (درس <a href="2-3.html">۲.۳</a>)؛ برای مثالی که اثر <code>static</code> را نشان می‌دهد، ترتیب مهم است.</span></li>
+</ol>
+<pre class="term" data-from="life.c">
+$ gcc -std=c11 -Wall -Wextra -o life life.c
+$ ./life
+call 1: static=101 local=101
+call 2: static=102 local=101
+call 3: static=103 local=101
+</pre>
+<p>ستون <code>static</code> بالا می‌رود (۱۰۱، ۱۰۲، ۱۰۳): تابع «یادش می‌ماند». ستون <code>local</code> همیشه ۱۰۱ است: هر بار قفسهٔ تازه.</p>
+
+<div class="widget" data-w="mem" data-config='{"title":"سه بار صدا زدن: static در برابر محلی","code":["next_id();      // static last","next_id();","next_local();   // محلی last","next_local();"],"intro":"دو قفسه داریم. last (static) از قبل در RAM ثابت است و ۱۰۰ دارد. last (محلی) فقط وقتی تابع اجراست وجود دارد.","cells":[{"addr":".data","name":"last (static)","val":100,"kind":"var"},{"addr":"پشته","name":"last (محلی)","val":"—","kind":"var"}],"steps":[{"line":0,"set":{"0":101},"hot":[0],"say":"بار اول: static از ۱۰۰ به ۱۰۱ رفت. قفسه همان قفسهٔ قدیمی است، فقط مقدارش عوض شد."},{"line":1,"set":{"0":102},"hot":[0],"say":"بار دوم: همان قفسه، این بار ۱۰۱ را می‌بیند و می‌شود ۱۰۲. حافظهٔ تابع کار می‌کند."},{"line":2,"set":{"1":101},"hot":[1],"say":"نسخهٔ محلی: قفسهٔ تازه روی پشته ساخته شد، ۱۰۰ گرفت، شد ۱۰۱ و برگشت. قفسه همین حالا خراب می‌شود."},{"line":3,"set":{"1":101},"hot":[1],"say":"بار دوم: باز قفسهٔ تازه، باز از ۱۰۰. هیچ اثری از بار قبل نیست. برای همین همیشه ۱۰۱ می‌دهد."}]}'></div>
+
+<div class="callout warn"><div class="ct">دو خطر <code>static</code> محلی</div>
+<ul>
+<li><b>تابع دیگر «خالص» نیست.</b> با ورودی یکسان خروجی متفاوت می‌دهد و تست‌کردنش سخت‌تر است. برای شمارنده یا آخرین مقدار خوب است، برای منطق اصلی نه.</li>
+<li><b>ایمنی در برابر وقفه و چند وظیفه.</b> اگر هم <code>main</code> و هم یک ISR (درس <a href="5-3.html">۵.۳</a>) یا دو task (درس <a href="5-6.html">۵.۶</a>) همان تابع را صدا بزنند، یک قفسه بین آنها مشترک می‌شود. بدون محافظت، خراب می‌شود. متغیر محلی معمولی این خطر را ندارد چون هر بار قفسهٔ خودش را دارد.</li>
+</ul></div>
+
+<h2 id="zero">مقدار اولیه: سراسری صفر، محلی آشغال</h2>
+<p>در درس <a href="2-1.html">۲.۱</a> دیدی متغیر محلی بدون مقدار، «آشغال» دارد. حالا دلیلش را می‌فهمی و می‌بینی سراسری‌ها فرق دارند:</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>متغیر</th><th>مقدار اولیه اگر ننویسی</th><th>چرا؟</th></tr></thead>
+<tbody>
+<tr><td>سراسری و <code>static</code> (محلی یا سراسری)</td><td><b>صفر</b> (تضمین‌شده توسط استاندارد C)</td><td>کد استارت‌آپ <code>.bss</code> را صفر می‌کند</td></tr>
+<tr><td>محلی معمولی</td><td><b>آشغال</b> (هر چه قبلا روی آن خانه‌ها بوده)</td><td>پشته هر لحظه دوباره استفاده می‌شود و پاک نمی‌شود، چون پاک کردن زمان می‌برد</td></tr>
+<tr><td>حافظهٔ <code>malloc</code></td><td><b>آشغال</b></td><td><code>calloc</code> صفر می‌کند (درس ۴.۴)</td></tr>
+</tbody></table></div>
+
+<div class="code" data-file="zero.c" data-lang="c" data-verify="host" id="code4">
+<pre>
+#include &lt;stdio.h&gt;
+
+int g_count;                    // سراسری بدون مقدار
+static int s_flag;              // static بدون مقدار
+int g_table[4];                 // آرایهٔ سراسری بدون مقدار
+
+int main(void)
+{
+    static int calls;           // static محلی بدون مقدار
+    printf("g_count=%d s_flag=%d calls=%d\n", g_count, s_flag, calls);
+    printf("table: %d %d %d %d\n", g_table[0], g_table[1], g_table[2], g_table[3]);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code4">
+  <li data-lines="3-5"><b class="what">سه سراسری بدون مقدار.</b> هیچ‌کدام مقدار اولیه ندارند. آرایه هم همین‌طور: همهٔ خانه‌هایش صفر می‌شود.
+    <span class="why">اگر مقدار نمی‌دهی هم به‌خاطر خوانایی <code>= 0</code> بنویس؛ برای کامپایلر تفاوتی ندارد (باز هم <code>.bss</code>) ولی خواننده مطمئن می‌شود عمدی است.</span></li>
+  <li data-lines="9"><b class="what"><code>static</code> محلی بدون مقدار.</b> مثل سراسری صفر است، نه آشغال.</li>
+  <li data-lines="10-11"><b class="what">چاپ.</b> همه صفر چاپ می‌شوند، بدون اینکه ما چیزی نوشته باشیم.</li>
+</ol>
+<pre class="term" data-from="zero.c">
+$ gcc -std=c11 -Wall -Wextra -o zero zero.c
+$ ./zero
+g_count=0 s_flag=0 calls=0
+table: 0 0 0 0
+</pre>
+
+<div class="callout warn"><div class="ct">در میکروکنترلر: «صفر تضمینی» به کد استارت‌آپ وابسته است</div>
+<p>این ضمانت را استاندارد C می‌دهد، ولی <b>کد استارت‌آپ</b> عملی‌اش می‌کند. اگر خودت یک استارت‌آپ ناقص بنویسی (یا در یک پروژهٔ خاص حافظه‌ای را عمدا پاک نکنی)، سراسری‌ها آشغال می‌شوند. در پروژه‌های معمولی STM32 و ESP32 کد استارت‌آپ آماده است و کار می‌کند؛ لازم نیست نگرانش باشی، فقط بدانی از کجا می‌آید.</p></div>
+
+<h2 id="stack">پشته: سینی کارهای در جریان</h2>
+<p>در درس <a href="2-6.html">۲.۶</a> دیدی هر تابع، هنگام صدا زدن، یک <span class="term" data-t="stackframe">فریم</span> روی <span class="term" data-t="call_stack">پشتهٔ فراخوانی</span> می‌گیرد. حالا آن را روی نقشهٔ حافظه ببین. پشته یک ناحیهٔ ثابت از RAM است که از <b>بالاترین آدرس شروع می‌شود و به سمت آدرس‌های کمتر رشد می‌کند</b>. ثباتی به اسم <b>SP</b> (Stack Pointer، اشاره‌گر پشته) همیشه به آخرین فریم اشاره می‌کند.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 420" role="img" aria-label="RAM از بالا: data و bss، heap که به پایین رشد می‌کند، فضای آزاد، و پشته که از بالای RAM به سمت بالا می‌آید با فریم‌های main، f و g؛ SP به فریم g اشاره می‌کند">
+  <defs><marker id="m5c" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">داخل RAM: پشته و heap به سمت هم می‌آیند</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="200" y="46" width="220" height="40" fill="#3ddc97"/>
+    <rect x="200" y="86" width="220" height="50" fill="#ff9a4d"/>
+    <rect x="200" y="136" width="220" height="110" fill="none" stroke-dasharray="7 6" stroke-width="2.5"/>
+    <rect x="200" y="246" width="220" height="42" fill="#ff86b3"/>
+    <rect x="200" y="288" width="220" height="42" fill="#7ea3ff"/>
+    <rect x="200" y="330" width="220" height="42" fill="#ffd60a"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-size="13.5" font-weight="700">
+    <text x="310" y="71">.data و .bss</text>
+    <text x="310" y="106">heap</text><text x="310" y="124" font-size="12">(malloc)</text>
+    <text x="310" y="272">فریم g: c = 3</text>
+    <text x="310" y="314">فریم f: b = 2</text>
+    <text x="310" y="356">فریم main: a = 1</text>
+  </g>
+  <text x="310" y="196" text-anchor="middle" class="s-tx" font-size="13.5">فضای آزاد</text>
+  <g class="mono s-tx" font-size="12" text-anchor="end">
+    <text x="190" y="58">0x20000000</text><text x="190" y="372">0x20020000</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M440 96V130" marker-end="url(#m5c)"/>
+    <path d="M440 240V152" marker-end="url(#m5c)"/>
+    <path d="M580 267H426" marker-end="url(#m5c)"/>
+  </g>
+  <g class="s-tx" font-size="13.5" font-weight="700" text-anchor="middle">
+    <text x="610" y="116">انبار به سمت پایین رشد می‌کند</text>
+    <text x="610" y="200">پشته به سمت بالا (آدرس کمتر)</text>
+    <text x="655" y="290" font-size="12.5" font-weight="400">به آخرین فریم اشاره می‌کند</text>
+  </g>
+  <text class="mono s-tx" x="640" y="270" font-size="15" font-weight="800">SP</text>
+  <text x="380" y="400" text-anchor="middle" class="s-tx" font-size="13.5">اگر این دو به هم برسند، برنامه به بی‌راهه می‌رود؛ در MCU چیزی جلویشان را نمی‌گیرد</text>
+</svg></div>
+<figcaption>هر تابع تازه یک فریم زیر فریم قبلی می‌سازد و با برگشتن آن را رها می‌کند. آدرس‌ها نمونه‌اند. (در پروژهٔ واقعی، درس ۵.۱، اندازهٔ هر ناحیه را در linker script می‌گذاری.)</figcaption></figure>
+
+<div class="widget" data-w="mem" data-config='{"title":"فریم‌ها روی پشته: main ← f ← g","code":["int a = 1;      // در main","f();            // main، f را صدا می‌زند","  int b = 2;    // داخل f","  g();          // f، g را صدا می‌زند","    int c = 3;  // داخل g","// g تمام شد","// f تمام شد"],"intro":"پشته خالی است و SP در بالاترین آدرس RAM. روی بعدی بزن.","cells":[{"addr":"رجیستر","name":"SP","val":"0x20020000","kind":"ptr"},{"addr":"0x2001FFF8","name":"a (main)","val":"—","kind":"var"},{"addr":"0x2001FFF0","name":"b (f)","val":"—","kind":"var"},{"addr":"0x2001FFE8","name":"c (g)","val":"—","kind":"var"}],"steps":[{"line":0,"set":{"0":"0x2001FFF8","1":1},"hot":[0,1],"say":"فریم main ساخته شد. SP یک قدم به سمت پایین آمد (به آدرس کمتر) و a قفسه گرفت."},{"line":2,"set":{"0":"0x2001FFF0","2":2},"hot":[0,2],"say":"f صدا زده شد: فریم تازه زیر فریم main. SP باز پایین‌تر آمد."},{"line":4,"set":{"0":"0x2001FFE8","3":3},"hot":[0,3],"say":"g صدا زده شد: سومین فریم. حالا سه تابع همزمان زنده‌اند."},{"line":5,"set":{"0":"0x2001FFF0","3":"—"},"hot":[0,3],"say":"g تمام شد: فریمش رها شد و SP بالا آمد. c دیگر وجود ندارد (خانه‌اش فعلا همان بایت‌های قبلی را دارد، ولی مال ما نیست)."},{"line":6,"set":{"0":"0x2001FFF8","2":"—"},"hot":[0,2],"say":"f هم تمام شد. b رفت. فقط main و a مانده‌اند. آخرین‌ورودی، اولین‌خروجی!"}]}'></div>
+
+<h2 id="overflow">سرریز پشته: خطری که بی‌صدا می‌آید</h2>
+<p>اندازهٔ پشته در PC چندین مگابایت است و اگر پر شود، سیستم‌عامل برنامه را می‌کُشد (پیام <em>segmentation fault</em>). در میکروکنترلر این‌طور نیست. پشته یک ناحیهٔ کوچک است (معمولا از چند صد بایت تا چند کیلوبایت که خودت در پروژه تعیین می‌کنی) و <b>هیچ نگهبانی</b> اطرافش نیست: حافظهٔ زیر پشته یا داده‌های دیگر است (سراسری‌ها، heap) یا حافظهٔ بی‌مصرف. پس <span class="term" data-t="stackoverflow">سرریز پشته</span> (stack overflow) یعنی پشته بی‌سروصدا روی متغیرهای دیگر می‌نویسد.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>سینی کارهای آشپزخانه فقط ده جا دارد. آشپز یازدهمین ظرف را می‌گذارد؛ ظرف روی میز کناری، جایی که مواد اولیهٔ فردا بود، می‌افتد و همه را می‌ریزد. هیچ آلارمی نمی‌زند؛ فردا مواد خراب‌اند و کسی نمی‌داند چرا. علائم در میکروکنترلر همین است: متغیر سراسری که «خودبه‌خود» عوض شد، برنامه‌ای که گاهی هنگ می‌کند، یا HardFault (خطای سخت CPU، درس <a href="6-1.html">۶.۱</a>).</p></div>
+
+<p>پشته با چه چیزهایی پر می‌شود؟ سه عامل اصلی:</p>
+<ol class="steps">
+  <li><b>آرایهٔ بزرگ محلی.</b> <code>char buf[1024]</code> داخل یک تابع یعنی هر بار که تابع صدا زده شود، ۱۰۲۴ بایت از پشته می‌رود.</li>
+  <li><b>بازگشت عمیق.</b> هر مرحله یک فریم (درس <a href="2-6.html">۲.۶</a>).</li>
+  <li><b>زنجیرهٔ عمیق توابع</b> و ISRها که بالای پشته نشسته‌اند.</li>
+</ol>
+
+<p>می‌شود پیش از اجرا، مصرف پشتهٔ هر تابع را از کامپایلر پرسید. گزینهٔ <code>-fstack-usage</code> یک فایل <code>.su</code> می‌سازد. این دو تابع را ببین:</p>
+
+<div class="code" data-file="stack.c" data-lang="c" data-verify="arm" data-cflags="-fstack-usage" id="code5">
+<pre>
+#include &lt;stdint.h&gt;
+
+extern void send(const uint8_t *data, uint32_t len);
+
+void log_small(void)
+{
+    uint8_t line[16];
+    for (uint32_t i = 0; i &lt; 16; i++) line[i] = (uint8_t)i;
+    send(line, 16);
+}
+
+void log_big(void)
+{
+    uint8_t line[1024];
+    for (uint32_t i = 0; i &lt; 1024; i++) line[i] = (uint8_t)i;
+    send(line, 1024);
+}
+</pre></div>
+<ol class="walk" data-for="code5">
+  <li data-lines="3"><b class="what">تابع بیرونی.</b> <code>send</code> جای دیگر تعریف می‌شود؛ فقط لازم داریم چیزی باشد که آرایه را «مصرف» کند تا کامپایلر آن را حذف نکند.</li>
+  <li data-lines="5-10"><b class="what">آرایهٔ ۱۶ بایتی محلی.</b> روی پشته: کوچک و بی‌خطر.</li>
+  <li data-lines="12-17"><b class="what">آرایهٔ ۱۰۲۴ بایتی محلی.</b> هر بار صدا زدن ۱ کیلوبایت پشته می‌گیرد.
+    <span class="why">در یک MCU با پشتهٔ ۲ کیلوبایتی، دو بار صدا زدن تو در تو (یا یک ISR وسط آن) کافی است تا پشته سرریز شود.</span></li>
+</ol>
+<pre class="term" data-kind="cmd">
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -fstack-usage -c stack.c
+$ cat stack.su
+stack.c:5:6:log_small	32	static
+stack.c:12:6:log_big	1040	static
+</pre>
+<p>ستون دوم بایت‌های پشته است: ۳۲ و ۱۰۴۰ (بیشتر از خود آرایه، چون آدرس برگشت و رجیسترهای ذخیره‌شده هم روی فریم می‌روند). <code>static</code> در ستون سوم یعنی اندازه در زمان کامپایل ثابت است.</p>
+
+<div class="callout tip"><div class="ct">چه کنیم؟</div>
+<ul>
+<li>بافر بزرگ را <code>static</code> کن (می‌رود <code>.bss</code>؛ اندازه‌اش را <code>size</code> نشان می‌دهد و در زمان ساخت می‌فهمی جا می‌شود یا نه) یا سراسری بگذار.</li>
+<li>بازگشت را در MCU جدی محدود کن یا حذف کن (درس <a href="2-6.html">۲.۶</a>).</li>
+<li>در ISR فقط متغیرهای کوچک بگذار (درس ۵.۳).</li>
+<li>اندازهٔ پشته را از روی <code>-fstack-usage</code> و آزمایش واقعی بگذار، با حاشیهٔ ایمنی. در FreeRTOS/ESP-IDF هر task پشتهٔ جدا و اندازهٔ جداگانه دارد (درس <a href="5-6.html">۵.۶</a>).</li>
+</ul></div>
+
+<h2 id="dangling">هرگز آدرس متغیر محلی را برنگردان</h2>
+<p>حالا که فهمیدی محلی‌ها با برگشتن از تابع می‌میرند، خطرناک‌ترین اشتباه اشاره‌گر را بفهم. تابع می‌خواهد یک عدد بسازد و <b>آدرسش</b> را بدهد:</p>
+
+<div class="code" data-file="dangling.c" data-lang="c" data-verify="host-fail" data-cflags="-Werror=return-local-addr" id="code6">
+<pre>
+#include &lt;stdio.h&gt;
+
+int *make_number(void)
+{
+    int n = 42;                 // محلی: با برگشتن تابع می‌میرد
+    return &amp;n;                  // آدرس چیزی که دارد می‌میرد!
+}
+
+int main(void)
+{
+    int *p = make_number();
+    printf("%d\n", *p);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code6">
+  <li data-lines="3-7"><b class="what">تابع اشتباه.</b> <code>n</code> روی پشته و در فریم <code>make_number</code> است. <code>return &amp;n</code> آدرس همان خانه را به بیرون می‌دهد.
+    <span class="why">لحظهٔ برگشت، فریم رها می‌شود. آن خانه‌ها به‌زودی برای تابع بعدی به کار می‌روند و <code>n</code> هیچ‌جا نیست.</span></li>
+  <li data-lines="11-12"><b class="what">استفادهٔ آویزان.</b> <code>p</code> به خانه‌ای اشاره دارد که دیگر مال ما نیست (dangling pointer، اشاره‌گر آویزان؛ درس <a href="3-2.html">۳.۲</a>). خواندن آن نتیجهٔ نامعلوم دارد: ممکن است ۴۲ بدهد (اگر هنوز پاک نشده)، ممکن است آشغال یا crash.</li>
+</ol>
+<pre class="term" data-kind="err" data-from="dangling.c">
+dangling.c: In function 'make_number':
+dangling.c:6:12: error: function returns address of local variable [-Werror=return-local-addr]
+</pre>
+<p>خوشبختانه <code>gcc</code> این خطا را می‌بیند (همین هشدار به‌طور پیش‌فرض با <code>-Wall</code> هست؛ ما با <code>-Werror=</code> به خطا تبدیلش کردیم تا کامپایل متوقف شود). ولی همیشه هشدار نمی‌دهد: اگر آدرس را در یک اشاره‌گر سراسری بریزی یا از چند تابع رد کنی، کامپایلر ممکن است ندبیند. یک قانون ساده: <b>هر چه در تابع ساخته‌ای، با برگشتن می‌میرد؛ پس آدرسش را نده.</b> سه راه درست:</p>
+
+<div class="code" data-file="safe_number.c" data-lang="c" data-verify="host" id="code7">
+<pre>
+#include &lt;stdio.h&gt;
+
+static int *counter_ptr(void)
+{
+    static int n = 42;          // static: تا آخر برنامه زنده است
+    return &amp;n;
+}
+
+static void fill_number(int *out)
+{
+    *out = 42;                  // نتیجه در قفسهٔ صدازننده نوشته می‌شود
+}
+
+int main(void)
+{
+    int *p = counter_ptr();
+    int mine;
+    fill_number(&amp;mine);
+    printf("%d %d\n", *p, mine);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code7">
+  <li data-lines="3-7"><b class="what">راه ۱: static.</b> <code>n</code> در <code>.data</code> می‌نشیند و می‌ماند؛ آدرسش همیشه معتبر است.
+    <span class="why">هزینه‌اش: یک قفسهٔ مشترک بین همهٔ صدا زدن‌ها. اگر دو نفر همزمان از آن استفاده کنند به هم می‌ریزد.</span></li>
+  <li data-lines="9-12"><b class="what">راه ۲: صدازننده قفسه را می‌دهد.</b> <code>out</code> اشاره‌گر به قفسه‌ای در <code>main</code> است. تابع فقط داخلش می‌نویسد. این رایج‌ترین الگو در کد embedded است: تابع خروجی را <b>در جایی که تو می‌دهی</b> می‌ریزد.</li>
+  <li data-lines="14-21"><b class="what">استفاده.</b> هر دو خروجی معتبرند.</li>
+</ol>
+<pre class="term" data-from="safe_number.c">
+$ ./safe_number
+42 42
+</pre>
+<p>راه سوم <code>malloc</code> است که در درس <a href="4-4.html">۴.۴</a> می‌آید و در میکروکنترلر با احتیاط استفاده می‌شود.</p>
+
+<h2 id="const">Flash یا RAM؟ قدرت <span class="en">const</span></h2>
+<p>یک جدول ۳۲ عددی سینوس را در نظر بگیر که برای تولید صدا لازم است. دو راه برای نوشتنش هست و تفاوتشان فقط یک کلمه است:</p>
+
+<div class="code" data-file="tables.c" data-lang="c" data-verify="arm" id="code8">
+<pre>
+#include &lt;stdint.h&gt;
+
+const uint8_t sine_flash[32] = {
+    128, 152, 176, 198, 218, 234, 245, 253,
+    255, 253, 245, 234, 218, 198, 176, 152,
+    128, 103,  79,  57,  37,  21,  10,   2,
+      0,   2,  10,  21,  37,  57,  79, 103
+};
+
+uint8_t sine_ram[32] = {
+    128, 152, 176, 198, 218, 234, 245, 253,
+    255, 253, 245, 234, 218, 198, 176, 152,
+    128, 103,  79,  57,  37,  21,  10,   2,
+      0,   2,  10,  21,  37,  57,  79, 103
+};
+</pre></div>
+<ol class="walk" data-for="code8">
+  <li data-lines="3-8"><b class="what">با <code>const</code>.</b> جدول فقط‌خواندنی است، پس می‌رود <code>.rodata</code> در Flash. RAM هیچ‌چیز نمی‌گیرد.</li>
+  <li data-lines="10-15"><b class="what">بدون <code>const</code>.</b> جدول ممکن است عوض شود؛ پس باید در RAM باشد و برای مقدارهای اولیه‌اش یک نسخه هم در Flash نگه داشته شود (<code>.data</code>). یعنی ۳۲ بایت Flash و ۳۲ بایت RAM. دو برابر!
+    <span class="why">در جدول‌های بزرگ‌تر (فونت صفحه‌نمایش، جدول CRC، نقشهٔ رنگ) این تفاوت تعیین‌کننده است. RAM میکروکنترلر گران‌ترین منبع است.</span></li>
+</ol>
+<pre class="term" data-kind="cmd">
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -c tables.c
+$ arm-none-eabi-size -A tables.o | head -6
+tables.o  :
+section           size   addr
+.text                0      0
+.data               32      0
+.bss                 0      0
+.rodata             32      0
+$ arm-none-eabi-nm tables.o
+00000000 R sine_flash
+00000000 D sine_ram
+</pre>
+<p><code>sine_flash</code> با حرف <code>R</code> در <code>.rodata</code> و <code>sine_ram</code> با <code>D</code> در <code>.data</code>. هر کدام ۳۲ بایت، ولی اولی فقط Flash می‌گیرد و دومی هر دو.</p>
+
+<div class="callout warn"><div class="ct">سه نکتهٔ ریز دربارهٔ <code>const</code> و Flash</div>
+<ul>
+<li>فقط <code>const</code> <b>سراسری</b> (یا <code>static const</code>) به Flash می‌رود. یک <code>const int x = 5;</code> <b>داخل تابع</b> فقط یک متغیر محلی است که نباید عوض شود؛ روی پشته می‌نشیند.</li>
+<li>رشتهٔ literal مثل <code>"hello"</code> در <code>.rodata</code> است (درس <a href="2-8.html">۲.۸</a>). ولی <code>char s[] = "hello"</code> داخل تابع یک کپی روی پشته می‌سازد.</li>
+<li>در پردازنده‌های ۸ بیتی AVR (Arduino Uno) Flash و RAM آدرس‌گذاری جدا دارند و برای خواندن از Flash باید ابزار مخصوص (<code>PROGMEM</code>) به کار ببری. در Cortex-M و ESP32 این‌طور نیست؛ Flash در همان فضای آدرس دیده می‌شود و <code>const</code> کافی است (در ESP32 از راه کش).</li>
+</ul></div>
+
+<h2 id="embedded">در STM32 و ESP32 نقشه چه شکلی است؟</h2>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>STM32F411 (Nucleo-F411RE)</th><th>ESP32 (کلاسیک، ESP-IDF)</th></tr></thead>
+<tbody>
+<tr><td>کد برنامه</td><td>Flash داخلی، ۵۱۲KB از <code>0x08000000</code>، اجرای مستقیم از آنجا</td><td>Flash <b>خارجی</b> (معمولا ۴ مگابایت) و اجرا از طریق کش</td></tr>
+<tr><td>متغیرها</td><td>SRAM ۱۲۸KB از <code>0x20000000</code></td><td>SRAM داخلی ۵۲۰KB، تقسیم‌شده بین کد داغ (IRAM)، داده (DRAM) و کش؛ بخشی هم برای سیستم</td></tr>
+<tr><td>حافظهٔ اضافه</td><td>ندارد (روی این تراشه)</td><td>PSRAM خارجی، فقط روی بعضی ماژول‌ها</td></tr>
+<tr><td>پشته</td><td>یک پشتهٔ اصلی؛ اندازه در linker script</td><td>هر task پشتهٔ جدا؛ اندازه هنگام <code>xTaskCreate</code></td></tr>
+<tr><td>کپی <code>.data</code> و صفر کردن <code>.bss</code></td><td>کد استارت‌آپ خودت (یا CMSIS)</td><td>کد شروع ESP-IDF خودکار انجام می‌دهد</td></tr>
+</tbody></table></div>
+
+<p>در ESP32 یک جزئیات خاص هست که در ESP-IDF زیاد به آن می‌خوری: تابعی که در ISR اجرا می‌شود یا نباید منتظر Flash بماند، باید در <b>RAM</b> باشد. برای همین برچسب <code>IRAM_ATTR</code> را جلوی تابع می‌گذاری تا در IRAM (RAM اجرایی) قرار بگیرد، نه در Flash کش‌شده (درس <a href="5-3.html">۵.۳</a>). جزئیات دقیق انواع حافظه و اندازه‌ها در «Memory Types» مستندات ESP-IDF است؛ آنجا ببین، چون بین نسخه‌های تراشه (ESP32، S2، S3، C3) فرق می‌کند. یک نمونه برای دیدن مقدار heap آزاد (ESP-IDF v5.x):</p>
+
+<div class="code" data-file="heap_info.c" data-lang="c" data-verify="frag" id="code9">
+<pre>
+#include "esp_log.h"
+#include "esp_system.h"
+
+static const char *TAG = "mem";
+
+int g_boot_count = 3;           // .data
+int g_flags;                    // .bss
+
+void app_main(void)
+{
+    int local = 7;              // پشتهٔ task اصلی
+    ESP_LOGI(TAG, "local=%d boot=%d flags=%d", local, g_boot_count, g_flags);
+    ESP_LOGI(TAG, "free heap = %lu bytes", (unsigned long)esp_get_free_heap_size());
+}
+</pre></div>
+<ol class="walk" data-for="code9">
+  <li data-lines="1-2"><b class="what">سرصفحه‌ها.</b> <code>esp_log.h</code> برای لاگ و <code>esp_system.h</code> برای <code>esp_get_free_heap_size</code>.</li>
+  <li data-lines="4"><b class="what">برچسب لاگ.</b> رشتهٔ ثابت، در <code>.rodata</code>.</li>
+  <li data-lines="6-7"><b class="what">سراسری‌ها.</b> یکی در <code>.data</code> و یکی در <code>.bss</code>، دقیقا مثل STM32.</li>
+  <li data-lines="9-12,14"><b class="what">app_main.</b> نقطهٔ شروع برنامه در ESP-IDF (به‌جای <code>main</code> دستی، درس <a href="5-6.html">۵.۶</a>). <code>local</code> روی پشتهٔ همین task است.</li>
+  <li data-lines="13"><b class="what">heap آزاد.</b> تعداد بایت‌های آزاد heap را برمی‌گرداند؛ با <code>(unsigned long)</code> و <code>%lu</code> چاپ می‌کنیم تا روی هر پلتفرم درست کار کند.
+    <span class="why">اندازهٔ دقیق نوع برگشتی در نسخه‌های مختلف فرق می‌کند؛ تبدیل صریح مشکل قالب <code>printf</code> را از بین می‌برد.</span></li>
+</ol>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: چرا «نقشه» تا این حد مهم است؟</div>
+<p>در PC سیستم‌عامل به هر برنامه یک <b>حافظهٔ مجازی</b> می‌دهد: ناحیه‌های جدا، محافظت‌شده، با پشتهٔ بزرگ. اگر برنامه بیرون از حدش بنویسد، سیستم‌عامل قطعش می‌کند. در میکروکنترلر (به‌ویژه Cortex-M4 در STM32F411 که واحد محافظت حافظهٔ MPU را فقط اختیاری دارد و معمولا خاموش است) هیچ‌چیز ناحیه‌ها را محافظت نمی‌کند. برنامه‌نویس خودش «شهردار» است: باید بداند هر متغیر کجاست و هر ناحیه چقدر بزرگ است. همین آگاهی، فرق «کد که روی PC کار می‌کند» با «کد که سال‌ها روی دستگاه بی‌خطا می‌چرخد» است.</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">متغیر <code>uint8_t table[100] = {0};</code> در سطح فایل (بیرون هر تابع) را بدون <code>const</code> نوشته‌ای. معمولا در کدام بخش می‌رود؟</p>
+  <ol>
+    <li data-why="پشته برای محلی‌های داخل تابع است؛ این متغیر بیرون تابع است.">پشته (stack)</li>
+    <li>.bss (RAM، با صفر پر می‌شود)</li>
+    <li data-why=".rodata فقط برای داده‌های const است. این جدول const نیست و باید بتواند عوض شود.">.rodata (Flash)</li>
+    <li data-why=".text فقط دستورهای ماشین (کد توابع) است، نه داده.">.text (Flash)</li>
+  </ol>
+  <div class="fb">سراسری بدون <code>const</code> با مقدار صفر (یا بدون مقدار) در <code>.bss</code> است. مقدار صفر لازم نیست در Flash ذخیره شود؛ کد استارت‌آپ آن را پاک می‌کند.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">تابع زیر را سه بار پشت هم صدا زده‌ایم. مجموع سه مقدار برگشتی چند می‌شود؟<br><code>int f(void) { static int n = 0; n++; return n; }</code></p>
+  <ol>
+    <li data-why="این وقتی است که n هر بار از نو ساخته شود (محلی معمولی)؛ static چنین نیست.">۳ (هر بار ۱)</li>
+    <li data-why="مقدار برگشتی سه بار ۱ نیست؛ n بین صدا زدن‌ها می‌ماند.">۱</li>
+    <li>۶ (یعنی ۱ + ۲ + ۳)</li>
+    <li data-why="خط static int n = 0 فقط یک بار، قبل از main، اجرا می‌شود؛ کامپایل و اجرا مشکلی ندارد.">برنامه کامپایل نمی‌شود</li>
+  </ol>
+  <div class="fb">مقدارها ۱، ۲، ۳ هستند چون <code>n</code> یک بار ساخته می‌شود و با هر صدا زدن یکی بالا می‌رود. مجموعشان ۶ است.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">کدام گزینه <b>باگ</b> دارد؟</p>
+  <ol>
+    <li><code>char *get_name(void) { char name[8] = "ADC"; return name; }</code></li>
+    <li data-why="این تابع رشتهٔ literal را برمی‌گرداند که در .rodata است و تا آخر برنامه زنده است؛ درست است.">‎<code>const char *get_name(void) { return "ADC"; }</code></li>
+    <li data-why="static آرایه را در RAM ثابت نگه می‌دارد؛ آدرسش همیشه معتبر است.">‎<code>char *get_name(void) { static char name[8] = "ADC"; return name; }</code></li>
+    <li data-why="اینجا فقط نتیجه را در قفسهٔ صدازننده می‌نویسیم؛ آدرس محلی برنمی‌گردد.">‎<code>void get_name(char *out) { out[0] = 'A'; out[1] = 0; }</code></li>
+  </ol>
+  <div class="fb">در گزینهٔ اول <code>name</code> محلی است و با برگشتن تابع می‌میرد؛ اشاره‌گر برگشتی آویزان است. سه گزینهٔ دیگر یا در <code>.rodata</code>، یا <code>static</code>، یا در قفسهٔ صدازننده می‌نویسند.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">چرا در STM32 نوشتن <code>char buf[4096];</code> داخل یک تابع معمولی معمولا فکر خوبی نیست؟</p>
+  <ol>
+    <li data-why="محلی‌ها آشغال دارند ولی مشکل اصلی چیز دیگری است: اندازه. آشغال را با مقدار اولیه می‌شود درست کرد.">چون مقدارش آشغال است</li>
+    <li data-why="کامپایل می‌شود؛ خطای نحوی ندارد. مشکل در زمان اجرا است.">چون کامپایل نمی‌شود</li>
+    <li data-why="محلی‌ها در RAM هستند، نه Flash؛ ولی Flash هم مشکل این خط نیست.">چون Flash را پر می‌کند</li>
+    <li>چون ۴ کیلوبایت از پشتهٔ کوچک را می‌گیرد و ممکن است پشته سرریز شود و متغیرهای دیگر را بی‌صدا خراب کند</li>
+  </ol>
+  <div class="fb">پشته در MCU کوچک است و محافظت ندارد. بافر بزرگ را <code>static</code> یا سراسری کن تا در زمان ساخت (با <code>size</code>) بفهمی جا می‌شود.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">چه کسی قبل از <code>main</code> مقدار اولیهٔ <code>int g = 5;</code> را در RAM می‌گذارد؟</p>
+  <ol>
+    <li data-why="خود main هنوز شروع نشده؛ این کار قبل از آن انجام می‌شود.">خود تابع <code>main</code> در اولین خط</li>
+    <li>کد استارت‌آپ (Reset_Handler)، با کپی از Flash به RAM</li>
+    <li data-why="RAM با خاموشی پاک می‌شود؛ نمی‌تواند این مقدار را از قبل نگه دارد.">خود RAM آن را از قبل نگه داشته</li>
+    <li data-why="کامپایلر فقط کد را می‌سازد؛ کپی مقدارها هنگام اجرا و توسط برنامه انجام می‌شود.">کامپایلر هنگام کامپایل مستقیم در RAM می‌نویسد</li>
+  </ol>
+  <div class="fb">کامپایلر مقدار ۵ را در Flash می‌گذارد و کد استارت‌آپ هر بار که میکروکنترلر reset می‌شود آن را به RAM کپی می‌کند.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">خروجی <code>arm-none-eabi-size -A</code> برای فایلی نشان می‌دهد: <code>.data 8</code>، <code>.bss 400</code>، <code>.rodata 64</code>. این فایل در RAM چند بایت متغیر ایستا (سراسری و static) اشغال می‌کند؟</p>
+  <ol>
+    <li data-why="فقط .bss را حساب کرده‌ای؛ .data هم در RAM می‌نشیند.">۴۰۰</li>
+    <li data-why="این عدد .rodata را هم اضافه کرده که در Flash می‌ماند و RAM نمی‌گیرد.">۴۷۲</li>
+    <li>۴۰۸</li>
+    <li data-why="فقط .data را دیده‌ای؛ .bss هم در RAM است.">۸</li>
+  </ol>
+  <div class="fb">RAM ایستا = <code>.data + .bss</code> = ۸ + ۴۰۰ = ۴۰۸. <code>.rodata</code> (۶۴) در Flash است. پشته و heap جدا حساب می‌شوند.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: هر متغیر کجاست؟</div>
+<p>این فایل را ببین و برای هر متغیر بگو در کدام بخش است.</p>
+<div class="code" data-lang="c" id="ex1src"><pre>
+uint32_t g_ticks;
+uint32_t g_boot_count = 3;
+const char g_name[] = "LOGGER";
+static uint16_t s_samples[100];
+const uint16_t g_limits[4] = {10, 20, 30, 40};
+// داخل تابع work():
+//   static uint32_t runs;
+//   uint32_t local_sum = 0;
+</pre></div>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> برای هر یک از این هفت متغیر، بخش را حدس بزن (<code>.data</code>، <code>.bss</code>، <code>.rodata</code> یا پشته).</li>
+  <li><b>حل:</b> فایل کامل را (جواب زیر) با <code>arm-none-eabi-gcc -c</code> بساز و با <code>arm-none-eabi-nm -S</code> حدس‌هایت را چک کن.</li>
+  <li><b>محاسبه:</b> با کمک <code>size</code> بگو این فایل چند بایت RAM ایستا و چند بایت Flash (برای داده) می‌خواهد.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>سه سؤال بپرس: «آیا <code>const</code> سراسری است؟» (rodata)، «بیرون تابع است یا <code>static</code> است؟» (data یا bss؛ مقدار غیرصفر: data، وگرنه bss)، «داخل تابع و معمولی است؟» (پشته).</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-nm -S ex1.o
+00000000 00000004 D g_boot_count
+00000008 00000008 R g_limits
+00000000 00000007 R g_name
+00000000 00000004 B g_ticks
+000000cc 00000004 b runs.0
+00000004 000000c8 b s_samples
+00000000 00000074 T work
+</pre>
+<p><code>local_sum</code> در فهرست نیست چون روی پشته (یا در رجیستر) است.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="ex1.c" data-lang="c" data-verify="arm" id="ex1">
+<pre>
+#include &lt;stdint.h&gt;
+
+uint32_t g_ticks;
+uint32_t g_boot_count = 3;
+const char g_name[] = "LOGGER";
+static uint16_t s_samples[100];
+const uint16_t g_limits[4] = {10, 20, 30, 40};
+
+uint32_t work(void)
+{
+    static uint32_t runs;
+    uint32_t local_sum = 0;
+    runs++;
+    for (uint32_t i = 0; i &lt; 4; i++) {
+        local_sum += g_limits[i];
+    }
+    return local_sum + runs + s_samples[0] + g_ticks + g_boot_count + (uint32_t)g_name[0];
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="3"><b class="what">g_ticks.</b> سراسری بدون مقدار: <code>.bss</code> (۴ بایت).</li>
+  <li data-lines="4"><b class="what">g_boot_count.</b> مقدار اولیهٔ غیرصفر: <code>.data</code> (۴ بایت RAM + ۴ بایت Flash).</li>
+  <li data-lines="5"><b class="what">g_name.</b> <code>const</code> سراسری: <code>.rodata</code>. رشتهٔ «LOGGER» ۶ حرف + <code>'\0'</code> = ۷ بایت.</li>
+  <li data-lines="6"><b class="what">s_samples.</b> ۱۰۰ عنصر ۲ بایتی = ۲۰۰ بایت، بدون مقدار: <code>.bss</code>.</li>
+  <li data-lines="7"><b class="what">g_limits.</b> ۴ عنصر ۲ بایتی = ۸ بایت: <code>.rodata</code>.</li>
+  <li data-lines="12"><b class="what">runs.</b> <code>static</code> محلی بدون مقدار: <code>.bss</code> (۴ بایت).</li>
+  <li data-lines="13"><b class="what">local_sum.</b> محلی معمولی: پشته یا رجیستر. در هیچ بخشی ثبت نمی‌شود.</li>
+</ol>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-size ex1.o
+   text	   data	    bss	    dec	    hex	filename
+    132	      4	    208	    344	    158	ex1.o
+</pre>
+<p>RAM ایستا = <code>.data</code> + <code>.bss</code> = ۴ + ۲۰۸ = ۲۱۲ (۲۰۸ = ۲۰۰ + ۴ + ۴). ستون <code>text</code> (۱۳۲) شامل کد ۱۱۶ بایتی <code>work</code> و ۱۵ بایت <code>.rodata</code> (۸ + ۷) و کمی تراز است؛ داده‌ها در Flash: <code>.rodata</code> (۱۵) + نسخهٔ اولیهٔ <code>.data</code> (۴).</p></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: شمارندهٔ فراموش‌کار (پیدا کردن باگ)</div>
+<p>این تابع قرار است هر بار که صدا زده می‌شود شماره را یکی زیاد کند. ولی همیشه ۱ چاپ می‌کند:</p>
+<div class="code" data-file="count.c" data-lang="c" data-verify="host" id="ex2bug">
+<pre>
+#include &lt;stdio.h&gt;
+
+static void on_tick(void)
+{
+    int ticks = 0;              // باگ: هر بار از صفر شروع می‌شود
+    ticks++;
+    printf("ticks = %d\n", ticks);
+}
+
+int main(void)
+{
+    for (int i = 0; i &lt; 3; i++) {
+        on_tick();
+    }
+    return 0;
+}
+</pre></div>
+<pre class="term" data-from="count.c">
+$ ./count
+ticks = 1
+ticks = 1
+ticks = 1
+</pre>
+<ol class="parts">
+  <li><b>تشخیص:</b> دلیل را با کلمهٔ «طول عمر» توضیح بده.</li>
+  <li><b>اصلاح:</b> با کمترین تغییر درستش کن. (چه کلمه‌ای را کجا اضافه می‌کنی؟)</li>
+  <li><b>فکر کن:</b> این <code>ticks</code> از یک ISR هم بالا برود، چه خطری دارد؟ گزینهٔ سراسری چه؟ (بخش «دو خطر static محلی» را ببین.)</li>
+</ol>
+<details><summary>راهنمایی</summary><p>محلی معمولی هر بار ساخته و خراب می‌شود. برای اینکه بین دو بار صدا زدن زنده بماند، یک کلمه لازم است که در این درس دیدی.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="count_fixed.c">
+$ ./count_fixed
+ticks = 1
+ticks = 2
+ticks = 3
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="count_fixed.c" data-lang="c" data-verify="host" id="ex2">
+<pre>
+#include &lt;stdio.h&gt;
+
+static void on_tick(void)
+{
+    static int ticks = 0;       // static: بین صدا زدن‌ها می‌ماند
+    ticks++;
+    printf("ticks = %d\n", ticks);
+}
+
+int main(void)
+{
+    for (int i = 0; i &lt; 3; i++) {
+        on_tick();
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="5"><b class="what">تنها تغییر: <code>static</code>.</b> حالا <code>ticks</code> یک بار (قبل از <code>main</code>) ساخته می‌شود و تا آخر برنامه می‌ماند. مقدار <code>0</code> یک بار گذاشته می‌شود، نه با هر بار صدا زدن.
+    <span class="why">قسمت پ: اگر ISR و <code>main</code> هر دو <code>on_tick</code> را صدا بزنند، یک قفسه مشترک می‌شود و ممکن است <code>ticks++</code> (خواندن، افزودن، نوشتن) وسط کار قطع شود. این «race» است و در درس ۵.۳ راه‌حلش می‌آید. سراسری هم همین خطر را دارد و علاوه‌بر آن همه‌جا دیده می‌شود.</span></li>
+</ol>
+<pre class="term" data-from="count_fixed.c">
+$ ./count_fixed
+ticks = 1
+ticks = 2
+ticks = 3
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: بودجهٔ حافظهٔ یک بافر (چالش میکروکنترلری)</div>
+<p>تابع <code>send_report</code> ۲۵۶ بایت را می‌سازد و با <code>uart_send</code> می‌فرستد. بافر <code>report</code> را یک بار محلی بنویس و یک بار <code>static</code>. سپس تفاوت را با <code>-fstack-usage</code> و <code>size</code> اندازه بگیر.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> در کدام نسخه پشته بیشتر مصرف می‌شود؟ در کدام نسخه <code>.bss</code> بزرگ‌تر است؟</li>
+  <li><b>اندازه‌گیری:</b> هر دو نسخه را (جواب پایین) با <code>arm-none-eabi-gcc … -fstack-usage -c</code> بساز و عدد <code>.su</code> و ستون‌های <code>size</code> را بنویس.</li>
+  <li><b>تصمیم:</b> فرض کن این تابع داخل یک task با پشتهٔ ۵۱۲ بایتی اجرا می‌شود. کدام نسخه امن است؟ اگر دو task همزمان از نسخهٔ <code>static</code> استفاده کنند چه می‌شود؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>نسخهٔ محلی حدود ۲۵۶ بایت به فریم اضافه می‌کند. نسخهٔ <code>static</code> ۲۵۶ بایت به <code>.bss</code> اضافه می‌کند و از پشته چیزی نمی‌گیرد.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-nocheck>
+$ cat buf_stack.su buf_static.su
+buf_stack.c:5:6:send_report	272	static
+buf_static.c:5:6:send_report	16	static
+</pre>
+<p>و <code>size</code>: نسخهٔ محلی <code>bss = 0</code>، نسخهٔ <code>static</code> <code>bss = 256</code>.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="buf_stack.c" data-lang="c" data-verify="arm" data-cflags="-fstack-usage" id="ex3a">
+<pre>
+#include &lt;stdint.h&gt;
+
+extern void uart_send(const uint8_t *data, uint32_t len);
+
+void send_report(void)
+{
+    uint8_t report[256];
+    for (uint32_t i = 0; i &lt; 256; i++) {
+        report[i] = (uint8_t)(i * 3u);
+    }
+    uart_send(report, 256);
+}
+</pre></div>
+<div class="code" data-file="buf_static.c" data-lang="c" data-verify="arm" data-cflags="-fstack-usage" id="ex3b">
+<pre>
+#include &lt;stdint.h&gt;
+
+extern void uart_send(const uint8_t *data, uint32_t len);
+
+void send_report(void)
+{
+    static uint8_t report[256];
+    for (uint32_t i = 0; i &lt; 256; i++) {
+        report[i] = (uint8_t)(i * 3u);
+    }
+    uart_send(report, 256);
+}
+</pre></div>
+<ol class="walk" data-for="ex3b">
+  <li data-lines="8"><b class="what">تنها فرق: <code>static</code>.</b> بافر از پشته به <code>.bss</code> رفت.</li>
+</ol>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-size buf_stack.o buf_static.o
+   text	   data	    bss	    dec	    hex	filename
+     86	      0	      0	     86	     56	buf_stack.o
+     68	      0	    256	    324	    144	buf_static.o
+</pre>
+<p><b>تحلیل:</b> نسخهٔ محلی ۲۷۲ بایت پشته می‌خواهد؛ در task با پشتهٔ ۵۱۲ بایتی، فقط ۲۴۰ بایت برای کل بقیهٔ زنجیرهٔ توابع (از جمله <code>uart_send</code>) می‌ماند: خطرناک. نسخهٔ <code>static</code> فقط ۱۶ بایت پشته می‌گیرد و ۲۵۶ بایت RAM ایستا؛ این عدد در زمان ساخت معلوم است و اگر RAM پر باشد لینکر خطا می‌دهد، نه اینکه بعد از ماه‌ها بی‌صدا خراب شود. ولی اگر دو task همزمان <code>send_report</code> را اجرا کنند، هر دو روی همان ۲۵۶ بایت می‌نویسند و داده قاطی می‌شود؛ باید یا قفل بگذاری یا برای هر task بافر جدا بدهی (درس ۵.۶).</p></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>معمولا در این درس سه جا گیر می‌کنند. اول: <b>فکر می‌کنند <code>static</code> داخل تابع هر بار مقدار اولیه می‌گیرد</b>؛ نه، فقط یک بار. دوم: <b>یادشان می‌رود Flash و RAM دو انبارند</b>؛ برای همین جدول را <code>const</code> نمی‌کنند و RAM را هدر می‌دهند. سوم و خطرناک‌تر: <b>بافر بزرگ محلی</b> که فقط در آزمایش‌های بلند و گاهی کار می‌کند و اسمش در گزارش باگ «هنگ‌کردن تصادفی» می‌ماند. عادت‌های حرفه‌ای: بعد از هر ساخت، عددهای <code>size</code> را نگاه کن، مصرف پشته را از <code>-fstack-usage</code> بپرس، و هرگز آدرس یک متغیر محلی را برنگردان. اگر این سه عادت را الان بگیری، ماه‌ها زمان اشکال‌زدایی را صرفه‌جویی می‌کنی.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li>Flash: <code>.text</code> (کد)، <code>.rodata</code> (ثابت‌ها)، نسخهٔ اولیهٔ <code>.data</code>. RAM: <code>.data</code>، <code>.bss</code>، heap، پشته.</li>
+  <li>سراسری با مقدار غیرصفر: <code>.data</code>. سراسری بدون مقدار یا صفر: <code>.bss</code> (صفر تضمینی). محلی: پشته (آشغال، مگر مقدار بدهی).</li>
+  <li>کد استارت‌آپ، قبل از <code>main</code>، <code>.data</code> را از Flash کپی و <code>.bss</code> را صفر می‌کند.</li>
+  <li>دیده‌شدن (scope) با طول عمر (lifetime) فرق دارد. <code>static</code> محلی: فقط تابع می‌بیند، ولی تا آخر برنامه زنده است.</li>
+  <li>پشته از بالای RAM به پایین رشد می‌کند؛ در MCU محافظت ندارد و سرریزش بی‌صدا خرابکاری می‌کند. بافر بزرگ محلی نساز.</li>
+  <li>آدرس متغیر محلی را برنگردان؛ با برگشتن تابع می‌میرد.</li>
+  <li><code>const</code> سراسری در Flash می‌ماند و RAM نمی‌گیرد. با <code>size</code>، <code>nm</code> و <code>-fstack-usage</code> اندازه بگیر.</li>
+  <li>درس بعد: <a href="3-6.html">۳.۶ رجیستر و <span class="en">volatile</span></a>، جایی که آدرس‌ها به سخت‌افزار وصل می‌شوند.</li>
+</ul></div>
+
+</article>
+</body>
+</html>

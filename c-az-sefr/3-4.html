@@ -1,0 +1,1133 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>struct، union، enum، typedef و تراز حافظه · C برای میکروکنترلر</title>
+<meta name="description" content="بسته‌بندی داده‌ها با struct، دید چندگانه با union، نام‌گذاری حالت‌ها با enum، typedef، padding و تراز حافظه، و اتصال به رجیسترهای STM32؛ با کد خط‌به‌خط، آزمون و تمرین.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="3-4">
+
+<p class="lede">تا اینجا هر داده یک متغیر جدا بود: <code>id</code>، <code>temp</code>، <code>ok</code>. ولی دنیای واقعی «بسته» است: یک خوانش سنسور همزمان شناسه دارد، دما دارد و وضعیت. یک رجیستر GPIO ده‌ها فیلد پشت سر هم دارد. یک پکت شبکه هدر و بدنه دارد. C برای همین چند ابزار دارد: <code>struct</code> (بسته‌ای از چند مقدار)، <code>union</code> (یک حافظه با چند «عینک»)، <code>enum</code> (اسم برای عددهای حالت) و <code>typedef</code> (اسم کوتاه برای یک نوع). و یک نکته پنهان که هر برنامه‌نویس embedded باید بداند: <b>کامپایلر لابه‌لای فیلدها بایت خالی می‌گذارد</b>.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>ساختار (struct) تعریف کنی، مقدار اولیه بدهی و با <code>.</code> و <code>-&gt;</code> به فیلدها برسی</li>
+    <li>آرایه‌ای از struct بسازی و struct را با اشاره‌گر به تابع بدهی</li>
+    <li>با <code>sizeof</code> و <code>offsetof</code> بفهمی هر فیلد کجا نشسته و چرا بایت خالی (padding) هست</li>
+    <li>فرق union، bit-field و ماسک را بگویی و union را برای دیدن بایت‌ها به‌کار ببری</li>
+    <li>enum برای حالت‌ها بنویسی و از کامپایلر بخواهی حالت فراموش‌شده را به تو نشان دهد</li>
+    <li>بفهمی چرا <code>GPIOA-&gt;ODR</code> کار می‌کند (struct روی آدرس رجیستر)</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="3-2.html">۳.۲</a> و <a href="3-3.html">۳.۳</a> (اشاره‌گر، آدرس، تراز، <code>const</code>)</li>
+    <li>درس <a href="2-7.html">۲.۷</a> (آرایه) و <a href="2-2.html">۲.۲</a> (<code>uint8_t</code> و هم‌خانواده‌ها)</li>
+    <li>درس <a href="3-1.html">۳.۱</a> (ماسک و شیفت) برای بخش bit-field</li>
+    <li>یک کامپایلر روی رایانه؛ کدهای STM32 فقط کامپایل می‌شوند و سخت‌افزار لازم نیست</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایده اصلی: پرونده به‌جای برگه‌های پراکنده</h2>
+<p>فرض کن برای هر دانش‌آموز مدرسه سه برگه جدا داری: یکی فقط شماره دانش‌آموزی، یکی نمره، یکی وضعیت حضور. برای پیدا کردن اطلاعات علی باید سه جا را بگردی و مطمئن باشی برگه‌ها را قاطی نکرده‌ای. بهتر است برای هر نفر <b>یک پرونده</b> داشته باشی که هر سه برگه در آن است. آن‌وقت می‌گویی «پرونده علی» و همه با هم جابه‌جا می‌شوند.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>فرم ثبت‌نام را ببین: چند خانه دارد (نام، سن، شماره). ساختار فرم ثابت است، اما هر نفر آن را با مقدارهای خودش پر می‌کند. در C «قالب فرم» را با <code>struct</code> می‌نویسی و «فرم پرشده» یک متغیر از آن نوع است. هر خانه فرم اسم دارد و اندازه‌اش را فرم تعیین می‌کند. یک تفاوت مهم با فرم کاغذی: کامپایلر ممکن است بین دو خانه <b>جای خالی</b> بگذارد تا خواندن سریع‌تر شود؛ یک بخش کامل همین درس درباره آن است.</p></div>
+
+<h2 id="struct">struct: بسته‌ای از چند مقدار</h2>
+<p><span class="term" data-t="structure">ساختار (<span class="en">struct</span>)</span> نوعی است که خودت می‌سازی و از چند متغیر (به اسم <span class="term" data-t="member">فیلد یا عضو</span>) تشکیل می‌شود. اول قالب را تعریف می‌کنی، بعد از روی قالب متغیر می‌سازی. فیلدهای struct در حافظه <b>به ترتیب نوشتن</b> پشت سر هم می‌نشینند (با یک شرط که در بخش padding می‌بینی).</p>
+
+<div class="code" data-file="struct_basic.c" data-lang="c" data-verify="host" id="code1">
+<pre>
+#include &lt;stdio.h&gt;
+
+struct sensor {
+    int id;
+    int temp_c;
+    int ok;
+};
+
+int main(void)
+{
+    struct sensor s1 = {1, 25, 1};
+    struct sensor s2 = s1;          // کپی کل بسته
+    s2.temp_c = 40;                 // فقط s2 عوض می‌شود
+
+    printf("s1: id=%d temp=%d ok=%d\n", s1.id, s1.temp_c, s1.ok);
+    printf("s2: id=%d temp=%d ok=%d\n", s2.id, s2.temp_c, s2.ok);
+    printf("sizeof(struct sensor) = %zu\n", sizeof(struct sensor));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code1">
+  <li data-lines="3-7"><b class="what">قالب.</b> <code>struct sensor</code> یک نوع جدید است با سه فیلد <code>int</code>. این فقط طرح فرم است؛ تا اینجا هیچ حافظه‌ای مصرف نشده.
+    <span class="why">نقطه‌ویرگول بعد از <code>}</code> اجباری است. فراموشش کنی، خطای کامپایل عجیبی در خط بعد می‌گیری.</span></li>
+  <li data-lines="9-10,19"><b class="what">main.</b> نقطه شروع.</li>
+  <li data-lines="11"><b class="what">ساختن و پر کردن.</b> <code>s1</code> یک متغیر از نوع <code>struct sensor</code> است. مقدارهای داخل آکولاد به ترتیب فیلدها می‌روند: <code>id=1</code>، <code>temp_c=25</code>، <code>ok=1</code>.
+    <span class="why">اگر ترتیب فیلدها را جابه‌جا کنی، مقدارها جابه‌جا می‌روند بدون هیچ هشداری. در بخش بعد راه امن‌تری را می‌بینی.</span></li>
+  <li data-lines="12"><b class="what">کپی کل بسته.</b> <code>s2 = s1</code> همه فیلدها را یکجا کپی می‌کند. بعد از آن دو بسته مستقل‌اند (مثل کپی <code>int</code> در درس ۲.۱).
+    <span class="why">این با آرایه فرق دارد: آرایه را نمی‌شود با <code>=</code> کپی کرد ولی struct را می‌شود، حتی اگر آرایه داخلش باشد.</span></li>
+  <li data-lines="13"><b class="what">دسترسی به فیلد با نقطه.</b> <code>s2.temp_c</code> یعنی «فیلد temp_c از بسته s2». فقط همین فیلد تغییر می‌کند.</li>
+  <li data-lines="15-16"><b class="what">چاپ.</b> نشان می‌دهد <code>s1</code> دست‌نخورده است.</li>
+  <li data-lines="17"><b class="what">اندازه.</b> ۱۲ بایت: سه <code>int</code> چهار بایتی.</li>
+</ol>
+<pre class="term" data-from="struct_basic.c">
+$ gcc -std=c11 -Wall -Wextra -o struct_basic struct_basic.c
+$ ./struct_basic
+s1: id=1 temp=25 ok=1
+s2: id=1 temp=40 ok=1
+sizeof(struct sensor) = 12
+</pre>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 260" role="img" aria-label="دو بسته sensor در حافظه؛ هر کدام سه فیلد int چهاربایتی؛ s2 کپی s1 است و فقط temp_c آن عوض شده">
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">هر struct یک تکه پیوسته از حافظه است؛ کپی = رونوشت کل تکه</text>
+  <text x="60" y="66" class="s-tx mono" font-size="15" font-weight="800">s1</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="110" y="44" width="180" height="46" fill="#ffd60a"/><rect x="290" y="44" width="180" height="46" fill="#7ea3ff"/><rect x="470" y="44" width="180" height="46" fill="#ff86b3"/>
+  </g>
+  <g class="mono" font-size="19" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="200" y="74">id = 1</text><text x="380" y="74">temp_c = 25</text><text x="560" y="74">ok = 1</text>
+  </g>
+  <text x="60" y="176" class="s-tx mono" font-size="15" font-weight="800">s2</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="110" y="154" width="180" height="46" fill="#ffd60a"/><rect x="290" y="154" width="180" height="46" fill="#ff9a4d"/><rect x="470" y="154" width="180" height="46" fill="#ff86b3"/>
+  </g>
+  <g class="mono" font-size="19" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="200" y="184">id = 1</text><text x="380" y="184">temp_c = 40</text><text x="560" y="184">ok = 1</text>
+  </g>
+  <g class="mono s-tx" font-size="12.5" text-anchor="middle" font-weight="700">
+    <text x="200" y="110">+0</text><text x="380" y="110">+4</text><text x="560" y="110">+8</text>
+    <text x="200" y="220">+0</text><text x="380" y="220">+4</text><text x="560" y="220">+8</text>
+  </g>
+  <path d="M380 116V146" stroke="#15120a" stroke-width="3" fill="none" stroke-dasharray="6 5"/>
+  <text x="380" y="136" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">s2 = s1 کپی شد؛ بعد فقط temp_c عوض شد</text>
+  <text x="380" y="248" text-anchor="middle" class="s-tx" font-size="13.5">عددهای +۰ و +۴ و +۸ فاصله هر فیلد از ابتدای بسته (بایت) هستند</text>
+</svg></div>
+<figcaption>سه فیلد <span class="en">int</span> = ۱۲ بایت پیوسته. <span class="en">s1</span> و <span class="en">s2</span> دو تکه جدا در RAM‌اند.</figcaption></figure>
+
+<h2 id="typedef">typedef: اسم کوتاه برای یک نوع</h2>
+<p>نوشتن <code>struct sensor</code> در هر جا خسته‌کننده است. <span class="term" data-t="typedef">typedef</span> اسم دیگری برای یک نوع می‌سازد؛ مثل اینکه به «جمهوری اسلامی ایران» بگویی «ایران». چیزی ساخته نمی‌شود، فقط یک لقب دیگر. الگوی رایج در کد embedded:</p>
+<pre class="term" data-kind="cmd">
+typedef struct {
+    int id;
+    int temp_c;
+} sensor_t;        /* حالا می‌شود نوشت: sensor_t s1; */
+</pre>
+<p>قرارداد: اسم نوع‌ها با <code>_t</code> تمام می‌شود (مثل <code>uint8_t</code> و <code>size_t</code>؛ خود <code>uint8_t</code> هم یک typedef است). روی نوع‌های ساده هم می‌شود لقب داد: <code>typedef uint16_t millivolt_t;</code> خوانایی را بالا می‌برد. فقط بدان که کامپایلر <code>millivolt_t</code> و <code>uint16_t</code> را یکی می‌داند و اگر قاطی‌شان کنی خطایی نمی‌دهد.</p>
+
+<h2 id="init">مقداردهی با نام و آرایه‌ای از struct</h2>
+<p>مقداردهی با ترتیب (مثل <code>{1, 25, 1}</code>) شکننده است: اگر یک فیلد در وسط struct اضافه شود، همه مقدارها به فیلد بعدی سر می‌خورند. راه بهتر که در C99 آمد: <span class="term" data-t="designated">مقداردهی نامزد</span> با نام فیلد: <code>{.id = 3, .temp_x10 = 235}</code>. فیلدهایی که ننویسی <b>صفر</b> می‌شوند (نه آشغال، برخلاف متغیر معمولی؛ یک استثنای مهربان).</p>
+
+<div class="code" data-file="designated.c" data-lang="c" data-verify="host" id="code2">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+typedef struct {
+    uint8_t id;
+    int16_t temp_x10;               // دما ضرب در ۱۰
+    uint8_t flags;
+} reading_t;
+
+int main(void)
+{
+    reading_t r = {.id = 3, .temp_x10 = 235};
+    reading_t table[3] = {
+        {.id = 1, .temp_x10 = 200},
+        {.id = 2, .temp_x10 = 310},
+        {.id = 3, .temp_x10 = 150},
+    };
+    int hottest = 0;
+
+    printf("r: id=%u temp=%d flags=%u\n", (unsigned)r.id, (int)r.temp_x10, (unsigned)r.flags);
+    for (int i = 1; i &lt; 3; i++) {
+        if (table[i].temp_x10 &gt; table[hottest].temp_x10) {
+            hottest = i;
+        }
+    }
+    printf("hottest: id=%u temp=%d\n", (unsigned)table[hottest].id, (int)table[hottest].temp_x10);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code2">
+  <li data-lines="4-8"><b class="what">تعریف نوع با typedef.</b> سه فیلد با اندازه‌های ثابت (درس ۲.۲). دما را <b>ضرب در ۱۰</b> نگه می‌داریم: ۲۳٫۵ درجه می‌شود ۲۳۵. بدون float و بدون هزینه اعشار.
+    <span class="why">این ترفند در میکروکنترلرها رایج است (درس ۴.۷ عمیق‌ترش می‌کند). <code>int16_t</code> یعنی دو بایت علامت‌دار.</span></li>
+  <li data-lines="10-11,26-27"><b class="what">main.</b></li>
+  <li data-lines="12"><b class="what">مقداردهی نامزد.</b> فقط <code>id</code> و <code>temp_x10</code> را داده‌ایم. <code>flags</code> ننوشته ماند، پس صفر می‌شود.
+    <span class="why">استاندارد C می‌گوید فیلدهای جاافتاده در مقداردهی با آکولاد صفر می‌شوند. برای همین <code>{0}</code> راه رایج «همه چیز را صفر کن» است.</span></li>
+  <li data-lines="13-16"><b class="what">آرایه‌ای از struct.</b> سه خوانش پشت هم. هر عنصر با آکولاد خودش پر می‌شود. کامای آخر مجاز است و افزودن عنصر جدید را ساده می‌کند.</li>
+  <li data-lines="17"><b class="what">اندیس بهترین.</b> <code>hottest</code> اندیس داغ‌ترین عنصر است؛ اول عنصر ۰.</li>
+  <li data-lines="19"><b class="what">چاپ.</b> <code>%u</code> برای عدد بی‌علامت و <code>%d</code> برای علامت‌دار؛ چون <code>uint8_t</code> روی چاپ به <code>int</code> ارتقا می‌یابد، با cast صریح می‌نویسیم تا هشدار نگیریم.</li>
+  <li data-lines="20-24"><b class="what">جست‌وجو.</b> <code>table[i].temp_x10</code> یعنی «عنصر i ام آرایه، فیلد temp_x10». اول اندیس، بعد نقطه.</li>
+  <li data-lines="25"><b class="what">چاپ نتیجه.</b> عنصر شماره ۱ (شناسه ۲) با ۳۱٫۰ داغ‌ترین است.</li>
+</ol>
+<pre class="term" data-from="designated.c">
+$ ./designated
+r: id=3 temp=235 flags=0
+hottest: id=2 temp=310
+</pre>
+
+<h2 id="enum">enum: اسم برای عددهای حالت</h2>
+<p>فرض کن یک دستگاه سه حالت دارد. اگر بنویسی <code>state = 2</code>، شش ماه بعد کسی نمی‌داند ۲ یعنی چه. <span class="term" data-t="enumeration">enum</span> (از enumeration، شمارش) به عددها اسم می‌دهد: <code>STATE_IDLE</code> می‌شود ۰، بعدی ۱ و همین‌طور. اسم‌ها ثابت‌های <code>int</code> هستند و کامپایلر می‌تواند کمک کند تا حالتی را فراموش نکنی.</p>
+
+<div class="code" data-file="enum_state.c" data-lang="c" data-verify="host" id="code3">
+<pre>
+#include &lt;stdio.h&gt;
+
+typedef enum {
+    STATE_IDLE,
+    STATE_RUN,
+    STATE_ERROR,
+    STATE_COUNT                     // تعداد حالت‌ها؛ حالت واقعی نیست
+} state_t;
+
+static const char *const state_names[STATE_COUNT] = {
+    [STATE_IDLE]  = "IDLE",
+    [STATE_RUN]   = "RUN",
+    [STATE_ERROR] = "ERROR",
+};
+
+int main(void)
+{
+    for (int s = 0; s &lt; STATE_COUNT; s++) {
+        printf("%d = %s\n", s, state_names[s]);
+    }
+    printf("STATE_COUNT = %d\n", (int)STATE_COUNT);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code3">
+  <li data-lines="3-8"><b class="what">تعریف enum.</b> اسم‌ها از ۰ شروع می‌شوند و یکی‌یکی زیاد می‌شوند: IDLE=0، RUN=1، ERROR=2. آخرین اسم <code>STATE_COUNT</code> یعنی ۳ = تعداد حالت‌های واقعی.
+    <span class="why">ترفند «COUNT در آخر»: اگر بعدا حالت جدیدی قبل از COUNT اضافه کنی، شمارش خودکار درست می‌شود و آرایه‌ها و حلقه‌هایی که به آن تکیه دارند نمی‌شکنند.</span></li>
+  <li data-lines="10-14"><b class="what">جدول اسم‌ها.</b> آرایه ثابتی از متن‌ها که با خود enum ایندکس می‌شود: <code>[STATE_RUN] = "RUN"</code>. اندازه‌اش <code>STATE_COUNT</code> است.
+    <span class="why">این‌طور اسم چاپی هر حالت کنار تعریفش می‌ماند و ترتیب اشتباه نمی‌شود. <code>const</code> جدول را فقط‌خواندنی می‌کند و روی MCU در Flash می‌ماند.</span></li>
+  <li data-lines="18-20"><b class="what">حلقه روی همه حالت‌ها.</b> از ۰ تا قبل از COUNT.</li>
+  <li data-lines="21"><b class="what">چاپ COUNT.</b> یک enum معمولی همان <code>int</code> است، پس cast صریح می‌کنیم.</li>
+</ol>
+<pre class="term" data-from="enum_state.c">
+$ ./enum_state
+0 = IDLE
+1 = RUN
+2 = ERROR
+STATE_COUNT = 3
+</pre>
+
+<p>مزیت بزرگ دیگر: وقتی روی یک enum <code>switch</code> می‌نویسی و یکی از حالت‌ها را جا بیندازی، کامپایلر می‌تواند اعتراض کند (با <code>-Wall</code> هشدار <code>-Wswitch</code> فعال است). این‌جا هشدار را به خطا تبدیل کرده‌ایم:</p>
+<div class="code" data-file="enum_switch.c" data-lang="c" data-verify="host-fail" data-cflags="-Werror=switch" id="code4">
+<pre>
+#include &lt;stdio.h&gt;
+
+typedef enum {
+    STATE_IDLE,
+    STATE_RUN,
+    STATE_ERROR
+} state_t;
+
+int main(void)
+{
+    state_t s = STATE_RUN;
+    switch (s) {
+    case STATE_IDLE:
+        printf("idle\n");
+        break;
+    case STATE_RUN:
+        printf("run\n");
+        break;
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code4">
+  <li data-lines="3-7"><b class="what">سه حالت.</b> IDLE و RUN و ERROR.</li>
+  <li data-lines="12-19"><b class="what">switch ناقص.</b> فقط دو حالت پوشش داده شده و <code>STATE_ERROR</code> نه. اگر روزی حالت ERROR پیش بیاید، هیچ‌چیز اتفاق نمی‌افتد.
+    <span class="why">در ماشین حالت (درس ۴.۶) فراموش کردن یک حالت باگ سخت‌یاب است. اگر <code>default:</code> ننویسی، کامپایلر خودش یادآوری می‌کند؛ با <code>default</code> این هشدار خاموش می‌شود.</span></li>
+</ol>
+<pre class="term" data-kind="err" data-from="enum_switch.c">
+enum_switch.c: In function 'main':
+enum_switch.c:12:5: error: enumeration value 'STATE_ERROR' not handled in switch [-Werror=switch]
+</pre>
+
+<div class="callout warn"><div class="ct">دو نکته درباره enum در C</div>
+<p>(۱) در C نوع enum عملا یک <code>int</code> است و کامپایلر نمی‌گذارد <b>اشتباه بودن</b> مقدار را ببیند: <code>state_t s = 42;</code> بدون خطا کامپایل می‌شود. (۲) اندازه یک enum معمولا ۴ بایت است. برای پکت‌هایی که باید یک بایت باشند، فیلد را <code>uint8_t</code> بگیر و مقدار enum را داخلش بریز.</p></div>
+
+<h2 id="pointer">struct و اشاره‌گر: نقطه یا پیکان؟</h2>
+<p>در درس ۲.۶ دیدی پارامتر تابع کپی است. برای struct هم همین است: اگر struct بزرگ (مثلا ۱۰۰ بایت) را by value بدهی، همه‌اش کپی می‌شود، هم کند است و هم تابع نمی‌تواند نسخه اصلی را تغییر دهد. راه حل همان اشاره‌گر درس ۳.۲ است. برای رسیدن به فیلد از راه اشاره‌گر <b>پیکان</b> <code>-&gt;</code> داریم: <code>p-&gt;x</code> یعنی <code>(*p).x</code> ( «برو به جایی که p می‌گوید، بعد فیلد x»).</p>
+
+<div class="code" data-file="ptr_arrow.c" data-lang="c" data-verify="host" id="code5">
+<pre>
+#include &lt;stdio.h&gt;
+
+typedef struct {
+    int x;
+    int y;
+} point_t;
+
+typedef struct {
+    point_t top_left;
+    int w;
+    int h;
+} rect_t;
+
+static void move_by_value(point_t p)
+{
+    p.x += 10;                      // فقط کپی عوض می‌شود
+}
+
+static void move_by_ptr(point_t *p)
+{
+    p-&gt;x += 10;                     // خود شیء اصلی عوض می‌شود
+}
+
+static int area(const rect_t *r)
+{
+    return r-&gt;w * r-&gt;h;
+}
+
+int main(void)
+{
+    point_t a = {1, 2};
+    rect_t box = {.top_left = {0, 0}, .w = 4, .h = 3};
+
+    move_by_value(a);
+    printf("after by value: x=%d\n", a.x);
+    move_by_ptr(&amp;a);
+    printf("after by pointer: x=%d\n", a.x);
+    printf("area=%d, corner x=%d\n", area(&amp;box), box.top_left.x);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code5">
+  <li data-lines="3-6"><b class="what">نوع نقطه.</b> نوع <code>point_t</code> با دو فیلد.</li>
+  <li data-lines="8-12"><b class="what">struct تودرتو.</b> یک مستطیل، خودش یک <code>point_t</code> را به‌عنوان فیلد دارد. به فیلدها با زنجیره نقطه می‌رسی: <code>box.top_left.x</code>.
+    <span class="why">داخل حافظه هم فیلد تودرتو مستقیما داخل بسته بیرونی می‌نشیند، نه جای دیگر. همه‌چیز یک تکه پیوسته است.</span></li>
+  <li data-lines="14-17"><b class="what">by value.</b> <code>p</code> کپی است، پس <code>p.x += 10</code> فقط کپی را عوض می‌کند و در main اثری ندارد.</li>
+  <li data-lines="19-22"><b class="what">با اشاره‌گر.</b> <code>p-&gt;x</code> به خود شیء اصلی می‌رسد و ۱۰ تا اضافه می‌کند.
+    <span class="why">پیکان چون اشاره‌گر است. اگر به‌جایش نقطه بنویسی (<code>p.x</code>)، کامپایلر خطا می‌دهد؛ نمونه‌اش در تمرین ۲ است.</span></li>
+  <li data-lines="24-27"><b class="what">const برای خواندن.</b> <code>area</code> فقط می‌خواند، پس <code>const rect_t *</code> می‌گیرد (درس ۳.۳). ساختار بزرگ را by value نمی‌دهیم و با const قول می‌دهیم آن را عوض نکنیم.</li>
+  <li data-lines="32"><b class="what">مقداردهی تودرتو.</b> فیلد مستطیل هم با نام مقدار می‌گیرد.</li>
+  <li data-lines="34-35"><b class="what">by value.</b> بعد از صدا زدن، <code>a.x</code> هنوز ۱ است.</li>
+  <li data-lines="36-37"><b class="what">با آدرس.</b> <code>&amp;a</code> آدرس بسته را می‌دهد؛ حالا <code>a.x</code> شد ۱۱.</li>
+  <li data-lines="38"><b class="what">مساحت.</b> ۴×۳ = ۱۲ و گوشه x=0.</li>
+</ol>
+<pre class="term" data-from="ptr_arrow.c">
+$ ./ptr_arrow
+after by value: x=1
+after by pointer: x=11
+area=12, corner x=0
+</pre>
+
+<div class="widget" data-w="mem" data-config='{"title":"کپی در برابر آدرس: کدام a.x را عوض می‌کند؟","code":["point_t a = {1, 2};","move_by_value(a);   // p.x += 10","move_by_ptr(&a);    // p->x += 10"],"intro":"دو قفسه: a.x در main و کپی آن در تابع. یک قفسه هم برای اشاره‌گر.","cells":[{"addr":"0x20000ff8","name":"a.x (main)","val":null,"kind":"var"},{"addr":"0x20000ff0","name":"p.x (کپی در تابع)","val":null,"kind":"var"},{"addr":"0x20000fe8","name":"p (اشاره‌گر)","val":null,"kind":"ptr"}],"steps":[{"line":0,"set":{"0":1},"hot":[0],"say":"a ساخته شد و a.x برابر ۱ است (فیلد y را برای سادگی نشان نمی‌دهیم)."},{"line":1,"set":{"1":1},"hot":[1],"say":"تابع صدا زده شد: یک <b>کپی</b> از کل بسته ساخته شد. p.x هم ۱ است."},{"line":1,"set":{"1":11},"hot":[1],"say":"p.x += 10 فقط کپی را ۱۱ کرد. a.x هنوز ۱ است."},{"line":2,"set":{"2":"0x20000ff8"},"hot":[2,0],"say":"این بار فقط <b>آدرس</b> a می‌رود. p اشاره‌گر به همان a است."},{"line":2,"set":{"0":11},"hot":[0],"say":"p->x += 10 مستقیم به a می‌رسد. حالا a.x برابر ۱۱ است."}]}'></div>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 240" role="img" aria-label="متغیر a از نوع point_t با فیلدهای x و y و اشاره‌گر p که به آن اشاره می‌کند؛ نقطه برای شیء و پیکان برای اشاره‌گر">
+  <defs><marker id="ar6" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">همان شیء، دو راه دسترسی</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="330" y="60" width="160" height="56" fill="#3ddc97"/><rect x="490" y="60" width="160" height="56" fill="#7ea3ff"/>
+    <rect x="70" y="60" width="150" height="56" rx="10" fill="#ff86b3"/>
+  </g>
+  <g class="mono" font-size="20" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="410" y="96">x = 1</text><text x="570" y="96">y = 2</text><text x="145" y="96">p</text>
+  </g>
+  <path d="M220 88H326" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar6)"/>
+  <text x="490" y="52" text-anchor="middle" class="s-tx mono" font-size="15" font-weight="800">point_t a</text>
+  <g class="s-tx" font-size="14.5" text-anchor="middle" font-weight="700">
+    <text x="410" y="150"><tspan class="mono">⁦a.x⁩</tspan></text>
+    <text x="145" y="150"><tspan class="mono">⁦p-&gt;x⁩</tspan></text>
+  </g>
+  <text x="380" y="190" text-anchor="middle" class="s-tx" font-size="14.5">روی خود شیء: <tspan class="mono">⁦.⁩</tspan> (نقطه) | روی اشاره‌گر: <tspan class="mono">⁦-&gt;⁩</tspan> (پیکان)</text>
+  <text x="380" y="214" text-anchor="middle" class="s-tx" font-size="13.5"><tspan class="mono">⁦p-&gt;x⁩</tspan> همان <tspan class="mono">⁦(*p).x⁩</tspan> است؛ پیکان فقط نوشتار کوتاه‌تر است</text>
+</svg></div>
+<figcaption>هر دو راه به یک قفسه می‌رسند؛ فقط یکی مستقیم و دیگری از راه آدرس.</figcaption></figure>
+
+<h2 id="size">اندازه واقعی struct و بایت‌های خالی</h2>
+<p>سه فیلد <code>uint8_t</code>، <code>uint32_t</code> و <code>uint8_t</code> روی هم ۱ + ۴ + ۱ = ۶ بایت‌اند. فکر می‌کنی <code>sizeof</code> چه بشود؟ ۶؟ جواب ۱۲ است! دلیلش همان <span class="term" data-t="alignment">تراز</span> است که در درس ۳.۳ دیدی: <code>uint32_t</code> باید در آدرسی بنشیند که مضرب ۴ است. پس کامپایلر بعد از فیلد اول ۳ بایت خالی می‌گذارد. به این بایت‌های خالی <span class="term" data-t="padding">padding</span> می‌گویند.</p>
+<p>قاعده‌ها (روی ARM و ESP32 و PC معمول است):</p>
+<ol class="steps">
+  <li><b>هر فیلد</b> در آدرسی شروع می‌شود که بر تراز خودش (معمولا اندازه‌اش) بخش‌پذیر باشد.</li>
+  <li><b>ترتیب فیلدها ثابت است.</b> کامپایلر فیلدها را جابه‌جا نمی‌کند؛ فقط لابه‌لایشان بایت خالی می‌گذارد.</li>
+  <li><b>کل struct</b> هم مضربی از بزرگ‌ترین تراز فیلدهایش می‌شود (بایت خالی در انتها)، تا در یک آرایه از struct همه عنصرها هم‌تراز بمانند.</li>
+</ol>
+
+<div class="code" data-file="padding.c" data-lang="c" data-verify="host" id="code6">
+<pre>
+#include &lt;stddef.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+struct wasteful {
+    uint8_t a;
+    uint32_t b;
+    uint8_t c;
+};
+
+struct sorted {
+    uint32_t b;
+    uint8_t a;
+    uint8_t c;
+};
+
+struct __attribute__((packed)) tight {
+    uint8_t a;
+    uint32_t b;
+    uint8_t c;
+};
+
+int main(void)
+{
+    printf("wasteful: size=%zu, offset of b=%zu, offset of c=%zu\n",
+           sizeof(struct wasteful), offsetof(struct wasteful, b), offsetof(struct wasteful, c));
+    printf("sorted:   size=%zu\n", sizeof(struct sorted));
+    printf("tight:    size=%zu, offset of b=%zu\n", sizeof(struct tight), offsetof(struct tight, b));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code6">
+  <li data-lines="5-9"><b class="what">ترتیب بد.</b> یک بایت، بعد عدد چهاربایتی، بعد یک بایت دیگر.
+    <span class="why">فیلد <code>b</code> فقط در آفست ۴ می‌تواند بنشیند (۳ بایت خالی بعد از a). فیلد <code>c</code> در آفست ۸ می‌نشیند و آخر هم ۳ بایت خالی تا ۱۲ می‌رسد.</span></li>
+  <li data-lines="11-15"><b class="what">ترتیب مرتب.</b> همان فیلدها، ولی بزرگ‌ترین اول. حالا <code>a</code> و <code>c</code> کنار هم می‌نشینند و فقط ۲ بایت خالی در انتها می‌ماند: ۸ بایت.
+    <span class="why">قاعده سرانگشتی: فیلدها را از بزرگ به کوچک بنویس. اگر لازم نیست ترتیب معنایی خاصی داشته باشند، ۳۳٪ RAM را نجات می‌دهد (از ۱۲ به ۸).</span></li>
+  <li data-lines="17-21"><b class="what">حالت packed.</b> <code>__attribute__((packed))</code> افزونه gcc/clang است و padding را حذف می‌کند: ۶ بایت. توضیح خطرش پایین‌تر است.</li>
+  <li data-lines="25-26"><b class="what">offsetof.</b> ماکرو استاندارد در <code>stddef.h</code>: فاصله فیلد از ابتدای struct بر حسب بایت. اینجا نشان می‌دهد <code>b</code> در ۴ و <code>c</code> در ۸ است.
+    <span class="why">به‌جای حدس زدن، از خود کامپایلر بپرس. در ساختار پروتکل و رجیستر، همین ماکرو راه اثبات درستی است.</span></li>
+  <li data-lines="27-28"><b class="what">اندازه‌ها.</b> ۱۲ و ۸ و ۶.</li>
+</ol>
+<pre class="term" data-from="padding.c">
+$ ./padding
+wasteful: size=12, offset of b=4, offset of c=8
+sorted:   size=8
+tight:    size=6, offset of b=1
+</pre>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="دو چیدمان یک struct: ترتیب a b c ۱۲ بایت با ۶ بایت padding؛ ترتیب b a c ۸ بایت با ۲ بایت padding">
+  <text x="380" y="22" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">همان سه فیلد، دو ترتیب، دو اندازه</text>
+  <text x="380" y="52" text-anchor="middle" class="s-tx mono" font-size="14" font-weight="800">{ uint8_t a; uint32_t b; uint8_t c; }  ← ۱۲ بایت</text>
+  <defs><pattern id="pd" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="8" height="8" fill="#ddd"/><rect width="4" height="8" fill="#999"/></pattern></defs>
+  <g stroke="#15120a" stroke-width="2.5">
+    <rect x="40" y="66" width="40" height="44" fill="#ffd60a"/>
+    <rect x="80" y="66" width="120" height="44" fill="url(#pd)"/>
+    <rect x="200" y="66" width="160" height="44" fill="#7ea3ff"/>
+    <rect x="360" y="66" width="40" height="44" fill="#ff86b3"/>
+    <rect x="400" y="66" width="120" height="44" fill="url(#pd)"/>
+  </g>
+  <g class="mono" font-size="16" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="60" y="94">a</text><text x="280" y="94">b</text><text x="380" y="94">c</text>
+  </g>
+  <g class="mono s-tx" font-size="12" text-anchor="middle" font-weight="700">
+    <text x="60" y="128">+0</text><text x="200" y="128">+4</text><text x="360" y="128">+8</text><text x="140" y="146">۳ بایت خالی</text><text x="460" y="128">۳ بایت خالی</text>
+  </g>
+  <text x="380" y="190" text-anchor="middle" class="s-tx mono" font-size="14" font-weight="800">{ uint32_t b; uint8_t a; uint8_t c; }  ← ۸ بایت</text>
+  <g stroke="#15120a" stroke-width="2.5">
+    <rect x="40" y="204" width="160" height="44" fill="#7ea3ff"/>
+    <rect x="200" y="204" width="40" height="44" fill="#ffd60a"/>
+    <rect x="240" y="204" width="40" height="44" fill="#ff86b3"/>
+    <rect x="280" y="204" width="80" height="44" fill="url(#pd)"/>
+  </g>
+  <g class="mono" font-size="16" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="120" y="232">b</text><text x="220" y="232">a</text><text x="260" y="232">c</text>
+  </g>
+  <g class="mono s-tx" font-size="12" text-anchor="middle" font-weight="700">
+    <text x="40" y="266">+0</text><text x="200" y="266">+4</text><text x="240" y="266">+5</text><text x="320" y="266">۲ بایت خالی</text>
+  </g>
+  <text x="560" y="228" class="s-tx" font-size="14.5" font-weight="700" text-anchor="middle">۴ بایت کمتر</text>
+  <text x="560" y="248" class="s-tx" font-size="13" text-anchor="middle">در آرایه ۱۰۰تایی: ۴۰۰ بایت RAM</text>
+</svg></div>
+<figcaption>مربع‌های راه‌راه بایت‌های خالی (padding)‌اند. ترتیب فیلدها تنها با جابه‌جا کردن، اندازه را عوض می‌کند.</figcaption></figure>
+
+<p>حالا خودت ترتیب را عوض کن و ببین. تیک «مرتب‌شده از بزرگ به کوچک» را بزن، بعد packed را:</p>
+<div class="widget" data-w="struct" data-title="سه فیلد خوانش: تراز و بایت‌های خالی" data-members='[["uint8_t","a"],["uint32_t","b"],["uint8_t","c"]]'></div>
+<div class="widget" data-w="struct" data-title="بسته سنسور: تگ، دما، زمان، پرچم" data-members='[["char","tag"],["int16_t","temp"],["uint32_t","time"],["uint8_t","flags"]]'></div>
+
+<p>روی میکروکنترلر این عددها را می‌شود قبل از اجرا اثبات کرد. اگر برنامه‌ات به اندازه یا آفست خاصی تکیه دارد (مثلا مدل رجیستر)، آن را با <code>_Static_assert</code> بنویس؛ اگر عدد غلط باشد برنامه اصلا ساخته نمی‌شود. این‌جا برای <b>ARM Cortex-M4</b> کامپایل می‌شود، یعنی ثابت می‌کند روی هدف واقعی هم همین ۱۲ و ۸ است:</p>
+<div class="code" data-file="padding_arm.c" data-lang="c" data-verify="arm" id="code7">
+<pre>
+#include &lt;stddef.h&gt;
+#include &lt;stdint.h&gt;
+
+struct wasteful {
+    uint8_t a;
+    uint32_t b;
+    uint8_t c;
+};
+
+struct sorted {
+    uint32_t b;
+    uint8_t a;
+    uint8_t c;
+};
+
+// اگر عددها درست نباشند، همین‌جا کامپایل می‌شکند
+_Static_assert(sizeof(struct wasteful) == 12, "wasteful must be 12 bytes");
+_Static_assert(offsetof(struct wasteful, b) == 4, "b at offset 4");
+_Static_assert(sizeof(struct sorted) == 8, "sorted must be 8 bytes");
+</pre></div>
+<ol class="walk" data-for="code7">
+  <li data-lines="1-2"><b class="what">هدرها.</b> <code>stddef.h</code> برای <code>offsetof</code> و <code>stdint.h</code> برای اندازه‌های ثابت.</li>
+  <li data-lines="4-14"><b class="what">دو چیدمان.</b> همان دو struct قبلی.</li>
+  <li data-lines="17-19"><b class="what">ادعای زمان کامپایل.</b> <code>_Static_assert(شرط, "پیام")</code> در C11: اگر شرط نادرست باشد کامپایل شکست می‌خورد. سه ادعا: اندازه ۱۲، آفست <code>b</code> برابر ۴، اندازه دیگری ۸.
+    <span class="why">بدون سخت‌افزار و بدون اجرا ثابت می‌شود که روی این پردازنده پیش‌بینی درست بوده است. اگر کسی فیلدی وسط struct اضافه کند، همین‌جا اعتراض می‌کند.</span></li>
+</ol>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: packed چه می‌کند و چرا خطرناک است</div>
+<p><code>packed</code> به کامپایلر می‌گوید «هیچ بایت خالی نگذار». اندازه کمتر می‌شود و ساختار پکت روی سیم دقیقا با آنچه دو طرف قرار گذاشته‌اند یکی می‌شود. اما هزینه دارد: فیلد <code>b</code> حالا در آفست ۱ است، یعنی ناهم‌تراز. کامپایلر برای هر دسترسی باید کد بیشتر بسازد (مثلا بایت‌به‌بایت بخواند). روی Cortex-M0 بدون این کدِ اضافه خطای سخت‌افزاری می‌داد. اگر آدرس فیلد packed را بگیری و به <code>uint32_t *</code> بدهی، کامپایلر دیگر نمی‌داند ناهم‌تراز است و خطا می‌شود؛ gcc در این حالت هشدار <code>-Waddress-of-packed-member</code> می‌دهد. قاعده: <code>packed</code> را فقط برای <b>تعریف پکت خارجی</b> به‌کار ببر و فیلدها را با نام بخوان، نه با اشاره‌گر. برای رجیسترهای سخت‌افزار اصلا لازم نیست (آنها خودشان هم‌ترازند).</p></div>
+
+<h2 id="bits">bit-field یا ماسک؟</h2>
+<p>گاهی یک فیلد فقط چند بیت لازم دارد: یک پرچم ۱ بیتی، یک حالت ۳ بیتی. C اجازه می‌دهد بعد از اسم فیلد <code>: تعداد_بیت</code> بنویسی. به این <span class="term" data-t="bitfield">bit-field</span> می‌گویند. نوشتنش راحت است، اما بسیاری از جزئیاتش را استاندارد C به پیاده‌ساز واگذار کرده: بیت‌ها از ابتدا پر می‌شوند یا از انتها؟ فیلدها در چه اندازه واحد ذخیره می‌شوند؟ آیا از مرز واحد رد می‌شوند؟ پس همان struct ممکن است روی دو کامپایلر مختلف چیدمان متفاوت داشته باشد. دو راه را کنار هم ببین:</p>
+
+<div class="code" data-file="bitfield.c" data-lang="c" data-verify="host" id="code8">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+struct status_bits {
+    unsigned ready : 1;
+    unsigned error : 1;
+    unsigned mode  : 3;
+};
+
+#define ST_READY  (1u &lt;&lt; 0)
+#define ST_ERROR  (1u &lt;&lt; 1)
+#define ST_MODE_SHIFT 2u
+#define ST_MODE_MASK  (0x7u &lt;&lt; ST_MODE_SHIFT)
+
+int main(void)
+{
+    struct status_bits s = {.ready = 1, .mode = 5};
+    uint8_t reg = 0;
+
+    reg |= ST_READY;
+    reg |= (uint8_t)(5u &lt;&lt; ST_MODE_SHIFT);
+
+    printf("sizeof(bit-field struct) = %zu\n", sizeof s);
+    printf("bit-field: ready=%u error=%u mode=%u\n", s.ready, s.error, s.mode);
+    printf("mask:      ready=%u error=%u mode=%u\n",
+           (unsigned)(reg &amp; ST_READY),
+           (unsigned)((reg &amp; ST_ERROR) != 0u),
+           (unsigned)((reg &amp; ST_MODE_MASK) &gt;&gt; ST_MODE_SHIFT));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code8">
+  <li data-lines="4-8"><b class="what">bit-field.</b> <code>ready</code> یک بیت، <code>error</code> یک بیت و <code>mode</code> سه بیت. روی هم ۵ بیت که داخل یک واحد <code>unsigned</code> (۴ بایت) جا می‌شوند.
+    <span class="why">اندازه ۴ است نه ۱؛ چون واحد ذخیره <code>unsigned</code> است. چیدمان بیت‌ها به کامپایلر بستگی دارد (در gcc روی این پردازنده‌ها از بیت صفر شروع می‌شود، ولی تضمین استاندارد نیست).</span></li>
+  <li data-lines="10-13"><b class="what">راه ماسک.</b> هر پرچم یک ثابت با شیفت است؛ فیلد چندبیتی با ماسک و مقدار شیفت. این همان روش درس ۳.۱ است.
+    <span class="why">در این راه هر بیت را خودت تعیین می‌کنی و تضمین می‌دهی روی هر کامپایلر یکسان باشد. مستندات رجیستر هم بیت‌ها را همین‌طور می‌گوید.</span></li>
+  <li data-lines="17"><b class="what">bit-field با نام.</b> مقداردهی نامزد: <code>.ready = 1</code> و <code>.mode = 5</code>.</li>
+  <li data-lines="18-21"><b class="what">راه ماسک.</b> همان مقدارها را به صورت یک بایت می‌سازد: بیت ۰ برای ready، بیت‌های ۲ تا ۴ برای mode.</li>
+  <li data-lines="23-24"><b class="what">چاپ اول.</b> اندازه و مقدارها با نام.</li>
+  <li data-lines="25-28"><b class="what">چاپ دوم.</b> با ماسک: تست هر پرچم با <code>&amp;</code> و بیرون کشیدن فیلد با ماسک و شیفت به راست.</li>
+</ol>
+<pre class="term" data-from="bitfield.c">
+$ ./bitfield
+sizeof(bit-field struct) = 4
+bit-field: ready=1 error=0 mode=5
+mask:      ready=1 error=0 mode=5
+</pre>
+<div class="callout tip"><div class="ct">توصیه برای کد سخت‌افزار</div>
+<p>برای رجیسترها و پکت‌ها <b>ماسک و شیفت</b> را ترجیح بده. bit-field فقط وقتی مناسب است که چیدمان برایت مهم نباشد (مثلا صرفه‌جویی RAM در داخل خود برنامه). کتابخانه‌های ST و ESP-IDF هم برای بیت‌های ثبات‌ها معمولا از ثابت‌های ماسک استفاده می‌کنند، هر چند بعضی ساختارهای سیستمی bit-field دارند.</p></div>
+
+<h2 id="union">union: یک حافظه، چند عینک</h2>
+<p><span class="term" data-t="union">union</span> شبیه struct نوشته می‌شود، ولی فیلدها <b>پشت سر هم نمی‌نشینند</b>؛ همه از یک آدرس شروع می‌شوند و روی هم می‌افتند. اندازه union برابر بزرگ‌ترین فیلد است. مثل یک تکه حافظه که می‌توانی از سه عینک مختلف نگاهش کنی: یک بار به‌عنوان یک عدد ۳۲ بیتی، یک بار دو عدد ۱۶ بیتی، یک بار چهار بایت.</p>
+
+<div class="code" data-file="union_view.c" data-lang="c" data-verify="host" id="code9">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+typedef union {
+    uint32_t word;
+    uint16_t half[2];
+    uint8_t byte[4];
+} view32_t;
+
+int main(void)
+{
+    view32_t v;
+    v.word = 0x12345678u;
+    printf("sizeof = %zu\n", sizeof(view32_t));
+    printf("half[0] = 0x%04X, half[1] = 0x%04X\n", (unsigned)v.half[0], (unsigned)v.half[1]);
+    printf("byte[0] = 0x%02X, byte[3] = 0x%02X\n", (unsigned)v.byte[0], (unsigned)v.byte[3]);
+    v.byte[0] = 0xFF;
+    printf("word now = 0x%08X\n", (unsigned)v.word);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code9">
+  <li data-lines="4-8"><b class="what">تعریف.</b> سه دید روی همان ۴ بایت: <code>word</code> (یک عدد)، <code>half[2]</code> (دو عدد ۱۶ بیتی)، <code>byte[4]</code> (چهار بایت).
+    <span class="why">در C، خواندن فیلدی که آخرین بار روی آن ننوشته‌ای، بایت‌های حافظه را با نوع جدید تفسیر می‌کند و مجاز است (در C++ این‌طور نیست). ولی نتیجه به ترتیب بایت‌ها بستگی دارد.</span></li>
+  <li data-lines="13"><b class="what">نوشتن با یک دید.</b> کل چهار بایت با یک عدد پر می‌شود.</li>
+  <li data-lines="14"><b class="what">اندازه.</b> ۴ بایت و نه ۸: فیلدها روی هم افتاده‌اند.</li>
+  <li data-lines="15"><b class="what">دید ۱۶ بیتی.</b> <code>half[0]</code> نیمه پایین (0x5678) است. چون little-endian است، نیمه کم‌ارزش در آدرس پایین‌تر می‌نشیند.</li>
+  <li data-lines="16"><b class="what">دید بایتی.</b> <code>byte[0]</code> کم‌ارزش‌ترین بایت (0x78) و <code>byte[3]</code> پرارزش‌ترین (0x12) است.</li>
+  <li data-lines="17-18"><b class="what">نوشتن با دید دیگر.</b> فقط بایت اول را عوض می‌کنیم و <code>word</code> خودکار تغییر می‌کند: 0x123456FF.
+    <span class="why">هیچ کپی در کار نیست؛ همه دیدها همان یک حافظه‌اند.</span></li>
+</ol>
+<pre class="term" data-from="union_view.c">
+$ ./union_view
+sizeof = 4
+half[0] = 0x5678, half[1] = 0x1234
+byte[0] = 0x78, byte[3] = 0x12
+word now = 0x123456FF
+</pre>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 270" role="img" aria-label="یک تکه چهاربایتی حافظه با سه دید: word یک عدد ۳۲ بیتی، half دو عدد ۱۶ بیتی، byte چهار بایت">
+  <text x="380" y="22" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">یک حافظه، سه دید (همه از یک آدرس)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="60" y="44" width="160" height="46" fill="#ffd60a"/><rect x="220" y="44" width="160" height="46" fill="#ffd60a"/><rect x="380" y="44" width="160" height="46" fill="#ffd60a"/><rect x="540" y="44" width="160" height="46" fill="#ffd60a"/>
+  </g>
+  <g class="mono" font-size="22" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="140" y="75">78</text><text x="300" y="75">56</text><text x="460" y="75">34</text><text x="620" y="75">12</text>
+  </g>
+  <g class="mono s-tx" font-size="12" text-anchor="middle" font-weight="700">
+    <text x="140" y="108">+0</text><text x="300" y="108">+1</text><text x="460" y="108">+2</text><text x="620" y="108">+3</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="60" y="126" width="640" height="34" fill="#7ea3ff"/>
+    <rect x="60" y="176" width="320" height="34" fill="#3ddc97"/><rect x="380" y="176" width="320" height="34" fill="#3ddc97"/>
+    <rect x="60" y="226" width="160" height="34" fill="#ff86b3"/><rect x="220" y="226" width="160" height="34" fill="#ff86b3"/><rect x="380" y="226" width="160" height="34" fill="#ff86b3"/><rect x="540" y="226" width="160" height="34" fill="#ff86b3"/>
+  </g>
+  <g class="mono" font-size="15" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="380" y="149">word = 0x12345678</text>
+    <text x="220" y="199">half[0] = 0x5678</text><text x="540" y="199">half[1] = 0x1234</text>
+    <text x="140" y="249">byte[0]</text><text x="300" y="249">byte[1]</text><text x="460" y="249">byte[2]</text><text x="620" y="249">byte[3]</text>
+  </g>
+</svg></div>
+<figcaption>سه فیلد <span class="en">union</span> روی هم افتاده‌اند. نوشتن با یکی، خواندن با دیگری را عوض می‌کند. مقدارهای شکل مربوط به ماشین little-endian است.</figcaption></figure>
+
+<h3>union برچسب‌دار</h3>
+<p>کاربرد دیگر union: یک «جعبه» که <b>یا</b> یک <code>int</code> دارد <b>یا</b> یک <code>float</code>، و برای اینکه بدانی الان کدام است، یک فیلد <code>kind</code> (از جنس enum) کنارش می‌گذاری. به این الگو union برچسب‌دار (tagged union) می‌گویند و پایه پیام‌ها و رویدادهای مختلف در سیستم‌های embedded است.</p>
+<div class="code" data-file="tagged.c" data-lang="c" data-verify="host" id="code10">
+<pre>
+#include &lt;stdio.h&gt;
+
+typedef enum {
+    VAL_INT,
+    VAL_FLOAT
+} val_kind_t;
+
+typedef struct {
+    val_kind_t kind;
+    union {
+        int i;
+        float f;
+    } as;
+} value_t;
+
+static void print_value(const value_t *v)
+{
+    if (v-&gt;kind == VAL_INT) {
+        printf("int %d\n", v-&gt;as.i);
+    } else {
+        printf("float %.2f\n", (double)v-&gt;as.f);
+    }
+}
+
+int main(void)
+{
+    value_t a = {.kind = VAL_INT, .as.i = 42};
+    value_t b = {.kind = VAL_FLOAT, .as.f = 3.5f};
+    print_value(&amp;a);
+    print_value(&amp;b);
+    printf("sizeof(value_t) = %zu\n", sizeof(value_t));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code10">
+  <li data-lines="3-6"><b class="what">برچسب.</b> enum می‌گوید داخل جعبه چه چیزی است.</li>
+  <li data-lines="8-14"><b class="what">struct + union داخلش.</b> فیلد <code>as</code> یک union بی‌نام‌نوع است: <code>i</code> یا <code>f</code>، ولی نه هر دو.
+    <span class="why">صرفه‌جویی: یک <code>value_t</code> هشت بایت است (برچسب + یک جای مشترک)، نه دوازده.</span></li>
+  <li data-lines="16-23"><b class="what">استفاده امن.</b> اول برچسب را بخوان، بعد فقط فیلد متناظر را.
+    <span class="why">اگر برچسب را چک نکنی و فیلد اشتباه را بخوانی، بایت‌های یک <code>float</code> را به‌عنوان <code>int</code> می‌خوانی: معنی ندارد و کامپایلر هم نمی‌فهمد.</span></li>
+  <li data-lines="27-28"><b class="what">مقداردهی نامزد تودرتو.</b> <code>.as.i = 42</code> یعنی «در union، فیلد i».</li>
+  <li data-lines="31"><b class="what">اندازه.</b> ۸ بایت: ۴ برای برچسب و ۴ برای بزرگ‌ترین فیلد.</li>
+</ol>
+<pre class="term" data-from="tagged.c">
+$ ./tagged
+int 42
+float 3.50
+sizeof(value_t) = 8
+</pre>
+
+<h2 id="mcu">در STM32 و ESP32 یعنی چه؟</h2>
+<p>سه جا این درس مستقیما در میکروکنترلر دیده می‌شود.</p>
+<h3>۱. ثبات‌های سخت‌افزار = یک struct روی آدرس ثابت</h3>
+<p>یک پورت GPIO در STM32F4 ده‌ها ثبات ۳۲ بیتی پشت سر هم دارد (MODER در آفست 0x00، ODR در 0x14، BSRR در 0x18 و …؛ جدولش در RM0383). اگر فیلدهای struct را به همان ترتیب و همه از نوع <code>uint32_t</code> بنویسی، هیچ padding‌ای نمی‌ماند و آفست هر فیلد دقیقا آدرس ثبات می‌شود. بعد کافی است <b>آدرس پایه پورت را به اشاره‌گر struct تبدیل کنی</b>. همان چیزی که در فایل‌های <code>stm32f4xx.h</code> ST به اسم <code>GPIO_TypeDef</code> و <code>GPIOA</code> می‌بینی.</p>
+
+<div class="code" data-file="gpio_arm.c" data-lang="c" data-verify="arm" id="code11">
+<pre>
+#include &lt;stddef.h&gt;
+#include &lt;stdint.h&gt;
+
+typedef struct {
+    volatile uint32_t MODER;        // +0x00
+    volatile uint32_t OTYPER;       // +0x04
+    volatile uint32_t OSPEEDR;      // +0x08
+    volatile uint32_t PUPDR;        // +0x0C
+    volatile uint32_t IDR;          // +0x10
+    volatile uint32_t ODR;          // +0x14
+    volatile uint32_t BSRR;         // +0x18
+    volatile uint32_t LCKR;         // +0x1C
+    volatile uint32_t AFR[2];       // +0x20
+} gpio_regs_t;
+
+_Static_assert(offsetof(gpio_regs_t, ODR) == 0x14, "ODR offset");
+_Static_assert(offsetof(gpio_regs_t, BSRR) == 0x18, "BSRR offset");
+_Static_assert(sizeof(gpio_regs_t) == 0x28, "gpio size");
+
+#define GPIOA ((gpio_regs_t *)0x40020000u)
+
+void led_toggle(void)
+{
+    GPIOA-&gt;ODR ^= (1u &lt;&lt; 5);        // PA5 = LD2
+}
+</pre></div>
+<ol class="walk" data-for="code11">
+  <li data-lines="4-14"><b class="what">نقشه ثبات‌ها.</b> هر خط یک ثبات ۳۲ بیتی است؛ کامنت‌ها آفست را می‌گویند. <code>AFR[2]</code> دو ثبات پشت هم (AFRL و AFRH) است.
+    <span class="why">کلمه <code>volatile</code> به کامپایلر می‌گوید این حافظه را سخت‌افزار هم عوض می‌کند و هیچ خواندن یا نوشتنی را حذف نکند. دلیل کامل و مثال در درس ۳.۶ است؛ فعلا آن را همراه هر ثبات ببین.</span></li>
+  <li data-lines="16-18"><b class="what">اثبات نقشه.</b> سه ادعا زمان کامپایل: آفست <code>ODR</code> برابر 0x14، آفست <code>BSRR</code> برابر 0x18 و اندازه کل 0x28.
+    <span class="why">این ادعاها همان عددهای مستندات‌اند. اگر اشتباها فیلدی جا بیفتد یا اضافه شود، کامپایل می‌شکند، پیش از اینکه LED روی برد اشتباه کار کند.</span></li>
+  <li data-lines="20"><b class="what">آدرس پایه به اشاره‌گر.</b> پورت GPIOA در STM32F411 از <code>0x40020000</code> شروع می‌شود. cast آن را «اشاره‌گر به struct» می‌کند تا <code>GPIOA-&gt;ODR</code> مثل هر struct دیگری کار کند.</li>
+  <li data-lines="22-25"><b class="what">یک خط کار.</b> <code>GPIOA-&gt;ODR ^= (1u &lt;&lt; 5)</code> بیت ۵ ثبات خروجی را برعکس می‌کند. پایه PA5 روی برد Nucleo به LED کاربر LD2 وصل است.
+    <span class="why">این تابع کامپایل می‌شود ولی نه روی PC اجرا می‌شود (آدرس 0x40020000 در PC وجود ندارد). در درس ۵.۲ همین را روی برد اجرا می‌کنیم.</span></li>
+</ol>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 320" role="img" aria-label="ثبات‌های GPIOA از آدرس 0x40020000 به‌صورت فیلدهای struct با آفست‌های 0x00 تا 0x24 روی هم افتاده‌اند؛ اشاره‌گر GPIOA به ابتدای آن اشاره می‌کند">
+  <defs><marker id="ar7" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="22" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">struct روی آدرس رجیستر: هر فیلد یک ثبات ۳۲ بیتی</text>
+  <g stroke="#15120a" stroke-width="2.5">
+    <rect x="300" y="40" width="300" height="30" fill="#ffd60a"/><rect x="300" y="70" width="300" height="30" fill="#7ea3ff"/><rect x="300" y="100" width="300" height="30" fill="#ff86b3"/><rect x="300" y="130" width="300" height="30" fill="#3ddc97"/>
+    <rect x="300" y="160" width="300" height="30" fill="#ff9a4d"/><rect x="300" y="190" width="300" height="30" fill="#b394ff"/><rect x="300" y="220" width="300" height="30" fill="#3fd3e6"/><rect x="300" y="250" width="300" height="30" fill="#f0e68c"/>
+  </g>
+  <g class="mono" font-size="15" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="450" y="61">MODER</text><text x="450" y="91">OTYPER</text><text x="450" y="121">OSPEEDR</text><text x="450" y="151">PUPDR</text>
+    <text x="450" y="181">IDR</text><text x="450" y="211">ODR</text><text x="450" y="241">BSRR</text><text x="450" y="271">LCKR</text>
+  </g>
+  <g class="mono s-tx" font-size="12.5" text-anchor="start" font-weight="700">
+    <text x="610" y="61">+0x00</text><text x="610" y="91">+0x04</text><text x="610" y="121">+0x08</text><text x="610" y="151">+0x0C</text><text x="610" y="181">+0x10</text><text x="610" y="211">+0x14</text><text x="610" y="241">+0x18</text><text x="610" y="271">+0x1C</text>
+  </g>
+  <g class="mono s-tx" font-size="12.5" text-anchor="end" font-weight="700">
+    <text x="290" y="61">0x40020000</text><text x="290" y="211">0x40020014</text>
+  </g>
+  <rect x="50" y="42" width="110" height="34" rx="9" fill="#ff86b3" stroke="#15120a" stroke-width="3"/>
+  <text x="105" y="65" text-anchor="middle" class="mono" font-size="16" font-weight="800" fill="#15120a">GPIOA</text>
+  <path d="M160 59H296" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar7)"/>
+  <text x="105" y="200" text-anchor="middle" class="s-tx mono" font-size="13.5" font-weight="800">GPIOA-&gt;ODR</text>
+  <path d="M170 196H296" stroke="#15120a" stroke-width="3" fill="none" stroke-dasharray="6 5" marker-end="url(#ar7)"/>
+  <text x="380" y="302" text-anchor="middle" class="s-tx" font-size="13.5">هیچ padding‌ای نیست چون همه فیلدها ۴ بایتی و هم‌تراز‌اند (پس از LCKR، ثبات‌های AFR در 0x20 و 0x24 می‌آیند)</text>
+</svg></div>
+<figcaption>ثبات‌ها روی حافظه نگاشت شده‌اند. آدرس هر ثبات = آدرس پایه + آفست فیلد (اعداد از RM0383).</figcaption></figure>
+
+<p>همین ایده را می‌توانی روی PC هم بازی کنی. به‌جای آدرس سخت‌افزار، یک تکه RAM معمولی می‌گذاریم و همان نوشتن‌ها را می‌کنیم. این نمونه اجرا می‌شود و <code>offsetof</code> عددهای مستندات را نشان می‌دهد:</p>
+<div class="code" data-file="gpio_sim.c" data-lang="c" data-verify="host" id="code12">
+<pre>
+#include &lt;stddef.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+typedef struct {
+    volatile uint32_t MODER;
+    volatile uint32_t OTYPER;
+    volatile uint32_t OSPEEDR;
+    volatile uint32_t PUPDR;
+    volatile uint32_t IDR;
+    volatile uint32_t ODR;
+    volatile uint32_t BSRR;
+} gpio_sim_t;
+
+static gpio_sim_t fake_gpioa;           // قطعه‌ای از RAM به‌جای سخت‌افزار
+#define GPIOA (&amp;fake_gpioa)
+
+int main(void)
+{
+    GPIOA-&gt;ODR |= (1u &lt;&lt; 5);
+    printf("ODR after set   = 0x%08X\n", (unsigned)GPIOA-&gt;ODR);
+    GPIOA-&gt;ODR ^= (1u &lt;&lt; 5);
+    printf("ODR after toggle = 0x%08X\n", (unsigned)GPIOA-&gt;ODR);
+    printf("offset of ODR = 0x%zX, BSRR = 0x%zX\n", offsetof(gpio_sim_t, ODR), offsetof(gpio_sim_t, BSRR));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code12">
+  <li data-lines="5-13"><b class="what">نقشه ناقص.</b> فقط هفت ثبات اول.</li>
+  <li data-lines="15-16"><b class="what">جای‌گزین سخت‌افزار.</b> یک متغیر سراسری از همان نوع؛ ماکرو <code>GPIOA</code> آدرسش را می‌دهد. بقیه کد می‌تواند عین کد واقعی باشد.
+    <span class="why">این کاری است که در تست واحد روی PC می‌کنند: سخت‌افزار را با یک struct معمولی جایگزین می‌کنی (درس ۶.۴).</span></li>
+  <li data-lines="20-21"><b class="what">Set.</b> بیت ۵ را روشن می‌کند: 0x20.</li>
+  <li data-lines="22-23"><b class="what">Toggle.</b> همان بیت را برعکس می‌کند و به ۰ برمی‌گردد.</li>
+  <li data-lines="24"><b class="what">آفست‌ها.</b> 0x14 و 0x18: عینا همان عددهای مستندات.</li>
+</ol>
+<pre class="term" data-from="gpio_sim.c">
+$ ./gpio_sim
+ODR after set   = 0x00000020
+ODR after toggle = 0x00000000
+offset of ODR = 0x14, BSRR = 0x18
+</pre>
+
+<h3>۲. پکت و رکورد سنسور</h3>
+<p>نمونه‌ای مثل <code>reading_t</code> یا هدر پروتکل با struct مشخص می‌شود. قاعده حرفه‌ای: فیلدها را از بزرگ به کوچک بچین یا با <code>_Static_assert</code> اندازه را قفل کن. اگر لازم است چیدمان دقیقا با پروتکل بخواند، فیلد به فیلد سریالایز کن (شیفت و ماسک درس ۳.۳) و به <code>memcpy</code> کل struct تکیه نکن؛ چون padding و ترتیب بایت‌ها روی دو پردازنده فرق دارد.</p>
+
+<h3>۳. ESP32</h3>
+<p>در ESP-IDF تقریبا همه چیز struct است: پیکربندی GPIO یک struct به اسم <code>gpio_config_t</code> است که با مقداردهی نامزد پر می‌کنی (<code>.pin_bit_mask</code>، <code>.mode</code> و …) و به <code>gpio_config()</code> می‌دهی. حالت‌های سیستم و کدهای خطا هم <code>enum</code> هستند (مثل <code>esp_err_t</code> که در ۵.۶ می‌آید). این کد همان الگوی این درس را نشان می‌دهد؛ اسم فیلدها از ESP-IDF v5.x است و در مستندات رسمی آن را ببین:</p>
+<div class="code" data-file="gpio_cfg.c" data-lang="c" data-verify="frag" id="code13">
+<pre>
+#include "driver/gpio.h"
+
+void led_init(void)
+{
+    gpio_config_t cfg = {
+        .pin_bit_mask = 1ULL &lt;&lt; 2,       // GPIO2
+        .mode = GPIO_MODE_OUTPUT,
+    };
+    gpio_config(&amp;cfg);                   // آدرس struct را می‌دهیم
+}
+</pre></div>
+<ol class="walk" data-for="code13">
+  <li data-lines="5-8"><b class="what">مقداردهی نامزد.</b> فقط فیلدهای لازم را می‌نویسی. بقیه صفر می‌شوند (در این نسخه صفر یعنی pull-up و pull-down غیرفعال و وقفه خاموش).
+    <span class="why">برای همین فیلدهای struct پیکربندی معمولا طوری طراحی می‌شوند که «صفر» مقدار پیش‌فرض مناسب باشد.</span></li>
+  <li data-lines="6"><b class="what">ماسک پین.</b> <code>1ULL &lt;&lt; 2</code> بیت شماره ۲ در یک عدد ۶۴ بیتی. ULL یعنی <code>unsigned long long</code> تا شیفت در ۶۴ بیت انجام شود.</li>
+  <li data-lines="9"><b class="what">تحویل با اشاره‌گر.</b> <code>&amp;cfg</code> آدرس struct است؛ تابع فقط می‌خواند (پارامترش <code>const</code> است).</li>
+</ol>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="3">
+  <p class="q">در <code>struct s { uint8_t a; uint32_t b; };</code> روی Cortex-M4، مقدار <code>sizeof(struct s)</code> چقدر است؟</p>
+  <ol>
+    <li data-why="۵ همان جمع ساده اندازه فیلدهاست (۱ + ۴). ولی b باید در آدرسی مضرب ۴ بنشیند، پس ۳ بایت خالی بعد از a می‌آید.">۵</li>
+    <li data-why="۴ اندازه فقط یکی از فیلدهاست. struct هر دو فیلد را دارد.">۴</li>
+    <li>۸</li>
+    <li data-why="۱۶ خیلی بزرگ است؛ تراز ۴ بایت است، نه ۸ یا ۱۶.">۱۶</li>
+  </ol>
+  <div class="fb"><code>a</code> در آفست ۰، سه بایت خالی، <code>b</code> در آفست ۴ تا ۷. اندازه ۸ که مضرب تراز ۴ است.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">اگر <code>p</code> از نوع <code>point_t *</code> باشد، کدام عبارت فیلد x را می‌خواند؟</p>
+  <ol>
+    <li><code>p-&gt;x</code></li>
+    <li data-why="نقطه برای خود شیء است، نه اشاره‌گر. کامپایلر می‌گوید «'p' is a pointer; did you mean to use '-&gt;'?».">p.x</li>
+    <li data-why="بدون پرانتز، نقطه قبل از ستاره حساب می‌شود و *p.x یعنی *(p.x)؛ درستش (*p).x است.">*p.x</li>
+    <li data-why="&amp;p آدرس خود متغیر p است، نه چیزی که p نشان می‌دهد.">&amp;p.x</li>
+  </ol>
+  <div class="fb"><code>p-&gt;x</code> کوتاه‌شده <code>(*p).x</code> است.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">خروجی چیست؟<br><code>union { uint32_t w; uint8_t b[4]; } u; u.w = 0x11223344; printf("%02X", u.b[0]);</code><br>(روی STM32 یا x86)</p>
+  <ol>
+    <li data-why="11 پرارزش‌ترین بایت است و در b[3] می‌نشیند، چون کم‌ارزش‌ترین بایت اول می‌آید.">11</li>
+    <li data-why="22 بایت دوم از بالاست؛ در b[2] است.">22</li>
+    <li data-why="33 در b[1] می‌نشیند.">33</li>
+    <li>44</li>
+  </ol>
+  <div class="fb">little-endian: کم‌ارزش‌ترین بایت (44) در پایین‌ترین آدرس، یعنی <code>b[0]</code>.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">کدام خط باعث خطای کامپایل می‌شود؟<br><code>typedef struct { int x; } t;<br>t a = {1}, b = {1};<br>if (a == b) { }</code></p>
+  <ol>
+    <li data-why="مقداردهی با آکولاد کاملا مجاز است.">t a = {1}, b = {1};</li>
+    <li><code>if (a == b)</code></li>
+    <li data-why="typedef روی struct بی‌نام مجاز و رایج است.">typedef struct { int x; } t;</li>
+    <li data-why="این کد خطا دارد؛ مقایسه دو struct با == در C ممکن نیست.">هیچ‌کدام</li>
+  </ol>
+  <div class="fb">C عملگر <code>==</code> را برای struct ندارد («invalid operands to binary ==»). فیلدها را جدا مقایسه کن (تمرین ۲). <code>memcmp</code> هم به‌خاطر padding نامطمئن است.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">چرا بهتر است در <code>switch</code> روی یک enum، برای هر حالت یک <code>case</code> بنویسیم و <code>default</code> را ننویسیم؟</p>
+  <ol>
+    <li data-why="اندازه برنامه با default تفاوت محسوسی ندارد؛ مسئله ایمنی است.">چون برنامه کوچک‌تر می‌شود</li>
+    <li data-why="switch بدون default هم مجاز است و کامپایل می‌شود.">چون switch بدون default اجرا نمی‌شود</li>
+    <li>چون اگر بعدا حالت جدیدی به enum اضافه شود و case‌اش را فراموش کنیم، کامپایلر هشدار می‌دهد</li>
+    <li data-why="enum همیشه مقدارهای درست ندارد؛ ولی این دلیل ربطی به default ندارد.">چون enum فقط مقدار مجاز می‌گیرد</li>
+  </ol>
+  <div class="fb">با <code>default</code>، هشدار <code>-Wswitch</code> ساکت می‌شود و حالت فراموش‌شده بی‌صدا به default می‌رود.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">چرا <code>GPIOA-&gt;ODR</code> در STM32 می‌تواند مستقیما ثبات سخت‌افزار را بخواند و بنویسد؟</p>
+  <ol>
+    <li data-why="پردازنده کد خاصی برای struct ندارد. همان دستور load/store معمولی است.">چون پردازنده دستور مخصوص struct دارد</li>
+    <li>چون ثبات‌ها روی حافظه نگاشت شده‌اند و struct با فیلدهای ۳۲ بیتی بدون padding، آفست هر فیلد را دقیقا برابر آدرس ثبات می‌کند</li>
+    <li data-why="GPIOA یک ماکرو (اشاره‌گر به آدرس ثابت) است، نه متغیری که در RAM ساخته شده باشد.">چون GPIOA متغیر سراسری در RAM است</li>
+    <li data-why="union لازم نیست؛ struct ساده کافی است.">چون هر ثبات یک union است</li>
+  </ol>
+  <div class="fb">آدرس پایه + آفست فیلد = آدرس ثبات. <code>_Static_assert</code> با <code>offsetof</code> می‌تواند این را ثابت کند.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: داغ‌ترین اتاق</div>
+<p>چهار اتاق با دمای مشخص داریم. تابعی می‌خواهیم که <b>اشاره‌گر به داغ‌ترین اتاق</b> را برگرداند. سپس میانگین دما را چاپ کن.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> با اتاق‌های <code>kitchen 27</code>، <code>bedroom 21</code>، <code>garage 15</code>، <code>lab 31</code>: داغ‌ترین چیست و میانگین (با تقسیم صحیح) چند؟</li>
+  <li><b>حل:</b> نوع <code>room_t</code> با فیلد <code>name</code> (<code>const char *</code>) و <code>temp_c</code> بنویس، آرایه بساز، تابع <code>find_hottest</code> را بنویس و نتیجه را چاپ کن.</li>
+  <li><b>تغییر:</b> چرا خروجی تابع را <code>const room_t *</code> گرفتیم و نه <code>room_t</code> (کپی)؟ (فکر کن به هزینه و به اینکه اتاق واقعی در آرایه است.)</li>
+</ol>
+<details><summary>راهنمایی</summary><p>شروع کن با «بهترین = عنصر اول» و از عنصر دوم به بعد اگر دمای عنصر جاری بیشتر بود، بهترین را عوض کن. تابع آدرس عنصر را برمی‌گرداند: <code>&amp;rooms[i]</code>. آدرسی که برمی‌گرداند مال آرایه صدا زننده است و بعد از برگشت هم زنده می‌ماند (خلاف متغیر محلی).</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="rooms.c">
+$ ./rooms
+hottest: lab (31 C)
+average: 23 C
+</pre>
+<p>میانگین: (۲۷ + ۲۱ + ۱۵ + ۳۱) ÷ ۴ = ۹۴ ÷ ۴ = ۲۳٫۵، ولی تقسیم صحیح <code>۲۳</code> می‌دهد.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="rooms.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stddef.h&gt;
+#include &lt;stdio.h&gt;
+
+typedef struct {
+    const char *name;
+    int temp_c;
+} room_t;
+
+static const room_t *find_hottest(const room_t *rooms, size_t n)
+{
+    const room_t *best = &amp;rooms[0];
+    for (size_t i = 1; i &lt; n; i++) {
+        if (rooms[i].temp_c &gt; best-&gt;temp_c) {
+            best = &amp;rooms[i];
+        }
+    }
+    return best;
+}
+
+int main(void)
+{
+    const room_t rooms[] = {
+        {"kitchen", 27},
+        {"bedroom", 21},
+        {"garage", 15},
+        {"lab", 31},
+    };
+    size_t n = sizeof rooms / sizeof rooms[0];
+    const room_t *hot = find_hottest(rooms, n);
+    int sum = 0;
+
+    for (size_t i = 0; i &lt; n; i++) {
+        sum += rooms[i].temp_c;
+    }
+    printf("hottest: %s (%d C)\n", hot-&gt;name, hot-&gt;temp_c);
+    printf("average: %d C\n", sum / (int)n);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="4-7"><b class="what">نوع اتاق.</b> اسم به‌صورت اشاره‌گر به متن ثابت و دما.</li>
+  <li data-lines="9-18"><b class="what">جست‌وجو.</b> <code>best</code> اشاره‌گر به عنصر اول است؛ هر عنصر داغ‌تر، جایش را می‌گیرد. خروجی <code>const room_t *</code> است چون اتاق به آرایه صدا زننده تعلق دارد و کسی نباید از راه نتیجه آن را عوض کند.
+    <span class="why">کپی نمی‌گیریم چون کپی اسم و دما را دوباره می‌ساخت؛ ولی مهم‌تر اینکه با اشاره‌گر بعدا می‌توان به همان اتاق واقعی دسترسی داشت. آدرس عنصر آرایه صدا زننده امن است.</span></li>
+  <li data-lines="22-27"><b class="what">آرایه از struct.</b> مقداردهی با ترتیب فیلدها، چون فقط دو فیلد دارد.</li>
+  <li data-lines="28"><b class="what">تعداد عنصر.</b> اینجا آرایه واقعی است، پس <code>sizeof</code> درست کار می‌کند (درس ۳.۳).</li>
+  <li data-lines="32-34"><b class="what">مجموع.</b> با <code>rooms[i].temp_c</code>.</li>
+  <li data-lines="35-36"><b class="what">چاپ.</b> پیکان برای نتیجه اشاره‌گر. تقسیم صحیح میانگین را ۲۳ می‌دهد.</li>
+</ol>
+<pre class="term" data-from="rooms.c">
+$ ./rooms
+hottest: lab (31 C)
+average: 23 C
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: سه اشتباه رایج با struct</div>
+<p>هر کدام از این سه قطعه یک اشتباه مبتدی‌ها دارد. مشکل هر یک را بگو و اصلاح کن.</p>
+<div class="code" data-lang="c" id="ex2bad"><pre>
+/* الف */
+typedef struct {
+    int x;
+    int y;
+} point_t
+
+/* ب */
+point_t a = {1, 2};
+point_t *p = &amp;a;
+printf("%d\n", p.x);
+
+/* پ */
+point_t b = {1, 2};
+if (a == b) { printf("same\n"); }
+</pre></div>
+<ol class="parts">
+  <li><b>الف:</b> چرا بعد از این تعریف کامپایلر در خط‌های بعدی خطا می‌دهد؟</li>
+  <li><b>ب:</b> پیام کامپایلر چیست و چه باید نوشت؟</li>
+  <li><b>پ:</b> چطور دو نقطه را درست مقایسه کنیم؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>(الف) بعد از <code>}</code> چه چیزی کم است؟ (ب) روی اشاره‌گر چه نوشتاری داریم؟ (پ) C عملگر <code>==</code> را برای کل struct تعریف نکرده؛ فیلدها را جدا چک کن.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>الف: کامپایلر معمولا خطایی در خط <em>بعدی</em> می‌گیرد، نه در خود تعریف. ب و پ را می‌توانی کامپایل کنی و همین پیام‌ها را ببینی (پایین در جواب).</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="table-wrap"><table><thead><tr><th>بخش</th><th>مشکل</th><th>اصلاح</th></tr></thead><tbody>
+<tr><td>الف</td><td>بعد از <code>}</code> در تعریف struct نقطه‌ویرگول نیست</td><td><code>} point_t;</code></td></tr>
+<tr><td>ب</td><td><code>p</code> اشاره‌گر است، پس نقطه غلط است</td><td><code>p-&gt;x</code> یا <code>(*p).x</code></td></tr>
+<tr><td>پ</td><td><code>==</code> روی struct تعریف نشده</td><td>تابع مقایسه فیلد به فیلد</td></tr>
+</tbody></table></div>
+<p>پیام واقعی کامپایلر برای بخش ب:</p>
+<div class="code" data-file="dot_bad.c" data-lang="c" data-verify="host-fail" id="ex2b">
+<pre>
+#include &lt;stdio.h&gt;
+
+typedef struct {
+    int x;
+    int y;
+} point_t;
+
+int main(void)
+{
+    point_t a = {1, 2};
+    point_t *p = &amp;a;
+    printf("%d\n", p.x);
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-from="dot_bad.c">
+dot_bad.c: In function 'main':
+dot_bad.c:12:21: error: 'p' is a pointer; did you mean to use '-&gt;'?
+</pre>
+<p>پیام برای بخش پ:</p>
+<div class="code" data-file="eq_bad.c" data-lang="c" data-verify="host-fail" id="ex2c">
+<pre>
+#include &lt;stdio.h&gt;
+
+typedef struct {
+    int x;
+    int y;
+} point_t;
+
+int main(void)
+{
+    point_t a = {1, 2};
+    point_t b = {1, 2};
+    if (a == b) {
+        printf("same\n");
+    }
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-from="eq_bad.c">
+eq_bad.c: In function 'main':
+eq_bad.c:12:11: error: invalid operands to binary == (have 'point_t' and 'point_t')
+</pre>
+<p>نسخه درست:</p>
+<div class="code" data-file="points_fixed.c" data-lang="c" data-verify="host" id="ex2">
+<pre>
+#include &lt;stdbool.h&gt;
+#include &lt;stdio.h&gt;
+
+typedef struct {
+    int x;
+    int y;
+} point_t;
+
+static bool point_equal(const point_t *a, const point_t *b)
+{
+    return (a-&gt;x == b-&gt;x) &amp;&amp; (a-&gt;y == b-&gt;y);
+}
+
+int main(void)
+{
+    point_t a = {1, 2};
+    point_t b = {1, 2};
+    point_t *p = &amp;a;
+    printf("x via pointer = %d\n", p-&gt;x);
+    printf("equal = %d\n", point_equal(&amp;a, &amp;b));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="4-7"><b class="what">نوع با نقطه‌ویرگول.</b> پایان تعریف <code>} point_t;</code></li>
+  <li data-lines="9-12"><b class="what">مقایسه فیلد به فیلد.</b> دو اشاره‌گر <code>const</code> می‌گیرد و هر دو فیلد را چک می‌کند. <code>&amp;&amp;</code> یعنی هر دو باید برابر باشند.
+    <span class="why">نمی‌توانیم از <code>memcmp</code> کل struct استفاده کنیم چون بایت‌های padding مقدار مشخصی ندارند و دو struct با فیلد یکسان ممکن است با <code>memcmp</code> برابر درنیایند.</span></li>
+  <li data-lines="18-19"><b class="what">پیکان.</b> <code>p-&gt;x</code> به‌جای <code>p.x</code>.</li>
+  <li data-lines="20"><b class="what">مقایسه.</b> <code>point_equal(&amp;a, &amp;b)</code> عدد ۱ (درست) برمی‌گرداند.</li>
+</ol>
+<pre class="term" data-from="points_fixed.c">
+$ ./points_fixed
+x via pointer = 1
+equal = 1
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: شبیه‌سازی GPIO روی PC (کار با سخت‌افزار)</div>
+<p>می‌خواهیم منطق روشن و خاموش کردن LED را قبل از رسیدن برد، روی PC آزمایش کنیم. به‌جای <code>0x40020000</code> یک struct معمولی می‌گذاریم.</p>
+<ol class="parts">
+  <li><b>پیش‌نمایش:</b> اگر هفت ثبات ۳۲ بیتی از <code>MODER</code> تا <code>BSRR</code> پشت هم باشند، آفست <code>ODR</code> و <code>BSRR</code> چند است؟ (هر ثبات ۴ بایت است و <code>ODR</code> ششمین است.)</li>
+  <li><b>حل:</b> struct را تعریف کن، یک نمونه سراسری بساز، بیت ۵ <code>ODR</code> را روشن کن، چاپ کن، برعکس کن و دوباره چاپ کن.</li>
+  <li><b>ادعا:</b> با <code>_Static_assert</code> ثابت کن آفست <code>ODR</code> برابر 0x14 است.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>ثبات‌ها را از <code>MODER</code> تا <code>BSRR</code> به همین ترتیب بنویس. بیت ۵ یعنی <code>(1u &lt;&lt; 5)</code>. روشن کردن با <code>|=</code> و برعکس کردن با <code>^=</code> (درس ۳.۱). <code>offsetof</code> در <code>stddef.h</code> است.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="gpio_sim.c">
+$ ./gpio_sim
+ODR after set   = 0x00000020
+ODR after toggle = 0x00000000
+offset of ODR = 0x14, BSRR = 0x18
+</pre>
+<p>جواب الف: ODR ششمین است و هر کدام ۴ بایت، پس 5 × 4 = 20 = 0x14. BSRR هفتمین است: 0x18.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>کد همان نمونه بخش «در STM32 و ESP32 یعنی چه؟» است؛ فقط <code>_Static_assert</code> را هم اضافه کن. نسخه کامل:</p>
+<div class="code" data-file="gpio_sim2.c" data-lang="c" data-verify="host" id="ex3">
+<pre>
+#include &lt;stddef.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+typedef struct {
+    volatile uint32_t MODER;
+    volatile uint32_t OTYPER;
+    volatile uint32_t OSPEEDR;
+    volatile uint32_t PUPDR;
+    volatile uint32_t IDR;
+    volatile uint32_t ODR;
+    volatile uint32_t BSRR;
+} gpio_sim_t;
+
+_Static_assert(offsetof(gpio_sim_t, ODR) == 0x14, "ODR must be at 0x14");
+
+static gpio_sim_t fake_gpioa;
+#define GPIOA (&amp;fake_gpioa)
+
+int main(void)
+{
+    GPIOA-&gt;ODR |= (1u &lt;&lt; 5);
+    printf("ODR after set    = 0x%08X\n", (unsigned)GPIOA-&gt;ODR);
+    GPIOA-&gt;ODR ^= (1u &lt;&lt; 5);
+    printf("ODR after toggle = 0x%08X\n", (unsigned)GPIOA-&gt;ODR);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="5-13"><b class="what">نقشه ثبات‌ها.</b> ترتیب فیلدها ترتیب آفست‌هاست؛ همه <code>uint32_t</code>‌اند، پس padding نیست.</li>
+  <li data-lines="15"><b class="what">اثبات آفست.</b> اگر کسی ترتیب را بهم بریزد، کامپایل نمی‌شود.
+    <span class="why">بهتر است این دفاع را بلافاصله کنار تعریف struct ثبات بنویسی، نه جای دیگر.</span></li>
+  <li data-lines="17-18"><b class="what">جای‌گزین ثبات‌ها.</b> متغیر سراسری از همان نوع (سراسری‌ها صفر شروع می‌شوند)، و ماکرو که آدرسش را می‌دهد.</li>
+  <li data-lines="22-25"><b class="what">Set و Toggle.</b> با <code>GPIOA-&gt;ODR</code> مثل کد واقعی.
+    <span class="why">فردا که برد رسید، فقط تعریف <code>GPIOA</code> عوض می‌شود؛ بقیه منطق دست‌نخورده می‌ماند.</span></li>
+</ol>
+<pre class="term" data-from="gpio_sim2.c">
+$ ./gpio_sim2
+ODR after set    = 0x00000020
+ODR after toggle = 0x00000000
+</pre></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>معمولا سه جا گیر می‌کنند. اول <b>padding</b>: «چرا sizeof از جمع فیلدها بیشتر است؟» جواب همیشه تراز است؛ با <code>offsetof</code> ببین. دوم <b>نقطه یا پیکان</b>: یک قاعده یک‌خطی؛ اگر جلوی حرف <code>p</code> ستاره هست یا خودش اشاره‌گر است، پیکان. سوم <b>وسوسه <code>packed</code></b>: وقتی RAM کم است، سریع دست به packed می‌بری؛ اول ترتیب فیلدها را از بزرگ به کوچک بچین. ۹۰٪ وقت‌ها همان کافی است و ناهم‌ترازی هم نمی‌آید. و یک عادت طلایی: هر struct مهم (رجیستر، پکت) را کنارش با <code>_Static_assert</code> قفل کن.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li><code>struct</code>: چند فیلد پشت هم در یک تکه حافظه. <code>a.x</code> روی شیء، <code>p-&gt;x</code> روی اشاره‌گر. <code>=</code> کل struct را کپی می‌کند.</li>
+  <li>مقداردهی نامزد <code>{.x = 1}</code> امن‌تر از ترتیبی است؛ فیلدهای جاافتاده صفر می‌شوند.</li>
+  <li><code>typedef</code> فقط اسم دیگری برای یک نوع می‌سازد؛ قرارداد <code>_t</code>.</li>
+  <li><code>enum</code> به عددهای حالت اسم می‌دهد؛ ترفند <code>COUNT</code> در آخر. در switch بدون <code>default</code> کامپایلر حالت فراموش‌شده را نشان می‌دهد.</li>
+  <li>padding از تراز می‌آید: هر فیلد در مضرب تراز خودش می‌نشیند و اندازه کل مضرب بزرگ‌ترین تراز است. فیلدها را از بزرگ به کوچک بنویس؛ با <code>sizeof</code>، <code>offsetof</code> و <code>_Static_assert</code> ثابت کن.</li>
+  <li><code>packed</code> padding را برمی‌دارد ولی ناهم‌ترازی می‌آورد؛ فقط برای پکت خارجی. bit-field به پیاده‌ساز وابسته است؛ برای رجیستر ماسک بهتر است.</li>
+  <li><code>union</code>: یک حافظه با چند دید، اندازه برابر بزرگ‌ترین فیلد. با برچسب <code>enum</code> می‌شود یک «جعبه چندنوعی» ساخت.</li>
+  <li>رجیستر سخت‌افزار = struct از <code>uint32_t</code> روی آدرس پایه: <code>GPIOA-&gt;ODR</code>.</li>
+</ul>
+<p>درس بعد: <a href="3-5.html">۳.۵ نقشه حافظه و طول عمر متغیر</a>؛ ببین متغیرهایت واقعا کجا زندگی می‌کنند.</p></div>
+
+</article>
+</body>
+</html>

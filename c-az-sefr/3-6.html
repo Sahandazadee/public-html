@@ -1,0 +1,1074 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>رجیستر و volatile · C برای میکروکنترلر</title>
+<meta name="description" content="چطور با یک اشاره‌گر به آدرس ثابت، LED و پایه‌های میکروکنترلر را کنترل کنیم؟ رجیستر memory-mapped، چرا volatile حیاتی است (با اسمبلی واقعی)، خطر خواندن-تغییر-نوشتن و چشمک LD2 در STM32.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="3-6">
+
+<p class="lede">تا اینجا هر چیزی که در C نوشتیم فقط جابه‌جا کردن اعداد در RAM بود. ولی میکروکنترلر برای این ساخته شده که <b>دنیای واقعی را عوض کند</b>: LED را روشن کند، موتور را بچرخاند، دکمه را بخواند. جادو در یک ایده است: بعضی «خانه‌های حافظه» اصلا حافظه نیستند؛ دکمه‌ها و نمایشگرهای سخت‌افزارند. در این درس یاد می‌گیری چطور با یک اشاره‌گر به آن خانه‌ها دست بزنی، و چرا بدون یک کلمهٔ کوچک به اسم <code>volatile</code> کامپایلر بی‌سروصدا برنامه‌ات را خراب می‌کند.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>توضیح بدهی رجیستر memory-mapped چیست و چرا با اشاره‌گر به آن دست می‌زنیم</li>
+    <li>یک رجیستر را با <code>(*(volatile uint32_t *)0x...)</code> بخوانی و بنویسی</li>
+    <li>با اسمبلی واقعی نشان بدهی که بدون <code>volatile</code> چه اتفاقی می‌افتد</li>
+    <li>فرق <code>volatile</code> و اتمی‌بودن را بدانی و <code>const volatile</code> را درست به کار ببری</li>
+    <li>خطر «خواندن-تغییر-نوشتن» را بشناسی و بدانی چرا BSRR وجود دارد</li>
+    <li>LED روی برد Nucleo-F411RE (LD2 روی PA5) را با رجیستر خام چشمک بزنی</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="3-1.html">۳.۱</a> (عملگر بیتی و ماسک: <code>|=</code>، <code>&amp;= ~</code>، <code>1u &lt;&lt; n</code>)</li>
+    <li>درس‌های <a href="3-2.html">۳.۲</a> و <a href="3-3.html">۳.۳</a> (اشاره‌گر) و <a href="3-4.html">۳.۴</a> (<code>struct</code>)</li>
+    <li>درس <a href="3-5.html">۳.۵</a> (نقشهٔ حافظه و RAM/Flash)</li>
+    <li>کامپایلر <code>gcc</code> و (برای بخش‌های STM32) <code>arm-none-eabi-gcc</code> از درس <a href="1-3.html">۱.۳</a></li>
+    <li>برد Nucleo-F411RE اختیاری است؛ همهٔ کدها بدون برد هم کامپایل می‌شوند</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: پنل دکمه‌های آسانسور</h2>
+<p>فرق یک قفسهٔ عادی (RAM) با یک <b>پنل کنترل</b> را ببین.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>قفسهٔ کتاب: هر چیزی که بگذاری همان‌جا می‌ماند. فردا هم همان است. حالا <b>پنل آسانسور</b> را ببین. وقتی «طبقهٔ ۵» را می‌زنی، چیزی «ذخیره» نمی‌شود؛ یک اتفاق می‌افتد (آسانسور راه می‌افتد). و نمایشگر بالای در، عددی نشان می‌دهد که خودت ننوشته‌ای؛ آسانسور عوضش می‌کند. یعنی:</p>
+<ul>
+<li><b>نوشتن</b> روی دکمه = دادن فرمان، نه ذخیره‌کردن.</li>
+<li><b>خواندن</b> نمایشگر = پرسیدن وضعیت زندهٔ دنیا، که هر لحظه ممکن است عوض شود.</li>
+</ul></div>
+
+<p>در میکروکنترلر، این پنل‌ها را <span class="term" data-t="register">رجیستر</span> (register) می‌گویند. هر رجیستر یک خانهٔ ۳۲ بیتی است با یک آدرس. بعضی بیت‌هایش «دکمه» هستند (نوشتنشان LED را روشن می‌کند) و بعضی «نمایشگر» (خواندنشان می‌گوید دکمهٔ آبی فشرده شده یا نه).</p>
+
+<h2 id="mmio">رجیستر در نقشهٔ حافظه</h2>
+<p>در درس <a href="3-5.html">۳.۵</a> دیدی Flash و RAM هر کدام بازهٔ آدرس خودشان را دارند. ترفند معماری Cortex-M این است که <b>رجیسترهای سخت‌افزار هم در همان فضای آدرس هستند</b>. به این روش می‌گویند <span class="term" data-t="mmio">memory-mapped I/O</span> (ورودی/خروجی نگاشته‌شده در حافظه). نتیجه‌اش: CPU با همان دستورهای خواندن و نوشتن حافظه، سخت‌افزار را هم کنترل می‌کند.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 390" role="img" aria-label="نقشهٔ آدرس STM32F411: Flash، SRAM، رجیسترهای سخت‌افزار و هستهٔ Cortex-M؛ و بزرگ‌نمایی GPIOA با رجیسترهای MODER تا BSRR">
+  <defs><marker id="m6a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="180" y="26" text-anchor="middle" class="s-tx" font-size="15" font-weight="800">فضای آدرس (نه به مقیاس)</text>
+  <text x="590" y="26" text-anchor="middle" class="s-tx" font-size="15" font-weight="800">داخل GPIOA (پورت A)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="130" y="46" width="200" height="54" fill="#ffd60a"/>
+    <rect x="130" y="100" width="200" height="54" fill="#3ddc97"/>
+    <rect x="130" y="154" width="200" height="74" fill="#ff86b3"/>
+    <rect x="130" y="228" width="200" height="54" fill="#7ea3ff"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle">
+    <text x="230" y="68" font-size="14" font-weight="800">حافظهٔ Flash</text>
+    <text x="230" y="120" font-size="14" font-weight="800">حافظهٔ RAM</text>
+    <text x="230" y="184" font-size="14" font-weight="800">رجیسترهای سخت‌افزار</text><text x="230" y="204" font-size="12.5">GPIO، RCC، تایمرها، UART…</text>
+    <text x="230" y="250" font-size="13" font-weight="800">هستهٔ Cortex-M</text><text x="230" y="268" font-size="12.5">SysTick، NVIC…</text>
+  </g>
+  <g class="mono" fill="#15120a" font-size="12" font-weight="700" text-anchor="middle">
+    <text x="230" y="87">0x08000000</text><text x="230" y="140">0x20000000</text><text x="230" y="220">0x40000000</text>
+  </g>
+  <g class="mono s-tx" font-size="12" text-anchor="end"><text x="122" y="64">0x08000000</text><text x="122" y="118">0x20000000</text><text x="122" y="172">0x40000000</text><text x="122" y="246">0xE0000000</text></g>
+  <path d="M332 191C372 191 386 100 436 100" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#m6a)"/>
+  <g stroke="#15120a" stroke-width="2.5">
+    <rect x="440" y="46" width="300" height="34" fill="#fff"/>
+    <rect x="440" y="80" width="300" height="34" fill="#fff"/>
+    <rect x="440" y="114" width="300" height="34" fill="#fff"/>
+    <rect x="440" y="148" width="300" height="34" fill="#fff"/>
+    <rect x="440" y="182" width="300" height="34" fill="#7ea3ff"/>
+    <rect x="440" y="216" width="300" height="34" fill="#ffd60a"/>
+    <rect x="440" y="250" width="300" height="34" fill="#ff9a4d"/>
+  </g>
+  <g class="mono" fill="#15120a" font-size="14" font-weight="800">
+    <text x="456" y="69">MODER</text><text x="456" y="103">OTYPER</text><text x="456" y="137">OSPEEDR</text><text x="456" y="171">PUPDR</text><text x="456" y="205">IDR</text><text x="456" y="239">ODR</text><text x="456" y="273">BSRR</text>
+  </g>
+  <g class="mono" fill="#15120a" font-size="13" text-anchor="end">
+    <text x="724" y="69">0x40020000</text><text x="724" y="103">0x40020004</text><text x="724" y="137">0x40020008</text><text x="724" y="171">0x4002000C</text><text x="724" y="205">0x40020010</text><text x="724" y="239">0x40020014</text><text x="724" y="273">0x40020018</text>
+  </g>
+  <g class="s-tx" font-size="12.5" text-anchor="middle">
+    <text x="590" y="304">هر رجیستر ۳۲ بیت = ۴ بایت است؛ پس آدرس‌ها ۴تا ۴تا زیاد می‌شوند</text>
+    <text x="590" y="324">GPIOB = ‎+0x400 و GPIOC = ‎+0x800 نسبت به GPIOA</text>
+  </g>
+  <text x="380" y="366" text-anchor="middle" class="s-tx" font-size="13.5">Flash و RAM و رجیستر: همه یک فضای آدرس‌اند و CPU با یک روش هر سه را می‌خواند</text>
+</svg></div>
+<figcaption>مثال: خانهٔ <code>0x40020014</code> رجیستر <code>ODR</code> پورت A است. اگر در آن بنویسی، ولتاژ پایه‌های PA0 تا PA15 عوض می‌شود. (آدرس‌ها از مستندات <span class="en">RM0383</span> برای STM32F411.)</figcaption></figure>
+
+<p>هفت رجیستر اول GPIOA این کارها را می‌کنند (فعلا فقط سه‌تا را لازم داریم؛ بقیه در درس <a href="5-2.html">۵.۲</a>):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>رجیستر</th><th>آفست</th><th>کارش</th></tr></thead>
+<tbody>
+<tr><td><code>MODER</code></td><td><code>0x00</code></td><td>حالت هر پایه: ۲ بیت برای هر پایه (<code>00</code> ورودی، <code>01</code> خروجی، <code>10</code> عملکرد جایگزین، <code>11</code> آنالوگ)</td></tr>
+<tr><td><code>OTYPER</code>، <code>OSPEEDR</code>، <code>PUPDR</code></td><td><code>0x04</code>، <code>0x08</code>، <code>0x0C</code></td><td>نوع خروجی، سرعت، مقاومت بالاکش/پایین‌کش</td></tr>
+<tr><td><code>IDR</code></td><td><code>0x10</code></td><td><b>نمایشگر:</b> ولتاژ فعلی پایه‌ها را نشان می‌دهد (فقط خواندنی)</td></tr>
+<tr><td><code>ODR</code></td><td><code>0x14</code></td><td><b>دکمهٔ خروجی:</b> هر بیت یک پایه؛ ۱ = ولتاژ بالا</td></tr>
+<tr><td><code>BSRR</code></td><td><code>0x18</code></td><td><b>دکمهٔ هوشمند:</b> نوشتن ۱ در بیت‌های ۰ تا ۱۵ پایه را روشن، و در بیت‌های ۱۶ تا ۳۱ خاموش می‌کند (فقط نوشتنی)</td></tr>
+</tbody></table></div>
+
+<div class="callout info"><div class="ct">چرا اینقدر «واقعی»؟</div>
+<p>این عددها را از حافظه ندارم و از خودم درنیاورده‌ام؛ در مستند رسمی <b>RM0383</b> (Reference Manual تراشهٔ STM32F411، درس <a href="1-3.html">۱.۳</a>) در بخش GPIO و نقشهٔ حافظه هستند. هر بار که با تراشهٔ تازه‌ای کار می‌کنی، اولین کارت باز کردن همین مستند و پیدا کردن «آدرس پایه» و «آفست رجیستر» است. اشتباه در یک رقم = رجیستر دیگر.</p></div>
+
+<h2 id="pointer">رجیستر با اشاره‌گر: یک خط با سه تکه</h2>
+<p>در درس <a href="3-2.html">۳.۲</a> یاد گرفتی اشاره‌گر یعنی «آدرس یک قفسه»، و با <code>*</code> به خودِ قفسه می‌رسی. رجیستر هم یک قفسه است که آدرسش را از پیش می‌دانیم. پس کافی است آدرس را به اشاره‌گر تبدیل کنیم و <code>*</code> بزنیم:</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 250" role="img" aria-label="ماکروی رجیستر در سه مرحله: عدد آدرس، تبدیل به اشاره‌گر volatile، و ستاره برای رسیدن به خود خانه">
+  <defs><marker id="m6b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="28" text-anchor="middle" class="s-tx mono" font-size="19" font-weight="800">(*(volatile uint32_t *)0x40020014u)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="30" y="66" width="210" height="84" rx="12" fill="#ff86b3"/>
+    <rect x="284" y="66" width="250" height="84" rx="12" fill="#ffd60a"/>
+    <rect x="578" y="66" width="152" height="84" rx="12" fill="#3ddc97"/>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none"><path d="M243 108H279" marker-end="url(#m6b)"/><path d="M537 108H573" marker-end="url(#m6b)"/></g>
+  <g fill="#15120a" text-anchor="middle">
+    <text x="135" y="86" font-size="14" font-weight="800">۱) یک عدد</text>
+    <text class="mono" x="135" y="112" font-size="16" font-weight="800">0x40020014u</text>
+    <text x="135" y="136" font-size="12.5">آدرس ODR در مستندات</text>
+    <text x="409" y="86" font-size="14" font-weight="800">۲) تبدیل به اشاره‌گر</text>
+    <text class="mono" x="409" y="112" font-size="15" font-weight="800">(volatile uint32_t *)</text>
+    <text x="409" y="136" font-size="12.5">«این عدد آدرس یک عدد ۳۲ بیتی است»</text>
+    <text x="654" y="86" font-size="14" font-weight="800">۳) ستاره</text>
+    <text class="mono" x="654" y="112" font-size="16" font-weight="800">*( … )</text>
+    <text x="654" y="136" font-size="12.5">برو به خود آن خانه</text>
+  </g>
+  <text x="380" y="192" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="700">نتیجه: چیزی که درست مثل یک متغیر عادی می‌شود نوشت و خواند</text>
+  <text x="380" y="216" text-anchor="middle" class="s-tx" font-size="13.5">ولی هر خواندن یا نوشتنش واقعا به پین و سخت‌افزار می‌رسد</text>
+  <text x="380" y="238" class="mono s-tx" text-anchor="middle" font-size="14">GPIOA_ODR = 0x20;    x = GPIOA_ODR;</text>
+</svg></div>
+<figcaption>سه تکه از داخل به بیرون خوانده می‌شوند: عدد، تبدیل، ستاره. پیشوند <code>u</code> آخر عدد یعنی «بی‌علامت» (درس <a href="2-2.html">۲.۲</a>).</figcaption></figure>
+
+<p>معمولا این عبارت را یک بار با <code>#define</code> نام می‌دهیم تا هر جا فقط <code>GPIOA_ODR</code> بنویسیم (ماکرو را در درس <a href="4-1.html">۴.۱</a> کامل یاد می‌گیری؛ فعلا بخوان: «هر جا این اسم را دیدی، به‌جایش آن عبارت را بگذار»). کلمهٔ <code>volatile</code> را هنوز توضیح نداده‌ایم؛ در بخش بعد می‌آید. اما پیش از آن، اجازه بده روی PC تمرین کنیم؛ چون روی PC نمی‌توانی به آدرس واقعی رجیستر دست بزنی (سیستم‌عامل جلویت را می‌گیرد)، یک «رجیستر ساختگی» می‌سازیم: یک آرایه که نقش سخت‌افزار را بازی کند.</p>
+
+<div class="code" data-file="mmio_pc.c" data-lang="c" data-verify="host" id="code1">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+static uint32_t fake_gpio[8];           // هشت کلمهٔ ۳۲ بیتی به جای رجیسترهای واقعی
+#define FAKE_BASE ((uintptr_t)fake_gpio)
+#define FAKE_ODR  (*(volatile uint32_t *)(FAKE_BASE + 0x14u))
+
+int main(void)
+{
+    FAKE_ODR = 0;
+    FAKE_ODR |= 1u &lt;&lt; 5;                // بیت ۵ را روشن کن
+    FAKE_ODR |= 1u &lt;&lt; 0;
+
+    volatile uint32_t *odr = (volatile uint32_t *)(FAKE_BASE + 0x14u);
+    printf("ODR = 0x%08x\n", (unsigned)*odr);
+    printf("offset = %u bytes from base\n", (unsigned)((uintptr_t)odr - FAKE_BASE));
+    printf("fake_gpio[5] = 0x%08x\n", (unsigned)fake_gpio[5]);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code1">
+  <li data-lines="4"><b class="what">سخت‌افزار ساختگی.</b> ۸ کلمهٔ ۳۲ بیتی = ۳۲ بایت، به اندازهٔ کافی برای رسیدن به آفست <code>0x14</code>. در برد واقعی این خانه‌ها را کارخانه ساخته؛ اینجا خودمان ساختیم.</li>
+  <li data-lines="5"><b class="what">آدرس پایه.</b> <code>uintptr_t</code> نوع عددی است که به اندازهٔ یک اشاره‌گر جا دارد (درس <a href="2-2.html">۲.۲</a>). آدرس آرایه را به عدد تبدیل می‌کنیم تا بشود با <code>0x14</code> جمعش کرد.
+    <span class="why">روی برد واقعی به‌جای این خط فقط یک عدد ثابت از مستندات می‌گذاشتیم (<code>0x40020000u</code>).</span></li>
+  <li data-lines="6"><b class="what">ماکروی رجیستر.</b> همان سه تکه: عدد ← تبدیل به اشاره‌گر ← ستاره. اسمش <code>FAKE_ODR</code> است و مثل متغیر رفتار می‌کند.</li>
+  <li data-lines="10-12"><b class="what">نوشتن با ماسک.</b> همان الگوی درس <a href="3-1.html">۳.۱</a>: <code>|= 1u &lt;&lt; n</code> فقط بیت n را یک می‌کند و بقیه را نگه می‌دارد. اول ۰ می‌کنیم تا از مقدار مشخصی شروع شود.</li>
+  <li data-lines="14-15"><b class="what">اشاره‌گر صریح.</b> همین کار را می‌توان با یک متغیر اشاره‌گر هم کرد. <code>*odr</code> یعنی «خودِ آن خانه». این روش زمانی به درد می‌خورد که آدرس را به تابع می‌دهی.</li>
+  <li data-lines="16"><b class="what">فاصله از ابتدا.</b> اختلاف دو آدرس ۲۰ بایت است، یعنی <code>0x14</code> در مبنای ۱۶.</li>
+  <li data-lines="17"><b class="what">راستی‌آزمایی.</b> بعد از دو بار نوشتن، خانهٔ پنجم آرایه (۲۰ ÷ ۴) همان مقدار را دارد. ثابت می‌کند اشاره‌گر واقعا به همان خانه رسیده.</li>
+</ol>
+<pre class="term" data-from="mmio_pc.c">
+$ gcc -std=c11 -Wall -Wextra -o mmio_pc mmio_pc.c
+$ ./mmio_pc
+ODR = 0x00000021
+offset = 20 bytes from base
+fake_gpio[5] = 0x00000021
+</pre>
+<p>مقدار <code>0x21</code> یعنی بیت‌های ۰ و ۵ یک‌اند: <code>0x21 = 0010 0001</code>. روی برد واقعی، همین دو بیت پایه‌های PA0 و PA5 را به ولتاژ بالا می‌بردند.</p>
+
+<h2 id="volatile">چرا <span class="en">volatile</span> لازم است؟</h2>
+<p>حالا مهم‌ترین قسمت درس. کامپایلر فکر می‌کند حافظه مثل قفسهٔ کتاب است: هر چه گذاشتی، همان می‌ماند، مگر خودت عوضش کنی. برای همین بی‌رحمانه بهینه‌سازی می‌کند (حذف خواندن‌های تکراری، حذف نوشتن‌های «بی‌اثر»، حذف حلقه‌های «بی‌کار»). ولی رجیستر پنل آسانسور است: مقدارش بدون دخالت برنامه عوض می‌شود، و نوشتن روی آن اثر دارد. باید به کامپایلر بگوییم.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>دانشجویی را تصور کن که مامور است «تا ساعت ۱۲ شد بگو». او یک بار به ساعت نگاه می‌کند (۱۱:۵۰)، در دفترش می‌نویسد «۱۱:۵۰» و تا آخر روز فقط به دفتر نگاه می‌کند: «هنوز ۱۱:۵۰ است!». او درست اجرا کرد، ولی دنیا عوض شده و او خبر ندارد. کامپایلر همین دانشجوی «باهوش» است: اگر نگویی «این ساعت دیواری است، هر بار دوباره نگاه کن»، از دفتر (رجیستر CPU) استفاده می‌کند. کلمهٔ <code>volatile</code> یعنی همین: «هر بار خودِ ساعت را ببین».</p></div>
+
+<p><span class="term" data-t="volatile_kw">volatile</span> (در لغت: «فرار، ناپایدار») یک <b>قید روی نوع</b> است که به کامپایلر می‌گوید: «مقدار این متغیر هر لحظه ممکن است بیرون از دید این برنامه عوض شود، یا خواندن/نوشتنش خودش اثری دارد. پس هر خواندن و هر نوشتنی را که در کد نوشته‌ام دقیقا و به همان ترتیب انجام بده.»</p>
+
+<p>ببین کامپایلر واقعا چه می‌کند. دو تابع می‌نویسیم که هر دو منتظر می‌مانند تا یک پرچم غیرصفر شود. (پرچم را سخت‌افزار یا یک ISR، درس <a href="5-3.html">۵.۳</a>، عوض می‌کند.) تفاوت فقط یک کلمه است.</p>
+
+<div class="code" data-file="wait.c" data-lang="c" data-verify="arm" data-cflags="-O2" id="code2">
+<pre>
+#include &lt;stdint.h&gt;
+
+uint32_t g_ready_plain;             // بدون volatile
+volatile uint32_t g_ready_vol;      // با volatile
+
+void wait_plain(void)
+{
+    while (g_ready_plain == 0) {
+    }
+}
+
+void wait_volatile(void)
+{
+    while (g_ready_vol == 0) {
+    }
+}
+</pre></div>
+<ol class="walk" data-for="code2">
+  <li data-lines="3"><b class="what">متغیر معمولی.</b> کامپایلر این را یک قفسهٔ کتاب می‌بیند.</li>
+  <li data-lines="4"><b class="what">متغیر <code>volatile</code>.</b> کلمه را قبل از نوع می‌نویسیم. هیچ‌چیز دیگر فرق ندارد.</li>
+  <li data-lines="6-10"><b class="what">انتظار روی متغیر معمولی.</b> «تا وقتی صفر است، هیچ نکن».
+    <span class="why">در ظاهر هیچ اشکالی ندارد. اگر پرچم وسط کار توسط ISR یک شود، حلقه باید تمام شود. ببین کامپایلر با این کد چه می‌کند.</span></li>
+  <li data-lines="12-16"><b class="what">انتظار روی متغیر volatile.</b> دقیقا همان حلقه.</li>
+</ol>
+
+<p>حالا اسمبلی که <code>arm-none-eabi-gcc -O2 -S</code> برای Cortex-M4 ساخته (خط‌های راهنما و ثابت‌های آدرس حذف شده؛ بقیه دست‌نخورده):</p>
+
+<div class="code" data-file="wait_plain.s" data-lang="asm" id="asm1">
+<pre>
+wait_plain:
+    ldr   r3, .L5
+    ldr   r3, [r3]
+    cbnz  r3, .L1
+.L3:
+    b     .L3
+.L1:
+    bx    lr
+</pre></div>
+<ol class="walk" data-for="asm1">
+  <li data-lines="2-3"><b class="what">فقط یک بار خواندن.</b> <code>ldr r3, [r3]</code> مقدار پرچم را یک بار از حافظه به رجیستر CPU (<code>r3</code>) می‌آورد.</li>
+  <li data-lines="4"><b class="what">تصمیم.</b> <code>cbnz</code> یعنی «اگر r3 غیرصفر بود، برو به <code>.L1</code> (برگرد)».</li>
+  <li data-lines="5-6"><b class="what">حلقهٔ بی‌نهایت!</b> اگر r3 صفر بود، <code>b .L3</code> یعنی «برو به همین خط» و تا ابد می‌ماند. دیگر <b>هرگز</b> به حافظه نگاه نمی‌کند.
+    <span class="why">کامپایلر با خودش گفته: «برنامه خودش پرچم را عوض نمی‌کند؛ پس اگر الان صفر است، همیشه صفر است». برای قفسهٔ کتاب درست، برای پنل آسانسور فاجعه. ISR پرچم را یک می‌کند و CPU خبردار نمی‌شود: برنامه «هنگ» می‌کند.</span></li>
+</ol>
+
+<div class="code" data-file="wait_volatile.s" data-lang="asm" id="asm2">
+<pre>
+wait_volatile:
+    ldr   r2, .L11
+.L8:
+    ldr   r3, [r2, #4]
+    cmp   r3, #0
+    beq   .L8
+    bx    lr
+</pre></div>
+<ol class="walk" data-for="asm2">
+  <li data-lines="2"><b class="what">آدرس پایه.</b> <code>r2</code> آدرس شروع متغیرهای سراسری را می‌گیرد. <code>g_ready_vol</code> چهار بایت بعد از آن است (<code>#4</code>).</li>
+  <li data-lines="4"><b class="what">خواندن داخل حلقه.</b> <code>ldr</code> <b>داخل</b> حلقه است، پس هر دور خودِ حافظه خوانده می‌شود.</li>
+  <li data-lines="5-6"><b class="what">مقایسه و برگشت.</b> اگر صفر بود (<code>beq</code>) دوباره به <code>.L8</code> برمی‌گردد و دوباره می‌خواند.
+    <span class="why">لحظه‌ای که ISR یا سخت‌افزار پرچم را یک کند، دور بعد <code>cmp</code> مقدار جدید را می‌بیند و حلقه تمام می‌شود. این دقیقا همان کاری است که می‌خواستیم.</span></li>
+</ol>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 340" role="img" aria-label="مقایسه دو حلقهٔ انتظار: بدون volatile فقط یک بار پرچم خوانده می‌شود و حلقه برای همیشه می‌چرخد؛ با volatile در هر دور دوباره خوانده می‌شود">
+  <defs><marker id="m6c" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <g stroke="#15120a" stroke-width="3" fill="none"><rect x="20" y="40" width="340" height="270" rx="14" fill="#fff"/><rect x="400" y="40" width="340" height="270" rx="14" fill="#fff"/></g>
+  <text x="190" y="30" text-anchor="middle" class="s-tx" font-size="15" font-weight="800">بدون volatile</text>
+  <text x="570" y="30" text-anchor="middle" class="s-tx" font-size="15" font-weight="800">با volatile</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="50" y="56" width="280" height="38" rx="8" fill="#3ddc97"/>
+    <rect x="430" y="56" width="280" height="38" rx="8" fill="#3ddc97"/>
+    <rect x="70" y="126" width="240" height="44" rx="8" fill="#ffd60a"/>
+    <rect x="450" y="126" width="240" height="44" rx="8" fill="#ffd60a"/>
+    <rect x="70" y="204" width="240" height="44" rx="8" fill="#fff"/>
+    <rect x="450" y="204" width="240" height="44" rx="8" fill="#fff"/>
+    <rect x="70" y="266" width="240" height="34" rx="8" fill="#ff9a4d"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-size="13.5" font-weight="700">
+    <text x="190" y="80">رجیستر پرچم (سخت‌افزار)</text><text x="570" y="80">رجیستر پرچم (سخت‌افزار)</text>
+    <text x="190" y="153">یک بار خواندن به r3</text><text x="570" y="153">خواندن به r3 در هر دور</text>
+    <text x="190" y="231">r3 صفر است؟</text><text x="570" y="231">r3 صفر است؟</text>
+    <text x="190" y="288">پرش به خودش تا ابد</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M190 96V122" marker-end="url(#m6c)"/><path d="M190 172V200" marker-end="url(#m6c)"/><path d="M190 250V262" marker-end="url(#m6c)"/>
+    <path d="M570 96V122" marker-end="url(#m6c)"/><path d="M570 172V200" marker-end="url(#m6c)"/>
+    <path d="M692 226H716V148H694" marker-end="url(#m6c)"/>
+    <path d="M310 285H338V283H310" stroke-dasharray="0"/>
+  </g>
+  <g class="s-tx" font-size="12.5" text-anchor="middle">
+    <text x="240" y="115">فقط این یک بار</text>
+    <text x="622" y="115">هر دور</text>
+    <text x="570" y="270">بله: برگرد بالا  |  نه: ادامه</text>
+    <text x="570" y="292">ISR پرچم را یک کند، دور بعد می‌بیند</text>
+    <text x="190" y="326">ISR پرچم را یک کند، CPU خبردار نمی‌شود</text>
+  </g>
+</svg></div>
+<figcaption>چپ: کامپایلر فرض می‌کند پرچم بدون دخالت برنامه عوض نمی‌شود، پس یک نسخه در رجیستر CPU نگه می‌دارد. راست: <code>volatile</code> او را وادار می‌کند هر بار سراغ خود خانه برود.</figcaption></figure>
+
+<div class="callout warn"><div class="ct">این باگ را «بهینه‌سازی» ظاهر می‌کند</div>
+<p>با <code>-O0</code> (بدون بهینه‌سازی) کامپایلر همه چیز را همان‌طور که نوشته‌ای انجام می‌دهد و برنامه بدون <code>volatile</code> هم کار می‌کند. آن‌وقت برنامه را با <code>-O2</code> می‌سازی (یا در نسخهٔ Release) و ناگهان هنگ می‌کند. کد تغییر نکرده؛ کامپایلر «هوشمندتر» شده. اگر برنامه‌ات در Debug کار می‌کند و در Release خراب می‌شود، اولین مظنون: <code>volatile</code> فراموش‌شده.</p></div>
+
+<h3>دو بلای دیگر که <span class="en">volatile</span> جلویشان را می‌گیرد</h3>
+<p>خواندن تکراری تنها بهینه‌سازی خطرناک نیست. دو مورد دیگر، این بار با دو رجیستر داده‌ای UART که هر بایت نوشته‌شده را به خط سریال می‌فرستد (خانهٔ <code>0x40004404</code> در USART2 روی STM32F411، در درس <a href="5-5.html">۵.۵</a> کامل می‌شود). ما دو بایت «H» و «i» می‌فرستیم. یک بار بدون <code>volatile</code> و یک بار با آن:</p>
+
+<pre class="term" data-kind="cmd">
+$ arm-none-eabi-objdump -d twice.o          # کد با -O2 ساخته شده
+send_plain:
+   mov.w  r3, #0x40004000
+   movs   r2, #105        @ 'i'
+   str.w  r2, [r3, #1028] @ 0x404
+   bx     lr
+send_volatile:
+   mov.w  r3, #0x40004000
+   movs   r1, #72         @ 'H'
+   movs   r2, #105        @ 'i'
+   str.w  r1, [r3, #1028]
+   str.w  r2, [r3, #1028]
+   bx     lr
+</pre>
+<p><b>نتیجه:</b> نسخهٔ معمولی فقط <code>'i'</code> را می‌فرستد. کامپایلر گفته «نوشتن اول را بعدی روی آن می‌نویسد؛ پس اولی بی‌اثر است و حذفش می‌کنم». روی قفسهٔ کتاب منطقی است؛ روی UART یعنی بایت «H» هرگز فرستاده نمی‌شود! با <code>volatile</code> هر دو <code>str</code> باقی می‌مانند، به همان ترتیب.</p>
+
+<p>مورد سوم: <b>تأخیر با حلقهٔ خالی</b>. ساده‌ترین «صبر کردن» در برنامه‌های اولیه:</p>
+<pre class="term" data-kind="cmd">
+$ arm-none-eabi-objdump -d delay.o          # -O2؛ حلقه از ۰ تا ۱۰۰۰۰۰۰
+delay_plain:
+   bx     lr                       @ کل حلقه حذف شد!
+delay_volatile:
+   sub    sp, #8
+   movs   r3, #0
+   str    r3, [sp, #4]
+   ldr    r3, [sp, #4]             @ i را از حافظه می‌خواند...
+   ... (۱۰۰۰۰۰۰ دور، هر دور خواندن و نوشتن i)
+   bx     lr
+</pre>
+<p>حلقهٔ <code>for (uint32_t i = 0; i &lt; 1000000u; i++) {}</code> هیچ اثری بیرون خودش ندارد، پس کامپایلر آن را کامل حذف می‌کند و تابع فقط <code>bx lr</code> (برگشت) می‌شود. تأخیر شما صفر می‌شود و LED «تند» چشمک می‌زند، طوری که چشم نمی‌بیند. با <code>volatile uint32_t i</code> متغیر شمارنده در حافظه می‌ماند و هر دور واقعا زمان می‌گیرد. (این روش تأخیر برای یادگیری خوب است، برای پروژهٔ واقعی نه: در درس <a href="5-4.html">۵.۴</a> با تایمر یاد می‌گیری.)</p>
+
+<h2 id="rules">قانون‌های <span class="en">volatile</span>: چه می‌کند، چه نمی‌کند</h2>
+
+<div class="table-wrap"><table>
+<thead><tr><th>کجا لازم است؟</th><th>دلیل</th></tr></thead>
+<tbody>
+<tr><td>رجیستر سخت‌افزار (memory-mapped)</td><td>مقدارش بدون دخالت برنامه عوض می‌شود؛ خواندن و نوشتنش اثر دارد</td></tr>
+<tr><td>متغیری که ISR (وقفه) می‌نویسد و <code>main</code> می‌خواند (یا برعکس)</td><td>کامپایلر ISR را نمی‌بیند و فکر می‌کند main تنها نویسنده است</td></tr>
+<tr><td>بافری که DMA پر می‌کند (انتقال بدون CPU؛ درس ۵.۵)</td><td>باز هم نویسنده‌ای بیرون از برنامه</td></tr>
+<tr><td>شمارندهٔ تأخیر ساده</td><td>تا حلقه حذف نشود</td></tr>
+</tbody></table></div>
+
+<p>و چیزهایی که <code>volatile</code> <b>نیست</b>:</p>
+<ul>
+  <li><b>سریع‌کننده نیست.</b> برعکس، جلوی بهینه‌سازی را می‌گیرد؛ پس هر جا که لازم نیست نگذارش. روی متغیرهای محلی معمولی و آرایه‌های داده بی‌جهت است.</li>
+  <li><b>قفل و اتمی نیست.</b> ببین <code>g_events++</code> روی یک متغیر <code>volatile</code> چه می‌شود:</li>
+</ul>
+
+<pre class="term" data-kind="cmd">
+$ arm-none-eabi-objdump -d incr.o          # volatile uint32_t g_events; g_events++;
+on_event:
+   ldr    r2, [pc, #8]          @ آدرس g_events
+   ldr    r3, [r2, #0]          @ ۱) خواندن
+   adds   r3, #1                @ ۲) یکی اضافه
+   str    r3, [r2, #0]          @ ۳) نوشتن
+   bx     lr
+</pre>
+<p>یک خط C شد <b>سه</b> دستور. اگر یک وقفه دقیقا بین خواندن و نوشتن بیاید و همین متغیر را عوض کند، تغییرش با نوشتن سوم گم می‌شود. <code>volatile</code> این را حل نمی‌کند؛ <span class="term" data-t="atomicop">عملیات اتمی</span> (atomic، یعنی «تقسیم‌ناپذیر») یا غیرفعال‌کردن موقت وقفه لازم است (درس <a href="5-3.html">۵.۳</a>). قاعدهٔ سرانگشتی: <code>volatile</code> به کامپایلر می‌گوید «هر دسترسی را انجام بده»، نه «این دسترسی‌ها را یکجا انجام بده».</p>
+<ul>
+  <li><b>برای داده‌های چندبایتی بزرگ‌تر از کلمه کافی نیست.</b> اگر متغیری ۶۴ بیتی باشد، روی Cortex-M4 با دو دستور خوانده می‌شود و ممکن است نصفه‌نیمه دیده شود.</li>
+</ul>
+
+<h3><span class="en">const volatile</span>: رجیستر فقط‌خواندنی</h3>
+<p>بعضی رجیسترها را فقط می‌شود خواند، مثل <code>IDR</code> (نمایشگر ولتاژ پایه‌ها). نوشتن روی آن بی‌معنی است. C به تو اجازه می‌دهد هر دو ویژگی را با هم بنویسی:</p>
+<ul>
+  <li><code>const</code>: «برنامه‌ی من هرگز روی این چیزی نمی‌نویسد» (کامپایلر جلوی نوشتن اشتباهی را می‌گیرد)،</li>
+  <li><code>volatile</code>: «ولی مقدارش خودبه‌خود عوض می‌شود» (کامپایلر نباید نسخه‌اش را کش کند).</li>
+</ul>
+<p>این دو تناقض ندارند: <code>const</code> دربارهٔ <i>ما</i> است، <code>volatile</code> دربارهٔ <i>دنیا</i>. امتحان کن که چه می‌شود اگر روی رجیستر <code>const volatile</code> بنویسی:</p>
+
+<div class="code" data-file="ro.c" data-lang="c" data-verify="host-fail" id="code3">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define GPIOC_IDR (*(const volatile uint32_t *)0x40020810u)
+
+int main(void)
+{
+    GPIOC_IDR = 0;
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code3">
+  <li data-lines="4"><b class="what">رجیستر ورودی پورت C.</b> آدرس <code>0x40020810</code> = <code>GPIOC</code> (<code>0x40020800</code>) + آفست <code>IDR</code> (<code>0x10</code>). بیت ۱۳ آن، دکمهٔ آبی Nucleo (PC13) است.</li>
+  <li data-lines="6-9"><b class="what">تلاش برای نوشتن.</b> این برنامه روی PC اجرا نمی‌شود (آدرس معتبر نیست) و ما هم قصد اجرایش را نداریم. فقط می‌خواهیم کامپایلر ببیند.
+    <span class="why">این خط اگر روی برد واقعی هم اجرا می‌شد، بی‌اثر بود؛ ولی چون ما آن را <code>const</code> اعلام کرده‌ایم، کامپایلر همان لحظه جلویمان را می‌گیرد.</span></li>
+</ol>
+<pre class="term" data-kind="err" data-from="ro.c">
+ro.c: In function 'main':
+ro.c:7:15: error: assignment of read-only location '*1073874960'
+</pre>
+<p>عدد <code>1073874960</code> همان <code>0x40020810</code> به صورت ده‌دهی است. خطا همین‌جا در کامپایل پیدا شد، نه بعد از هفته‌ها اشکال‌زدایی.</p>
+
+<h2 id="struct">به‌جای یک ماکرو برای هر رجیستر: <span class="en">struct</span> روی سخت‌افزار</h2>
+<p>یک پورت GPIO دهها رجیستر دارد و ما پورت‌های A، B، C… داریم. اگر برای هرکدام یک ماکرو بنویسی، صدها ماکرو می‌شود. ولی رجیسترهای هر پورت <b>پشت هم و با ترتیب ثابت</b> چیده شده‌اند، دقیقا شبیه اعضای یک <code>struct</code> (درس <a href="3-4.html">۳.۴</a>). پس یک <code>struct</code> می‌سازیم که هر عضوش یک رجیستر است و آن را روی آدرس پایهٔ پورت «می‌اندازیم». به این کار <span class="term" data-t="regoverlay">پوشش struct روی سخت‌افزار</span> می‌گویند. ببین ترتیب اعضا چقدر مهم است:</p>
+
+<div class="code" data-file="gpio_struct.c" data-lang="c" data-verify="host" id="code4">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stddef.h&gt;
+#include &lt;stdint.h&gt;
+
+typedef struct {
+    volatile uint32_t MODER;    // +0x00
+    volatile uint32_t OTYPER;   // +0x04
+    volatile uint32_t OSPEEDR;  // +0x08
+    volatile uint32_t PUPDR;    // +0x0C
+    const volatile uint32_t IDR;  // +0x10 (فقط‌خواندنی)
+    volatile uint32_t ODR;      // +0x14
+    volatile uint32_t BSRR;     // +0x18
+    volatile uint32_t LCKR;     // +0x1C
+    volatile uint32_t AFR[2];   // +0x20 و +0x24
+} GPIO_TypeDef;
+
+int main(void)
+{
+    printf("MODER   0x%02zx\n", offsetof(GPIO_TypeDef, MODER));
+    printf("OTYPER  0x%02zx\n", offsetof(GPIO_TypeDef, OTYPER));
+    printf("OSPEEDR 0x%02zx\n", offsetof(GPIO_TypeDef, OSPEEDR));
+    printf("PUPDR   0x%02zx\n", offsetof(GPIO_TypeDef, PUPDR));
+    printf("IDR     0x%02zx\n", offsetof(GPIO_TypeDef, IDR));
+    printf("ODR     0x%02zx\n", offsetof(GPIO_TypeDef, ODR));
+    printf("BSRR    0x%02zx\n", offsetof(GPIO_TypeDef, BSRR));
+    printf("LCKR    0x%02zx\n", offsetof(GPIO_TypeDef, LCKR));
+    printf("AFR     0x%02zx\n", offsetof(GPIO_TypeDef, AFR));
+    printf("size    0x%02zx\n", sizeof(GPIO_TypeDef));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code4">
+  <li data-lines="2"><b class="what"><code>stddef.h</code>.</b> تعریف ماکروی <code>offsetof</code> را می‌آورد: «عضو X چند بایت از ابتدای struct فاصله دارد؟».</li>
+  <li data-lines="5-15"><b class="what">نقشهٔ رجیسترها به‌صورت struct.</b> هر عضو یک رجیستر ۳۲ بیتی است و به‌ترتیب همان جدول مستندات چیده شده. عضو <code>IDR</code> <code>const volatile</code> است چون فقط‌خواندنی است. <code>AFR[2]</code> دو رجیستر است (پایه‌های ۰ تا ۷ و ۸ تا ۱۵).
+    <span class="why">چون همه اعضا ۴ بایتی‌اند، کامپایلر بین آنها هیچ padding (درس ۳.۴) نمی‌گذارد؛ پس آفست هر عضو دقیقا مجموع اندازهٔ اعضای قبلی است. اگر ترتیب را جابه‌جا بنویسی، همه‌چیز غلط می‌شود.</span></li>
+  <li data-lines="19-27"><b class="what">چاپ آفست‌ها.</b> برای هر عضو فاصلهٔ واقعی را می‌پرسیم و با جدول مستندات مقایسه می‌کنیم.</li>
+  <li data-lines="28"><b class="what">اندازهٔ کل.</b> ۴۰ بایت = <code>0x28</code>.</li>
+</ol>
+<pre class="term" data-from="gpio_struct.c">
+$ ./gpio_struct
+MODER   0x00
+OTYPER  0x04
+OSPEEDR 0x08
+PUPDR   0x0c
+IDR     0x10
+ODR     0x14
+BSRR    0x18
+LCKR    0x1c
+AFR     0x20
+size    0x28
+</pre>
+<p>آفست‌ها دقیقا همان مستندات RM0383 است. حالا روی برد، <code>#define GPIOA ((GPIO_TypeDef *)0x40020000u)</code> می‌گوید «از آدرس <code>0x40020000</code> به بعد را مثل یک <code>GPIO_TypeDef</code> بخوان». آن‌وقت <code>GPIOA-&gt;ODR</code> یعنی «آدرس پایه + آفست <code>ODR</code>»، یعنی همان <code>0x40020014</code>. کامپایلر آفست را حساب می‌کند و تو فقط اسم می‌نویسی. (اشاره‌گر به struct با <code>-&gt;</code>: درس <a href="3-4.html">۳.۴</a>.)</p>
+
+<div class="callout info"><div class="ct">همین را در CMSIS و <code>stm32f4xx.h</code> می‌بینی</div>
+<p>شرکت ST و ARM همین کار را برای همهٔ رجیسترها انجام داده‌اند و در یک فایل هدر (به‌نام <code>stm32f4xx.h</code>، همراه با <span class="term" data-t="cmsis">CMSIS</span>) گذاشته‌اند. در آن جا <code>GPIO_TypeDef</code> و <code>GPIOA</code> و <code>RCC</code> تعریف شده‌اند و <code>GPIOA-&gt;ODR</code> را مستقیم می‌نویسی. اسم‌هایی مثل <code>__IO</code> (که در آن هدرها می‌بینی) فقط اسم دیگری برای <code>volatile</code> است؛ <code>__I</code> یعنی <code>const volatile</code>. یعنی کاری که ما اینجا از صفر ساختیم، همان کار هدر رسمی است؛ فقط بزرگ‌تر. در درس <a href="5-2.html">۵.۲</a> هدر کوچک خودمان را می‌سازیم.</p></div>
+
+<h2 id="rmw">خطر خواندن-تغییر-نوشتن</h2>
+<p>الگوی <code>ODR |= (1u &lt;&lt; 5)</code> که در درس ۳.۱ دوست‌داشتنی بود، روی رجیستر واقعی یک نقطه‌ضعف پنهان دارد. ببین کامپایلر برای آن چه ساخته و در مقابل، برای نوشتن مستقیم در <code>BSRR</code>:</p>
+
+<div class="code" data-file="rmw.c" data-lang="c" data-verify="arm" data-cflags="-O2" id="code5">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define GPIOA_ODR  (*(volatile uint32_t *)0x40020014u)
+#define GPIOA_BSRR (*(volatile uint32_t *)0x40020018u)
+
+void led_on_rmw(void)
+{
+    GPIOA_ODR |= 1u &lt;&lt; 5;
+}
+
+void led_on_bsrr(void)
+{
+    GPIOA_BSRR = 1u &lt;&lt; 5;
+}
+</pre></div>
+<ol class="walk" data-for="code5">
+  <li data-lines="3-4"><b class="what">دو رجیستر.</b> <code>ODR</code> در <code>0x40020014</code> و <code>BSRR</code> در <code>0x40020018</code>، هر دو در GPIOA.</li>
+  <li data-lines="6-10"><b class="what">راه اول: <code>|=</code>.</b> در ظاهر یک خط، ولی همان‌طور که دیدیم سه کار پشت سر هم است: بخوان، تغییر بده، بنویس.</li>
+  <li data-lines="12-15"><b class="what">راه دوم: BSRR.</b> فقط یک نوشتن. بیت ۵ از نیمهٔ پایین (بیت‌های ۰ تا ۱۵) یعنی «پایه ۵ را یک کن»؛ بقیهٔ پایه‌ها را کاری ندارد (صفر نوشتن در BSRR اثری ندارد).</li>
+</ol>
+<pre class="term" data-kind="cmd">
+$ arm-none-eabi-objdump -d rmw.o
+led_on_rmw:
+   ldr    r2, [pc, #8]          @ r2 = 0x40020000
+   ldr    r3, [r2, #20]         @ ۱) خواندن ODR   (آفست ۲۰ = 0x14)
+   orr.w  r3, r3, #32           @ ۲) تغییر: بیت ۵ را یک کن (32 = 1&lt;&lt;5)
+   str    r3, [r2, #20]         @ ۳) نوشتن ODR
+   bx     lr
+led_on_bsrr:
+   ldr    r3, [pc, #4]          @ r3 = 0x40020000
+   movs   r2, #32               @ 32 = 1&lt;&lt;5
+   str    r2, [r3, #24]         @ فقط یک نوشتن در BSRR (آفست ۲۴ = 0x18)
+   bx     lr
+</pre>
+<p>نسخهٔ <code>|=</code> یک <code>ldr</code> و یک <code>str</code> با یک دستور <code>orr</code> بین آن دو دارد؛ یعنی <b>سه دستور</b> و یک «پنجره»: اگر بین خواندن و نوشتن، چیز دیگری (یک ISR، یا خود سخت‌افزار) ODR را عوض کند، نوشتن ما آن تغییر را زیر پا می‌گذارد. نسخهٔ BSRR یک دستور است: پنجره‌ای ندارد.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 340" role="img" aria-label="نمودار زمانی دو روش روشن کردن پین ۵ وقتی وسط کار یک وقفه پین ۰ را روشن می‌کند: روش خواندن-تغییر-نوشتن پین ۰ را گم می‌کند و روش BSRR نه">
+  <defs><marker id="m6d" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="15" font-weight="800">زمان از چپ به راست؛ وسط کار main یک وقفه می‌آید</text>
+  <text x="380" y="52" text-anchor="middle" class="s-tx" font-size="14" font-weight="800">راه اول: خواندن ← تغییر ← نوشتن</text>
+  <text x="380" y="194" text-anchor="middle" class="s-tx" font-size="14" font-weight="800">راه دوم: یک نوشتن در BSRR</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="30" y="64" width="210" height="58" rx="10" fill="#ffd60a"/>
+    <rect x="275" y="64" width="210" height="58" rx="10" fill="#ff86b3"/>
+    <rect x="520" y="64" width="210" height="58" rx="10" fill="#ffd60a"/>
+    <rect x="30" y="206" width="210" height="58" rx="10" fill="#e9e4cf" stroke-dasharray="6 5"/>
+    <rect x="275" y="206" width="210" height="58" rx="10" fill="#ff86b3"/>
+    <rect x="520" y="206" width="210" height="58" rx="10" fill="#ffd60a"/>
+    <rect x="520" y="130" width="210" height="40" rx="8" fill="#ff9a4d"/>
+    <rect x="520" y="272" width="210" height="40" rx="8" fill="#3ddc97"/>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M242 93H271" marker-end="url(#m6d)"/><path d="M487 93H516" marker-end="url(#m6d)"/>
+    <path d="M242 235H271" marker-end="url(#m6d)"/><path d="M487 235H516" marker-end="url(#m6d)"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-size="13.5" font-weight="700">
+    <text x="135" y="86">main: tmp = ODR</text><text class="mono" x="135" y="108" font-size="13">tmp = 0x0000</text>
+    <text x="380" y="86">وقفه: پین ۰ را روشن کرد</text><text class="mono" x="380" y="108" font-size="13">ODR = 0x0001</text>
+    <text x="625" y="86">main: ODR = tmp | 0x20</text><text class="mono" x="625" y="108" font-size="13">ODR ← 0x0020</text>
+    <text x="625" y="156">پین ۰ گم شد!</text>
+    <text x="135" y="232">main هنوز خوانده‌ای ندارد</text><text x="135" y="252" font-size="12.5" font-weight="400">(چیزی برای خواندن نیست)</text>
+    <text x="380" y="228">وقفه: پین ۰ را روشن کرد</text><text class="mono" x="380" y="250" font-size="13">ODR = 0x0001</text>
+    <text x="625" y="228">main: BSRR = 0x20</text><text class="mono" x="625" y="250" font-size="13">ODR = 0x0021</text>
+    <text x="625" y="298">هر دو پین درست</text>
+  </g>
+  <text x="380" y="332" text-anchor="middle" class="s-tx" font-size="13">خواندن + نوشتن دو مرحله‌اند؛ وسط‌شان جا برای دخالت است. نوشتن BSRR یک مرحله است.</text>
+</svg></div>
+<figcaption>ODR یک «قفسه» است که هم main و هم وقفه رویش می‌نویسند. راه اول مقدار کهنه‌ای را که main خوانده بود روی آن می‌نویسد؛ راه دوم فقط بیت ۵ را عوض می‌کند و به بقیه دست نمی‌زند.</figcaption></figure>
+
+<p>خودت قدم به قدم ببین:</p>
+<div class="widget" data-w="mem" data-config='{"title":"خواندن-تغییر-نوشتن با وقفه‌ای در میان","code":["tmp = ODR;          // main می‌خواند","// --- وقفه: ODR = ODR | 1 ---","tmp = tmp | 0x20;   // main تغییر می‌دهد","ODR = tmp;          // main می‌نویسد"],"intro":"ODR خالی است (0x0000). main می‌خواهد پین ۵ را روشن کند. روی بعدی بزن.","cells":[{"addr":"0x40020014","name":"ODR (رجیستر واقعی)","val":"0x0000","kind":"var"},{"addr":"رجیستر CPU","name":"tmp (نسخهٔ main)","val":null,"kind":"var"}],"steps":[{"line":0,"set":{"1":"0x0000"},"hot":[1],"say":"main رجیستر ODR را خواند و نسخه‌ای (0x0000) در tmp گذاشت."},{"line":1,"set":{"0":"0x0001"},"hot":[0],"say":"<b>وقفه آمد</b> و پین ۰ را روشن کرد. ODR واقعی حالا 0x0001 است. ولی tmp در main هنوز 0x0000 دارد، چون خبر ندارد."},{"line":2,"set":{"1":"0x0020"},"hot":[1],"say":"main روی نسخهٔ کهنهٔ خودش کار می‌کند: 0x0000 | 0x20 = 0x0020."},{"line":3,"set":{"0":"0x0020"},"hot":[0],"say":"main نتیجه را روی ODR نوشت. <b>پین ۰ که وقفه روشن کرده بود دوباره خاموش شد.</b> باگی که فقط گاهی و به‌صورت تصادفی رخ می‌دهد!"}]}'></div>
+
+<p>این همان نمایش برنامه‌ای است که در PC ساخته‌ایم. رجیستر ODR و رجیستر «پرچم‌های در انتظار» را با دو تابع شبیه‌سازی می‌کنیم؛ وقفه را هم یک تابع معمولی که وسط کار صدایش می‌زنیم:</p>
+
+<div class="code" data-file="rmw_sim.c" data-lang="c" data-verify="host" id="code6">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+static volatile uint32_t odr;           // رجیستر خروجی ساختگی
+static uint32_t pr;                     // رجیستر «در انتظار» ساختگی
+
+static void bsrr_write(uint32_t v)      // رفتار BSRR: نیمهٔ پایین set، نیمهٔ بالا reset
+{
+    odr = (odr | (v &amp; 0xFFFFu)) &amp; ~((v &gt;&gt; 16) &amp; 0xFFFFu);
+}
+
+static void pr_write(uint32_t v)        // رفتار write-1-to-clear: هر بیتِ ۱ پاک می‌شود
+{
+    pr &amp;= ~v;
+}
+
+static void interrupt_sets_pin0(void)   // وقفه‌ای که وسط کار پین ۰ را روشن می‌کند
+{
+    odr = odr | 1u;
+}
+
+int main(void)
+{
+    /* الف) خواندن-تغییر-نوشتن: وقفه وسط کار می‌آید */
+    odr = 0;
+    uint32_t tmp = odr;                 // ۱) خواندن
+    interrupt_sets_pin0();              // وقفه: ODR الان 0x0001
+    tmp = tmp | (1u &lt;&lt; 5);              // ۲) تغییر
+    odr = tmp;                          // ۳) نوشتن: پین ۰ گم شد
+    printf("read-modify-write: 0x%04x\n", (unsigned)odr);
+
+    /* ب) همان کار با BSRR: یک نوشتن، بدون خواندن */
+    odr = 0;
+    interrupt_sets_pin0();
+    bsrr_write(1u &lt;&lt; 5);
+    printf("BSRR             : 0x%04x\n", (unsigned)odr);
+
+    /* پ) پاک کردن پرچم write-1-to-clear */
+    pr = (1u &lt;&lt; 5) | (1u &lt;&lt; 13);        // دو پرچم فعال
+    pr_write(pr | (1u &lt;&lt; 13));          // غلط: PR |= بیت ۱۳ (کل مقدار برمی‌گردد)
+    printf("PR |= bit13      : 0x%04x\n", (unsigned)pr);
+    pr = (1u &lt;&lt; 5) | (1u &lt;&lt; 13);
+    pr_write(1u &lt;&lt; 13);                 // درست: فقط بیت ۱۳
+    printf("PR  = bit13      : 0x%04x\n", (unsigned)pr);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code6">
+  <li data-lines="4-5"><b class="what">دو رجیستر ساختگی.</b> اولی مثل <code>ODR</code>؛ دومی مثل یک رجیستر «پرچم‌های در انتظار» (در بخش بعد می‌بینی). فقط اولی <code>volatile</code> است چون «وقفه» عوضش می‌کند.</li>
+  <li data-lines="7-10"><b class="what">رفتار BSRR.</b> ۱۶ بیت پایین: پین‌هایی که باید روشن شوند (<code>odr | set</code>)؛ ۱۶ بیت بالا: پین‌هایی که باید خاموش شوند (<code>&amp; ~reset</code>). سخت‌افزار واقعی این کار را <b>در یک لحظه و بدون خواندن توسط برنامه</b> می‌کند.</li>
+  <li data-lines="12-15"><b class="what">رفتار write-1-to-clear.</b> نوشتن یک در هر بیت، آن بیت را <b>پاک</b> می‌کند و نوشتن صفر اثری ندارد. بعضی پرچم‌های وضعیت واقعا این‌طور کار می‌کنند.</li>
+  <li data-lines="17-20"><b class="what">وقفهٔ ساختگی.</b> یک تابع معمولی که پین ۰ را یک می‌کند؛ در برنامهٔ واقعی این کار را ISR می‌کند.</li>
+  <li data-lines="24-30"><b class="what">حالت الف.</b> سه مرحلهٔ خواندن-تغییر-نوشتن را جدا نوشتیم تا بتوانیم وسطشان «وقفه» بیندازیم. نتیجه: پین ۰ که وقفه روشن کرده بود، گم می‌شود.</li>
+  <li data-lines="32-36"><b class="what">حالت ب.</b> همان وقفه، ولی با یک نوشتن BSRR. پین ۰ سرجایش می‌ماند و پین ۵ هم روشن می‌شود.</li>
+  <li data-lines="38-44"><b class="what">حالت پ: پاک‌کردن پرچم.</b> دو پرچم فعال‌اند (بیت‌های ۵ و ۱۳). می‌خواهیم فقط ۱۳ را پاک کنیم. اگر <code>PR |= بیت۱۳</code> بنویسی، اول کل PR (هر دو پرچم) خوانده می‌شود، بعد همان دو بیت روشن نوشته می‌شود، پس <b>هر دو پاک می‌شوند</b>. درست‌ترین کار نوشتن مستقیم فقط بیت ۱۳ است.
+    <span class="why">قاعدهٔ ذهنی: روی رجیستر write-1-to-clear هرگز <code>|=</code> نزن؛ فقط بیتی را که می‌خواهی پاک شود بنویس (با <code>=</code>). این‌که کدام رجیستر این‌طور است، در مستندات RM0383 با علامت <code>rc_w1</code> نوشته شده (برای مثال رجیستر <code>EXTI_PR</code>، درس <a href="5-3.html">۵.۳</a>).</span></li>
+</ol>
+<pre class="term" data-from="rmw_sim.c">
+$ gcc -std=c11 -Wall -Wextra -o rmw_sim rmw_sim.c
+$ ./rmw_sim
+read-modify-write: 0x0020
+BSRR             : 0x0021
+PR |= bit13      : 0x0000
+PR  = bit13      : 0x0020
+</pre>
+<p>اعداد داستان را می‌گویند: <code>0x0020</code> یعنی فقط پین ۵ (پین ۰ گم شد)، <code>0x0021</code> یعنی هر دو پین درست، <code>0x0000</code> یعنی هر دو پرچم پاک شدند، و <code>0x0020</code> در آخر یعنی فقط پرچم ۱۳ پاک شد. برای همین طراحان STM32 رجیستر <code>BSRR</code> را گذاشته‌اند: <b>تنها برای این‌که بدون خطر بتوانی پین‌ها را جدا از هم عوض کنی.</b></p>
+
+<div class="callout tip"><div class="ct">قاعدهٔ عملی برای GPIO در STM32</div>
+<ul>
+<li>برای <b>روشن/خاموش‌کردن پین</b>: همیشه <code>BSRR</code>. (بیت n = روشن، بیت n+16 = خاموش.)</li>
+<li>برای <b>خواندن پین ورودی</b>: <code>IDR</code>. برای خواندن آنچه خودت روی خروجی گذاشته‌ای: <code>ODR</code>.</li>
+<li>برای <b>تنظیمات</b> (مثل MODER) که فقط در ابتدای برنامه یک بار عوض می‌شوند، <code>|=</code> و <code>&amp;= ~</code> اشکالی ندارد؛ چون هیچ وقفه‌ای هم‌زمان با آن سراغ همان رجیستر نمی‌رود. اگر هم بخواهی مطمئن باشی، ISRها را در آن لحظه غیرفعال کن (درس ۵.۳).</li>
+</ul></div>
+
+<h2 id="blink">اولین برنامهٔ واقعی: چشمک LD2</h2>
+<p>حالا همه‌چیز را کنار هم بگذاریم. برد Nucleo-F411RE یک LED کاربر به اسم <b>LD2</b> دارد که به پایهٔ <b>PA5</b> وصل است. برای چشمک‌زدن سه کار لازم است:</p>
+<ol class="steps">
+  <li><b>ساعت پورت A را روشن کن.</b> پریفرال‌های STM32 برای صرفه‌جویی در برق پیش‌فرض بی‌ساعت‌اند و به رجیسترشان جواب نمی‌دهند. رجیستر <code>RCC_AHB1ENR</code> در آدرس <code>0x40023830</code> (پایهٔ RCC <code>0x40023800</code> + آفست <code>0x30</code>) است و بیت ۰ آن <code>GPIOAEN</code> است.</li>
+  <li><b>PA5 را خروجی کن.</b> در <code>GPIOA_MODER</code> دو بیتِ ۱۱ و ۱۰ (مخصوص پایهٔ ۵) را <code>01</code> کن.</li>
+  <li><b>در حلقه: BSRR بنویس، صبر کن، دوباره.</b> بیت ۵ = روشن، بیت ۲۱ (۵+۱۶) = خاموش.</li>
+</ol>
+
+<div class="widget" data-w="bits" data-width="16" data-reg="GPIOA_MODER" data-value="0" data-title="GPIOA_MODER (۱۶ بیت پایین): حالت پایه‌های PA0 تا PA7" data-fields='[{"name":"PA5","hi":11,"lo":10,"map":["ورودی","خروجی","عملکرد جایگزین","آنالوگ"]},{"name":"PA4","hi":9,"lo":8,"map":["ورودی","خروجی","عملکرد جایگزین","آنالوگ"]}]'></div>
+<p>در ابزارک بالا بیت ۱۰ را یک و بیت ۱۱ را صفر کن: فیلد PA5 می‌شود <code>01</code> = «خروجی». این همان مقداری است که برنامه باید بنویسد.</p>
+
+<div class="callout warn"><div class="ct">چرا <code>MODER = ...</code> ساده کافی نیست؟</div>
+<p>رجیستر MODER برای <b>هر ۱۶ پایه</b> دو بیت دارد (۳۲ بیت). اگر بنویسی <code>GPIOA_MODER = 1u &lt;&lt; 10;</code> همهٔ پایه‌های دیگر را هم صفر (ورودی) می‌کنی؛ از جمله پایه‌های PA13 و PA14 که تراشه در حالت پیش‌فرض برای اتصال دیباگر (SWD) در «عملکرد جایگزین» گذاشته است، و ارتباط دیباگر قطع می‌شود. برای همین اول فقط همان دو بیت را پاک می‌کنیم (<code>&amp; ~(3u &lt;&lt; 10)</code>)، بعد مقدار جدید را OR می‌کنیم. الگوی «فیلد را پاک کن، مقدار را بگذار» از درس ۳.۱.</p></div>
+
+<div class="code" data-file="blink_regs.c" data-lang="c" data-verify="arm" id="code7">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define RCC_AHB1ENR (*(volatile uint32_t *)0x40023830u)
+#define GPIOA_MODER (*(volatile uint32_t *)0x40020000u)
+#define GPIOA_BSRR  (*(volatile uint32_t *)0x40020018u)
+
+static void delay(void)
+{
+    for (volatile uint32_t i = 0; i &lt; 400000u; i++) {
+    }
+}
+
+int main(void)
+{
+    RCC_AHB1ENR |= 1u &lt;&lt; 0;
+    (void)RCC_AHB1ENR;
+    GPIOA_MODER = (GPIOA_MODER &amp; ~(3u &lt;&lt; 10)) | (1u &lt;&lt; 10);
+
+    for (;;) {
+        GPIOA_BSRR = 1u &lt;&lt; 5;
+        delay();
+        GPIOA_BSRR = 1u &lt;&lt; 21;
+        delay();
+    }
+}
+</pre></div>
+<ol class="walk" data-for="code7">
+  <li data-lines="3-5"><b class="what">سه رجیستر.</b> RCC_AHB1ENR (روشن‌کردن ساعت)، GPIOA_MODER (حالت پایه‌ها)، GPIOA_BSRR (روشن/خاموش‌کردن). آدرس هر کدام = پایه + آفست از مستندات.</li>
+  <li data-lines="7-11"><b class="what">تأخیر خام.</b> حلقه‌ای که ۴۰۰ هزار بار می‌شمارد. شمارنده <code>volatile</code> است تا کامپایلر حلقه را حذف نکند (همان دام بخش قبل). زمان تقریبی آن به بهینه‌سازی و کلاک (پیش‌فرض ۱۶ مگاهرتز HSI) بستگی دارد و در حد چند دهم ثانیه است.
+    <span class="why">این یک راه بد ولی ساده است؛ زمان‌بندی درست با SysTick در درس ۵.۴ می‌آید.</span></li>
+  <li data-lines="15"><b class="what">main بدون <code>void</code> برگشتی.</b> <code>int main(void)</code>؛ ولی روی برد هرگز برنمی‌گردد (حلقهٔ بی‌نهایت پایین).</li>
+  <li data-lines="16"><b class="what">ساعت GPIOA.</b> بیت ۰ رجیستر <code>RCC_AHB1ENR</code> را یک می‌کنیم. بدون این، همهٔ نوشتن‌های بعدی روی GPIOA بی‌اثر است.
+    <span class="why">این متداول‌ترین علت «LED من چشمک نمی‌زند»: ساعت پورت فراموش شده.</span></li>
+  <li data-lines="17"><b class="what">خواندن بی‌مصرف.</b> <code>(void)RCC_AHB1ENR;</code> فقط یک بار رجیستر را می‌خواند و نتیجه را دور می‌ریزد. چون رجیستر <code>volatile</code> است، کامپایلر این خواندن را حذف <b>نمی‌کند</b>. خوانده‌شدن، تأخیر کوچکی می‌دهد تا ساعت پورت واقعا برقرار شود (ST در مستندات خود توصیه می‌کند؛ جزئیات را در errata/مستندات تراشه ببین).</li>
+  <li data-lines="18"><b class="what">PA5 خروجی.</b> اول دو بیت ۱۱ و ۱۰ را پاک می‌کنیم (<code>3u &lt;&lt; 10</code> = <code>0b11</code> در بیت‌های ۱۰ و ۱۱)، بعد <code>01</code> می‌گذاریم. بقیهٔ پایه‌ها دست‌نخورده می‌مانند.</li>
+  <li data-lines="20-25"><b class="what">حلقهٔ چشمک.</b> بیت ۵ در BSRR: LED روشن؛ صبر؛ بیت ۲۱: LED خاموش؛ صبر. برای همیشه.
+    <span class="why">LD2 روی Nucleo با ۱ روشن و با ۰ خاموش می‌شود (منطق مثبت). اگر به LED دیگری وصل کنی که به زمین وصل باشد، ممکن است برعکس باشد.</span></li>
+</ol>
+
+<p>این برنامه بدون startup و linker script روی برد اجرا نمی‌شود (خود <code>main</code> را کسی صدا نمی‌زند؛ درس <a href="5-1.html">۵.۱</a>). ولی همین فایل با <code>arm-none-eabi-gcc -c</code> کامپایل و بی‌هشدار ساخته شد. در درس <a href="5-2.html">۵.۲</a> آن را کامل و اجرایی می‌کنیم.</p>
+
+<p>حالا همین برنامه، این بار با <code>struct</code>. مقایسه کن که چقدر خواناتر شد:</p>
+
+<div class="code" data-file="blink_struct.c" data-lang="c" data-verify="arm" id="code8">
+<pre>
+#include &lt;stdint.h&gt;
+
+typedef struct {
+    volatile uint32_t MODER;
+    volatile uint32_t OTYPER;
+    volatile uint32_t OSPEEDR;
+    volatile uint32_t PUPDR;
+    const volatile uint32_t IDR;
+    volatile uint32_t ODR;
+    volatile uint32_t BSRR;
+    volatile uint32_t LCKR;
+    volatile uint32_t AFR[2];
+} GPIO_TypeDef;
+
+typedef struct {
+    volatile uint32_t CR;
+    volatile uint32_t PLLCFGR;
+    volatile uint32_t CFGR;
+    volatile uint32_t CIR;
+    volatile uint32_t AHB1RSTR;
+    volatile uint32_t AHB2RSTR;
+    uint32_t RESERVED0[2];
+    volatile uint32_t APB1RSTR;
+    volatile uint32_t APB2RSTR;
+    uint32_t RESERVED1[2];
+    volatile uint32_t AHB1ENR;
+} RCC_TypeDef;
+
+#define RCC   ((RCC_TypeDef *)0x40023800u)
+#define GPIOA ((GPIO_TypeDef *)0x40020000u)
+
+static void delay(void)
+{
+    for (volatile uint32_t i = 0; i &lt; 400000u; i++) {
+    }
+}
+
+int main(void)
+{
+    RCC-&gt;AHB1ENR |= 1u &lt;&lt; 0;
+    (void)RCC-&gt;AHB1ENR;
+    GPIOA-&gt;MODER = (GPIOA-&gt;MODER &amp; ~(3u &lt;&lt; 10)) | (1u &lt;&lt; 10);
+
+    for (;;) {
+        GPIOA-&gt;BSRR = 1u &lt;&lt; 5;
+        delay();
+        GPIOA-&gt;BSRR = 1u &lt;&lt; 21;
+        delay();
+    }
+}
+</pre></div>
+<ol class="walk" data-for="code8">
+  <li data-lines="3-13"><b class="what">GPIO_TypeDef.</b> همان struct بخش قبل (آفست‌هایش را روی PC چاپ کردیم).</li>
+  <li data-lines="15-27"><b class="what">RCC_TypeDef (بخش کوچک‌شده).</b> ما فقط تا <code>AHB1ENR</code> نیاز داریم، ولی باید همهٔ رجیسترهای بین را هم بنویسیم تا <code>AHB1ENR</code> روی آفست <code>0x30</code> بیفتد. رجیسترهایی که در مستندات «Reserved» اند به‌صورت آرایهٔ معمولی (بدون <code>volatile</code>) می‌آیند.
+    <span class="why">آفست AHB1ENR را بشمار: ۶ رجیستر (۰x00 تا ۰x14)، ۲ رزرو (تا ۰x1C)، ۲ رجیستر (۰x20 و ۰x24)، ۲ رزرو (تا ۰x2C)، و بعد AHB1ENR در ۰x30. اگر یکی را جا بیندازی، همه‌ی دسترسی‌ها یک خانه جابه‌جا می‌شوند و بدون هیچ پیام خطا رجیستر دیگری را می‌نویسی.</span></li>
+  <li data-lines="29-30"><b class="what">اسم دادن به سخت‌افزار.</b> «آدرس <code>0x40020000</code> را مثل یک <code>GPIO_TypeDef</code> ببین». اشاره‌گر است، پس با <code>-&gt;</code> به اعضا می‌رسیم.</li>
+  <li data-lines="40-42"><b class="what">راه‌اندازی.</b> دقیقا همان سه کار، با اسم‌های خواناتر: <code>RCC-&gt;AHB1ENR</code>، <code>GPIOA-&gt;MODER</code>.</li>
+  <li data-lines="44-48"><b class="what">حلقه.</b> <code>GPIOA-&gt;BSRR</code> = «رجیستر BSRR پورت A». چون <code>BSRR</code> عضو <code>volatile</code> است، هر نوشتن واقعا انجام می‌شود.</li>
+</ol>
+<p>هر دو نسخه، کد ماشین یکسانی می‌سازند: مثلا نوشتن در BSRR در هر دو <code>str r6, [r4, #24]</code> است (آفست ۲۴ = <code>0x18</code>). <code>struct</code> هزینه‌ای ندارد؛ فقط خوانایی می‌دهد.</p>
+
+<h2 id="esp32">در ESP32 چه؟</h2>
+<p>ESP32 هم رجیستر memory-mapped دارد و کارش همان است. ولی چون تراشه پیچیده‌تر است (مثلا ماتریس GPIO که هر پایه را به هر پریفرالی وصل می‌کند)، Espressif اصرار دارد که از توابع <b>درایور</b> ESP-IDF استفاده کنی. آن توابع در داخل، همین کار (نوشتن در رجیستر با <code>volatile</code>) را می‌کنند. برای برنامهٔ کاربردی همان چشمک این‌طور نوشته می‌شود:</p>
+
+<div class="code" data-file="blink_esp.c" data-lang="c" data-verify="frag" id="code9">
+<pre>
+#include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#define LED_GPIO GPIO_NUM_2
+
+void app_main(void)
+{
+    gpio_reset_pin(LED_GPIO);
+    gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
+    while (1) {
+        gpio_set_level(LED_GPIO, 1);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        gpio_set_level(LED_GPIO, 0);
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
+</pre></div>
+<ol class="walk" data-for="code9">
+  <li data-lines="1-3"><b class="what">سرصفحه‌ها.</b> درایور GPIO و FreeRTOS (برای <code>vTaskDelay</code>).</li>
+  <li data-lines="5"><b class="what">شمارهٔ پایه.</b> روی بسیاری از بردهای DevKit ارزان LED روی GPIO2 است (روی برد تو ممکن است فرق کند؛ نقشهٔ برد را ببین).</li>
+  <li data-lines="7-11"><b class="what">راه‌اندازی.</b> <code>gpio_reset_pin</code> پایه را به حالت پیش‌فرض می‌برد و <code>gpio_set_direction</code> آن را خروجی می‌کند. معادل دو مرحلهٔ «ساعت» و «MODER» در STM32.</li>
+  <li data-lines="12-16"><b class="what">حلقه.</b> <code>gpio_set_level</code> معادل نوشتن در BSRR است و <code>vTaskDelay</code> به‌جای حلقهٔ خالی، task را می‌خواباند تا CPU برای کارهای دیگر آزاد بماند (درس <a href="5-6.html">۵.۶</a>).</li>
+</ol>
+<p>یعنی ایدهٔ «رجیستر = پنل دکمه» در ESP32 هم درست است؛ فقط لایهٔ درایور آن را از دید برنامهٔ کاربردی پنهان می‌کند. هر وقت لازم شد به رجیستر ESP32 مستقیم دست بزنی (بهینه‌سازی سرعت، یک قابلیت خاص)، مرجع رسمی <em>Technical Reference Manual</em> تراشه و پروندهٔ هدر <code>soc/</code> در ESP-IDF را بخوان؛ آنجا هم همان ساختار struct و <code>volatile</code> را می‌بینی.</p>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: <span class="en">volatile</span> دقیقا چه تضمینی می‌دهد؟</div>
+<p>استاندارد C می‌گوید دسترسی به یک شیء <code>volatile</code> یک «اثر جانبی» است و کامپایلر باید همهٔ اثرهای جانبی را به همان ترتیبی که در کد آمده انجام دهد (نسبت به سایر دسترسی‌های <code>volatile</code>). دو محدودیت مهم: (۱) ترتیب بین دسترسی <code>volatile</code> و دسترسی <b>غیر</b>-<code>volatile</code> تضمین نمی‌شود؛ کامپایلر ممکن است یک متغیر معمولی را قبل یا بعد از آن جابه‌جا کند. (۲) خود <b>CPU</b> و بافرهای حافظه هم ممکن است ترتیب واقعی دسترسی‌ها را عوض کنند. در Cortex-M4 برای رجیسترهای پریفرال معمولا مشکلی نیست، ولی در ARM بزرگ‌تر یا وقتی ترتیب دقیق مهم است از «مانع حافظه» (<code>__DMB()</code> و همراهان از CMSIS) استفاده می‌شود. برای شروع کار همین کافی است که بدانی این مسئله وجود دارد؛ در پروژه‌های معمولی STM32F411 با <code>volatile</code> درست کار می‌کنی.</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="3">
+  <p class="q">وقتی می‌نویسیم <code>#define GPIOA_ODR (*(volatile uint32_t *)0x40020014u)</code>، ترتیب کارها از داخل به بیرون چیست؟</p>
+  <ol>
+    <li data-why="ستاره در آخر می‌آید، نه اول: باید اول عدد را به اشاره‌گر تبدیل کنی و بعد به خود خانه برسی.">اول ستاره، بعد تبدیل نوع، بعد عدد</li>
+    <li data-why="عدد یک آدرس است، نه مقداری که بخواهی در متغیر بگذاری؛ اینجا هیچ متغیر جدیدی ساخته نمی‌شود.">یک متغیر ۳۲ بیتی جدید در RAM می‌سازد و در آن ۰x۴۰۰۲۰۰۱۴ می‌گذارد</li>
+    <li>عدد آدرس ← تبدیل به اشاره‌گر به <code>volatile uint32_t</code> ← ستاره: رسیدن به خود آن خانه</li>
+    <li data-why="این عبارت هیچ تابعی صدا نمی‌زند؛ فقط یک نام برای یک خانهٔ حافظه است.">تابعی را در آدرس ۰x۴۰۰۲۰۰۱۴ صدا می‌زند</li>
+  </ol>
+  <div class="fb">عدد را اول به «اشاره‌گر به عدد ۳۲ بیتی volatile» تبدیل می‌کنیم، و ستاره به خود خانه می‌رسد. حاصل مثل یک متغیر است ولی هر دسترسی به آن، به سخت‌افزار می‌رسد.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">برنامه‌ای با <code>-O0</code> درست کار می‌کند ولی با <code>-O2</code> در حلقهٔ <code>while (flag == 0) {}</code> هنگ می‌کند. <code>flag</code> را یک ISR عوض می‌کند. محتمل‌ترین علت چیست؟</p>
+  <ol>
+    <li data-why="ISR روی رجیستر CPU اثری ندارد؛ مشکل نه کامپایلر خراب، بلکه فرض کامپایلر دربارهٔ flag است.">کامپایلر خراب است</li>
+    <li><code>flag</code> را <code>volatile</code> نکرده‌ایم و کامپایلر مقدارش را یک بار خوانده و در رجیستر نگه داشته</li>
+    <li data-why="حافظه سالم است؛ مشکل در مقدار نگه‌داری‌شده در رجیستر CPU است.">RAM پر شده</li>
+    <li data-why="ISR اگر صدا نمی‌خورد برنامه با -O0 هم هنگ می‌کرد. علت به بهینه‌سازی بستگی دارد.">ISR اصلا صدا زده نمی‌شود</li>
+  </ol>
+  <div class="fb">علامت مشخص «با -O0 درست، با -O2 خراب» ارتباط با بهینه‌سازی دارد. کامپایلر نمی‌داند ISR هم در کار است و <code>flag</code> را یک بار می‌خواند. <code>volatile</code> درمان است.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">چرا برای روشن‌کردن یک پین STM32 از <code>GPIOA_BSRR = 1u &lt;&lt; 5;</code> بهتر است تا <code>GPIOA_ODR |= 1u &lt;&lt; 5;</code>؟</p>
+  <ol>
+    <li data-why="سرعت تفاوتی در اصل موضوع نیست؛ مسئله ایمنی در برابر وقفه است.">چون BSRR سریع‌تر از ODR است</li>
+    <li data-why="ODR هم رجیستر معتبری است و کار می‌کند؛ ولی امن نیست.">چون ODR اصلا برای روشن‌کردن پین نیست</li>
+    <li data-why="هر دو با ماسک کار می‌کنند. مسئله چیز دیگری است.">چون <code>|=</code> در C وجود ندارد</li>
+    <li><code>|=</code> سه مرحله است (خواندن، تغییر، نوشتن) و وقفه وسط آن ممکن است تغییرات دیگر را از بین ببرد؛ BSRR یک نوشتن است</li>
+  </ol>
+  <div class="fb">BSRR طوری طراحی شده که فقط بیت‌هایی که ۱ نوشته‌ای اثر داشته باشند، بدون خواندن قبلی. پس پنجرهٔ خطا ندارد.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">کدام اعلان برای رجیستر <b>ورودی فقط‌خواندنی</b> (مثل IDR) مناسب‌تر است؟</p>
+  <ol>
+    <li><code>const volatile uint32_t *</code> (اشاره‌گر به عدد ۳۲ بیتی فقط‌خواندنی که خودبه‌خود عوض می‌شود)</li>
+    <li data-why="بدون volatile کامپایلر مقدار را کش می‌کند و تغییرات پایه را نمی‌بیند.">‎<code>const uint32_t *</code></li>
+    <li data-why="بدون const اجازهٔ نوشتن اشتباهی روی رجیستر فقط‌خواندنی را داده‌ای.">‎<code>volatile uint32_t *</code></li>
+    <li data-why="این حالت هیچ محافظتی ندارد، نه در برابر نوشتن و نه در برابر کش‌کردن.">‎<code>uint32_t *</code></li>
+  </ol>
+  <div class="fb"><code>const</code>: ما نمی‌نویسیم. <code>volatile</code>: دنیا عوض می‌کند. هر دو برای IDR لازم‌اند.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">بعد از اجرای این کد، مقدار <code>x</code> چیست؟<br><code>volatile uint32_t x = 0; x++; x++;</code> (در یک برنامهٔ بدون وقفه)</p>
+  <ol>
+    <li data-why="هر دو x++ اجرا می‌شوند و volatile آنها را حذف نمی‌کند.">۰</li>
+    <li>۲</li>
+    <li data-why="volatile باعث حذف یکی از x++ها نمی‌شود، برعکس، هر دو را حتما اجرا می‌کند.">۱</li>
+    <li data-why="کد کاملا قانونی است و کامپایل می‌شود.">خطای کامپایل</li>
+  </ol>
+  <div class="fb">بدون وقفه، هیچ‌کس وسط کار x را عوض نمی‌کند، پس ۲ می‌شود. <code>volatile</code> فقط تضمین می‌کند هر دو افزایش انجام شوند؛ ولی اتمی‌بودن (تقسیم‌ناپذیری) را تضمین نمی‌کند.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">می‌خواهی پرچم <code>rc_w1</code> شماره ۱۳ را پاک کنی و پرچم‌های دیگر دست نخورند. کدام کد درست است؟</p>
+  <ol>
+    <li data-why="این کل مقدار را می‌خواند و همه‌ی پرچم‌های فعال را دوباره می‌نویسد، پس همه را پاک می‌کند.">‎<code>PR |= 1u &lt;&lt; 13;</code></li>
+    <li data-why="این همهٔ بیت‌ها به‌جز ۱۳ را روشن می‌نویسد، یعنی همهٔ پرچم‌های دیگر را پاک می‌کند.">‎<code>PR = ~(1u &lt;&lt; 13);</code></li>
+    <li><code>PR = 1u &lt;&lt; 13;</code></li>
+    <li data-why="نوشتن صفر در رجیستر write-1-to-clear اثری ندارد؛ هیچ پرچمی پاک نمی‌شود.">‎<code>PR = 0;</code></li>
+  </ol>
+  <div class="fb">در رجیستر write-1-to-clear فقط بیت‌هایی که ۱ می‌نویسی اثر دارند. پس فقط بیت ۱۳ را با <code>=</code> بنویس.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: کتابخانهٔ کوچک set/clear/toggle</div>
+<p>یک «رجیستر ساختگی» در PC بساز و سه تابع بنویس که با اشاره‌گر به <code>volatile uint32_t</code> کار کنند.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> رجیستر با ۰ شروع می‌شود. بیت ۳ را set، بیت ۵ را set، بیت ۳ را toggle، بیت ۵ را clear و بیت ۰ را toggle کن. بعد از هر مرحله مقدار هگز چیست؟ (روی کاغذ حل کن.)</li>
+  <li><b>حل:</b> توابع <code>reg_set</code>، <code>reg_clear</code>، <code>reg_toggle</code> (هرکدام <code>volatile uint32_t *reg</code> و شماره بیت می‌گیرند) را بنویس و پنج مرحلهٔ بالا را اجرا کن.</li>
+  <li><b>فکر کن:</b> چرا پارامتر <code>reg</code> باید <code>volatile uint32_t *</code> باشد، نه <code>uint32_t *</code>؟ (راهنمایی: اگر رجیستر واقعی بود چه می‌شد؟)</li>
+</ol>
+<details><summary>راهنمایی</summary><p>هر تابع یک خط دارد: set با <code>|=</code>، clear با <code>&amp;= ~</code>، toggle با <code>^=</code>. همه با <code>1u &lt;&lt; bit</code> (درس ۳.۱).</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="sim_regs.c">
+$ ./sim_regs
+set 3    : 0x0008
+set 5    : 0x0028
+toggle 3 : 0x0020
+clear 5  : 0x0000
+toggle 0 : 0x0001
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="sim_regs.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+static volatile uint32_t fake_odr;
+
+static void reg_set(volatile uint32_t *reg, unsigned bit)
+{
+    *reg |= 1u &lt;&lt; bit;
+}
+
+static void reg_clear(volatile uint32_t *reg, unsigned bit)
+{
+    *reg &amp;= ~(1u &lt;&lt; bit);
+}
+
+static void reg_toggle(volatile uint32_t *reg, unsigned bit)
+{
+    *reg ^= 1u &lt;&lt; bit;
+}
+
+int main(void)
+{
+    reg_set(&amp;fake_odr, 3);
+    printf("set 3    : 0x%04x\n", (unsigned)fake_odr);
+    reg_set(&amp;fake_odr, 5);
+    printf("set 5    : 0x%04x\n", (unsigned)fake_odr);
+    reg_toggle(&amp;fake_odr, 3);
+    printf("toggle 3 : 0x%04x\n", (unsigned)fake_odr);
+    reg_clear(&amp;fake_odr, 5);
+    printf("clear 5  : 0x%04x\n", (unsigned)fake_odr);
+    reg_toggle(&amp;fake_odr, 0);
+    printf("toggle 0 : 0x%04x\n", (unsigned)fake_odr);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="4"><b class="what">رجیستر ساختگی.</b> <code>volatile</code>، مثل رجیستر واقعی.</li>
+  <li data-lines="6-9"><b class="what">set.</b> <code>*reg</code> = خود رجیستر. <code>|= 1u &lt;&lt; bit</code> فقط آن بیت را یک می‌کند.</li>
+  <li data-lines="11-14"><b class="what">clear.</b> <code>~(1u &lt;&lt; bit)</code> یعنی همه بیت‌ها یک جز بیت مورد نظر؛ <code>&amp;=</code> آن بیت را صفر و بقیه را نگه می‌دارد.</li>
+  <li data-lines="16-19"><b class="what">toggle.</b> <code>^=</code> بیت را برعکس می‌کند.</li>
+  <li data-lines="23-32"><b class="what">پنج مرحله.</b> ۰x۰۸ ← ۰x۲۸ ← ۰x۲۰ (بیت ۳ برگشت) ← ۰x۰۰ ← ۰x۰۱.
+    <span class="why">قسمت پ: اگر پارامتر <code>volatile</code> نبود و رجیستر واقعی بود، کامپایلر ممکن بود دو نوشتن پشت‌سرهم را ادغام یا حذف کند. با <code>volatile</code> به‌درستی هر <code>|=</code> واقعا انجام می‌شود. توجه کن: این توابع همان مشکل خواندن-تغییر-نوشتن را دارند و برای GPIO همیشه BSRR بهتر است.</span></li>
+</ol>
+<pre class="term" data-from="sim_regs.c">
+$ ./sim_regs
+set 3    : 0x0008
+set 5    : 0x0028
+toggle 3 : 0x0020
+clear 5  : 0x0000
+toggle 0 : 0x0001
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: دکمه‌ای که فقط در Release هنگ می‌کند (پیدا کردن باگ)</div>
+<p>تابع زیر باید منتظر فشرده‌شدن دکمه بماند. ISR (<code>EXTI15_10_IRQHandler</code>، در درس ۵.۳ می‌آید) پرچم را یک می‌کند. کد با <code>-O0</code> درست کار می‌کند ولی با <code>-O2</code> هنگ می‌کند.</p>
+<div class="code" data-file="ex2_bug.c" data-lang="c" data-verify="arm" data-cflags="-O2" id="ex2bug">
+<pre>
+#include &lt;stdint.h&gt;
+
+static uint32_t button_pressed;         // ISR این را ۱ می‌کند
+
+void EXTI15_10_IRQHandler(void)
+{
+    button_pressed = 1;
+}
+
+uint32_t wait_for_button(void)
+{
+    while (button_pressed == 0) {
+    }
+    return 1;
+}
+</pre></div>
+<ol class="parts">
+  <li><b>تشخیص:</b> علت هنگ‌کردن را با یک جمله بگو. کدام خط اسمبلی (بخش «چرا volatile») همین را نشان می‌دهد؟</li>
+  <li><b>اصلاح:</b> با کمترین تغییر درستش کن.</li>
+  <li><b>چالش:</b> برنامه‌نویسی می‌گوید «وقتی وسط حلقه یک <code>printf</code> گذاشتم مشکل حل شد». چرا شاید این‌طور شد؟ چرا این «درمان» خطرناک است؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>حلقه فقط <code>button_pressed</code> را می‌خواند و خودش هرگز آن را عوض نمی‌کند. کامپایلر <code>ISR</code> را در این تابع نمی‌بیند. یک کلمه بعد از <code>static</code> لازم است.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-objdump -d ex2_bug.o     # (نسخهٔ خراب)
+wait_for_button:
+   ldr    r3, [pc, #8]
+   ldr    r3, [r3, #0]          @ یک بار
+   cbnz   r3, 14
+   b.n    12                    @ به خودش می‌پرد!
+   movs   r0, #1
+   bx     lr
+
+$ arm-none-eabi-objdump -d ex2_fix.o     # (نسخهٔ اصلاح‌شده)
+wait_for_button:
+   ldr    r2, [pc, #8]
+   ldr    r3, [r2, #0]          @ داخل حلقه
+   cmp    r3, #0
+   beq.n  e                     @ برگرد و دوباره بخوان
+   movs   r0, #1
+   bx     lr
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="ex2_fix.c" data-lang="c" data-verify="arm" data-cflags="-O2" id="ex2">
+<pre>
+#include &lt;stdint.h&gt;
+
+static volatile uint32_t button_pressed;    // ISR این را ۱ می‌کند
+
+void EXTI15_10_IRQHandler(void)
+{
+    button_pressed = 1;
+}
+
+uint32_t wait_for_button(void)
+{
+    while (button_pressed == 0) {
+    }
+    return 1;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="3"><b class="what">تنها تغییر: <code>volatile</code>.</b> حالا هر بار که حلقه <code>button_pressed</code> را می‌خواند، خودِ حافظه خوانده می‌شود.</li>
+  <li data-lines="5-8"><b class="what">ISR.</b> یک نوشتن ساده. این نوشتن را کامپایلر حذف نمی‌کرد، چون یک متغیر سراسری است که ممکن است جای دیگر خوانده شود.</li>
+  <li data-lines="10-15"><b class="what">حلقه.</b> اسمبلی نسخهٔ اصلاح‌شده <code>ldr</code> را داخل حلقه دارد و به خود پرش نمی‌کند (خروجی بالا).
+    <span class="why">قسمت پ: <code>printf</code> یک تابع بیرونی است و کامپایلر نمی‌داند آیا آن تابع متغیر سراسری را عوض می‌کند یا نه؛ برای احتیاط پرچم را بعد از هر صدا زدن دوباره می‌خواند. پس ناخواسته مشکل «حل» می‌شود. ولی اگر <code>printf</code> را حذف کنی یا تابع دیگری را جایش بگذاری که کامپایلر ببیند تأثیری ندارد، دوباره خراب می‌شود. راه‌حل باید همان چیزی باشد که به کامپایلر حقیقت را می‌گوید: <code>volatile</code>.</span></li>
+</ol></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: دکمهٔ آبی و LED (ارتباط با سخت‌افزار)</div>
+<p>روی Nucleo-F411RE دکمهٔ آبی B1 به PC13 وصل است و <b>فعال-پایین</b> است: وقتی فشرده نیست خط بالا (۱) است و وقتی فشرده شود پایین (۰). می‌خواهیم LED (PA5) تا وقتی دکمه را نگه داشته‌ای روشن باشد.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> اگر بیت ۱۳ از <code>GPIOC_IDR</code> برابر ۰ باشد، دکمه فشرده است یا رها؟ LED باید روشن باشد یا خاموش؟</li>
+  <li><b>حل:</b> برنامه را بنویس. چه ساعت‌هایی را باید روشن کنی؟ (راهنمایی: ساعت GPIOC بیت ۲ <code>RCC_AHB1ENR</code> است.) MODER پورت C برای PC13 را عوض نمی‌کنیم چون پیش‌فرض ورودی است.</li>
+  <li><b>چالش:</b> نسخه‌ای بنویس که هر بار دکمه <b>فشرده می‌شود</b> (نه نگه‌داشتن) LED برعکس شود. چه مشکلی با لرزش (bounce) مکانیکی دکمه پیش می‌آید؟ (رفع آن در درس <a href="4-6.html">۴.۶</a> می‌آید.)</li>
+</ol>
+<details><summary>راهنمایی</summary><p>آدرس <code>GPIOC_IDR</code> = <code>0x40020800 + 0x10 = 0x40020810</code>. با <code>const volatile</code> تعریفش کن. برای چالش، مقدار قبلی پین را نگه دار و فقط لحظهٔ گذر از ۱ به ۰ را ببین.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary><p>این برنامه روی برد اجرایی نیست مگر startup و linker script داشته باشی (درس ۵.۱ و ۵.۲)، ولی همین که بدون هشدار کامپایل شود نشان می‌دهد آدرس‌ها و انواع درست‌اند: <code>arm-none-eabi-gcc -c button.c</code> بدون خروجی. روی برد: LED با فشردن دکمه روشن و با رها کردن خاموش.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="button.c" data-lang="c" data-verify="arm" id="ex3">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define RCC_AHB1ENR (*(volatile uint32_t *)0x40023830u)
+#define GPIOA_MODER (*(volatile uint32_t *)0x40020000u)
+#define GPIOA_BSRR  (*(volatile uint32_t *)0x40020018u)
+#define GPIOC_IDR   (*(const volatile uint32_t *)0x40020810u)
+
+int main(void)
+{
+    RCC_AHB1ENR |= (1u &lt;&lt; 0) | (1u &lt;&lt; 2);
+    (void)RCC_AHB1ENR;
+    GPIOA_MODER = (GPIOA_MODER &amp; ~(3u &lt;&lt; 10)) | (1u &lt;&lt; 10);
+
+    for (;;) {
+        if (GPIOC_IDR &amp; (1u &lt;&lt; 13)) {
+            GPIOA_BSRR = 1u &lt;&lt; 21;
+        } else {
+            GPIOA_BSRR = 1u &lt;&lt; 5;
+        }
+    }
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="6"><b class="what">رجیستر ورودی.</b> <code>const volatile</code>: فقط می‌خوانیم و مقدارش خودبه‌خود عوض می‌شود (با فشردن دکمه).</li>
+  <li data-lines="11"><b class="what">دو ساعت.</b> بیت ۰ = GPIOAEN (برای LED) و بیت ۲ = GPIOCEN (برای دکمه). هر دو را با یک <code>|=</code> روشن می‌کنیم.</li>
+  <li data-lines="13"><b class="what">PA5 خروجی.</b> مثل قبل. PC13 دست‌نخورده می‌ماند و ورودی است (مقدار پیش‌فرض MODER پورت C صفر است).</li>
+  <li data-lines="15-21"><b class="what">حلقه.</b> اگر بیت ۱۳ از IDR یک بود، دکمه رها است و LED را خاموش می‌کنیم (BSRR بیت ۲۱)؛ وگرنه روشن (بیت ۵).
+    <span class="why">چون IDR <code>volatile</code> است، هر دور حلقه پین را دوباره می‌خواند. بدون <code>volatile</code> در <code>-O2</code>، همان دام بخش قبل: فقط یک بار خوانده می‌شد.</span></li>
+</ol>
+<p><b>چالش:</b> نسخهٔ تغییر-با-فشردن (نه با نگه‌داشتن). ایدهٔ اصلی: مقدار قبلی پین را نگه دار و فقط لحظهٔ گذر ۱ ← ۰ را ببین.</p>
+<div class="code" data-file="toggle_press.c" data-lang="c" data-verify="arm" id="ex3b">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define RCC_AHB1ENR (*(volatile uint32_t *)0x40023830u)
+#define GPIOA_MODER (*(volatile uint32_t *)0x40020000u)
+#define GPIOA_ODR   (*(volatile uint32_t *)0x40020014u)
+#define GPIOA_BSRR  (*(volatile uint32_t *)0x40020018u)
+#define GPIOC_IDR   (*(const volatile uint32_t *)0x40020810u)
+
+int main(void)
+{
+    RCC_AHB1ENR |= (1u &lt;&lt; 0) | (1u &lt;&lt; 2);
+    (void)RCC_AHB1ENR;
+    GPIOA_MODER = (GPIOA_MODER &amp; ~(3u &lt;&lt; 10)) | (1u &lt;&lt; 10);
+
+    uint32_t was_high = 1;
+    for (;;) {
+        uint32_t is_high = (GPIOC_IDR &gt;&gt; 13) &amp; 1u;
+        if (was_high == 1 &amp;&amp; is_high == 0) {
+            if (GPIOA_ODR &amp; (1u &lt;&lt; 5)) {
+                GPIOA_BSRR = 1u &lt;&lt; 21;
+            } else {
+                GPIOA_BSRR = 1u &lt;&lt; 5;
+            }
+        }
+        was_high = is_high;
+    }
+}
+</pre></div>
+<ol class="walk" data-for="ex3b">
+  <li data-lines="15"><b class="what">حافظهٔ لبه.</b> <code>was_high</code> پین را در دور قبل نگه می‌دارد. دکمه در ابتدا رها است.</li>
+  <li data-lines="17"><b class="what">مقدار فعلی.</b> بیت ۱۳ را به پایین‌ترین جا می‌آوریم (<code>&gt;&gt; 13</code>) و ماسک ۱ می‌زنیم. نتیجه ۰ یا ۱ است.</li>
+  <li data-lines="18-24"><b class="what">لبهٔ پایین‌رونده.</b> فقط وقتی قبلا بالا بود و الان پایین است (لحظهٔ فشردن)، LED برعکس می‌شود: با خواندن <code>ODR</code> تشخیص می‌دهیم الان روشن است یا نه، و با BSRR عوضش می‌کنیم.</li>
+  <li data-lines="25"><b class="what">به‌روزرسانی.</b> مقدار فعلی، «قبلی» دور بعد می‌شود.
+    <span class="why">در عمل، تماس مکانیکی دکمه چند ده میکروثانیه تا چند میلی‌ثانیه می‌لرزد و ممکن است یک بار فشردن، چند لبه بسازد و LED چند بار برعکس شود. راه‌حل، debounce با ماشین حالت (درس ۴.۶) و زمان‌سنج (۵.۴) است.</span></li>
+</ol></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>این درس پل بین دنیای C و دنیای الکترونیک است، و بیشتر گیرهایش سه‌تاست. اول: <b>«LED چشمک نمی‌زند»</b> و کد ظاهرا درست است. ۹۰٪ وقت‌ها ساعت پورت (<code>RCC_AHB1ENR</code>) را فراموش کرده‌ای، یا یک رقم آدرس غلط است. قبل از هر چیز، آدرس و بیت را با RM0383 چک کن. دوم: <b>برنامه فقط در Release خراب می‌شود</b>. اول <code>volatile</code>. سوم: <b>رجیستر را با <code>|=</code> عوض کردن</b> و ایراد گاه‌به‌گاه. برای GPIO از BSRR استفاده کن. یک عادت پایانی: هر وقت یک رجیستر تازه دیدی، اول در مستندات ببین نوعش چیست (<code>rw</code>، <code>r</code>، <code>w</code>، <code>rc_w1</code>) و بعد کد بنویس. اگر امروز فقط یک چیز به یاد بماند، این باشد: <b>رجیستر پنل آسانسور است، نه قفسهٔ کتاب.</b></p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li>رجیستر یک خانهٔ ۳۲ بیتی در فضای آدرس است که نوشتنش سخت‌افزار را فرمان می‌دهد و خواندنش وضعیت را می‌گوید (memory-mapped I/O).</li>
+  <li>دسترسی: <code>(*(volatile uint32_t *)آدرس)</code> = عدد ← تبدیل به اشاره‌گر ← ستاره. آدرس‌ها را از RM0383 بردار.</li>
+  <li><code>volatile</code> یعنی «هر خواندن/نوشتن را دقیقا انجام بده»؛ بدون آن، بهینه‌سازی خواندن را کش می‌کند، نوشتن‌های تکراری را حذف می‌کند و حلقه‌های خالی را دور می‌ریزد (با اسمبلی دیدیم).</li>
+  <li><code>volatile</code> اتمی نیست: <code>x++</code> سه دستور است. برای رجیستر فقط‌خواندنی: <code>const volatile</code>.</li>
+  <li>روی رجیستر مشترک با وقفه، خواندن-تغییر-نوشتن (<code>|=</code>) خطرناک است. برای GPIO از <code>BSRR</code> استفاده کن؛ روی رجیستر write-1-to-clear هرگز <code>|=</code> نزن.</li>
+  <li>رجیسترهای یک پریفرال را با <code>struct</code> پوشش بده: <code>GPIOA-&gt;ODR</code>. ترتیب و رزروها باید دقیقا با مستندات یکی باشد. CMSIS همین کار را می‌کند.</li>
+  <li>LD2 روی PA5 است: ساعت GPIOA ← MODER ← BSRR. در ESP32 برای همان کار API درایور (<code>gpio_set_level</code>) را صدا بزن.</li>
+  <li>درس بعد: فصل ۴ با <a href="4-1.html">۴.۱ پیش‌پردازنده و ماکرو</a> شروع می‌شود؛ همان <code>#define</code>ی که در این درس بارها دیدی.</li>
+</ul></div>
+
+</article>
+</body>
+</html>

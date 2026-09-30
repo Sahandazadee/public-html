@@ -1,0 +1,1315 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>پروژه چندفایلی و build · C برای میکروکنترلر</title>
+<meta name="description" content="پروژه چندفایلی در C: header و source، اعلان و تعریف، extern و static، خطاهای لینکر، Makefile و CMake، و ساختار پروژه‌های STM32 و ESP-IDF، با کد خط‌به‌خط و خروجی واقعی.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="4-2">
+
+<p class="lede">تا حالا هر برنامه‌ات در یک فایل جا می‌شد. پروژهٔ واقعی روی STM32 یا ESP32 ده‌ها فایل دارد: درایور UART، درایور سنسور، فیلتر، ماشین حالت. اگر همه در یک فایل ۵۰۰۰ خطی بودند، هیچ‌کس نمی‌توانست چیزی را پیدا کند یا بخشی را به پروژهٔ دیگر ببرد. در این درس یاد می‌گیری چطور کد را بین فایل‌ها تقسیم کنی، فایل‌ها چطور همدیگر را می‌شناسند، و چطور یک دستور <code>make</code> کل پروژه را می‌سازد. همین‌جا هم می‌فهمی پیام‌های ترسناک لینکر (<code>undefined reference</code>) واقعا یعنی چه.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>فرق «اعلان» و «تعریف» را بگویی و بدانی هر کدام کجا می‌رود</li>
+    <li>یک ماژول با <code>.h</code> و <code>.c</code> بسازی و در چند فایل به کار ببری</li>
+    <li>کاربرد <code>extern</code> و <code>static</code> را بدانی</li>
+    <li>خطاهای <code>undefined reference</code>، <code>multiple definition</code> و <code>conflicting types</code> را رفع کنی</li>
+    <li>یک <code>Makefile</code> و یک <code>CMakeLists.txt</code> ساده بنویسی و بخوانی</li>
+    <li>ساختار پروژهٔ STM32، ESP-IDF و PlatformIO را بشناسی</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="1-4.html">۱.۴</a> (چهار مرحلهٔ ساخت: preprocess، compile، assemble، link)</li>
+    <li>درس <a href="2-6.html">۲.۶</a> (تابع، پروتوتایپ و <code>static</code>)</li>
+    <li>درس <a href="4-1.html">۴.۱</a> (<code>#include</code> و include guard)</li>
+    <li><code>gcc</code> و <code>make</code> روی رایانه (و اختیاری: <code>cmake</code>)</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایده اصلی: منو و آشپزخانه</h2>
+<p>یک رستوران را در نظر بگیر. مشتری روی <b>منو</b> می‌بیند چه غذاهایی هست و اسم و قیمتشان چیست. او نمی‌داند و لازم هم نیست بداند غذا چطور پخته می‌شود. طرز پخت در <b>آشپزخانه</b> است. اگر آشپز طرز پخت را عوض کند، منو همان می‌ماند و مشتری چیزی نمی‌فهمد.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>در C همین تقسیم را داریم. <b>فایل هدر</b> (<span class="term" data-t="header">header</span>، پسوند <code>.h</code>) منوست: فقط می‌گوید چه تابع‌هایی هست و ورودی و خروجیشان چیست. <b>فایل منبع</b> (پسوند <code>.c</code>) آشپزخانه است: طرز کار واقعی. فایل‌های دیگر فقط منو را می‌خوانند (با <code>#include</code>) و سفارش می‌دهند (تابع را صدا می‌زنند).</p></div>
+
+<p>به هر مجموعه از یک <code>.h</code> و یک <code>.c</code> که یک کار مشخص را انجام می‌دهد، <b>ماژول</b> (<span class="term" data-t="module">module</span>) می‌گوییم: مثلا ماژول <code>uart</code> برای فرستادن بایت، یا ماژول <code>filter</code> برای میانگین‌گیری. پروژه یعنی چند ماژول به‌اضافهٔ یک <code>main.c</code> که آن‌ها را کنار هم می‌گذارد.</p>
+
+<h2 id="decl">اعلان و تعریف: دو کار متفاوت</h2>
+<p>این مهم‌ترین مفهوم درس است. در C دو چیز کاملا جدا داریم:</p>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>اعلان (<span class="term" data-t="declaration">declaration</span>)</th><th>تعریف (<span class="term" data-t="definition">definition</span>)</th></tr></thead>
+<tbody>
+<tr><td>یعنی چه</td><td>«چنین اسمی با چنین نوعی <b>وجود دارد</b>» (اسم را معرفی می‌کند)</td><td>«این هم <b>خودش</b>»؛ کد تابع یا قفسهٔ حافظه را می‌سازد</td></tr>
+<tr><td>مثال تابع</td><td><code>int16_t sensor_read_dc(void);</code></td><td><code>int16_t sensor_read_dc(void) { ... }</code></td></tr>
+<tr><td>مثال متغیر</td><td><code>extern int g_tick_count;</code></td><td><code>int g_tick_count = 0;</code></td></tr>
+<tr><td>حافظه مصرف می‌کند؟</td><td>خیر</td><td>بله (Flash برای تابع، RAM برای متغیر)</td></tr>
+<tr><td>چند بار مجاز است؟</td><td>هر چند بار (به‌شرط سازگاری)</td><td><b>فقط یک بار</b> در کل برنامه</td></tr>
+<tr><td>کجا می‌نویسیمش؟</td><td>در <code>.h</code></td><td>در <code>.c</code></td></tr>
+</tbody></table></div>
+<p>به اعلان تابع قبلا «پروتوتایپ» گفتیم (درس <a href="2-6.html">۲.۶</a>). اعلان متغیر با کلمهٔ <code>extern</code> (از external یعنی «بیرونی») نوشته می‌شود و به کامپایلر می‌گوید: «این قفسه جای دیگری ساخته شده؛ من فقط اسم و نوعش را می‌دانم».</p>
+
+<div class="callout warn"><div class="ct">چرا «فقط یک بار»؟</div>
+<p>اگر دو فایل هر کدام یک قفسه به نام <code>counter</code> بسازند، لینکر نمی‌داند کدام را وصل کند و خطا می‌دهد. اگر هدری که تعریف دارد در دو فایل <code>#include</code> شود، همین اتفاق می‌افتد، چون <code>#include</code> فقط متن را کپی می‌کند (درس <a href="4-1.html">۴.۱</a>). پس <b>در هدر فقط اعلان بگذار، تعریف را در .c بنویس</b>.</p></div>
+
+<h2 id="project">اولین پروژهٔ چندفایلی: دماسنج با فیلتر</h2>
+<p>برنامه‌ای می‌سازیم که دما را «می‌خواند» و میانگین سه خوانش اخیر را نشان می‌دهد. سه بخش دارد: ماژول سنسور (تولید خوانش شبیه‌سازی‌شده)، ماژول فیلتر (میانگین) و <code>main.c</code>. دما را بر حسب دهم درجه نگه می‌داریم: ۲۳۵ یعنی ۲۳٫۵ درجه (بدون اعشار، مثل درس <a href="2-3.html">۲.۳</a>).</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 330" role="img" aria-label="سه فایل منبع جداگانه کامپایل می‌شوند و سه فایل شیء می‌سازند؛ لینکر آن‌ها را به یک برنامه وصل می‌کند؛ هدرها در هر فایل منبع چسبانده می‌شوند">
+  <defs><marker id="ar1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <g class="s-tx" font-size="14" font-weight="800" text-anchor="middle">
+    <text x="670" y="26">فایل منبع</text><text x="450" y="26">فایل شیء</text><text x="260" y="26">لینکر</text><text x="90" y="26">برنامه</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="600" y="48" width="140" height="54" rx="10" fill="#ffd60a"/>
+    <rect x="600" y="118" width="140" height="54" rx="10" fill="#ffd60a"/>
+    <rect x="600" y="188" width="140" height="54" rx="10" fill="#ffd60a"/>
+    <rect x="390" y="48" width="120" height="54" rx="10" fill="#7ea3ff"/>
+    <rect x="390" y="118" width="120" height="54" rx="10" fill="#7ea3ff"/>
+    <rect x="390" y="188" width="120" height="54" rx="10" fill="#7ea3ff"/>
+    <rect x="200" y="48" width="120" height="194" rx="12" fill="#ff9a4d"/>
+    <rect x="30" y="108" width="120" height="74" rx="12" fill="#3ddc97"/>
+  </g>
+  <g class="mono" font-size="16" font-weight="800" fill="#15120a" text-anchor="middle" direction="ltr">
+    <text x="670" y="81">main.c</text><text x="670" y="151">sensor.c</text><text x="670" y="221">filter.c</text>
+    <text x="450" y="81">main.o</text><text x="450" y="151">sensor.o</text><text x="450" y="221">filter.o</text>
+    <text x="90" y="151">thermo</text>
+  </g>
+  <g fill="#15120a" font-size="15" font-weight="800" text-anchor="middle">
+    <text x="260" y="130">پیدا کردن</text><text x="260" y="152">نام‌ها و</text><text x="260" y="174">وصل کردنشان</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M600 75H514" marker-end="url(#ar1)"/><path d="M600 145H514" marker-end="url(#ar1)"/><path d="M600 215H514" marker-end="url(#ar1)"/>
+    <path d="M390 75H324" marker-end="url(#ar1)"/><path d="M390 145H324" marker-end="url(#ar1)"/><path d="M390 215H324" marker-end="url(#ar1)"/>
+    <path d="M200 145H154" marker-end="url(#ar1)"/>
+  </g>
+  <g class="s-tx" font-size="12.5" text-anchor="middle">
+    <text x="552" y="66">gcc -c</text><text x="552" y="136">gcc -c</text><text x="552" y="206">gcc -c</text>
+  </g>
+  <rect x="240" y="266" width="500" height="44" rx="10" fill="#fff" stroke="#15120a" stroke-width="3" stroke-dasharray="7 5"/>
+  <text x="490" y="285" text-anchor="middle" fill="#15120a" font-size="13.5" font-weight="700">هدرها (sensor.h، filter.h) وارد هر فایل منبعی می‌شوند که</text>
+  <text x="490" y="303" text-anchor="middle" fill="#15120a" font-size="13.5" font-weight="700">آن‌ها را include کند؛ خودشان فایل شیء جدا ندارند</text>
+</svg></div>
+<figcaption>هر فایل <code>.c</code> <b>جدا از بقیه</b> کامپایل می‌شود. فقط لینکر است که همه را با هم می‌بیند. هر کدام از فایل‌های منبع را «واحد ترجمه» (<span class="term" data-t="translationunit">translation unit</span>) می‌نامند.</figcaption></figure>
+
+<p>این نکته مهم است: وقتی کامپایلر <code>main.c</code> را می‌خواند، <b>هیچ‌چیز از محتوای <code>sensor.c</code> نمی‌داند</b>. فقط از روی هدر می‌داند که تابعی به اسم <code>sensor_read_dc</code> هست که <code>int16_t</code> برمی‌گرداند. بقیه‌اش را لینکر پر می‌کند.</p>
+
+<h3 id="sensor">ماژول سنسور</h3>
+<div class="code" data-file="sensor.h" data-lang="c" data-verify="make" data-project="thermo" id="t1">
+<pre>
+#ifndef SENSOR_H
+#define SENSOR_H
+
+#include &lt;stdint.h&gt;
+
+/* دمای شبیه‌سازی‌شده بر حسب دهم درجه: 235 یعنی 23.5 درجه */
+int16_t sensor_read_dc(void);
+
+#endif /* SENSOR_H */
+</pre></div>
+<ol class="walk" data-for="t1">
+  <li data-lines="1-2,9"><b class="what">include guard.</b> همان الگوی درس ۴.۱: اگر این هدر دو بار وارد شد، بار دوم پرش می‌خورد.
+    <span class="why">هر هدر خودت از اولین روز guard داشته باشد؛ چون نمی‌دانی چه فایلی روزی آن را از دو راه می‌آورد.</span></li>
+  <li data-lines="4"><b class="what">هدرهای مورد نیاز خودش.</b> چون در اعلان <code>int16_t</code> آمده، خود هدر باید <code>stdint.h</code> را بیاورد.
+    <span class="why">اگر نیاورد، هر کسی که <code>sensor.h</code> را وارد کند باید یادش باشد قبلش <code>stdint.h</code> را هم وارد کند. هدر خوب «خودکفاست».</span></li>
+  <li data-lines="7"><b class="what">اعلان تابع.</b> فقط سر تابع و <code>;</code>. بدنه‌ای در کار نیست.</li>
+</ol>
+
+<div class="code" data-file="sensor.c" data-lang="c" data-verify="make" data-project="thermo" id="t2">
+<pre>
+#include "sensor.h"
+
+static const int16_t samples[] = { 231, 236, 229, 240, 233 };
+static unsigned next_index = 0;
+
+int16_t sensor_read_dc(void)
+{
+    int16_t value = samples[next_index];
+    next_index = (next_index + 1U) % (sizeof(samples) / sizeof(samples[0]));
+    return value;
+}
+</pre></div>
+<ol class="walk" data-for="t2">
+  <li data-lines="1"><b class="what">هدر خودش را include می‌کند.</b> با این کار کامپایلر می‌تواند تعریف را با اعلان مقایسه کند.
+    <span class="why">اگر اعلان در هدر <code>int16_t</code> باشد و در <code>.c</code> تعریف را با <code>int</code> بنویسی، همین‌جا خطا می‌گیری، نه در لینک یا (بدتر) هنگام اجرا. پایین‌تر خطایش را می‌بینی.</span></li>
+  <li data-lines="3-4"><b class="what">داده‌های خصوصی.</b> جدول نمونه‌ها و اندیس فعلی <code>static</code> هستند: یعنی فقط برای همین فایل‌اند. <code>const</code> جدول را فقط‌خواندنی و جای‌گیرنده در Flash می‌کند (درس ۲.۷).
+    <span class="why">هیچ فایل دیگری نباید بتواند <code>next_index</code> را دست‌کاری کند. این «دیوار آشپزخانه» است.</span></li>
+  <li data-lines="6-11"><b class="what">تعریف تابع.</b> مقدار فعلی را بگیر، اندیس را یکی جلو ببر و اگر به انتها رسید به صفر برگرد (با باقیمانده <code>%</code>). <code>sizeof(samples) / sizeof(samples[0])</code> تعداد عنصرهاست (درس ۲.۷).</li>
+</ol>
+
+<h3 id="filter">ماژول فیلتر</h3>
+<div class="code" data-file="filter.h" data-lang="c" data-verify="make" data-project="thermo" id="t3">
+<pre>
+#ifndef FILTER_H
+#define FILTER_H
+
+#include &lt;stdint.h&gt;
+
+void filter_reset(void);
+void filter_add(int16_t value);
+int16_t filter_average(void);
+
+#endif /* FILTER_H */
+</pre></div>
+<div class="code" data-file="filter.c" data-lang="c" data-verify="make" data-project="thermo" id="t4">
+<pre>
+#include "filter.h"
+
+#define WINDOW 3U
+
+static int16_t window[WINDOW];
+static unsigned count = 0;
+static unsigned head = 0;
+
+void filter_reset(void)
+{
+    count = 0;
+    head = 0;
+}
+
+void filter_add(int16_t value)
+{
+    window[head] = value;
+    head = (head + 1U) % WINDOW;
+    if (count &lt; WINDOW) {
+        count++;
+    }
+}
+
+int16_t filter_average(void)
+{
+    int32_t sum = 0;
+    if (count == 0) {
+        return 0;
+    }
+    for (unsigned i = 0; i &lt; count; i++) {
+        sum += window[i];
+    }
+    return (int16_t)(sum / (int32_t)count);
+}
+</pre></div>
+<ol class="walk" data-for="t4">
+  <li data-lines="3"><b class="what">اندازهٔ پنجره.</b> ماکرو (درس ۴.۱) با <code>U</code> برای بی‌علامت.</li>
+  <li data-lines="5-7"><b class="what">وضعیت داخلی.</b> آرایهٔ سه‌تایی از آخرین خوانش‌ها، تعداد پرشده و اندیس نوشتن بعدی. همه <code>static</code>.
+    <span class="why">فیلتر «حافظه» دارد (آخرین مقدارها)، ولی این حافظه پنهان است و بیرون فقط از راه توابع ماژول به آن دسترسی داری.</span></li>
+  <li data-lines="9-13"><b class="what">صفر کردن.</b> شروع دوباره.</li>
+  <li data-lines="15-22"><b class="what">افزودن نمونه.</b> در خانهٔ <code>head</code> بنویس، <code>head</code> را چرخشی جلو ببر (به کمک <code>%</code>) و تا وقتی پنجره پر نشده <code>count</code> را زیاد کن. این هستهٔ همان «بافر حلقوی» است که در درس <a href="4-5.html">۴.۵</a> کامل می‌سازیم.</li>
+  <li data-lines="24-34"><b class="what">میانگین.</b> جمع را در <code>int32_t</code> نگه می‌داریم تا سرریز نکند (چون <code>int16_t</code> برای جمع چند دما ممکن است کوچک باشد؛ درس ۲.۲). اگر هنوز نمونه‌ای نیست ۰ برگردان.
+    <span class="why">تقسیم بر صفر رفتار تعریف‌نشده است؛ پس حالت <code>count == 0</code> باید جدا بررسی شود.</span></li>
+</ol>
+
+<h3 id="main">فایل main.c</h3>
+<div class="code" data-file="main.c" data-lang="c" data-verify="make" data-project="thermo" id="t5">
+<pre>
+#include &lt;stdio.h&gt;
+#include "sensor.h"
+#include "filter.h"
+
+int main(void)
+{
+    filter_reset();
+    for (int i = 0; i &lt; 5; i++) {
+        int16_t raw = sensor_read_dc();
+        filter_add(raw);
+        int16_t avg = filter_average();
+        printf("raw=%d.%d avg=%d.%d\n", raw / 10, raw % 10, avg / 10, avg % 10);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="t5">
+  <li data-lines="1-3"><b class="what">سه include.</b> <code>&lt;stdio.h&gt;</code> با <code>&lt;&gt;</code> چون سیستمی است. هدرهای پروژه با <code>""</code>.
+    <span class="why">در <code>main.c</code> فقط هدر لازم را وارد می‌کنیم؛ نه <code>sensor.c</code>. هرگز <code>#include "sensor.c"</code> ننویس: کد دو بار کامپایل می‌شود و <code>multiple definition</code> می‌گیری.</span></li>
+  <li data-lines="7"><b class="what">آغاز.</b> فیلتر را خالی می‌کنیم.</li>
+  <li data-lines="8-13"><b class="what">حلقهٔ ۵ بار.</b> هر بار یک خوانش می‌گیرد، به فیلتر می‌دهد و میانگین را می‌پرسد. <code>raw / 10</code> بخش صحیح دما و <code>raw % 10</code> رقم اعشار است.
+    <span class="why">این ترفند بدون <code>float</code> اعشار نمایش می‌دهد. درس ۲.۸ گفتیم روی MCU چاپ <code>float</code> پرهزینه است.</span></li>
+</ol>
+
+<h2 id="build">ساخت دستی: هر فایل جدا، لینک همه با هم</h2>
+<p>کاری که <code>make</code> برایمان می‌کند را اول دستی انجام می‌دهیم تا سر از کارش دربیاوریم. مرحلهٔ اول: هر <code>.c</code> را <b>جدا</b> به فایل شیء (<span class="term" data-t="objectfile">object file</span>) کامپایل می‌کنیم. پرچم <code>-c</code> یعنی «فقط کامپایل، لینک نکن». مرحلهٔ دوم: لینکر (<span class="term" data-t="linker">linker</span>) همه را وصل می‌کند.</p>
+<pre class="term" data-kind="cmd">
+$ gcc -std=c11 -Wall -Wextra -c main.c
+$ gcc -std=c11 -Wall -Wextra -c sensor.c
+$ gcc -std=c11 -Wall -Wextra -c filter.c
+$ gcc main.o sensor.o filter.o -o thermo
+</pre>
+<p>لینکر چطور می‌فهمد <code>main.o</code> باید <code>sensor_read_dc</code> را از کجا بگیرد؟ هر فایل شیء یک <b>جدول نام‌ها</b> دارد. دستور <code>nm</code> این جدول را چاپ می‌کند:</p>
+<pre class="term" data-nocheck>
+$ nm sensor.o
+0000000000000000 b next_index
+0000000000000000 r samples
+0000000000000000 T sensor_read_dc
+$ nm main.o
+                 U filter_add
+                 U filter_average
+                 U filter_reset
+0000000000000000 T main
+                 U sensor_read_dc
+</pre>
+<p>حرف اول هر ردیف بعد از آدرس، معنی دارد:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>حرف</th><th>معنی</th><th>مثال بالا</th></tr></thead>
+<tbody>
+<tr><td><code>T</code></td><td>کدِ تعریف‌شده در همین فایل که <b>برای همه دیده می‌شود</b></td><td><code>sensor_read_dc</code> در <code>sensor.o</code></td></tr>
+<tr><td><code>U</code></td><td>«تعریف‌نشده» در اینجا: <b>از فایل دیگری می‌خواهم</b></td><td><code>sensor_read_dc</code> در <code>main.o</code></td></tr>
+<tr><td>حرف کوچک (<code>b</code>، <code>r</code>، <code>t</code>)</td><td>خصوصی (<code>static</code>)؛ لینکر دیگران را به آن راه نمی‌دهد</td><td><code>next_index</code> و <code>samples</code></td></tr>
+</tbody></table></div>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 290" role="img" aria-label="جدول نام‌های main.o و sensor.o: هر U در main.o به یک T در sensor.o وصل می‌شود؛ متغیرهای static فقط با حرف کوچک دیده می‌شوند">
+  <defs><marker id="ar2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">لینکر هر «می‌خواهم» (U) را به یک «دارم» (T) وصل می‌کند</text>
+  <rect x="470" y="44" width="270" height="170" rx="14" fill="#ffd60a" stroke="#15120a" stroke-width="3"/>
+  <text x="605" y="70" text-anchor="middle" class="mono" fill="#15120a" font-size="16" font-weight="800" direction="ltr">main.o</text>
+  <g class="mono" font-size="14" font-weight="700" fill="#15120a" direction="ltr">
+    <text x="494" y="104">U  sensor_read_dc</text>
+    <text x="494" y="132">U  filter_add</text>
+    <text x="494" y="160">U  filter_average</text>
+    <text x="494" y="188">T  main</text>
+  </g>
+  <rect x="20" y="44" width="270" height="170" rx="14" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/>
+  <text x="155" y="70" text-anchor="middle" class="mono" fill="#15120a" font-size="16" font-weight="800" direction="ltr">sensor.o</text>
+  <g class="mono" font-size="14" font-weight="700" fill="#15120a" direction="ltr">
+    <text x="44" y="104">T  sensor_read_dc</text>
+    <text x="44" y="146">b  next_index</text>
+    <text x="44" y="174">r  samples</text>
+  </g>
+  <path d="M488 100C420 100 380 100 296 100" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar2)"/>
+  <text x="392" y="90" text-anchor="middle" class="s-tx" font-size="12.5">وصل می‌شود</text>
+  <text x="155" y="200" text-anchor="middle" fill="#15120a" font-size="12.5" font-weight="700">خصوصی: حرف کوچک؛ به هیچ U وصل نمی‌شود</text>
+  <text x="380" y="248" text-anchor="middle" class="s-tx" font-size="14" font-weight="700">اگر برای یک U هیچ T پیدا نشود: undefined reference</text>
+  <text x="380" y="272" text-anchor="middle" class="s-tx" font-size="14" font-weight="700">اگر برای یک نام دو T پیدا شود: multiple definition</text>
+</svg></div>
+<figcaption>ساختار خطاهای لینکر از همین جدول می‌آید: نام «می‌خواهم» بدون «دارم» یا نام «دارم» که دو بار وجود دارد.</figcaption></figure>
+
+<h2 id="errors">وقتی لینک خراب می‌شود: سه خطای معروف</h2>
+<p>خطاهای لینکر برای مبتدی‌ها ترسناک‌اند، چون به شماره خط اشاره نمی‌کنند و پیام‌شان طولانی است. ولی فقط سه مدل اصلی دارند. با هر کدام از نزدیک آشنا شو.</p>
+
+<h3 id="undef">خطای ۱: <span class="en">undefined reference</span></h3>
+<p>هدر را داری و تابع را صدا می‌زنی، ولی <code>sensor.c</code> را کامپایل و لینک نکرده‌ای. کامپایلر راضی است (اعلان را دیده). لینکر می‌گوید «تعریف کجاست؟»:</p>
+
+<div class="code" data-file="sensor.h" data-lang="c" data-verify="host-fail" data-project="undef_demo" id="u1">
+<pre>
+#ifndef SENSOR_H
+#define SENSOR_H
+
+#include &lt;stdint.h&gt;
+
+int16_t sensor_read_dc(void);
+
+#endif /* SENSOR_H */
+</pre></div>
+<div class="code" data-file="main.c" data-lang="c" data-verify="host-fail" data-project="undef_demo" id="u2">
+<pre>
+#include &lt;stdio.h&gt;
+#include "sensor.h"
+
+int main(void)
+{
+    printf("%d\n", sensor_read_dc());
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="u2">
+  <li data-lines="2"><b class="what">فقط هدر.</b> اعلان کافی است تا کامپایلر <code>main.c</code> را بپذیرد.</li>
+  <li data-lines="6"><b class="what">صدا زدن.</b> در <code>main.o</code> این می‌شود یک «U»: منتظر تعریف.
+    <span class="why">هیچ فایل <code>.c</code> دیگری در فرمان ساخت نیست، پس هیچ «T»ی برای <code>sensor_read_dc</code> نیست.</span></li>
+</ol>
+<pre class="term" data-kind="err" data-from="undef_demo">
+$ gcc -std=c11 -Wall -Wextra -o prog main.c
+main.c:(.text+0x9): undefined reference to `sensor_read_dc'
+collect2: error: ld returned 1 exit status
+</pre>
+<p>خط اول (که با <code>/usr/bin/ld:</code> شروع می‌شود و نام فایل موقت دارد) کوتاه شده است. مهم‌ترین قسمت <code>undefined reference to `نام'</code> است: نام همان تابع یا متغیری است که لینکر تعریفش را پیدا نکرد. آخرین خط (<code>collect2</code>) فقط می‌گوید لینکر شکست خورد.</p>
+<div class="callout tip"><div class="ct">چک‌لیست undefined reference</div>
+<ol class="steps">
+  <li><b>آیا فایل .c را کامپایل کرده‌ام؟</b> در <code>Makefile</code> یا لیست منبع‌ها اضافه‌اش کن.</li>
+  <li><b>آیا اسم را درست نوشته‌ام؟</b> <code>sensor_read_dc</code> با <code>sensor_readdc</code> دو تابع جدا هستند.</li>
+  <li><b>آیا تابع <code>static</code> شده؟</b> تابع <code>static</code> از فایل دیگر دیده نمی‌شود.</li>
+  <li><b>در C++ هستی؟</b> برای فایل C در پروژه C++ به <code>extern "C"</code> نیاز داری (فعلا لازم نیست).</li>
+</ol></div>
+
+<h3 id="multidef">خطای ۲: <span class="en">multiple definition</span></h3>
+<p>یک متغیر را در هدر <b>تعریف</b> کرده‌ای (نه اعلان). هر فایلی که هدر را وارد کند، قفسهٔ خودش را می‌سازد:</p>
+
+<div class="code" data-file="counter.h" data-lang="c" data-verify="host-fail" data-project="multi_demo" id="m1">
+<pre>
+#ifndef COUNTER_H
+#define COUNTER_H
+
+int counter = 0;       // تعریف در هدر: اشتباه!
+
+#endif /* COUNTER_H */
+</pre></div>
+<div class="code" data-file="other.c" data-lang="c" data-verify="host-fail" data-project="multi_demo" id="m2">
+<pre>
+#include "counter.h"
+
+void bump(void)
+{
+    counter++;
+}
+</pre></div>
+<div class="code" data-file="main.c" data-lang="c" data-verify="host-fail" data-project="multi_demo" id="m3">
+<pre>
+#include &lt;stdio.h&gt;
+#include "counter.h"
+
+void bump(void);
+
+int main(void)
+{
+    bump();
+    printf("%d\n", counter);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="m1">
+  <li data-lines="4"><b class="what">تعریف در هدر.</b> <code>int counter = 0;</code> یک قفسهٔ واقعی می‌سازد. include guard جلوی دوبار ورود در <b>یک فایل</b> را می‌گیرد، ولی هر <code>.c</code> جدا، هدر را دوباره و از نو می‌خواند.
+    <span class="why">قفل guard «برای هر فایل ترجمه» از نو شروع می‌شود؛ پس دو فایل <code>.c</code> دو قفسه به نام <code>counter</code> می‌سازند: یکی در <code>other.o</code> و یکی در <code>main.o</code>.</span></li>
+</ol>
+<pre class="term" data-kind="err" data-from="multi_demo">
+$ gcc -std=c11 -Wall -Wextra -o prog main.c other.c
+multiple definition of `counter'
+collect2: error: ld returned 1 exit status
+</pre>
+<p>پیام کامل وقتی که فایل‌ها را جدا کامپایل کرده باشی (مثل <code>make</code>) نام فایل‌های شیء را نشان می‌دهد و خیلی کمک می‌کند:</p>
+<pre class="term" data-nocheck>
+$ gcc -std=c11 -c main.c
+$ gcc -std=c11 -c other.c
+$ gcc main.o other.o -o prog
+/usr/bin/ld: other.o:(.bss+0x0): multiple definition of `counter'; main.o:(.bss+0x0): first defined here
+collect2: error: ld returned 1 exit status
+</pre>
+<p>در این پیام نام هر دو فایلی که تعریف را دارند آمده است. راه‌حل استاندارد: <b>اعلان</b> را با <code>extern</code> در هدر بگذار و <b>تعریف</b> را فقط در یک <code>.c</code>. در بخش بعد می‌بینی.</p>
+
+<h3 id="conflict">خطای ۳: <span class="en">conflicting types</span></h3>
+<p>این خطا لینکر نیست، کامپایلر است؛ ولی اینجا می‌آید چون از دورشدن اعلان و تعریف می‌آید. اگر در <code>sensor.c</code> هدر را <code>#include</code> کرده باشی و تعریف را با نوع دیگری بنویسی:</p>
+
+<div class="code" data-file="sensor.h" data-lang="c" data-verify="host-fail" data-project="conflict_demo" id="c1">
+<pre>
+#ifndef SENSOR_H
+#define SENSOR_H
+
+#include &lt;stdint.h&gt;
+
+int16_t sensor_read_dc(void);
+
+#endif /* SENSOR_H */
+</pre></div>
+<div class="code" data-file="sensor.c" data-lang="c" data-verify="host-fail" data-project="conflict_demo" id="c2">
+<pre>
+#include "sensor.h"
+
+int sensor_read_dc(void)
+{
+    return 231;
+}
+</pre></div>
+<div class="code" data-file="main.c" data-lang="c" data-verify="host-fail" data-project="conflict_demo" id="c3">
+<pre>
+#include &lt;stdio.h&gt;
+#include "sensor.h"
+
+int main(void)
+{
+    printf("%d\n", sensor_read_dc());
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="c2">
+  <li data-lines="1"><b class="what">هدر خودش.</b> کامپایلر اعلان را می‌بیند.</li>
+  <li data-lines="3"><b class="what">تعریف با نوع دیگر.</b> <code>int</code> با <code>int16_t</code> یکی نیست.
+    <span class="why">اگر <code>sensor.c</code> هدر خودش را include نمی‌کرد، این خطا دیده نمی‌شد و <code>main.c</code> فکر می‌کرد تابع <code>int16_t</code> می‌دهد ولی <code>sensor.c</code> چیز دیگری می‌ساخت. روی بعضی سخت‌افزارها (اندازهٔ ثبات‌ها یا قرارداد فراخوانی متفاوت) فقط دادهٔ اشتباه می‌گرفتی. include کردن هدر خود ماژول در فایل خودش <b>یک شبکهٔ ایمنی رایگان</b> است.</span></li>
+</ol>
+<pre class="term" data-kind="err" data-from="conflict_demo">
+sensor.c:3:5: error: conflicting types for 'sensor_read_dc'; have 'int(void)'
+sensor.h:6:9: note: previous declaration of 'sensor_read_dc' with type 'int16_t(void)' {aka 'short int(void)'}
+</pre>
+
+<h2 id="extern"><span class="en">extern</span>: متغیر مشترک بین فایل‌ها</h2>
+<p>گاهی واقعا یک متغیر باید بین دو فایل مشترک باشد؛ مثل شمارندهٔ تیک زمان یا پرچمی که وقفه می‌گذارد و <code>main</code> می‌خواند (درس ۵.۳). الگوی درست سه قدم دارد:</p>
+<ol class="steps">
+  <li><b>تعریف</b> در یک <code>.c</code>: <code>int g_tick_count = 0;</code> (قفسه اینجا ساخته می‌شود).</li>
+  <li><b>اعلان</b> در هدر: <code>extern int g_tick_count;</code> (به همه می‌گوید چنین قفسه‌ای هست).</li>
+  <li>هر فایلی که لازم دارد، هدر را وارد می‌کند.</li>
+</ol>
+
+<div class="code" data-file="config.h" data-lang="c" data-verify="host" data-project="ext_demo" id="e1">
+<pre>
+#ifndef CONFIG_H
+#define CONFIG_H
+
+extern int g_tick_count;      /* اعلان: تعریفش جای دیگری است */
+void tick(void);
+
+#endif /* CONFIG_H */
+</pre></div>
+<div class="code" data-file="config.c" data-lang="c" data-verify="host" data-project="ext_demo" id="e2">
+<pre>
+#include "config.h"
+
+int g_tick_count = 0;         /* تعریف: اینجا قفسه ساخته می‌شود */
+
+void tick(void)
+{
+    g_tick_count++;
+}
+</pre></div>
+<div class="code" data-file="main.c" data-lang="c" data-verify="host" data-project="ext_demo" id="e3">
+<pre>
+#include &lt;stdio.h&gt;
+#include "config.h"
+
+int main(void)
+{
+    tick();
+    tick();
+    g_tick_count += 10;
+    printf("ticks = %d\n", g_tick_count);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="e1">
+  <li data-lines="4"><b class="what">extern.</b> بدون مقدار اولیه و بدون ساختن قفسه؛ فقط «این اسم با این نوع وجود دارد».
+    <span class="why">اگر اینجا <code>= 0</code> می‌نوشتی، تعریف می‌شد و دوباره به خطای <code>multiple definition</code> می‌رسیدی.</span></li>
+  <li data-lines="5"><b class="what">تابع دسترسی.</b> اعلان تابع <code>tick</code> که در <code>config.c</code> تعریف شده.</li>
+</ol>
+<ol class="walk" data-for="e2">
+  <li data-lines="1"><b class="what">هدر خودش.</b> تا کامپایلر بررسی کند اعلان و تعریف هم‌نوع‌اند.</li>
+  <li data-lines="3"><b class="what">تعریف تنها.</b> تنها جایی که قفسهٔ <code>g_tick_count</code> ساخته می‌شود و مقدار اولیه می‌گیرد.</li>
+  <li data-lines="5-8"><b class="what">تابع.</b> یکی به شمارنده اضافه می‌کند.</li>
+</ol>
+<ol class="walk" data-for="e3">
+  <li data-lines="6-8"><b class="what">تغییر از دو جا.</b> دو بار <code>tick()</code> (شمارنده می‌شود ۲) و بعد مستقیم ۱۰ تا اضافه می‌کنیم. هر دو یک قفسه را تغییر می‌دهند.</li>
+</ol>
+<pre class="term" data-from="ext_demo">
+$ gcc -std=c11 -Wall -Wextra -o ext_demo main.c config.c
+$ ./ext_demo
+ticks = 12
+</pre>
+
+<p>قدم‌به‌قدم ببین که دو فایل یک قفسه را تغییر می‌دهند:</p>
+<div class="widget" data-w="mem" data-config='{"title":"g_tick_count فقط یک قفسه است، هر دو فایل همان را می‌بینند","code":["// config.c:  int g_tick_count = 0;","tick();          // main.c","tick();          // main.c","g_tick_count += 10;   // main.c"],"intro":"قفسه فقط یک بار (در config.c) ساخته می‌شود. روی بعدی بزن.","cells":[{"addr":"0x20000000","name":"g_tick_count","val":null,"kind":"var"}],"steps":[{"line":0,"set":{"0":0},"hot":[0],"say":"لینکر قفسه را از config.o می‌سازد. همهٔ فایل‌های دیگر با extern فقط اسمش را دارند."},{"line":1,"set":{"0":1},"hot":[0],"say":"tick() در config.c یکی اضافه کرد. main.c همین قفسه را می‌بیند."},{"line":2,"set":{"0":2},"hot":[0],"say":"بار دوم ۲ شد."},{"line":3,"set":{"0":12},"hot":[0],"say":"main.c مستقیم روی همان قفسه ۱۰ اضافه کرد. جواب ۱۲."}]}'></div>
+
+<div class="callout warn"><div class="ct">متغیر سراسری مشترک: با احتیاط</div>
+<p>هر متغیری که چند فایل به آن دسترسی مستقیم دارند، رد پای باگ را سخت می‌کند: «چه کسی این را عوض کرد؟». قاعده: تا می‌توانی متغیر را <code>static</code> نگه دار و بیرون فقط <b>توابع</b> (<code>tick_get()</code>، <code>tick_reset()</code>) بده. اگر مجبوری متغیر مشترک بدهی (مثلا پرچم بین ISR و <code>main</code>)، آن را با <code>volatile</code> (درس <a href="3-6.html">۳.۶</a>) و پیشوند <code>g_</code> مشخص کن:</p>
+<pre class="term" data-kind="cmd">
+/* button.h */
+extern volatile uint8_t g_button_pressed;   /* اعلان */
+
+/* button.c */
+volatile uint8_t g_button_pressed = 0;      /* تعریف */
+</pre></div>
+
+<h2 id="static"><span class="en">static</span>: دیوار دور فایل</h2>
+<p>در درس <a href="2-6.html">۲.۶</a> دیدی <code>static</code> جلوی تابع یعنی «فقط برای همین فایل». حالا دلیل واقعی‌اش را می‌فهمی: به‌طور پیش‌فرض هر تابع و هر متغیر سراسری برای لینکر «T» است و همه‌ی فایل‌ها می‌توانند به آن برسند. به این می‌گویند پیوند بیرونی (<span class="term" data-t="linkage">external linkage</span>). با <code>static</code>، اسم <b>پیوند درونی</b> (internal linkage) می‌گیرد: فقط در همین فایل ترجمه شناخته می‌شود. دو فایل می‌توانند هر کدام تابع <code>static</code> با اسم یکسان داشته باشند، بدون هیچ برخوردی.</p>
+
+<div class="code" data-file="a.c" data-lang="c" data-verify="host" data-project="static_demo" id="s1">
+<pre>
+#include &lt;stdio.h&gt;
+
+static void log_line(const char *msg)
+{
+    printf("[a] %s\n", msg);
+}
+
+void a_run(void)
+{
+    log_line("hello from a");
+}
+</pre></div>
+<div class="code" data-file="b.c" data-lang="c" data-verify="host" data-project="static_demo" id="s2">
+<pre>
+#include &lt;stdio.h&gt;
+
+static void log_line(const char *msg)
+{
+    printf("[b] %s\n", msg);
+}
+
+void b_run(void)
+{
+    log_line("hello from b");
+}
+</pre></div>
+<div class="code" data-file="main.c" data-lang="c" data-verify="host" data-project="static_demo" id="s3">
+<pre>
+void a_run(void);
+void b_run(void);
+
+int main(void)
+{
+    a_run();
+    b_run();
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="s1">
+  <li data-lines="3-6"><b class="what">تابع خصوصی.</b> <code>log_line</code> با <code>static</code> فقط در <code>a.c</code> دیده می‌شود. در <code>b.c</code> هم یک <code>log_line</code> دیگر با همین اسم داریم و برخوردی نیست.
+    <span class="why">در پروژه‌ای با ۵۰ فایل، تابع‌های کمکی کوچک (<code>clamp</code>، <code>log_line</code>) زیاد تکرار می‌شوند. <code>static</code> جلوی «آلودگی اسم‌ها» را می‌گیرد.</span></li>
+  <li data-lines="8-11"><b class="what">تابع عمومی.</b> <code>a_run</code> بدون <code>static</code> است، پس <code>main.c</code> می‌تواند صدایش بزند.</li>
+</ol>
+<pre class="term" data-from="static_demo">
+$ gcc -std=c11 -Wall -Wextra -o static_demo main.c a.c b.c
+$ ./static_demo
+[a] hello from a
+[b] hello from b
+</pre>
+<p>اگر <code>static</code> را از هر دو <code>log_line</code> برداری، هر دو «T» می‌شوند و لینکر با خطای آشنا مواجه می‌شویم:</p>
+<pre class="term" data-nocheck>
+/usr/bin/ld: b.o: in function `log_line':
+b.c:(.text+0x0): multiple definition of `log_line'; a.o:a.c:(.text+0x0): first defined here
+collect2: error: ld returned 1 exit status
+</pre>
+<p>و برعکس، اگر تابعی را <code>static</code> کنی و از فایل دیگر صدایش بزنی، همان <code>undefined reference</code> بخش قبل را می‌گیری؛ چون آن اسم دیگر «T» نیست.</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>چه می‌خواهی؟</th><th>در .h</th><th>در .c</th></tr></thead>
+<tbody>
+<tr><td>تابع عمومی</td><td><code>int f(int x);</code></td><td><code>int f(int x) { ... }</code></td></tr>
+<tr><td>تابع خصوصی</td><td>چیزی نمی‌نویسی</td><td><code>static int helper(int x) { ... }</code></td></tr>
+<tr><td>متغیر مشترک (با احتیاط)</td><td><code>extern int g_x;</code></td><td><code>int g_x = 0;</code></td></tr>
+<tr><td>متغیر خصوصی</td><td>چیزی نمی‌نویسی</td><td><code>static int x = 0;</code></td></tr>
+<tr><td>ثابت عددی</td><td><code>#define N 4</code></td><td>—</td></tr>
+<tr><td>تابع کوچک سریع</td><td><code>static inline int f(int x) { ... }</code></td><td>—</td></tr>
+</tbody></table></div>
+<p>ردیف آخر: تابع <code>static inline</code> را می‌توان در هدر تعریف کرد، چون هر فایل نسخهٔ خصوصی خودش را دارد و به لینکر نمی‌رسد.</p>
+
+<h2 id="design">طراحی ماژول: چه چیزی را نشان بدهم؟</h2>
+<p>ماژول خوب مثل یک دستگاه با چند دکمه است. می‌دانی هر دکمه چه می‌کند، ولی درون دستگاه را نمی‌بینی. هدر <b>واسط کاربری</b> (API، از Application Programming Interface) ماژول است.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="main.c فقط هدر sensor.h را می‌بیند و از راه تابع sensor_read_dc با sensor.c کار می‌کند؛ متغیرهای static داخل دیوار sensor.c پنهان‌اند">
+  <defs><marker id="ar3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">هدر پنجره است؛ دیوار همه‌چیز خصوصی را پنهان می‌کند</text>
+  <rect x="580" y="60" width="160" height="200" rx="14" fill="#ffd60a" stroke="#15120a" stroke-width="3"/>
+  <text x="660" y="90" text-anchor="middle" class="mono" fill="#15120a" font-size="16" font-weight="800" direction="ltr">main.c</text>
+  <g fill="#15120a" font-size="13.5" font-weight="700" text-anchor="middle">
+    <text x="660" y="130">فقط این را می‌بیند:</text>
+  </g>
+  <text x="660" y="160" text-anchor="middle" class="mono" fill="#15120a" font-size="13" direction="ltr">sensor_read_dc()</text>
+  <rect x="350" y="110" width="160" height="100" rx="12" fill="#3ddc97" stroke="#15120a" stroke-width="3"/>
+  <text x="430" y="138" text-anchor="middle" class="mono" fill="#15120a" font-size="16" font-weight="800" direction="ltr">sensor.h</text>
+  <text x="430" y="164" text-anchor="middle" fill="#15120a" font-size="13.5" font-weight="700">پنجره (API)</text>
+  <text x="430" y="188" text-anchor="middle" class="mono" fill="#15120a" font-size="12.5" direction="ltr">int16_t sensor_read_dc(void);</text>
+  <rect x="20" y="60" width="290" height="200" rx="14" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/>
+  <text x="165" y="90" text-anchor="middle" class="mono" fill="#15120a" font-size="16" font-weight="800" direction="ltr">sensor.c</text>
+  <rect x="40" y="108" width="250" height="34" rx="8" fill="#fff" stroke="#15120a" stroke-width="2.5"/>
+  <text x="165" y="130" text-anchor="middle" class="mono" fill="#15120a" font-size="13" direction="ltr">int16_t sensor_read_dc() {...}</text>
+  <rect x="40" y="156" width="250" height="34" rx="8" fill="#ff86b3" stroke="#15120a" stroke-width="2.5"/>
+  <text x="165" y="178" text-anchor="middle" class="mono" fill="#15120a" font-size="13" direction="ltr">static samples[]</text>
+  <rect x="40" y="200" width="250" height="34" rx="8" fill="#ff86b3" stroke="#15120a" stroke-width="2.5"/>
+  <text x="165" y="222" text-anchor="middle" class="mono" fill="#15120a" font-size="13" direction="ltr">static next_index</text>
+  <text x="165" y="252" text-anchor="middle" fill="#15120a" font-size="12.5" font-weight="700">صورتی: خصوصی، بیرون دیده نمی‌شود</text>
+  <path d="M578 160H514" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar3)"/>
+  <path d="M348 160H294" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar3)"/>
+</svg></div>
+<figcaption>فایل‌های دیگر فقط از راه تابع‌های هدر با ماژول حرف می‌زنند. اگر روزی فیلتر را از «میانگین» به «میانه» تغییر بدهی، <code>main.c</code> را لمس نمی‌کنی.</figcaption></figure>
+
+<div class="callout tip"><div class="ct">قواعد طراحی ماژول</div>
+<ul>
+<li><b>یک ماژول، یک مسئولیت.</b> <code>uart</code> فقط با UART کار دارد و فیلتر دما در آن نیست.</li>
+<li><b>پیشوند اسم ماژول</b> روی همهٔ توابع عمومی: <code>uart_init</code>، <code>uart_send_byte</code>. در C اسم فضای جدا ندارد؛ پیشوند جلوی برخورد اسم‌ها را می‌گیرد.</li>
+<li><b>هدر تا حد ممکن کوچک</b>: فقط آنچه کاربر لازم دارد. هر چیزی که فقط داخل <code>.c</code> لازم است در <code>.c</code> و <code>static</code> بماند.</li>
+<li><b>هدر خودکفا:</b> هر هدر باید تنها هم کامپایل شود (هدرهای لازم خودش را بیاورد).</li>
+<li><b>در هدر فقط اعلان،</b> ماکرو، <code>typedef</code>/<code>struct</code>/<code>enum</code> و توابع <code>static inline</code>. هرگز تعریف تابع یا متغیر معمولی.</li>
+</ul></div>
+
+<h3 id="opaque">نوع مات: مخفی کردن درون struct</h3>
+<p>گاهی نمی‌خواهی کاربر فیلدهای یک <code>struct</code> را ببیند (که بعدا نتواند مستقیم دست‌کاری‌شان کند و تغییر ساختار همه‌جا را نشکند). ترفند: در هدر فقط نام <code>struct</code> را می‌نویسی و محتوایش را در <code>.c</code>. به این <b>نوع مات</b> (<span class="term" data-t="opaque">opaque type</span>) می‌گویند: کاربر فقط اشاره‌گر به آن را دارد، نه درونش را.</p>
+
+<div class="code" data-file="led.h" data-lang="c" data-verify="host" data-project="opaque_ok" id="o1">
+<pre>
+#ifndef LED_H
+#define LED_H
+
+typedef struct led led_t;      /* نوع مات: فیلدها در led.c هستند */
+
+led_t *led_get(unsigned index);
+void led_on(led_t *led);
+void led_off(led_t *led);
+int led_is_on(const led_t *led);
+
+#endif /* LED_H */
+</pre></div>
+<div class="code" data-file="led.c" data-lang="c" data-verify="host" data-project="opaque_ok" id="o2">
+<pre>
+#include "led.h"
+
+struct led {
+    int pin;
+    int on;
+};
+
+static led_t leds[2] = { { 5, 0 }, { 2, 0 } };
+
+led_t *led_get(unsigned index)
+{
+    if (index &gt;= 2U) {
+        return 0;
+    }
+    return &amp;leds[index];
+}
+
+void led_on(led_t *led)  { led-&gt;on = 1; }
+void led_off(led_t *led) { led-&gt;on = 0; }
+int led_is_on(const led_t *led) { return led-&gt;on; }
+</pre></div>
+<div class="code" data-file="main.c" data-lang="c" data-verify="host" data-project="opaque_ok" id="o3">
+<pre>
+#include &lt;stdio.h&gt;
+#include "led.h"
+
+int main(void)
+{
+    led_t *ld2 = led_get(0);
+    led_on(ld2);
+    printf("led on: %d\n", led_is_on(ld2));
+    led_off(ld2);
+    printf("led on: %d\n", led_is_on(ld2));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="o1">
+  <li data-lines="4"><b class="what">نوع ناقص.</b> <code>typedef struct led led_t;</code> فقط می‌گوید «چنین struct ای هست». اندازه و فیلدهایش را کامپایلر <code>main.c</code> نمی‌داند.
+    <span class="why">پس در <code>main.c</code> نمی‌شود <code>led_t x;</code> ساخت (اندازه نامعلوم) و نمی‌شود <code>x-&gt;on</code> نوشت. فقط اشاره‌گر <code>led_t *</code> مجاز است، چون اشاره‌گر همیشه ۴ بایت است.</span></li>
+  <li data-lines="6-9"><b class="what">تابع‌های دسترسی.</b> تمام کارها با اشاره‌گر انجام می‌شود. <code>const led_t *</code> برای تابعی که فقط می‌خواند.</li>
+</ol>
+<ol class="walk" data-for="o2">
+  <li data-lines="3-6"><b class="what">تعریف کامل struct.</b> فقط در <code>led.c</code> که فیلدها را واقعا می‌شناسد.</li>
+  <li data-lines="8"><b class="what">دو LED خصوصی.</b> آرایهٔ <code>static</code> که پایهٔ ۵ (LD2 روی Nucleo) و ۲ (LED رایج ESP32) را نگه می‌دارد.</li>
+  <li data-lines="10-16"><b class="what">تحویل اشاره‌گر.</b> شمارهٔ نامعتبر را با اشاره‌گر <code>0</code> (NULL) رد می‌کنیم. در درس <a href="3-2.html">۳.۲</a> دیدی همیشه باید NULL را چک کرد.</li>
+  <li data-lines="18-20"><b class="what">تغییر و خواندن.</b> اینجا فیلدها دیده می‌شوند و می‌شود <code>-&gt;</code> زد.</li>
+</ol>
+<pre class="term" data-from="opaque_ok">
+$ gcc -std=c11 -Wall -Wextra -o opaque_ok main.c led.c
+$ ./opaque_ok
+led on: 1
+led on: 0
+</pre>
+<p>اگر کاربر بخواهد دور زدن دیوار را امتحان کند، کامپایلر او را نگه می‌دارد (یک نمونهٔ کوچک با <code>struct</code> ناقص):</p>
+<div class="code" data-file="incomplete.c" data-lang="c" data-verify="host-fail" id="i1">
+<pre>
+struct led;
+
+int main(void)
+{
+    struct led *p = 0;
+    return p-&gt;on;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-from="incomplete.c">
+incomplete.c: In function 'main':
+incomplete.c:6:13: error: invalid use of undefined type 'struct led'
+</pre>
+
+<h2 id="make">Makefile: دستور ساخت که یاد می‌گیرد چه چیزی عوض شده</h2>
+<p>ساخت دستی با چهار دستور برای ۳ فایل قابل تحمل است، ولی برای ۳۰ فایل نه. بدتر: بعد از تغییر یک خط، همه را از نو کامپایل می‌کنی؟ اگر فقط <code>sensor.c</code> عوض شده، چرا <code>main.c</code> را دوباره بسازی؟ ابزار <code>make</code> دقیقا برای همین است. یک فایل به‌نام <code>Makefile</code> می‌نویسی که می‌گوید «چه چیزی از چه چیزی ساخته می‌شود» و <code>make</code> با مقایسهٔ زمان فایل‌ها تصمیم می‌گیرد چه چیزی را از نو بسازد. این ابزار یک <b>سیستم ساخت</b> (<span class="term" data-t="buildsystem">build system</span>) است.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>فرض کن فهرست خریدی داری: «برای پخت کیک: تخم‌مرغ + آرد». اگر دیروز کیک را پخته‌ای و امروز فقط آرد جدید خریده‌ای، باید دوباره کیک بپزی. اگر هیچ‌کدام تغییر نکرده‌اند، لازم نیست. <code>make</code> همین منطق «کدام مادهٔ اولیه از پخت جدیدتر است؟» را برای فایل‌ها به‌کار می‌برد.</p></div>
+
+<p>یک Makefile از <b>قاعده</b> (rule) ساخته شده. هر قاعده سه بخش دارد:</p>
+<pre class="term" data-kind="cmd">
+هدف: پیش‌نیازها
+	دستور ساخت
+</pre>
+<p>«هدف» فایلی است که می‌خواهی بسازی، «پیش‌نیازها» فایل‌هایی که هدف از آن‌ها ساخته می‌شود، و «دستور» چیزی که در ترمینال اجرا می‌شود. <b>حتما</b> جلوی دستور یک نویسهٔ <b>Tab</b> باشد (نه فاصله). این قدیمی‌ترین تله در Makefile است و پیام خطایش <code>missing separator</code> است.</p>
+
+<div class="code" data-file="Makefile" data-lang="make" data-verify="make" data-project="thermo" id="mk1">
+<pre>
+CC      = gcc
+CFLAGS  = -std=c11 -Wall -Wextra -Wpedantic -O1 -MMD -MP
+TARGET  = thermo
+SRCS    = main.c sensor.c filter.c
+OBJS    = $(SRCS:.c=.o)
+DEPS    = $(OBJS:.o=.d)
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	$(CC) $(OBJS) -o $@
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $&lt; -o $@
+
+-include $(DEPS)
+
+clean:
+	rm -f $(OBJS) $(DEPS) $(TARGET)
+
+.PHONY: all clean
+</pre></div>
+<ol class="walk" data-for="mk1">
+  <li data-lines="1-2"><b class="what">متغیرهای ساخت.</b> <code>CC</code> کامپایلر و <code>CFLAGS</code> پرچم‌هاست. برای استفادهٔ بعدی: <code>$(CC)</code>. پرچم‌های <code>-Wall -Wextra</code> مثل همیشه؛ <code>-MMD -MP</code> را چند خط بعد توضیح می‌دهم.
+    <span class="why">پرچم‌ها یک‌جا هستند. اگر بخواهی <code>-O2</code> بگذاری یا برای ARM کراس‌کامپایل کنی، فقط این خط‌ها را عوض می‌کنی.</span></li>
+  <li data-lines="3-4"><b class="what">اسم برنامه و منبع‌ها.</b> برای افزودن فایل تازه فقط <code>SRCS</code> را عوض کن.</li>
+  <li data-lines="5-6"><b class="what">جایگزینی پسوند.</b> <code>$(SRCS:.c=.o)</code> یعنی «در فهرست SRCS هر <code>.c</code> را <code>.o</code> کن». می‌شود <code>main.o sensor.o filter.o</code>. مشابه برای <code>.d</code>.</li>
+  <li data-lines="8"><b class="what">هدف پیش‌فرض.</b> وقتی فقط <code>make</code> می‌زنی، <b>اولین</b> قاعدهٔ فایل ساخته می‌شود. اینجا <code>all</code> که می‌خواهد <code>thermo</code> ساخته شود.</li>
+  <li data-lines="10-11"><b class="what">لینک.</b> برنامه از فایل‌های شیء ساخته می‌شود. <code>$@</code> یعنی «نام هدف» (thermo).
+    <span class="why">اگر هر <code>.o</code> جدیدتر از <code>thermo</code> باشد، این دستور دوباره اجرا می‌شود.</span></li>
+  <li data-lines="13-14"><b class="what">قاعدهٔ عمومی کامپایل.</b> <code>%.o: %.c</code> یعنی «هر <code>X.o</code> از <code>X.c</code> ساخته می‌شود». <code>$&lt;</code> اولین پیش‌نیاز (فایل <code>.c</code>) و <code>$@</code> هدف (فایل <code>.o</code>).</li>
+  <li data-lines="16"><b class="what">وابستگی به هدرها.</b> پرچم <code>-MMD</code> به کامپایلر می‌گوید کنار هر <code>.o</code> یک فایل <code>.d</code> بسازد که فهرست هدرهای همان فایل را دارد. <code>-include</code> این فایل‌ها را می‌خواند (اگر هنوز نبودند خطا نمی‌دهد).
+    <span class="why">بدون این، اگر <code>filter.h</code> را عوض کنی، <code>make</code> نمی‌فهمد <code>main.c</code> هم باید دوباره کامپایل شود؛ چون در قاعده‌اش فقط <code>main.c</code> پیش‌نیاز است. نتیجه: باگ‌های عجیبی که فقط با <code>make clean</code> رفع می‌شوند.</span></li>
+  <li data-lines="18-19"><b class="what">پاک‌سازی.</b> فایل‌های ساخته‌شده را حذف می‌کند تا ساخت از نو شروع شود.</li>
+  <li data-lines="21"><b class="what">.PHONY.</b> به <code>make</code> می‌گوید <code>all</code> و <code>clean</code> اسم فایل نیستند، اسم کارند.
+    <span class="why">اگر روزی فایلی به نام <code>clean</code> در پوشه باشد، بدون این خط <code>make clean</code> فکر می‌کند «فایل clean که هست، کاری ندارم».</span></li>
+</ol>
+<pre class="term" data-nocheck>
+$ make
+gcc -std=c11 -Wall -Wextra -Wpedantic -O1 -MMD -MP -c main.c -o main.o
+gcc -std=c11 -Wall -Wextra -Wpedantic -O1 -MMD -MP -c sensor.c -o sensor.o
+gcc -std=c11 -Wall -Wextra -Wpedantic -O1 -MMD -MP -c filter.c -o filter.o
+gcc main.o sensor.o filter.o -o thermo
+$ ./thermo
+raw=23.1 avg=23.1
+raw=23.6 avg=23.3
+raw=22.9 avg=23.2
+raw=24.0 avg=23.5
+raw=23.3 avg=23.4
+</pre>
+<p>حالا ببین <code>make</code> چطور «هوشمند» رفتار می‌کند. بار دوم که می‌زنی چیزی تغییر نکرده. بعد فقط <code>filter.h</code> را «لمس» می‌کنیم (<code>touch</code> فقط زمان فایل را جدید می‌کند). فقط فایل‌هایی که آن هدر را include کرده‌اند دوباره ساخته می‌شوند (<code>sensor.c</code> هدر <code>filter.h</code> را ندارد و دست‌نخورده می‌ماند):</p>
+<pre class="term" data-nocheck>
+$ make
+make: Nothing to be done for 'all'.
+$ touch filter.h
+$ make
+gcc -std=c11 -Wall -Wextra -Wpedantic -O1 -MMD -MP -c main.c -o main.o
+gcc -std=c11 -Wall -Wextra -Wpedantic -O1 -MMD -MP -c filter.c -o filter.o
+gcc main.o sensor.o filter.o -o thermo
+</pre>
+<p>روی پروژهٔ بزرگ (هزاران فایل) این هوشمندی فرق ۳۰ ثانیه با ۳۰ دقیقه است.</p>
+
+<div class="callout warn"><div class="ct">تلهٔ Tab و تلهٔ پرچم‌ها</div>
+<ul>
+<li><b>Tab نه فاصله.</b> اگر ویرایشگرت Tab را به چهار فاصله تبدیل کند، <code>make</code> خطای <code>*** missing separator. Stop.</code> می‌دهد. در VS Code برای فایل Makefile حالت «Indent Using Tabs» را روشن کن.</li>
+<li><b>Makefile فقط زمان فایل‌ها را نگاه می‌کند، نه پرچم‌ها را.</b> اگر <code>CFLAGS</code> را عوض کنی (مثلا <code>-DBOARD=2</code>)، فایل‌های <code>.o</code> قدیمی جدیدتر از <code>.c</code> هستند و دوباره ساخته نمی‌شوند. بعد از تغییر پرچم‌ها یک بار <code>make clean</code> بزن. در تمرین ۳ این را واقعا می‌بینی.</li>
+</ul></div>
+
+<h2 id="cmake">CMake: نسل بعدی</h2>
+<p>Makefile روی Linux و macOS عالی است ولی روی Windows و بین IDEها دردسر دارد. <b>CMake</b> (<span class="term" data-t="cmake">CMake</span>) یک لایه بالاتر است: تو در <code>CMakeLists.txt</code> می‌نویسی «این برنامه از این فایل‌ها ساخته می‌شود» و CMake خودش برای هر سیستم (Makefile، Ninja، Visual Studio) فایل ساخت می‌سازد. ESP-IDF و بسیاری از پروژه‌های STM32 (از جمله خروجی CubeMX نسخه‌های جدید) از CMake استفاده می‌کنند.</p>
+
+<div class="code" data-file="CMakeLists.txt" data-lang="cmake" data-verify="frag" id="cm1">
+<pre>
+cmake_minimum_required(VERSION 3.10)
+project(thermo C)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+
+add_executable(thermo main.c sensor.c filter.c)
+target_compile_options(thermo PRIVATE -Wall -Wextra -Wpedantic)
+</pre></div>
+<ol class="walk" data-for="cm1">
+  <li data-lines="1-2"><b class="what">حداقل نسخه و پروژه.</b> اسم پروژه <code>thermo</code> و زبانش <code>C</code>.</li>
+  <li data-lines="4-5"><b class="what">استاندارد C11.</b> معادل <code>-std=c11</code> و <code>REQUIRED</code> یعنی «اگر نشد، خطا بده».</li>
+  <li data-lines="7"><b class="what">تعریف برنامه.</b> اسم خروجی و فهرست منبع‌ها.
+    <span class="why">هدرها را لازم نیست بنویسی؛ CMake وابستگی هدرها را خودش پیدا می‌کند.</span></li>
+  <li data-lines="8"><b class="what">پرچم هشدار.</b> فقط برای این برنامه (<code>PRIVATE</code>).</li>
+</ol>
+<p>ساخت با CMake دو مرحله دارد: «پیکربندی» (ساخت فایل‌های ساخت در یک پوشهٔ جدا به‌نام <code>build</code>) و «ساخت». من این را روی همین پروژه اجرا کردم:</p>
+<pre class="term" data-nocheck>
+$ cmake -S . -B build
+$ cmake --build build
+[ 25%] Building C object CMakeFiles/thermo.dir/main.c.o
+[ 50%] Building C object CMakeFiles/thermo.dir/sensor.c.o
+[ 75%] Building C object CMakeFiles/thermo.dir/filter.c.o
+[100%] Linking C executable thermo
+[100%] Built target thermo
+$ ./build/thermo
+raw=23.1 avg=23.1
+raw=23.6 avg=23.3
+raw=22.9 avg=23.2
+raw=24.0 avg=23.5
+raw=23.3 avg=23.4
+</pre>
+<p>اگر <code>build</code> را پاک کنی، هیچ‌چیز از منبع‌های تو پاک نمی‌شود. این «ساخت بیرون از پوشهٔ منبع» تمیز است.</p>
+
+<h2 id="mcu">در STM32 و ESP32 پروژه چه شکلی دارد؟</h2>
+<p>همین منطق (هدر، منبع، فهرست ساخت) در پروژهٔ واقعی MCU هم هست. فقط چند فایل ویژه اضافه می‌شود. نام‌های زیر نمونهٔ رایج‌اند و بسته به نسخهٔ ابزار ممکن است کمی فرق کنند:</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 330" role="img" aria-label="ساختار پوشه سه پروژه: STM32 با Makefile و startup و linker script، ESP-IDF با CMakeLists و main و components، و PlatformIO با platformio.ini و src و lib">
+  <text x="380" y="22" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">سه چیدمان رایج پروژه</text>
+  <rect x="524" y="38" width="216" height="270" rx="14" fill="#ffd60a" stroke="#15120a" stroke-width="3"/>
+  <rect x="272" y="38" width="216" height="270" rx="14" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/>
+  <rect x="20" y="38" width="216" height="270" rx="14" fill="#3ddc97" stroke="#15120a" stroke-width="3"/>
+  <g fill="#15120a" font-size="14.5" font-weight="800" text-anchor="middle">
+    <text x="632" y="64">STM32 (نمونهٔ CubeMX)</text><text x="380" y="64">ESP-IDF</text><text x="128" y="64">PlatformIO</text>
+  </g>
+  <g class="mono" font-size="12" font-weight="700" fill="#15120a" direction="ltr">
+    <text x="540" y="92">Core/Src/main.c</text>
+    <text x="540" y="114">Core/Src/sensor.c</text>
+    <text x="540" y="136">Core/Inc/sensor.h</text>
+    <text x="540" y="158">Drivers/  (HAL, CMSIS)</text>
+    <text x="540" y="180">startup_stm32f411xe.s</text>
+    <text x="540" y="202">STM32F411RETx_FLASH.ld</text>
+    <text x="540" y="224">Makefile  (یا CMakeLists)</text>
+  </g>
+  <g class="mono" font-size="12" font-weight="700" fill="#15120a" direction="ltr">
+    <text x="288" y="92">CMakeLists.txt</text>
+    <text x="288" y="114">sdkconfig</text>
+    <text x="288" y="136">main/CMakeLists.txt</text>
+    <text x="288" y="158">main/main.c</text>
+    <text x="288" y="180">components/sensor/</text>
+    <text x="304" y="202">CMakeLists.txt</text>
+    <text x="304" y="224">sensor.c</text>
+    <text x="304" y="246">include/sensor.h</text>
+  </g>
+  <g class="mono" font-size="12" font-weight="700" fill="#15120a" direction="ltr">
+    <text x="36" y="92">platformio.ini</text>
+    <text x="36" y="114">src/main.c</text>
+    <text x="36" y="136">include/config.h</text>
+    <text x="36" y="158">lib/sensor/</text>
+    <text x="52" y="180">sensor.c</text>
+    <text x="52" y="202">sensor.h</text>
+  </g>
+  <g fill="#15120a" font-size="12.5" text-anchor="middle">
+    <text x="632" y="262">startup و linker script را درس ۵.۱</text>
+    <text x="632" y="282">توضیح می‌دهد</text>
+    <text x="380" y="282">هر پوشهٔ components یک ماژول است</text>
+    <text x="128" y="282">هر پوشهٔ lib یک کتابخانه/ماژول است</text>
+  </g>
+</svg></div>
+<figcaption>در هر سه، همان اصل: هدر جدا از منبع، هر ماژول در پوشهٔ خودش و یک فایل ساخت که فهرست را می‌داند.</figcaption></figure>
+
+<h3 id="stm">STM32</h3>
+<p>خروجی CubeMX (یا نمونه‌های آماده) معمولا یک <code>Makefile</code> یا <code>CMakeLists.txt</code> می‌آورد. سه فایل ویژه دارد که در PC نبود: <b>startup</b> (کدی که بعد از روشن‌شدن اجرا می‌شود و <code>main</code> را صدا می‌زند)، <b>linker script</b> (فایل <code>.ld</code> که می‌گوید Flash و RAM کجا هستند و هر بخش کد کجا می‌نشیند) و <b>HAL/CMSIS</b> (هدرهای ثبات‌ها و کتابخانه). هر سه را در درس <a href="5-1.html">۵.۱</a> از نزدیک می‌سازیم. ساخت برای ARM فقط با تغییر کامپایلر است:</p>
+<pre class="term" data-kind="cmd">
+CC      = arm-none-eabi-gcc
+CFLAGS  = -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffunction-sections -fdata-sections
+LDFLAGS = -T STM32F411RETx_FLASH.ld -Wl,--gc-sections
+</pre>
+<p>همان قاعدهٔ <code>%.o: %.c</code>، فقط با <code>CC</code> و <code>CFLAGS</code> تازه. برای شروع بهتر است از پروژهٔ نمونهٔ تولیدشده استفاده کنی و بخوانی، نه اینکه از صفر بنویسی. (شرح هر پرچم را در درس <a href="6-5.html">۶.۵</a> می‌بینی.)</p>
+
+<h3 id="esp">ESP32 (ESP-IDF)</h3>
+<p>ESP-IDF از CMake استفاده می‌کند و مفهوم <b>کامپوننت</b> (component) دارد: هر پوشه با <code>CMakeLists.txt</code> خودش، یک ماژول. کامپوننت <code>main</code> همیشه هست و شامل <code>app_main</code> است. کامپوننت‌های خودت را در پوشهٔ <code>components/</code> می‌گذاری. نمونه (الگوی ESP-IDF v5.x؛ جزئیات دقیق را در مستندات رسمی <a href="https://docs.espressif.com/projects/esp-idf/" target="_blank" rel="noopener">ESP-IDF Programming Guide</a> ببین):</p>
+
+<div class="code" data-file="CMakeLists.txt" data-lang="cmake" data-verify="frag" id="idf1">
+<pre>
+# CMakeLists.txt در ریشهٔ پروژه
+cmake_minimum_required(VERSION 3.16)
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(thermo)
+</pre></div>
+<div class="code" data-file="CMakeLists.txt" data-lang="cmake" data-verify="frag" id="idf2">
+<pre>
+# components/sensor/CMakeLists.txt
+idf_component_register(SRCS "sensor.c"
+                       INCLUDE_DIRS "include")
+</pre></div>
+<ol class="walk" data-for="idf2">
+  <li data-lines="2-3"><b class="what">ثبت کامپوننت.</b> <code>SRCS</code> فایل‌های <code>.c</code> و <code>INCLUDE_DIRS</code> پوشه‌هایی که هدرهای عمومی (API) در آن‌هاست. هر کامپوننتی که <code>sensor.h</code> را بخواهد، این پوشه را در مسیر include می‌بیند.
+    <span class="why">این همان تقسیم «منو و آشپزخانه» است: پوشهٔ <code>include</code> منو و بقیه خصوصی.</span></li>
+</ol>
+<p>برای اینکه کامپوننت <code>main</code> از <code>sensor</code> استفاده کند، در <code>main/CMakeLists.txt</code> آن را با <code>REQUIRES</code> (یا <code>PRIV_REQUIRES</code>) اعلام می‌کنی. سپس <code>idf.py build</code> همه را می‌سازد. پرچم‌ها و تنظیمات را <code>idf.py menuconfig</code> در فایل <code>sdkconfig</code> ذخیره می‌کند (پایهٔ همان ماکروهای <code>CONFIG_...</code> درس ۴.۱).</p>
+
+<h3 id="pio">PlatformIO</h3>
+<p>PlatformIO افزونه‌ای برای VS Code است (درس <a href="1-3.html">۱.۳</a>) که کامپایلر و کتابخانه را خودش می‌آورد. تنها فایل تنظیم <code>platformio.ini</code> است:</p>
+<div class="code" data-file="platformio.ini" data-lang="ini" data-verify="frag" id="pio1">
+<pre>
+[env:nucleo_f411re]
+platform = ststm32
+board = nucleo_f411re
+framework = cmsis
+
+[env:esp32dev]
+platform = espressif32
+board = esp32dev
+framework = espidf
+</pre></div>
+<ol class="walk" data-for="pio1">
+  <li data-lines="1-4"><b class="what">یک محیط برای STM32.</b> نام محیط، پلتفرم، برد و چارچوب.</li>
+  <li data-lines="6-9"><b class="what">یک محیط برای ESP32.</b> با <code>pio run -e esp32dev</code> فقط همین محیط ساخته می‌شود.
+    <span class="why">یک پروژه با دو محیط، دقیقا همان «یک کد، چند برد» درس ۴.۱ است. نام برد و چارچوب‌ها را حتما در مستندات PlatformIO تطبیق بده؛ فهرستشان مرتب عوض می‌شود.</span></li>
+</ol>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="3">
+  <p class="q">کدام خط <b>تعریف</b> است، نه اعلان؟</p>
+  <ol>
+    <li data-why="این اعلان است؛ کلمهٔ extern یعنی قفسه جای دیگری ساخته شده."><code>extern int g_count;</code></li>
+    <li data-why="این پروتوتایپ است، یعنی اعلان؛ بدنه ندارد."><code>int read_adc(void);</code></li>
+    <li><code>int g_count = 0;</code></li>
+    <li data-why="typedef فقط یک اسم نوع می‌سازد؛ نه تابع می‌سازد نه قفسه.">typedef struct led led_t;</li>
+  </ol>
+  <div class="fb">تعریف قفسه یا کد را می‌سازد و فقط یک بار در کل برنامه مجاز است. اعلان فقط اسم را معرفی می‌کند.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">لینکر می‌گوید <code>undefined reference to `uart_send'</code>. اولین چیزی که باید چک کنی چیست؟</p>
+  <ol>
+    <li data-why="نقطه‌ویرگول گمشده خطای کامپایلر می‌سازد، نه لینکر. اینجا کامپایل موفق بوده.">در ماژول uart نقطه‌ویرگول جا افتاده است</li>
+    <li>آیا فایل <code>uart.c</code> کامپایل و لینک شده و آیا <code>uart_send</code> همان اسم را دارد و <code>static</code> نیست</li>
+    <li data-why="include guard ربطی به لینک ندارد؛ خطایش redefinition است، نه undefined reference.">include guard در uart.h کم است</li>
+    <li data-why="اندازهٔ آرایه ربطی به تابع پیدانشده ندارد.">آرایه‌ها بزرگ‌اند و باید کوچک شوند</li>
+  </ol>
+  <div class="fb">کامپایل شدن یعنی اعلان دیده شده است. خطای لینکر یعنی تعریف در فایل‌های لینک‌شده نیست: فایل را فراموش کرده‌ای، اسم را غلط نوشته‌ای یا تابع <code>static</code> است.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">هدر <code>state.h</code> شامل <code>int g_state = 0;</code> است و دو فایل <code>.c</code> آن را include می‌کنند. با وجود include guard، لینک چه می‌شود؟</p>
+  <ol>
+    <li>خطای <code>multiple definition of `g_state'</code>؛ چون هر فایل ترجمه، تعریف خودش را ساخته است</li>
+    <li data-why="guard فقط در یک فایل ترجمه جلوی دوبار ورود را می‌گیرد. فایل ترجمهٔ دوم از نو شروع می‌کند.">بدون خطا؛ include guard جلویش را می‌گیرد</li>
+    <li data-why="هشدار نیست، خطای لینکر است و ساخت شکست می‌خورد.">فقط یک هشدار می‌گیرد و برنامه ساخته می‌شود</li>
+    <li data-why="چنین خطایی در کامپایلر نیست؛ هر فایل به‌تنهایی درست کامپایل می‌شود.">هر دو فایل .c کامپایل نمی‌شوند</li>
+  </ol>
+  <div class="fb">هر <code>.c</code> جدا کامپایل می‌شود و guard برای هر کدام از نو شروع می‌شود. تعریف در هدر یعنی تعریف در همهٔ فایل‌ها. راه‌حل: <code>extern int g_state;</code> در هدر و <code>int g_state = 0;</code> در یک <code>.c</code>.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q"><code>static</code> جلوی یک تابع در <code>.c</code> چه می‌کند؟</p>
+  <ol>
+    <li data-why="static دربارهٔ دیده‌شدن است نه سرعت؛ تابع سریع‌تر نمی‌شود.">تابع را سریع‌تر می‌کند</li>
+    <li data-why="مقدار متغیرهای محلی به static جلوی تابع ربطی ندارد (آن معنی دیگری از static است).">متغیرهای محلی تابع را حفظ می‌کند</li>
+    <li data-why="برعکس؛ static تابع را از فایل‌های دیگر پنهان می‌کند.">تابع را برای همهٔ فایل‌ها قابل‌دیدن می‌کند</li>
+    <li>تابع را فقط برای همان فایل ترجمه قابل‌دیدن می‌کند (پیوند درونی)</li>
+  </ol>
+  <div class="fb">در سطح فایل، <code>static</code> یعنی «پیوند درونی»: لینکر این اسم را برای فایل‌های دیگر نمی‌بیند. دو فایل می‌توانند تابع <code>static</code> هم‌نام داشته باشند.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">پروژه‌ات با <code>make</code> ساخته می‌شود و <code>CFLAGS</code> را از <code>-DBOARD=1</code> به <code>-DBOARD=2</code> عوض کرده‌ای، ولی خروجی همان قبلی است. چرا؟</p>
+  <ol>
+    <li data-why="make پرچم‌های جدید را می‌شناسد؛ ولی فقط اگر دوباره کامپایل کند.">make پرچم جدید را نمی‌شناسد</li>
+    <li data-why="این خطای ساخت نیست؛ همان قدیمی ساخته شده و خطایی چاپ نشده.">کامپایلر خطا داده است ولی دیده نشده</li>
+    <li>make فقط زمان فایل‌ها را نگاه می‌کند و <code>.o</code> قدیمی هنوز جدیدتر از <code>.c</code> است؛ باید <code>make clean</code> بزنی</li>
+    <li data-why="Makefile با چند برد هیچ مشکلی ندارد؛ فقط باید ساخت از نو انجام شود.">Makefile فقط برای یک برد کار می‌کند</li>
+  </ol>
+  <div class="fb">Makefile وابستگی به «پرچم‌ها» را نمی‌فهمد؛ فقط زمان فایل‌ها را مقایسه می‌کند. بعد از عوض‌کردن پرچم‌ها، <code>make clean</code> یا حذف <code>.o</code>ها لازم است.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">در پروژهٔ STM32، ISR یک پرچم را ۱ می‌کند و <code>main</code> می‌خواند. پرچم در فایل <code>button.c</code> تعریف شده است. در <code>button.h</code> چه می‌نویسی؟</p>
+  <ol>
+    <li data-why="این تعریف است و در هدر با include در دو فایل به multiple definition می‌رسد.">volatile uint8_t g_pressed = 0;</li>
+    <li>extern volatile uint8_t g_pressed;</li>
+    <li data-why="static در هدر یعنی هر فایل نسخهٔ جدا از خودش را دارد؛ ISR و main دیگر یک متغیر مشترک ندارند.">static volatile uint8_t g_pressed;</li>
+    <li data-why="بدون extern و بدون =، در C این هم تعریف حساب می‌شود (و در gcc جدید multiple definition می‌دهد).">volatile uint8_t g_pressed;</li>
+  </ol>
+  <div class="fb">اعلان با <code>extern</code>، تعریف در یک <code>.c</code>، و <code>volatile</code> چون ISR مقدار را «پشت سر برنامه» تغییر می‌دهد (درس ۳.۶).</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: تقسیم یک برنامه به ماژول</div>
+<p>برنامهٔ زیر همه‌چیز را در یک فایل دارد. آن را به سه فایل <code>conv.h</code>، <code>conv.c</code> و <code>main.c</code> تقسیم کن.</p>
+<div class="code" data-lang="c" id="ex1bad"><pre>
+#include &lt;stdio.h&gt;
+
+int celsius_to_f(int c) { return c * 9 / 5 + 32; }
+int clamp_int(int v, int lo, int hi)
+{
+    if (v &lt; lo) return lo;
+    if (v &gt; hi) return hi;
+    return v;
+}
+
+int main(void)
+{
+    printf("%d C = %d F\n", 25, celsius_to_f(25));
+    printf("clamp(150) = %d\n", clamp_int(150, 0, 100));
+    return 0;
+}
+</pre></div>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> اگر فایل <code>conv.c</code> را در دستور <code>gcc</code> ننویسی (فقط <code>gcc main.c</code>) چه خطایی می‌گیری؟ لینکر یا کامپایلر؟</li>
+  <li><b>حل:</b> سه فایل را بنویس (با include guard و هدر خودکفا) و با <code>gcc -std=c11 -Wall -Wextra -o conv main.c conv.c</code> بساز.</li>
+  <li><b>چالش:</b> یک <code>Makefile</code> کوتاه برایش بنویس که فقط با <code>make</code> ساخته شود.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>در <code>conv.h</code> فقط دو پروتوتایپ و guard. در <code>conv.c</code> اول <code>#include "conv.h"</code> و بعد بدنهٔ دو تابع. در <code>main.c</code> فقط <code>stdio.h</code> و <code>conv.h</code>. برای Makefile می‌توانی الگوی Makefile درس را کپی و <code>SRCS</code> را عوض کنی.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="ex1_proj">
+$ ./conv
+25 C = 77 F
+clamp(150) = 100
+</pre>
+<p>جواب قسمت الف: خطای <b>لینکر</b> (<code>undefined reference to `celsius_to_f'</code>)، چون اگر هدر را نوشته باشی، کامپایلر اعلان را می‌بیند و راضی است، ولی لینکر تعریف را پیدا نمی‌کند.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="conv.h" data-lang="c" data-verify="host" data-project="ex1_proj" id="ex1a">
+<pre>
+#ifndef CONV_H
+#define CONV_H
+
+int celsius_to_f(int c);
+int clamp_int(int v, int lo, int hi);
+
+#endif /* CONV_H */
+</pre></div>
+<div class="code" data-file="conv.c" data-lang="c" data-verify="host" data-project="ex1_proj" id="ex1b">
+<pre>
+#include "conv.h"
+
+int celsius_to_f(int c)
+{
+    return c * 9 / 5 + 32;
+}
+
+int clamp_int(int v, int lo, int hi)
+{
+    if (v &lt; lo) {
+        return lo;
+    }
+    if (v &gt; hi) {
+        return hi;
+    }
+    return v;
+}
+</pre></div>
+<div class="code" data-file="main.c" data-lang="c" data-verify="host" data-project="ex1_proj" id="ex1c">
+<pre>
+#include &lt;stdio.h&gt;
+#include "conv.h"
+
+int main(void)
+{
+    printf("%d C = %d F\n", 25, celsius_to_f(25));
+    printf("clamp(150) = %d\n", clamp_int(150, 0, 100));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1a">
+  <li data-lines="1-2,7"><b class="what">guard.</b> از دوبار ورود جلوگیری می‌کند.</li>
+  <li data-lines="4-5"><b class="what">فقط اعلان‌ها.</b> دو پروتوتایپ؛ همان چیزی که <code>main.c</code> لازم دارد.</li>
+</ol>
+<ol class="walk" data-for="ex1b">
+  <li data-lines="1"><b class="what">هدر خودش.</b> برای بررسی سازگاری تعریف با اعلان.</li>
+  <li data-lines="3-6,8-17"><b class="what">تعریف‌ها.</b> همان بدنه‌های قبلی، با آکولاد کامل.</li>
+</ol>
+<ol class="walk" data-for="ex1c">
+  <li data-lines="1-2"><b class="what">دو include.</b> استاندارد و هدر پروژه.</li>
+  <li data-lines="6-7"><b class="what">استفاده.</b> صدا زدن توابع فقط از روی اعلان.</li>
+</ol>
+<pre class="term" data-from="ex1_proj">
+$ gcc -std=c11 -Wall -Wextra -o conv main.c conv.c
+$ ./conv
+25 C = 77 F
+clamp(150) = 100
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: باگ‌های چندفایلی را پیدا کن</div>
+<p>در این سه تکه، هر کدام یک اشتباه ساختاری دارد. بگو چه اتفاقی می‌افتد و چطور درست می‌شود.</p>
+<div class="code" data-lang="c" id="ex2bad"><pre>
+/* uart.h */
+volatile unsigned char g_rx_flag = 0;
+void uart_init(void) { g_rx_flag = 0; }
+
+/* sensor.c  (sensor.h را include نکرده) */
+int sensor_read_dc(void) { return 231; }
+
+/* main.c */
+static int helper(void);
+int main(void) { return helper(); }
+</pre></div>
+<ol class="parts">
+  <li><code>uart.h</code>: اگر دو فایل <code>.c</code> آن را include کنند چه می‌شود؟ چطور اصلاحش می‌کنی؟</li>
+  <li><code>sensor.c</code>: چه شبکهٔ ایمنی از دست رفته؟ (فکر کن اگر نوع برگشتی در هدر <code>int16_t</code> باشد.)</li>
+  <li><code>main.c</code>: <code>helper</code> در فایل دیگری تعریف شده و اینجا <code>static</code> اعلان شده. چه خطایی و چرا؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>الف: قاعدهٔ «در هدر فقط اعلان». ب: خطای <code>conflicting types</code> را یادت بیاور. پ: <code>static</code> یعنی پیوند درونی.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>الف: <code>multiple definition of `g_rx_flag'</code> و <code>multiple definition of `uart_init'</code>. ب: هیچ خطایی، و همین خطرناک است. پ: در <code>main.c</code>، کامپایلر هشدار می‌دهد <code>'helper' used but never defined</code> و لینک خطای خودش را می‌دهد (چون <code>static</code> است، هیچ فایل دیگری هم نمی‌تواند تعریفش کند).</p>
+<pre class="term" data-from="ex2_proj">
+$ ./uart_demo
+rx_flag=1 byte=65
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="table-wrap"><table><thead><tr><th>بخش</th><th>مشکل</th><th>اصلاح</th></tr></thead><tbody>
+<tr><td>الف</td><td>پرچم و تابع در هدر تعریف شده‌اند؛ هر <code>.c</code> که include کند یک نسخه می‌سازد → multiple definition؛ guard هم ندارد</td><td>در <code>uart.h</code>: guard، <code>extern volatile uint8_t g_rx_flag;</code> و پروتوتایپ؛ تعریف‌ها در <code>uart.c</code></td></tr>
+<tr><td>ب</td><td>تعریف بدون include کردن هدر خودش؛ کامپایلر نمی‌تواند با اعلان مقایسه کند و ناسازگاری نوع پنهان می‌ماند</td><td><code>#include "sensor.h"</code> در بالای <code>sensor.c</code></td></tr>
+<tr><td>پ</td><td><code>static</code> یعنی تعریف باید در همین فایل باشد؛ فایل دیگر نمی‌تواند آن را تأمین کند</td><td>یا تعریف را به همین فایل بیاور، یا <code>static</code> را بردار و اعلان را در هدر بگذار</td></tr>
+</tbody></table></div>
+<p>نسخهٔ اصلاح‌شدهٔ ماژول <code>uart</code> (یک شبیه‌سازی روی PC):</p>
+<div class="code" data-file="uart.h" data-lang="c" data-verify="host" data-project="ex2_proj" id="ex2a">
+<pre>
+#ifndef UART_H
+#define UART_H
+
+#include &lt;stdint.h&gt;
+
+extern volatile uint8_t g_rx_flag;
+
+void uart_init(void);
+void uart_on_byte(uint8_t byte);
+uint8_t uart_last_byte(void);
+
+#endif /* UART_H */
+</pre></div>
+<div class="code" data-file="uart.c" data-lang="c" data-verify="host" data-project="ex2_proj" id="ex2b">
+<pre>
+#include "uart.h"
+
+volatile uint8_t g_rx_flag = 0;
+static uint8_t last_byte = 0;
+
+void uart_init(void)
+{
+    g_rx_flag = 0;
+    last_byte = 0;
+}
+
+void uart_on_byte(uint8_t byte)
+{
+    last_byte = byte;
+    g_rx_flag = 1;
+}
+
+uint8_t uart_last_byte(void)
+{
+    return last_byte;
+}
+</pre></div>
+<div class="code" data-file="main.c" data-lang="c" data-verify="host" data-project="ex2_proj" id="ex2c">
+<pre>
+#include &lt;stdio.h&gt;
+#include "uart.h"
+
+int main(void)
+{
+    uart_init();
+    uart_on_byte(65);
+    if (g_rx_flag) {
+        printf("rx_flag=%u byte=%u\n", (unsigned)g_rx_flag, (unsigned)uart_last_byte());
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2a">
+  <li data-lines="6"><b class="what">اعلان متغیر مشترک.</b> <code>extern volatile</code>؛ بدون مقدار اولیه.</li>
+  <li data-lines="8-10"><b class="what">اعلان توابع.</b> فقط واسط: <code>uart_last_byte</code> راه خواندن است، چون <code>last_byte</code> خصوصی می‌ماند.</li>
+</ol>
+<ol class="walk" data-for="ex2b">
+  <li data-lines="3"><b class="what">تعریف پرچم.</b> تنها جایی که قفسه ساخته می‌شود.</li>
+  <li data-lines="4"><b class="what">داده خصوصی.</b> <code>static</code> است؛ بیرون فقط از راه تابع دیده می‌شود.</li>
+  <li data-lines="6-10,12-16,18-21"><b class="what">توابع ماژول.</b> شبیه‌سازی دریافت یک بایت: ذخیرهٔ آخرین بایت و بلند کردن پرچم (روی MCU این کار را ISR انجام می‌دهد).</li>
+</ol>
+<pre class="term" data-from="ex2_proj">
+$ gcc -std=c11 -Wall -Wextra -o uart_demo main.c uart.c
+$ ./uart_demo
+rx_flag=1 byte=65
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: یک کد، دو برد، با make</div>
+<p>می‌خواهیم پروژهٔ کوچکی بسازیم که نام برد و پایهٔ LED را چاپ کند و برد را با <code>make BOARD=2</code> انتخاب شود (شبیه <code>-DBOARD</code> درس ۴.۱).</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> اگر یک‌بار <code>make run</code> بزنی و بعد <code>make BOARD=2 run</code>، به‌نظرت خروجی دوم چیست؟</li>
+  <li><b>حل:</b> یک Makefile بنویس با متغیر <code>BOARD ?= 1</code> (یعنی «اگر از بیرون نیامده، ۱») که <code>-DBOARD=$(BOARD)</code> را به <code>CFLAGS</code> اضافه کند و هدف <code>run</code> و <code>clean</code> داشته باشد.</li>
+  <li><b>فکر کن:</b> چرا خروجی بعد از <code>make BOARD=2 run</code> هنوز برد ۱ است؟ چطور درستش می‌کنی؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>اول <code>make clean</code> بزن و <code>make BOARD=2 run</code> را بزن. فکر کن <code>make</code> چه چیزی را با چه چیزی مقایسه می‌کند: زمان فایل‌ها. پرچم‌ها در هیچ فایلی نیستند.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-nocheck>
+$ make run
+board=nucleo-f411re led_pin=5
+$ make BOARD=2 run
+board=nucleo-f411re led_pin=5      # هنوز قدیمی! (چون main.o جدیدتر از main.c است)
+$ make clean
+$ make BOARD=2 run
+board=esp32-devkit led_pin=2
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="board.h" data-lang="c" data-verify="make" data-project="ex3_proj" id="ex3a">
+<pre>
+#ifndef BOARD_H
+#define BOARD_H
+
+#ifndef BOARD
+#define BOARD 1
+#endif
+
+#if BOARD == 1
+#define BOARD_NAME "nucleo-f411re"
+#define LED_PIN    5
+#elif BOARD == 2
+#define BOARD_NAME "esp32-devkit"
+#define LED_PIN    2
+#else
+#error "Unknown BOARD"
+#endif
+
+#endif /* BOARD_H */
+</pre></div>
+<div class="code" data-file="main.c" data-lang="c" data-verify="make" data-project="ex3_proj" id="ex3b">
+<pre>
+#include &lt;stdio.h&gt;
+#include "board.h"
+
+int main(void)
+{
+    printf("board=%s led_pin=%d\n", BOARD_NAME, LED_PIN);
+    return 0;
+}
+</pre></div>
+<div class="code" data-file="Makefile" data-lang="make" data-verify="make" data-project="ex3_proj" id="ex3c">
+<pre>
+CC      = gcc
+BOARD  ?= 1
+CFLAGS  = -std=c11 -Wall -Wextra -DBOARD=$(BOARD)
+TARGET  = board_demo
+
+all: $(TARGET)
+
+$(TARGET): main.o
+	$(CC) main.o -o $@
+
+main.o: main.c board.h
+	$(CC) $(CFLAGS) -c main.c -o $@
+
+run: $(TARGET)
+	./$(TARGET)
+
+clean:
+	rm -f main.o $(TARGET)
+
+.PHONY: all run clean
+</pre></div>
+<ol class="walk" data-for="ex3c">
+  <li data-lines="2-3"><b class="what">متغیر برد.</b> <code>?=</code> فقط وقتی مقدار می‌دهد که <code>BOARD</code> از بیرون (خط فرمان یا محیط) نیامده باشد. <code>make BOARD=2</code> آن را ۲ می‌کند. پرچم <code>-DBOARD=...</code> به کامپایلر می‌رسد.</li>
+  <li data-lines="8-9"><b class="what">لینک.</b> برنامه از <code>main.o</code>.</li>
+  <li data-lines="11-12"><b class="what">کامپایل.</b> وابسته به <code>main.c</code> و <code>board.h</code>؛ اگر هر دو (زمان) عوض شوند دوباره ساخته می‌شود.
+    <span class="why">ولی مقدار <code>BOARD</code> در هیچ فایلی نیست. مهم همین است: <code>make</code> نمی‌فهمد <code>-DBOARD</code> عوض شده.</span></li>
+  <li data-lines="14-15"><b class="what">اجرا.</b> <code>run</code> اول <code>board_demo</code> را می‌سازد و بعد اجرا می‌کند.</li>
+  <li data-lines="17-18"><b class="what">پاک‌سازی.</b> برای وقتی که پرچم عوض می‌شود.</li>
+</ol>
+<pre class="term" data-nocheck>
+$ make run
+gcc -std=c11 -Wall -Wextra -DBOARD=1 -c main.c -o main.o
+gcc main.o -o board_demo
+./board_demo
+board=nucleo-f411re led_pin=5
+$ make BOARD=2 run
+./board_demo
+board=nucleo-f411re led_pin=5
+$ make clean
+rm -f main.o board_demo
+$ make BOARD=2 run
+gcc -std=c11 -Wall -Wextra -DBOARD=2 -c main.c -o main.o
+gcc main.o -o board_demo
+./board_demo
+board=esp32-devkit led_pin=2
+</pre>
+<p>ابزارهای بزرگ‌تر این مشکل را با نگه‌داشتن پرچم‌های ساخت در یک فایل و مقایسهٔ آن حل می‌کنند (CMake خودش هنگام تغییر گزینه‌ها همه را از نو می‌سازد). در Makefile ساده، عادت «بعد از عوض‌کردن پرچم، <code>make clean</code>» کافی است.</p></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>تقریبا همه در این درس سه جا گیر می‌کنند. اول <b>اعلان و تعریف را قاطی می‌کنند</b>؛ قانون ساده: هر چیزی که حافظه می‌گیرد فقط یک‌بار و در <code>.c</code> باشد. دوم <b>از پیام لینکر می‌ترسند</b>؛ در حالی که فقط دو جمله است: «این اسم را پیدا نکردم» یا «این اسم را دو بار پیدا کردم». سوم <b>Tab در Makefile</b>. برای اینکه مطمئن شوی درس را فهمیده‌ای، یک پروژهٔ کوچک با سه ماژول بساز و عمدا هر سه خطا را تولید کن؛ وقتی خودت بلد باشی خراب کنی، خطاها را در پروژهٔ واقعی ۱۰ ثانیه‌ای پیدا می‌کنی.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li>ماژول = یک <code>.h</code> (منو: اعلان‌ها) + یک <code>.c</code> (آشپزخانه: تعریف‌ها). هر <code>.c</code> جدا کامپایل می‌شود و لینکر همه را وصل می‌کند.</li>
+  <li><b>اعلان</b> اسم را معرفی می‌کند و چندبار مجاز است؛ <b>تعریف</b> حافظه می‌گیرد و فقط یک بار. در هدر فقط اعلان (و ماکرو/نوع/<code>static inline</code>).</li>
+  <li>متغیر مشترک: <code>extern</code> در هدر، تعریف در یک <code>.c</code>. تا می‌توانی متغیر را <code>static</code> نگه دار.</li>
+  <li><code>static</code> در سطح فایل = پیوند درونی: اسم برای بقیه پنهان است.</li>
+  <li>خطاهای لینکر: <code>undefined reference</code> (تعریف نیست: فایل، غلط املایی یا static) و <code>multiple definition</code> (تعریف دو بار: معمولا تعریف در هدر). هر <code>.c</code> باید هدر خودش را include کند تا <code>conflicting types</code> را زود بگیرد.</li>
+  <li>Makefile: قاعده‌های <code>هدف: پیش‌نیاز</code> با Tab؛ <code>-MMD</code> وابستگی هدرها را می‌سازد؛ پرچم‌ها را <code>make</code> نمی‌بیند، پس بعد از تغییرشان <code>make clean</code>.</li>
+  <li>CMake، فایل‌های ساخت را برای هر سیستم می‌سازد. ESP-IDF کامپوننت با <code>idf_component_register</code> دارد؛ PlatformIO با <code>platformio.ini</code>؛ پروژهٔ STM32 علاوه بر منبع‌ها startup و linker script دارد.</li>
+</ul>
+<p>درس بعد: <a href="4-3.html">۴.۳ اشاره‌گر به تابع و callback</a>.</p></div>
+
+</article>
+</body>
+</html>

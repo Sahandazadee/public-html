@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>اشاره‌گر (۱): آدرس و مقدار · C برای میکروکنترلر</title>
+<meta name="description" content="اشاره‌گر در C از صفر: آدرس با &amp;، دسترسی با *، تغییر متغیر از داخل تابع، NULL و اشاره‌گر وحشی، و اینکه چرا اشاره‌گر کلید کار با رجیستر STM32 و ESP32 است.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="3-2">
+
+<p class="lede">تا اینجا هر متغیر یک «قفسه» بود که مقدارش را می‌شد خواند و عوض کرد. حالا یک سؤال تازه: <b>خود شمارهٔ قفسه</b> را می‌شود در یک قفسهٔ دیگر نگه داشت؟ جواب «بله» است و اسم این کار «اشاره‌گر» است. اشاره‌گر ترسناک‌ترین بخش C شهرت دارد، ولی ایدهٔ اصلی‌اش به اندازهٔ یک نشانی خانه ساده است. در میکروکنترلر هم قلب کار است: رجیسترهای سخت‌افزار را با اشاره‌گر لمس می‌کنی.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>با <code>&amp;</code> آدرس یک متغیر را بگیری و با <code>*</code> به مقدار آن برسی</li>
+    <li>اشاره‌گر را درست اعلان کنی و اعلان را «بخوانی»</li>
+    <li>با تابعی که آدرس می‌گیرد، متغیر بیرون از تابع را تغییر بدهی (swap واقعی)</li>
+    <li>NULL، اشاره‌گر وحشی و آویزان را بشناسی و از آن‌ها دوری کنی</li>
+    <li>بدانی چرا اشاره‌گر در STM32 و ESP32 چهار بایت است و چطور به رجیستر می‌رسد</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="2-1.html">۲.۱</a>: متغیر، آدرس و بایت‌های حافظه (شکل قفسه‌ها)</li>
+    <li>درس <a href="2-6.html">۲.۶</a>: تابع و اینکه آرگومان‌ها «کپی» می‌شوند</li>
+    <li>درس <a href="3-1.html">۳.۱</a>: عملگر بیتی و ماسک</li>
+    <li>هیچ سخت‌افزاری لازم نیست؛ فقط کامپایلر روی PC</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: نشانی خانه، نه خود خانه</h2>
+<p>فرض کن به دوستت می‌خواهی بگویی «وسایل من را در خانهٔ فلان بگذار». دو راه داری: یا <b>یک ماکت از خانه</b> را برایش می‌فرستی (هرچه با ماکت بکند، خانهٔ اصلی تغییر نمی‌کند)، یا <b>یک کاغذ با نشانی خانه</b> می‌دهی. با کاغذ نشانی، دوستت به خود خانه می‌رود و همان‌جا وسایل را جابه‌جا می‌کند.</p>
+<p>در C این دو راه دقیقا وجود دارد. تا درس قبل، فقط «ماکت» می‌فرستادیم: آرگومان تابع یک کپی بود (درس <a href="2-6.html">۲.۶</a>). <b>اشاره‌گر (<span class="term" data-t="pointer">pointer</span>) همان کاغذ نشانی است</b>: یک متغیر که مقدارش، <span class="term" data-t="address">آدرس</span> حافظهٔ یک متغیر دیگر است.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>لینک یک فایل در Google Drive را در نظر بگیر. اگر خود فایل را ایمیل کنی، گیرنده یک <b>کپی</b> دارد و تغییراتش به فایل تو نمی‌رسد. اگر <b>لینک</b> بفرستی، همه به همان یک فایل می‌روند و هر تغییری، برای همه دیده می‌شود. اشاره‌گر لینک است. فقط یادت باشد لینک خودش هم یک «چیز» است: می‌شود نگهش داشت، عوضش کرد، یا (خطرناک!) به فایلی اشاره کند که دیگر پاک شده.</p></div>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 270" role="img" aria-label="متغیر x مقدار ۲۵ دارد و متغیر p آدرس x را نگه می‌دارد؛ پیکان از p به x می‌رود"><defs><marker id="arA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs><text x="380" y="24" text-anchor="middle" class="s-tx" font-size="15" font-weight="800" >p خودش هم یک متغیر است، اما مقدارش «آدرسِ» یک متغیر دیگر است</text><rect x="20" y="130" width="90" height="60" rx="8" fill="#e8e2c9" stroke="#15120a" stroke-width="3"/><text x="65.0" y="167.0" text-anchor="middle" class="mono" font-size="18" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">..</text><rect x="110" y="130" width="220" height="60" rx="8" fill="#ffd60a" stroke="#15120a" stroke-width="3"/><text x="220.0" y="167.0" text-anchor="middle" class="mono" font-size="26" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">25</text><rect x="330" y="130" width="220" height="60" rx="8" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/><text x="440.0" y="167.0" text-anchor="middle" class="mono" font-size="22" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">0x20000000</text><rect x="550" y="130" width="90" height="60" rx="8" fill="#e8e2c9" stroke="#15120a" stroke-width="3"/><text x="595.0" y="167.0" text-anchor="middle" class="mono" font-size="18" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">..</text><text x="220" y="118" text-anchor="middle" class="mono s-tx" font-size="20" font-weight="800" direction="ltr" style="font-variant-ligatures:none">x</text><text x="440" y="118" text-anchor="middle" class="mono s-tx" font-size="20" font-weight="800" direction="ltr" style="font-variant-ligatures:none">p</text><text x="220" y="214" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">0x20000000</text><text x="440" y="214" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">0x20000004</text><path d="M440 126 C440 50 230 50 224 122" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#arA)"/><text x="330" y="62" text-anchor="middle" class="s-tx" font-size="14" font-weight="800" >p اشاره می‌کند به x</text><text x="220" y="240" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700" >مقدار: عدد ۲۵</text><text x="440" y="240" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700" >مقدار: آدرس x (نه ۲۵!)</text><text x="700" y="160" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="600" >هر خانه ۴ بایت</text><text x="700" y="178" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="600" >(int در MCU)</text></svg>
+</div><figcaption>همان قفسه‌های درس <a href="2-1.html">۲.۱</a>. <span class="en">x</span> عدد ۲۵ را نگه می‌دارد. <span class="en">p</span> قفسهٔ کناری است که مقدارش آدرس <span class="en">x</span> است.</figcaption></figure>
+
+<h2 id="addr">آدرس یک متغیر: عملگر <code>&amp;</code></h2>
+<p>هر متغیر جایی در حافظه دارد و آن جا یک آدرس دارد. عملگر <span class="term" data-t="addressof">&amp;</span> (بخوان «آدرسِ») آدرس را می‌دهد: <code>&amp;x</code> یعنی «آدرس متغیر x». با <code>printf</code> و قالب <code>%p</code> می‌توانی آدرس را ببینی. (<code>%p</code> نوع <code>void *</code> می‌خواهد؛ فعلا فقط <code>(void *)</code> را قبل از آدرس بنویس. معنایش در درس <a href="3-3.html">۳.۳</a> می‌آید.)</p>
+
+<div class="code" data-file="addr.c" data-lang="c" data-verify="host" id="code1">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int a = 7;
+    int b = 8;
+
+    printf("a = %d, b = %d\n", a, b);
+    printf("&amp;a != &amp;b : %d\n", &amp;a != &amp;b);
+    printf("address of a: %p\n", (void *)&amp;a);
+    printf("address of b: %p\n", (void *)&amp;b);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code1">
+  <li data-lines="5-6"><b class="what">دو متغیر.</b> دو قفسهٔ <code>int</code> با مقدارهای ۷ و ۸.</li>
+  <li data-lines="8"><b class="what">مقدارها.</b> چاپ ساده؛ چیز تازه‌ای نیست.</li>
+  <li data-lines="9"><b class="what">مقایسهٔ آدرس‌ها.</b> <code>&amp;a != &amp;b</code> می‌پرسد «آیا آدرس a با آدرس b فرق دارد؟». جواب همیشه ۱ (درست) است، چون دو متغیر زنده هیچ‌وقت یک خانه را با هم شریک نیستند.</li>
+  <li data-lines="10-11"><b class="what">چاپ آدرس‌ها.</b> <code>%p</code> آدرس را به شکل هگز چاپ می‌کند.
+    <span class="why">عددی که چاپ می‌شود هر بار و روی هر رایانه فرق می‌کند (سیستم‌عامل جای برنامه را عوض می‌کند). اگر دو <code>int</code> کنار هم باشند، آدرس‌ها معمولا ۴ واحد فاصله دارند، چون هر <code>int</code> ۴ بایت است.</span></li>
+</ol>
+<pre class="term" data-from="addr.c" data-nocheck>
+$ ./addr
+a = 7, b = 8
+&amp;a != &amp;b : 1
+address of a: 0x7ffd0d2f51c0
+address of b: 0x7ffd0d2f51c4
+</pre>
+<p>دو آدرس آخر نمونه‌اند؛ روی رایانهٔ تو اعداد دیگری می‌بینی (ولی معمولا باز هم به هم نزدیک‌اند).</p>
+
+<h2 id="declare">اعلان اشاره‌گر و رسیدن به مقدار: عملگر <code>*</code></h2>
+<p>برای نگه داشتن یک آدرس، متغیری از نوع «اشاره‌گر به <code>int</code>» می‌سازیم: بین نوع و نام یک ستاره می‌گذاریم. سپس دو کار می‌توانیم بکنیم: آدرس را بدهیم (<code>&amp;x</code>) و از روی آدرس به مقدار برسیم (<code>*p</code>، به این کار <span class="term" data-t="dereference">dereference</span> یا «باز کردن اشاره‌گر» می‌گویند).</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="اجزای دستور int *p = &x; و معنای x و &amp;x و *p"><rect x="40" y="50" width="130" height="56" rx="8" fill="#ff86b3" stroke="#15120a" stroke-width="3"/><text x="105.0" y="85.0" text-anchor="middle" class="mono" font-size="26" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">int *</text><text x="105.0" y="132" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="800" >نوع: اشاره‌گر به int</text><rect x="190" y="50" width="80" height="56" rx="8" fill="#ffd60a" stroke="#15120a" stroke-width="3"/><text x="230.0" y="85.0" text-anchor="middle" class="mono" font-size="26" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">p</text><text x="230.0" y="132" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="800" >نام</text><rect x="290" y="50" width="60" height="56" rx="8" fill="#fff" stroke="#15120a" stroke-width="3"/><text x="320.0" y="85.0" text-anchor="middle" class="mono" font-size="26" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">=</text><text x="320.0" y="132" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="800" >انتساب</text><rect x="370" y="50" width="100" height="56" rx="8" fill="#3ddc97" stroke="#15120a" stroke-width="3"/><text x="420.0" y="85.0" text-anchor="middle" class="mono" font-size="26" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">&amp;x</text><text x="420.0" y="132" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="800" >آدرسِ x</text><rect x="490" y="50" width="50" height="56" rx="8" fill="#fff" stroke="#15120a" stroke-width="3"/><text x="515.0" y="85.0" text-anchor="middle" class="mono" font-size="26" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">;</text><text x="515.0" y="132" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="800" >پایان</text><text x="380" y="28" text-anchor="middle" class="s-tx" font-size="15" font-weight="800" >int *p = &amp;x;   ← یک خط، پنج تکه</text><path d="M20 160H740" stroke="#15120a" stroke-width="2" stroke-dasharray="6 5"/><rect x="24" y="176" width="70" height="24" rx="6" fill="#ffd60a" stroke="#15120a" stroke-width="2"/><text x="59" y="194" text-anchor="middle" class="mono s-tx" font-size="16" font-weight="800" direction="ltr" style="font-variant-ligatures:none">x</text><text x="736" y="194" text-anchor="start" class="s-tx" font-size="13.5" font-weight="600" >خودِ مقدار متغیر (اینجا ۲۵)</text><rect x="24" y="206" width="70" height="24" rx="6" fill="#3ddc97" stroke="#15120a" stroke-width="2"/><text x="59" y="224" text-anchor="middle" class="mono s-tx" font-size="16" font-weight="800" direction="ltr" style="font-variant-ligatures:none">&amp;x</text><text x="736" y="224" text-anchor="start" class="s-tx" font-size="13.5" font-weight="600" >آدرسِ x (اینجا 0x20000000)؛ «&amp;» را بخوان: «آدرسِ»</text><rect x="24" y="236" width="70" height="24" rx="6" fill="#7ea3ff" stroke="#15120a" stroke-width="2"/><text x="59" y="254" text-anchor="middle" class="mono s-tx" font-size="16" font-weight="800" direction="ltr" style="font-variant-ligatures:none">p</text><text x="736" y="254" text-anchor="start" class="s-tx" font-size="13.5" font-weight="600" >مقدار p = یک آدرس (همان 0x20000000)</text><rect x="24" y="266" width="70" height="24" rx="6" fill="#ff9a4d" stroke="#15120a" stroke-width="2"/><text x="59" y="284" text-anchor="middle" class="mono s-tx" font-size="16" font-weight="800" direction="ltr" style="font-variant-ligatures:none">*p</text><text x="736" y="284" text-anchor="start" class="s-tx" font-size="13.5" font-weight="600" >برو به آدرسی که p دارد و آنجا را بخوان/بنویس؛ «*» را بخوان: «چیزی که p نشان می‌دهد»</text></svg>
+</div><figcaption>سه عبارت مهم: <span class="en">x</span> مقدار، <span class="en">&amp;x</span> آدرس و <span class="en">*p</span> مقدارِ خانه‌ای که <span class="en">p</span> به آن اشاره می‌کند.</figcaption></figure>
+
+<div class="code" data-file="ptr1.c" data-lang="c" data-verify="host" id="code2">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int x = 25;
+    int *p = &amp;x;            // p آدرس x را نگه می‌دارد
+
+    printf("x  = %d\n", x);
+    printf("*p = %d\n", *p);
+    printf("p == &amp;x ? %d\n", p == &amp;x);
+
+    *p = 99;                // از راه آدرس، x را عوض کن
+    printf("x  = %d\n", x);
+    printf("*p = %d\n", *p);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code2">
+  <li data-lines="5"><b class="what">قفسهٔ معمولی.</b> <code>x</code> یک <code>int</code> با مقدار ۲۵ است.</li>
+  <li data-lines="6"><b class="what">قفسهٔ اشاره‌گر.</b> <code>int *p</code> را بخوان: «p از نوع اشاره‌گر به int است» یا «<code>*p</code> یک int است». در همان لحظه مقدارش را <code>&amp;x</code> می‌گذاریم، پس p به x اشاره می‌کند.
+    <span class="why">نوع <code>int *</code> مهم است: کامپایلر با آن می‌داند چه چیزی در آن آدرس هست (چند بایت را چطور بخواند). اشاره‌گر به <code>int</code> و اشاره‌گر به <code>char</code> دو نوع متفاوت‌اند.</span></li>
+  <li data-lines="8-9"><b class="what">خواندن دو راه.</b> مستقیم (<code>x</code>) و از راه اشاره‌گر (<code>*p</code>). هر دو ۲۵ هستند، چون p به x اشاره می‌کند.</li>
+  <li data-lines="10"><b class="what">مقایسهٔ آدرس.</b> <code>p == &amp;x</code> درست است؛ p همان آدرس را دارد.</li>
+  <li data-lines="12"><b class="what">نوشتن از راه اشاره‌گر.</b> <code>*p = 99</code> یعنی «به آدرسی که p نشان می‌دهد برو و ۹۹ را آنجا بگذار». چون آنجا خانهٔ x است، x عوض می‌شود.
+    <span class="why">اینجا p را دست نزدیم؛ p همچنان همان آدرس است. فقط <b>آنچه در آن آدرس است</b> عوض شد.</span></li>
+  <li data-lines="13-14"><b class="what">نتیجه.</b> هر دو ۹۹ شدند. x و *p دو نام برای یک قفسه‌اند.</li>
+</ol>
+<pre class="term" data-from="ptr1.c">
+$ gcc -std=c11 -Wall -Wextra -o ptr1 ptr1.c
+$ ./ptr1
+x  = 25
+*p = 25
+p == &amp;x ? 1
+x  = 99
+*p = 99
+</pre>
+
+<div class="callout warn"><div class="ct">ستاره دو معنی دارد</div>
+<p>علامت <code>*</code> در دو جای مختلف دو کار جدا می‌کند و اولین چیزی است که مبتدی‌ها را گیج می‌کند:</p>
+<ul>
+<li><b>در اعلان</b> (<code>int *p</code>): می‌گوید «p یک اشاره‌گر است».</li>
+<li><b>در عبارت</b> (<code>*p = 99</code> یا <code>y = *p</code>): می‌گوید «برو به آدرسی که p دارد».</li>
+</ul>
+<p>و <code>*</code> بین دو عدد (<code>a * b</code>) همان ضرب است. هرکدام را از جایشان بشناس.</p></div>
+
+<p>حالا همین برنامه را قدم‌به‌قدم ببین. دقت کن که در قفسهٔ <code>p</code> عدد نمی‌نشیند، آدرس می‌نشیند:</p>
+<div class="widget" data-w="mem" data-config='{"title":"x و p: مقدار در برابر آدرس","code":["int x = 25;","int *p = &x;","*p = 99;","int y = *p;"],"intro":"سه قفسه در RAM. روی بعدی بزن.","cells":[{"addr":"0x20000000","name":"x","val":null,"kind":"var"},{"addr":"0x20000004","name":"p","val":null,"kind":"ptr"},{"addr":"0x20000008","name":"y","val":null,"kind":"var"}],"steps":[{"line":0,"set":{"0":25},"hot":[0],"say":"قفسهٔ x در آدرس 0x20000000 ساخته شد و ۲۵ در آن رفت."},{"line":1,"set":{"1":"0x20000000"},"hot":[1],"say":"قفسهٔ p ساخته شد و <b>آدرس x</b> در آن نشست (نه ۲۵!). حالا p اشاره می‌کند به x."},{"line":2,"set":{"0":99},"hot":[0],"say":"*p یعنی برو به آدرس 0x20000000. آنجا ۹۹ گذاشته شد؛ یعنی خود x عوض شد. p هیچ تغییری نکرد."},{"line":3,"set":{"2":99},"hot":[2],"say":"*p خوانده شد (۹۹) و در قفسهٔ تازهٔ y کپی شد. y با x ارتباطی ندارد؛ کپی ساده است."}]}'></div>
+
+<h2 id="size">اشاره‌گر چند بایت است؟</h2>
+<p>اشاره‌گر فقط یک آدرس است و اندازهٔ آدرس به رایانه بستگی دارد، نه به چیزی که به آن اشاره می‌شود. در PC های امروزی (۶۴ بیتی) هر آدرس ۸ بایت است؛ در میکروکنترلرهای ۳۲ بیتی مثل STM32 (Cortex-M) و ESP32، هر آدرس ۴ بایت است. این کد را روی PC اجرا کن:</p>
+<div class="code" data-file="sizes.c" data-lang="c" data-verify="host" id="code3">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    printf("sizeof(int)      = %zu\n", sizeof(int));
+    printf("sizeof(char *)   = %zu\n", sizeof(char *));
+    printf("sizeof(int *)    = %zu\n", sizeof(int *));
+    printf("sizeof(double *) = %zu\n", sizeof(double *));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code3">
+  <li data-lines="5"><b class="what">اندازهٔ int.</b> ۴ بایت (مثل درس <a href="2-1.html">۲.۱</a>).</li>
+  <li data-lines="6-8"><b class="what">اندازهٔ اشاره‌گرها.</b> هر سه یکی‌اند؛ چه به <code>char</code> اشاره کنند چه به <code>double</code>. عدد ۸ مال PC ۶۴ بیتی است.
+    <span class="why">آدرس را باید بشود در یک قفسه نگه داشت. برای حافظهٔ ۴ گیگابایتی ۳۲ بیت کافی است؛ بیشتر از آن ۶۴ بیت می‌خواهد. RAM میکروکنترلر خیلی کوچک‌تر است و ۳۲ بیت برای آدرس‌دهی همه‌چیز (حتی رجیسترها) بس است.</span></li>
+</ol>
+<pre class="term" data-from="sizes.c">
+$ ./sizes
+sizeof(int)      = 4
+sizeof(char *)   = 8
+sizeof(int *)    = 8
+sizeof(double *) = 8
+</pre>
+<p>برای Cortex-M همین را نمی‌توانیم اجرا کنیم، اما می‌توانیم به کامپایلر ARM بگوییم «اگر اندازه ۴ نبود، ساختن را متوقف کن». این کد را با <code>arm-none-eabi-gcc</code> می‌سازیم و بدون خطا کامپایل می‌شود؛ یعنی اشاره‌گر در Cortex-M واقعا ۴ بایت است. (بقیهٔ کد را در بخش «رجیستر» توضیح می‌دهیم.)</p>
+<div class="code" data-file="reg.c" data-lang="c" data-verify="arm" id="code4">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define GPIOA_ODR_ADDR 0x40020014U
+
+_Static_assert(sizeof(void *) == 4, "pointers are 32-bit on Cortex-M");
+
+void led_toggle(void)
+{
+    volatile uint32_t *odr = (volatile uint32_t *)GPIOA_ODR_ADDR;
+    *odr ^= (1U &lt;&lt; 5);
+}
+</pre></div>
+<ol class="walk" data-for="code4">
+  <li data-lines="3"><b class="what">آدرس رجیستر خروجی GPIOA.</b> پایهٔ GPIOA برابر <code>0x40020000</code> و رجیستر <code>ODR</code> در فاصلهٔ <code>0x14</code> است (طبق RM0383). پسوند <code>U</code> یعنی بی‌علامت.</li>
+  <li data-lines="5"><b class="what">بررسی زمان کامپایل.</b> <code>_Static_assert</code> شرطی را همان موقع ساختن می‌سنجد؛ اگر غلط باشد کامپایل شکست می‌خورد و پیام را نشان می‌دهد.
+    <span class="why">این‌طور مطمئن می‌شویم فرض «اشاره‌گر ۴ بایت است» غلط از کار درنمی‌آید. اگر همین کد را روی PC ۶۴ بیتی بسازی، شکست می‌خورد.</span></li>
+  <li data-lines="7-8"><b class="what">تابع.</b> <code>void</code> یعنی چیزی برنمی‌گرداند و پارامتری هم ندارد.</li>
+  <li data-lines="9"><b class="what">اشاره‌گر به رجیستر.</b> عدد ثابت را به «اشاره‌گر به <code>uint32_t</code>» تبدیل می‌کنیم (<code>(volatile uint32_t *)</code> را «تبدیل نوع» می‌گویند). کلمهٔ <code>volatile</code> می‌گوید «این خانه را سخت‌افزار هم عوض می‌کند، حواست باشد»؛ معنایش کامل در درس <a href="3-6.html">۳.۶</a> می‌آید.</li>
+  <li data-lines="10"><b class="what">برعکس‌کردن بیت ۵.</b> <code>*odr ^= ...</code> یعنی «به آدرس odr برو و بیت ۵ را برعکس کن»؛ همان الگوی XOR از درس <a href="3-1.html">۳.۱</a>. روی برد Nucleo-F411RE بیت ۵ پورت A همان LED سبز (LD2) است، ولی پیش از این باید پین را خروجی و کلاک GPIOA را روشن کرده باشی (درس <a href="5-2.html">۵.۲</a>).</li>
+</ol>
+<div class="callout warn"><div class="ct">این تابع را روی PC اجرا نکن</div>
+<p>آدرس <code>0x40020014</code> روی PC وجود ندارد و اجرای آن برنامه را می‌کُشد. این کد فقط برای ساختن (کامپایل) روی ARM است. روی PC برای تمرین از یک متغیر معمولی به جای رجیستر استفاده می‌کنیم (تمرین ۳).</p></div>
+
+<h2 id="func">قدرت اشاره‌گر: تغییر متغیر از داخل تابع</h2>
+<p>در درس <a href="2-6.html">۲.۶</a> دیدی که تابع فقط <b>کپی</b> آرگومان‌ها را می‌گیرد؛ پس نمی‌تواند متغیر صدازننده را عوض کند. حالا با اشاره‌گر می‌شود. دو تابع swap را کنار هم ببین: یکی با کپی، یکی با آدرس:</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 350" role="img" aria-label="مقایسه swap با کپی و swap با اشاره‌گر؛ در حالت کپی فقط متغیرهای تابع جابه‌جا می‌شوند"><defs><marker id="arA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs><rect x="20" y="14" width="345" height="322" rx="12" fill="#fff" fill-opacity="0.35" stroke="#15120a" stroke-width="3"/><text x="192" y="42" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">swap_copy(x, y): کپی مقدار</text><text x="192" y="70" text-anchor="middle" class="s-tx" font-size="13" font-weight="800" >تابع main</text><rect x="50" y="82" width="120" height="52" rx="8" fill="#ffd60a" stroke="#15120a" stroke-width="3"/><text x="110.0" y="115.0" text-anchor="middle" class="mono" font-size="24" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">1</text><rect x="210" y="82" width="120" height="52" rx="8" fill="#ffd60a" stroke="#15120a" stroke-width="3"/><text x="270.0" y="115.0" text-anchor="middle" class="mono" font-size="24" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">2</text><text x="110" y="152" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">x</text><text x="270" y="152" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">y</text><text x="192" y="196" text-anchor="middle" class="s-tx" font-size="13" font-weight="800" >تابع swap (فقط تا پایان تابع زنده است)</text><rect x="50" y="210" width="120" height="52" rx="8" fill="#ff9a4d" stroke="#15120a" stroke-width="3"/><text x="110.0" y="243.0" text-anchor="middle" class="mono" font-size="24" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">2</text><rect x="210" y="210" width="120" height="52" rx="8" fill="#ff9a4d" stroke="#15120a" stroke-width="3"/><text x="270.0" y="243.0" text-anchor="middle" class="mono" font-size="24" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">1</text><text x="110" y="280" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">a</text><text x="270" y="280" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">b</text><text x="192" y="312" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="700" >a و b کپی‌اند؛ جابه‌جا شدند ولی x و y هیچ‌وقت ندیدند</text><rect x="395" y="14" width="345" height="322" rx="12" fill="#fff" fill-opacity="0.35" stroke="#15120a" stroke-width="3"/><text x="567" y="42" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">swap(&amp;x, &amp;y): کپی آدرس</text><text x="567" y="70" text-anchor="middle" class="s-tx" font-size="13" font-weight="800" >تابع main</text><rect x="425" y="82" width="120" height="52" rx="8" fill="#ffd60a" stroke="#15120a" stroke-width="3"/><text x="485.0" y="115.0" text-anchor="middle" class="mono" font-size="24" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">2</text><rect x="585" y="82" width="120" height="52" rx="8" fill="#ffd60a" stroke="#15120a" stroke-width="3"/><text x="645.0" y="115.0" text-anchor="middle" class="mono" font-size="24" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">1</text><text x="485" y="152" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">x</text><text x="645" y="152" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">y</text><text x="567" y="196" text-anchor="middle" class="s-tx" font-size="13" font-weight="800" >تابع swap (فقط تا پایان تابع زنده است)</text><rect x="425" y="210" width="120" height="52" rx="8" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/><text x="485.0" y="243.0" text-anchor="middle" class="mono" font-size="22" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">&amp;x</text><rect x="585" y="210" width="120" height="52" rx="8" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/><text x="645.0" y="243.0" text-anchor="middle" class="mono" font-size="22" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">&amp;y</text><text x="485" y="280" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">a</text><text x="645" y="280" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">b</text><path d="M455 208 L455 138" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#arA)"/><path d="M675 208 L675 138" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#arA)"/><text x="567" y="312" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="700" >a و b آدرس‌اند؛ *a و *b خودِ x و y را عوض می‌کنند</text></svg>
+</div><figcaption>چپ: <span class="en">a</span> و <span class="en">b</span> کپی‌اند؛ جابه‌جایی‌شان دنیای بیرون را عوض نمی‌کند. راست: <span class="en">a</span> و <span class="en">b</span> آدرس‌اند و <span class="en">*a</span> و <span class="en">*b</span> خودِ <span class="en">x</span> و <span class="en">y</span> هستند.</figcaption></figure>
+
+<div class="code" data-file="swap.c" data-lang="c" data-verify="host" id="code5">
+<pre>
+#include &lt;stdio.h&gt;
+
+static void swap_copy(int a, int b)
+{
+    int t = a;
+    a = b;
+    b = t;
+}
+
+static void swap(int *a, int *b)
+{
+    int t = *a;
+    *a = *b;
+    *b = t;
+}
+
+int main(void)
+{
+    int x = 1;
+    int y = 2;
+
+    swap_copy(x, y);
+    printf("after swap_copy: x = %d, y = %d\n", x, y);
+
+    swap(&amp;x, &amp;y);
+    printf("after swap:      x = %d, y = %d\n", x, y);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code5">
+  <li data-lines="3-8"><b class="what">swap با کپی.</b> <code>a</code> و <code>b</code> دو قفسهٔ تازه‌اند که مقدار x و y در آن‌ها کپی شده. جابه‌جاشان می‌کند، ولی به پایان تابع که برسد این قفسه‌ها از بین می‌روند.
+    <span class="why">کد درست کامپایل می‌شود و حتی هشداری نمی‌دهد. باگ فقط در نتیجه دیده می‌شود: چیزی جابه‌جا نشده.</span></li>
+  <li data-lines="10-15"><b class="what">swap با آدرس.</b> پارامترها از نوع <code>int *</code> هستند. <code>*a</code> یعنی «مقدارِ x». پس <code>t = *a</code> مقدار x را نجات می‌دهد؛ <code>*a = *b</code> مقدار y را در x می‌گذارد؛ <code>*b = t</code> مقدار قدیمی x را در y.
+    <span class="why">همان الگوی سه‌مرحله‌ای تمرین ۱ درس <a href="2-1.html">۲.۱</a>؛ فقط این بار قفسه‌ها بیرون از تابع هستند.</span></li>
+  <li data-lines="19-20"><b class="what">دو متغیر در main.</b> ۱ و ۲.</li>
+  <li data-lines="22-23"><b class="what">فراخوانی با کپی.</b> بعد از فراخوانی مقدارها هنوز ۱ و ۲‌اند.</li>
+  <li data-lines="25-26"><b class="what">فراخوانی با آدرس.</b> با <code>&amp;x</code> و <code>&amp;y</code> آدرس می‌دهیم. حالا مقدارها جابه‌جا شده‌اند.
+    <span class="why">نکته: خود آدرس‌ها هم <b>کپی</b> می‌شوند (C همیشه با کپی کار می‌کند)، ولی کپیِ یک آدرس هنوز به همان خانه اشاره می‌کند. همین تفاوت را می‌سازد.</span></li>
+</ol>
+<pre class="term" data-from="swap.c">
+$ ./swap
+after swap_copy: x = 1, y = 2
+after swap:      x = 2, y = 1
+</pre>
+
+<p>قدم‌به‌قدم ببین که داخل <code>swap</code> چه می‌گذرد:</p>
+<div class="widget" data-w="mem" data-config='{"title":"داخل swap(&x, &y)","code":["swap(&x, &y);","int t = *a;","*a = *b;","*b = t;"],"intro":"x و y در main هستند؛ a و b و t قفسه‌های تابع swap.","cells":[{"addr":"0x20000000","name":"x","val":1,"kind":"var"},{"addr":"0x20000004","name":"y","val":2,"kind":"var"},{"addr":"قفسه تابع","name":"a","val":null,"kind":"ptr"},{"addr":"قفسه تابع","name":"b","val":null,"kind":"ptr"},{"addr":"قفسه تابع","name":"t","val":null,"kind":"var"}],"steps":[{"line":0,"set":{"2":"0x20000000","3":"0x20000004"},"hot":[2,3],"say":"a آدرس x را گرفت و b آدرس y را. این دو آدرس‌اند، نه مقدار."},{"line":1,"set":{"4":1},"hot":[4],"say":"*a یعنی مقدار x، پس t شد ۱."},{"line":2,"set":{"0":2},"hot":[0],"say":"*a = *b: مقدار y (۲) در خانهٔ x نشست. x عوض شد؛ a هنوز همان آدرس است."},{"line":3,"set":{"1":1},"hot":[1],"say":"*b = t: ۱ در خانهٔ y نشست. جابه‌جایی کامل شد و با پایان تابع، a و b و t از بین می‌روند."}]}'></div>
+
+<h3 id="outparam">بازگرداندن چند نتیجه</h3>
+<p>تابع فقط یک مقدار برمی‌گرداند. اگر بخواهیم هم خارج‌قسمت و هم باقیمانده را بدهیم چه؟ یک راه رایج: نتیجه‌ها را از راه اشاره‌گرهای ورودی بنویس (<span class="term" data-t="outparam">پارامتر خروجی</span>) و «مقدار برگشتی» را برای <b>وضعیت</b> (موفق/ناموفق) نگه دار. تقریبا همهٔ توابع درایور ESP-IDF و HAL همین کار را می‌کنند.</p>
+<div class="code" data-file="divide.c" data-lang="c" data-verify="host" id="code6">
+<pre>
+#include &lt;stdio.h&gt;
+
+// نتیجه‌ها از راه اشاره‌گر برمی‌گردند؛ مقدار برگشتی «وضعیت» است
+static int divide(int a, int b, int *quotient, int *remainder)
+{
+    if (b == 0 || quotient == NULL || remainder == NULL) {
+        return -1;
+    }
+    *quotient = a / b;
+    *remainder = a % b;
+    return 0;
+}
+
+int main(void)
+{
+    int q = 0;
+    int r = 0;
+
+    if (divide(17, 5, &amp;q, &amp;r) == 0) {
+        printf("17 / 5 = %d remainder %d\n", q, r);
+    }
+    if (divide(1, 0, &amp;q, &amp;r) != 0) {
+        printf("divide by zero rejected\n");
+    }
+    if (divide(1, 1, NULL, &amp;r) != 0) {
+        printf("NULL pointer rejected\n");
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code6">
+  <li data-lines="4"><b class="what">امضای تابع.</b> دو ورودی معمولی و دو خروجی از نوع <code>int *</code>. مقدار برگشتی <code>int</code> کد وضعیت است: ۰ یعنی موفق و منفی یعنی خطا.
+    <span class="why">در ESP-IDF نوع <code>esp_err_t</code> و در HAL نوع <code>HAL_StatusTypeDef</code> همین نقش را دارند.</span></li>
+  <li data-lines="6-8"><b class="what">اعتبارسنجی.</b> اگر تقسیم بر صفر باشد یا یکی از اشاره‌گرها <code>NULL</code> باشد، پیش از هر کاری خطا برمی‌گردانیم.
+    <span class="why">اگر <code>NULL</code> را بررسی نکنیم و کسی <code>NULL</code> بفرستد، <code>*quotient = ...</code> به آدرس صفر می‌نویسد. بخش بعد را ببین.</span></li>
+  <li data-lines="9-11"><b class="what">نوشتن نتیجه‌ها.</b> دو نتیجه در دو متغیر صدازننده نوشته می‌شود و صفر (موفقیت) برمی‌گردد.</li>
+  <li data-lines="16-17"><b class="what">دو متغیر خروجی.</b> با مقدار اولیه صفر (طبق قانون درس <a href="2-1.html">۲.۱</a>).</li>
+  <li data-lines="19-21"><b class="what">استفادهٔ معمول.</b> <code>&amp;q</code> و <code>&amp;r</code> آدرس‌های دو متغیر خروجی‌اند. نتیجه فقط وقتی خوانده می‌شود که وضعیت ۰ باشد.</li>
+  <li data-lines="22-27"><b class="what">دو خطا.</b> تقسیم بر صفر و <code>NULL</code> هر دو رد می‌شوند و برنامه نمی‌ترکد.</li>
+</ol>
+<pre class="term" data-from="divide.c">
+$ ./divide
+17 / 5 = 3 remainder 2
+divide by zero rejected
+NULL pointer rejected
+</pre>
+
+<h2 id="null">NULL، وحشی، آویزان: اشاره‌گر بد</h2>
+<p>اشاره‌گر خودش فقط یک عدد است و هیچ‌چیز تضمین نمی‌کند که آن عدد آدرس یک متغیر سالم باشد. چهار حالت را باید از هم تشخیص بدهی:</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="چهار حالت اشاره‌گر: معتبر، NULL، وحشی و آویزان"><defs><marker id="arA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs><rect x="14" y="10" width="170" height="280" rx="12" fill="#3ddc97" fill-opacity="0.22" stroke="#15120a" stroke-width="3"/><text x="99" y="40" text-anchor="middle" class="s-tx" font-size="18" font-weight="800" >معتبر</text><rect x="49" y="60" width="100" height="40" rx="8" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/><text x="99.0" y="87.0" text-anchor="middle" class="mono" font-size="16" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">0x2000...</text><text x="99" y="118" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">p</text><rect x="49" y="180" width="100" height="40" rx="8" fill="#ffd60a" stroke="#15120a" stroke-width="3"/><text x="99.0" y="207.0" text-anchor="middle" class="mono" font-size="18" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">25</text><path d="M99 124 L99 176" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#arA)"/><text x="99" y="252" text-anchor="middle" class="s-tx" font-size="12" font-weight="700" >به متغیر زنده اشاره می‌کند</text><text x="99" y="270" text-anchor="middle" class="s-tx" font-size="12" font-weight="700" >خواندنش امن است</text><rect x="199" y="10" width="170" height="280" rx="12" fill="#7ea3ff" fill-opacity="0.22" stroke="#15120a" stroke-width="3"/><text x="284" y="40" text-anchor="middle" class="s-tx" font-size="18" font-weight="800" >NULL</text><rect x="234" y="60" width="100" height="40" rx="8" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/><text x="284.0" y="87.0" text-anchor="middle" class="mono" font-size="16" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">0</text><text x="284" y="118" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">p</text><text x="284" y="196" text-anchor="middle" class="mono s-tx" font-size="22" font-weight="800" direction="ltr" style="font-variant-ligatures:none">NULL</text><path d="M254 214H314M264 222H304M274 230H294" stroke="#15120a" stroke-width="3"/><text x="284" y="252" text-anchor="middle" class="s-tx" font-size="12" font-weight="700" >«به هیچ‌جا اشاره نمی‌کنم»</text><text x="284" y="270" text-anchor="middle" class="s-tx" font-size="12" font-weight="700" >قبل از استفاده بررسی کن</text><rect x="384" y="10" width="170" height="280" rx="12" fill="#ff86b3" fill-opacity="0.22" stroke="#15120a" stroke-width="3"/><text x="469" y="40" text-anchor="middle" class="s-tx" font-size="18" font-weight="800" >وحشی</text><rect x="419" y="60" width="100" height="40" rx="8" fill="#fff" stroke="#15120a" stroke-width="3"/><text x="469.0" y="87.0" text-anchor="middle" class="mono" font-size="16" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">?</text><text x="469" y="118" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">p</text><rect x="419" y="180" width="100" height="40" rx="8" fill="#fff" stroke="#15120a" stroke-width="3" stroke-dasharray="6 4"/><text x="469.0" y="207.0" text-anchor="middle" class="mono" font-size="18" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">???</text><path d="M469 124 L469 176" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#arA)"/><text x="469" y="252" text-anchor="middle" class="s-tx" font-size="12" font-weight="700" >مقدار اولیه نگرفته؛ به هر جایی</text><text x="469" y="270" text-anchor="middle" class="s-tx" font-size="12" font-weight="700" >اشاره می‌کند (خطرناک‌ترین)</text><rect x="569" y="10" width="170" height="280" rx="12" fill="#ff9a4d" fill-opacity="0.22" stroke="#15120a" stroke-width="3"/><text x="654" y="40" text-anchor="middle" class="s-tx" font-size="18" font-weight="800" >آویزان</text><rect x="604" y="60" width="100" height="40" rx="8" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/><text x="654.0" y="87.0" text-anchor="middle" class="mono" font-size="16" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">0x2000...</text><text x="654" y="118" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">p</text><rect x="604" y="180" width="100" height="40" rx="8" fill="#fff" stroke="#15120a" stroke-width="3" stroke-dasharray="6 4"/><text x="654.0" y="207.0" text-anchor="middle" class="mono" font-size="18" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">-</text><path d="M654 124 L654 176" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#arA)"/><text x="654" y="252" text-anchor="middle" class="s-tx" font-size="12" font-weight="700" >متغیرش تمام شده (مثلا تابع</text><text x="654" y="270" text-anchor="middle" class="s-tx" font-size="12" font-weight="700" >برگشته) ولی آدرس مانده</text></svg>
+</div><figcaption>فقط حالت اول امن است. سه حالت بعدی همان چیزهایی‌اند که باگ‌های پنهان و رفتارهای عجیب درست می‌کنند.</figcaption></figure>
+
+<ul>
+  <li><b>معتبر:</b> به یک متغیر زنده اشاره می‌کند.</li>
+  <li><b><span class="term" data-t="null">NULL</span>:</b> ثابت خاصی (مقدارش صفر) که می‌گوید «الان به هیچ‌جا اشاره نمی‌کنم». قانون: <b>پیش از باز کردن اشاره‌گری که ممکن است NULL باشد، حتما بررسی کن</b>.</li>
+  <li><b><span class="term" data-t="wildptr">وحشی</span> (wild):</b> اشاره‌گری که مقدار اولیه نگرفته. مثل هر متغیر بدون مقدار اولیه، پر از آشغال است، یعنی به «جای تصادفی» اشاره می‌کند.</li>
+  <li><b><span class="term" data-t="danglingptr">آویزان</span> (dangling):</b> زمانی معتبر بود، ولی متغیری که به آن اشاره می‌کرد از بین رفته (مثلا متغیر محلی یک تابعِ تمام‌شده). آدرس مانده ولی خانه دیگر مال آن متغیر نیست. در درس <a href="3-5.html">۳.۵</a> کامل می‌بینیم.</li>
+</ul>
+
+<div class="code" data-file="guard.c" data-lang="c" data-verify="host" id="code7">
+<pre>
+#include &lt;stdio.h&gt;
+
+static int read_or_default(int *p, int fallback)
+{
+    if (p == NULL) {
+        return fallback;
+    }
+    return *p;
+}
+
+int main(void)
+{
+    int value = 42;
+    int *good = &amp;value;
+    int *none = NULL;
+
+    printf("good -> %d\n", read_or_default(good, -1));
+    printf("none -> %d\n", read_or_default(none, -1));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code7">
+  <li data-lines="3-9"><b class="what">تابع محافظ.</b> اگر اشاره‌گر <code>NULL</code> باشد، مقدار جایگزین را برمی‌گرداند. فقط وقتی مطمئن است که چیزی برای خواندن هست، <code>*p</code> را انجام می‌دهد.
+    <span class="why">شرط <code>p == NULL</code> را می‌شود کوتاه‌تر نوشت <code>!p</code> (چون NULL صفر است و صفر «نادرست» است، درس <a href="2-4.html">۲.۴</a>)، ولی نوشتن صریح خواناتر است.</span></li>
+  <li data-lines="14-15"><b class="what">دو اشاره‌گر.</b> یکی به متغیر واقعی و یکی صریحا <code>NULL</code>.
+    <span class="why">هر اشاره‌گری که هنوز آدرس مناسبی ندارد را <b>به‌جای رها کردن</b> با <code>NULL</code> مقداردهی کن؛ همان قانون «مقدار اولیه بده».</span></li>
+  <li data-lines="17-18"><b class="what">استفاده.</b> اولی ۴۲ را می‌خواند و دومی بدون خطر مقدار پیش‌فرض ۱- را می‌دهد.</li>
+</ol>
+<pre class="term" data-from="guard.c">
+$ ./guard
+good -> 42
+none -> -1
+</pre>
+
+<p>و اشاره‌گر وحشی. خوشبختانه gcc اینجا کمک می‌کند (ما هشدار را عمدا به خطا تبدیل کرده‌ایم):</p>
+<div class="code" data-file="wild.c" data-lang="c" data-verify="host-fail" data-cflags="-Werror=uninitialized" id="code8">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int *p;
+    *p = 5;
+    printf("done\n");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code8">
+  <li data-lines="5-6"><b class="what">نوشتن به آدرس آشغال.</b> <code>p</code> هیچ مقداری ندارد و <code>*p = 5</code> در همان «جای تصادفی» می‌نویسد. روی PC معمولا برنامه با پیام Segmentation fault می‌ترکد؛ ولی روی میکروکنترلر ممکن است روی متغیر دیگری یا حتی روی یک رجیستر سخت‌افزار بنویسد و هیچ پیامی نبینی.
+    <span class="why">در میکروکنترلر بیشتر آدرس‌ها «جایی» دارند (RAM، Flash یا رجیستر)، پس کمتر پیش می‌آید که فوری بترکد. باگی که بی‌صدا است، سخت‌ترین باگ است.</span></li>
+</ol>
+<pre class="term" data-kind="err" data-from="wild.c">
+wild.c: In function 'main':
+wild.c:6:8: error: 'p' is used uninitialized [-Werror=uninitialized]
+</pre>
+
+<div class="callout info"><div class="ct">NULL در میکروکنترلر</div>
+<p>در PC خواندن یا نوشتن آدرس صفر، سیستم‌عامل را وامی‌دارد برنامه را ببندد. در میکروکنترلر آدرس صفر معمولا «جای معتبری» است؛ مثلا در STM32 بسته به تنظیم بوت، آدرس ۰ همان Flash یا جدول وقفه را نشان می‌دهد. خواندن آن بدون خطا اتفاق می‌افتد و مقدار بی‌ربط می‌دهد. پس نباید منتظر «ترکیدنِ کمک‌کننده» باشی؛ خودت با <code>if (p == NULL)</code> جلوی این کار را بگیر.</p></div>
+
+<h2 id="traps">تله‌های مبتدی‌ها</h2>
+
+<h3 id="trap-decl">تله ۱: <code>int* a, b</code></h3>
+<p>ستاره به <b>نام</b> می‌چسبد، نه به نوع. پس در <code>int *a, b;</code> فقط <code>a</code> اشاره‌گر است و <code>b</code> یک <code>int</code> معمولی. با فاصله‌گذاری فریب نخور؛ <code>int* a, b</code> هم دقیقا همین است.</p>
+<div class="code" data-file="decl.c" data-lang="c" data-verify="host-fail" data-cflags="-Werror=int-conversion" id="code9">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int x = 5;
+    int *a, b;
+    a = &amp;x;
+    b = &amp;x;
+    printf("%d %d\n", *a, b);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code9">
+  <li data-lines="6"><b class="what">اعلان فریبنده.</b> فقط <code>a</code> از نوع <code>int *</code> است. <code>b</code> یک <code>int</code> است.</li>
+  <li data-lines="7-8"><b class="what">انتساب.</b> خط ۷ درست است. خط ۸ می‌خواهد یک آدرس را در یک <code>int</code> بریزد و کامپایلر اعتراض می‌کند.
+    <span class="why">در نسخه‌های جدید gcc این خطا پیش‌فرض است؛ در نسخه‌های قدیمی فقط هشدار است. ما <code>-Werror=int-conversion</code> را گذاشته‌ایم تا در هر نسخه‌ای خطا ببینی.</span></li>
+</ol>
+<pre class="term" data-kind="err" data-from="decl.c">
+decl.c: In function 'main':
+decl.c:8:7: error: assignment to 'int' from 'int *' makes integer from pointer without a cast [-Werror=int-conversion]
+</pre>
+<p>درمان: هر اشاره‌گر را در یک خط جدا اعلان کن (<code>int *a;</code> و <code>int *b;</code>) یا ستاره را جدا برای هر نام بنویس: <code>int *a, *b;</code>.</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>تله</th><th>غلط</th><th>درست</th></tr></thead>
+<tbody>
+<tr><td>فراموشی <code>&amp;</code> هنگام فراخوانی</td><td><code>swap(x, y)</code></td><td><code>swap(&amp;x, &amp;y)</code></td></tr>
+<tr><td>فراموشی <code>*</code> هنگام نوشتن</td><td><code>p = 99;</code> (آدرس را عوض می‌کند)</td><td><code>*p = 99;</code></td></tr>
+<tr><td>عوض کردن اشاره‌گر به‌جای مقدار (در تابع)</td><td><code>a = b;</code> داخل swap</td><td><code>*a = *b;</code></td></tr>
+<tr><td>باز کردن بدون بررسی</td><td><code>*p</code> وقتی ممکن است NULL باشد</td><td><code>if (p != NULL) { ... }</code></td></tr>
+<tr><td>استفاده از اشاره‌گر مقداردهی‌نشده</td><td><code>int *p; *p = 5;</code></td><td><code>int *p = &amp;x;</code> یا <code>= NULL</code></td></tr>
+</tbody></table></div>
+
+<h2 id="mcu">اشاره‌گر در STM32 و ESP32</h2>
+<p>در بخش «اندازه» با یک نمونه آشنا شدی: <code>(volatile uint32_t *)0x40020014</code>. راز میکروکنترلر این است که <b>رجیسترهای سخت‌افزار هم فقط آدرس‌اند</b>. پردازنده وقتی به آدرس <code>0x40020014</code> می‌نویسد، واقعا پین‌های GPIOA را عوض می‌کند. اشاره‌گر همان چیزی است که این آدرس را در C نگه می‌دارد و با <code>*</code> به آن می‌نویسد.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 320" role="img" aria-label="نقشهٔ آدرس STM32F411 شامل Flash از 0x08000000 و RAM از 0x20000000 و رجیسترها از 0x40000000 و یک اشاره‌گر که به رجیستر ODR اشاره می‌کند"><defs><marker id="arA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs><text x="380" y="24" text-anchor="middle" class="s-tx" font-size="15" font-weight="800" >برای پردازنده همه‌چیز «آدرس» است: کد، متغیر و حتی رجیسترهای سخت‌افزار</text><rect x="20" y="50" width="230" height="80" rx="8" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/><text x="135" y="84" text-anchor="middle" class="s-tx" font-size="18" font-weight="800" >Flash</text><text x="135" y="110" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="600" >کد و ثابت‌ها</text><text x="135" y="152" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">0x08000000</text><rect x="265" y="50" width="230" height="80" rx="8" fill="#ffd60a" stroke="#15120a" stroke-width="3"/><text x="380" y="84" text-anchor="middle" class="s-tx" font-size="18" font-weight="800" >RAM</text><text x="380" y="110" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="600" >متغیرها</text><text x="380" y="152" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">0x20000000</text><rect x="510" y="50" width="230" height="80" rx="8" fill="#3ddc97" stroke="#15120a" stroke-width="3"/><text x="625" y="84" text-anchor="middle" class="s-tx" font-size="18" font-weight="800" >رجیسترها</text><text x="625" y="110" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="600" >GPIOA و ...</text><text x="625" y="152" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">0x40020000</text><rect x="560" y="170" width="130" height="40" rx="8" fill="#ff9a4d" stroke="#15120a" stroke-width="3"/><text x="625.0" y="197.0" text-anchor="middle" class="mono" font-size="18" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">ODR</text><text x="625" y="232" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800" direction="ltr" style="font-variant-ligatures:none">0x40020014</text><path d="M625 130 L625 166" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#arA)"/><text x="700" y="158" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="700" >+0x14</text><rect x="265" y="240" width="230" height="50" rx="8" fill="#b394ff" stroke="#15120a" stroke-width="3"/><text x="380.0" y="272.0" text-anchor="middle" class="mono" font-size="18" font-weight="800" fill="#15120a" style="font-variant-ligatures:none">odr = 0x40020014</text><text x="380" y="308" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="700" direction="ltr" style="font-variant-ligatures:none">volatile uint32_t *odr</text><path d="M497 262 C560 262 590 250 592 216" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#arA)"/><text x="150" y="262" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700" >اشاره‌گر هم متغیر است:</text><text x="150" y="282" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700" >در RAM می‌نشیند</text></svg>
+</div><figcaption>نقشهٔ ساده‌شدهٔ آدرس STM32F411: کد در Flash، متغیرها در RAM و رجیسترها در ناحیهٔ محیطی‌ها. اشاره‌گر <span class="en">odr</span> یک متغیر ۴ بایتی در RAM است که به یک رجیستر اشاره می‌کند.</figcaption></figure>
+
+<p>ترکیب دو درس آخر همین است: رجیستر ۳۲ بیتی + ماسک + اشاره‌گر. در درس <a href="3-6.html">۳.۶</a> جزئیاتش را کامل می‌کنیم (چرا <code>volatile</code>، ماکروها، ساختار GPIO). در ESP32 معمولا مستقیم به رجیستر نمی‌رسی و از درایور استفاده می‌کنی، اما اشاره‌گر همان‌جا هم همه‌جاست:</p>
+
+<div class="code" data-file="esp_task.c" data-lang="c" data-verify="frag" id="code10">
+<pre>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+static void blink_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
+
+void app_main(void)
+{
+    TaskHandle_t handle = NULL;
+    xTaskCreate(blink_task, "blink", 2048, NULL, 5, &amp;handle);
+}
+</pre></div>
+<ol class="walk" data-for="code10">
+  <li data-lines="1-2"><b class="what">هدرهای FreeRTOS.</b> برای <code>vTaskDelay</code> و <code>xTaskCreate</code> (درس <a href="5-6.html">۵.۶</a>).</li>
+  <li data-lines="4-10"><b class="what">تابع تسک.</b> هر تسک یک تابع است با یک پارامتر <code>void *</code>: اشاره‌گر به «هر چیزی»، برای اینکه بتوانی هر دادهٔ دلخواهی را به تسک بدهی (<code>void *</code> در درس <a href="3-3.html">۳.۳</a> می‌آید). <code>(void)arg;</code> یعنی «این پارامتر را نمی‌خواهم» تا هشدار نگیریم. حلقهٔ بی‌نهایت و <code>vTaskDelay</code> هم می‌گذارد تسک نیم ثانیه استراحت کند.</li>
+  <li data-lines="14"><b class="what">دستگیره.</b> <code>TaskHandle_t</code> یک «دسته» برای تسک ساخته‌شده است. با <code>NULL</code> مقداردهی‌اش می‌کنیم (همان قانون این درس).</li>
+  <li data-lines="15"><b class="what">ساخت تسک.</b> چند اشاره‌گر در یک خط: اسم تسک (رشته، یعنی اشاره‌گر به کاراکترها، درس <a href="3-3.html">۳.۳</a>)، <code>NULL</code> به‌عنوان «پارامتری ندارم»، و <code>&amp;handle</code> به‌عنوان پارامتر خروجی: تابع دستگیرهٔ تسک را در <code>handle</code> می‌نویسد. عددها اندازهٔ stack و اولویت‌اند.
+    <span class="why">این همان الگوی «پارامتر خروجی» بخش قبل است؛ فقط این بار توسط خود ESP-IDF. اگر جزئیات نام و پارامترها را می‌خواهی، مستندات رسمی ESP-IDF را (<a href="https://docs.espressif.com/projects/esp-idf/" target="_blank" rel="noopener">docs.espressif.com</a>) ببین.</span></li>
+</ol>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: اشاره‌گر یعنی همان عدد</div>
+<p>در سطح ماشین هیچ «نوع اشاره‌گر»ی وجود ندارد؛ فقط یک عدد ۳۲ بیتی است که در یک رجیستر پردازنده یا یک قفسهٔ RAM نشسته. دستور «بارگذاری» (load) پردازنده آن عدد را به‌عنوان آدرس می‌گیرد و مقدار آن خانه را می‌آورد. نوع اشاره‌گر در C فقط به <b>کامپایلر</b> می‌گوید آن آدرس را با چه اندازه و چه شکلی بخواند و بنویسد. برای همین در C می‌شود عدد را به اشاره‌گر تبدیل کرد: کاری که در برنامه‌های میکروکنترلر لازم است و در PC معمولا خطرناک.</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">عبارت <code>&amp;x</code> چه چیزی را می‌دهد؟</p>
+  <ol>
+    <li data-why="مقدار خود x با نوشتن x به‌دست می‌آید، نه &amp;x.">مقدار متغیر x</li>
+    <li>آدرس متغیر x در حافظه</li>
+    <li data-why="اندازه را sizeof می‌دهد، نه &amp;.">اندازهٔ x به بایت</li>
+    <li data-why="مقایسه با == انجام می‌شود؛ &amp; به‌تنهایی مقایسه نیست.">اینکه x صفر است یا نه</li>
+  </ol>
+  <div class="fb"><code>&amp;</code> یک‌طرفه (پیش از یک متغیر) یعنی «آدرسِ». بین دو عدد (<code>a &amp; b</code>) عملگر بیتی AND است که در درس ۳.۱ دیدی.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">بعد از این کد، <code>x</code> چند است؟<br><code>int x = 5; int *p = &amp;x; *p = 7;</code></p>
+  <ol>
+    <li data-why="۵ مقدار اولیه بود؛ *p = 7 آن را عوض می‌کند.">۵</li>
+    <li data-why="p آدرس است نه مقدار؛ و آدرس در x نمی‌نشیند.">آدرس x</li>
+    <li>۷</li>
+    <li data-why="کد کاملا درست کامپایل و اجرا می‌شود.">برنامه کامپایل نمی‌شود</li>
+  </ol>
+  <div class="fb"><code>*p = 7</code> به خانهٔ x می‌رود و ۷ را آنجا می‌گذارد. x و <code>*p</code> یک قفسه‌اند.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">کدام خط اشتباه است؟ (<code>x</code> یک <code>int</code> و <code>p</code> یک <code>int *</code> است.)</p>
+  <ol>
+    <li data-why="این خط درست است: p را با آدرس x مقدار می‌دهد.">p = &amp;x;</li>
+    <li data-why="این هم درست است: مقدار خانهٔ p را در x کپی می‌کند.">x = *p;</li>
+    <li>int *q = x;</li>
+    <li data-why="درست است: دو اشاره‌گر هم‌نوع را می‌شود به هم داد.">int *r = p;</li>
+  </ol>
+  <div class="fb"><code>x</code> یک عدد است، نه آدرس. برای ساختن اشاره‌گر باید <code>&amp;x</code> بدهی: <code>int *q = &amp;x;</code>.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">روی STM32F411 و ESP32، اندازهٔ <code>sizeof(int *)</code> و <code>sizeof(char *)</code> چقدر است؟</p>
+  <ol>
+    <li>هر دو ۴ بایت</li>
+    <li data-why="۸ بایت مال PC ۶۴ بیتی است. این میکروکنترلرها ۳۲ بیتی‌اند.">هر دو ۸ بایت</li>
+    <li data-why="اندازهٔ اشاره‌گر به نوعی که به آن اشاره می‌شود بستگی ندارد؛ فقط به معماری بستگی دارد.">int * چهار بایت و char * یک بایت</li>
+    <li data-why="آدرس همیشه ثابت است و به اندازهٔ ۲ بایت فقط در AVR های ۸ بیتی (مثل Arduino Uno) است.">۲ بایت</li>
+  </ol>
+  <div class="fb">اشاره‌گر یک آدرس است و آدرس در معماری ۳۲ بیتی ۴ بایت می‌شود، مستقل از نوع مقصد. (در Arduino Uno با پردازندهٔ AVR ۸ بیتی، اشاره‌گر ۲ بایت است.)</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">چرا <code>void swap(int a, int b)</code> (بدون ستاره) نمی‌تواند دو متغیر صدازننده را جابه‌جا کند؟</p>
+  <ol>
+    <li data-why="دستورهای خود تابع درست‌اند؛ مشکل از جای دیگری است.">چون کامپایلر اجازه نمی‌دهد دو مقدار را جابه‌جا کنیم</li>
+    <li data-why="static ربطی به این ندارد؛ swap معمولی هم همین مشکل را دارد.">چون تابع static است</li>
+    <li data-why="نه، تابع بدون مشکل کامپایل می‌شود؛ باگ در نتیجه دیده می‌شود.">چون برنامه ساخته نمی‌شود</li>
+    <li>چون a و b کپی‌اند و با پایان تابع از بین می‌روند؛ x و y هرگز عوض نمی‌شوند</li>
+  </ol>
+  <div class="fb">C آرگومان‌ها را با کپی می‌دهد. برای تغییر متغیر بیرونی باید <b>آدرسش</b> را بدهی (<code>int *a</code>) و با <code>*a</code> به آن برسی.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">عبارت <code>*(volatile uint32_t *)0x40020014 ^= (1U &lt;&lt; 5);</code> روی STM32F411 چه می‌کند؟</p>
+  <ol>
+    <li data-why="0x40020014 یک آدرس است، نه یک مقدار که به بیت ۵ چیزی اضافه شود.">عدد 0x40020014 را با ۳۲ جمع می‌کند</li>
+    <li>به رجیستر ODR پورت A می‌رود و بیت ۵ آن را برعکس می‌کند</li>
+    <li data-why="^ عملگر XOR است، نه به توان.">0x40020014 را به توان ۵ می‌رساند</li>
+    <li data-why="این آدرس در RAM نیست؛ ناحیهٔ RAM از 0x20000000 شروع می‌شود و این آدرس ناحیهٔ رجیسترهاست.">یک متغیر در RAM را برعکس می‌کند</li>
+  </ol>
+  <div class="fb">عدد را به اشاره‌گر تبدیل کرده، با ستارهٔ ابتدایی به آن آدرس رفته و XOR با ماسک بیت ۵ را اعمال کرده است.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: کی چه چیزی عوض می‌شود؟</div>
+<p>این برنامه را با دقت بخوان. دو اشاره‌گر و دو متغیر داریم:</p>
+<div class="code" data-lang="c" id="ex1code"><pre>
+int a = 10;
+int b = 20;
+int *p = &amp;a;
+int *q = &amp;b;
+
+*p = *q;        // ۱
+q = p;          // ۲
+*q = 5;         // ۳
+</pre></div>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> بعد از اجرای سه خط، مقدار <code>a</code>، <code>b</code>، <code>*p</code> و <code>*q</code> چقدر است؟ (روی کاغذ چهار قفسه بکش.)</li>
+  <li><b>حل:</b> برنامه را کامل بنویس، همهٔ این مقدارها را چاپ کن و پیش‌بینی خودت را بسنج.</li>
+  <li><b>چالش:</b> فرق <code>*p = *q</code> و <code>p = q</code> چیست؟ هرکدام کدام قفسه را عوض می‌کنند؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>خط ۱ محتوای خانه‌ها را کپی می‌کند (ستاره دارد، پس به «خانه‌ها» می‌رود). خط ۲ فقط به q یک آدرس تازه می‌دهد (بدون ستاره). بعد از خط ۲، p و q هر دو به یک خانه اشاره می‌کنند.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="ex1.c">
+$ ./ex1
+a = 5, b = 20
+*p = 5, *q = 5
+p == q ? 1
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="ex1.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int a = 10;
+    int b = 20;
+    int *p = &amp;a;
+    int *q = &amp;b;
+
+    *p = *q;        // مقدار b را در a کپی کن
+    q = p;          // حالا q هم به a اشاره می‌کند
+    *q = 5;         // a را عوض کن
+
+    printf("a = %d, b = %d\n", a, b);
+    printf("*p = %d, *q = %d\n", *p, *q);
+    printf("p == q ? %d\n", p == q);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="7-8"><b class="what">وضع اولیه.</b> p به a و q به b اشاره می‌کند.</li>
+  <li data-lines="10"><b class="what">خط ۱.</b> مقدار خانهٔ b (۲۰) در خانهٔ a کپی می‌شود: a = ۲۰. اشاره‌گرها دست‌نخورده‌اند.</li>
+  <li data-lines="11"><b class="what">خط ۲.</b> q حالا آدرس a را دارد. b دیگر با هیچ اشاره‌گری در ارتباط نیست، ولی مقدارش هنوز ۲۰ است.
+    <span class="why">این تفاوت <code>q = p</code> (عوض‌کردن آدرس) با <code>*q = *p</code> (کپی مقدار) است.</span></li>
+  <li data-lines="12"><b class="what">خط ۳.</b> چون q به a اشاره می‌کند، <code>*q = 5</code> مقدار a را ۵ می‌کند.</li>
+  <li data-lines="14-16"><b class="what">چاپ.</b> a برابر ۵، b برابر ۲۰ و <code>*p</code> و <code>*q</code> هر دو ۵ (هر دو به a اشاره می‌کنند).</li>
+</ol>
+<pre class="term" data-from="ex1.c">
+$ ./ex1
+a = 5, b = 20
+*p = 5, *q = 5
+p == q ? 1
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: swap که کار نمی‌کند</div>
+<p>همکارت این تابع را نوشته و می‌گوید «کامپایل هم می‌شود، بدون هشدار!». ولی خروجی همان مقدارهای اول است.</p>
+<div class="code" data-file="bugswap.c" data-lang="c" data-verify="host" id="ex2bug">
+<pre>
+#include &lt;stdio.h&gt;
+
+static void swap_bug(int *a, int *b)
+{
+    int *t = a;
+    a = b;
+    b = t;
+}
+
+int main(void)
+{
+    int x = 3;
+    int y = 8;
+
+    swap_bug(&amp;x, &amp;y);
+    printf("x = %d, y = %d\n", x, y);
+    return 0;
+}
+</pre></div>
+<pre class="term" data-from="bugswap.c">
+$ ./bugswap
+x = 3, y = 8
+</pre>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> داخل تابع دقیقا چه چیزی جابه‌جا شده است؟ (مقدار x و y؟ یا چیز دیگر؟)</li>
+  <li><b>پیدا کردن:</b> چرا این جابه‌جایی بیرون از تابع دیده نمی‌شود؟</li>
+  <li><b>اصلاح:</b> تابع را درست کن و دو محافظ <code>NULL</code> هم اضافه کن؛ سپس با <code>swap(&amp;x, NULL)</code> امتحانش کن.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>پارامترهای <code>a</code> و <code>b</code> خودشان کپی‌اند. عوض‌کردن خودِ <code>a</code> و <code>b</code> یعنی عوض‌کردن آدرسی که در قفسهٔ کپی است. برای رسیدن به x و y ستاره لازم داری.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="swapfix.c">
+$ ./swapfix
+x = 8, y = 3
+x = 8, y = 3
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="swapfix.c" data-lang="c" data-verify="host" id="ex2">
+<pre>
+#include &lt;stdio.h&gt;
+
+static void swap(int *a, int *b)
+{
+    if (a == NULL || b == NULL) {
+        return;
+    }
+    int t = *a;
+    *a = *b;
+    *b = t;
+}
+
+int main(void)
+{
+    int x = 3;
+    int y = 8;
+
+    swap(&amp;x, &amp;y);
+    printf("x = %d, y = %d\n", x, y);
+    swap(&amp;x, NULL);
+    printf("x = %d, y = %d\n", x, y);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="5-7"><b class="what">محافظ NULL.</b> اگر هرکدام NULL باشد، بی‌سروصدا برمی‌گردیم و چیزی را تخریب نمی‌کنیم.
+    <span class="why">در کد واقعی ممکن است بخواهی به‌جای برگشت بی‌صدا، کد خطا برگردانی (مثل <code>divide</code>). انتخاب به طراحی تو بستگی دارد.</span></li>
+  <li data-lines="8-10"><b class="what">جابه‌جایی مقدار.</b> در نسخهٔ خراب، <code>a = b</code> فقط آدرس‌های داخل کپی‌ها را جابه‌جا می‌کرد؛ این‌جا با ستاره به مقدار خود x و y می‌رسیم.
+    <span class="why">قاعده: «اگر می‌خواهی متغیر بیرونی عوض شود، پشت اسم پارامتر ستاره بگذار».</span></li>
+  <li data-lines="18-21"><b class="what">دو بار فراخوانی.</b> بار اول جابه‌جا می‌کند؛ بار دوم با NULL هیچ اتفاقی نمی‌افتد.</li>
+</ol>
+<pre class="term" data-from="swapfix.c">
+$ ./swapfix
+x = 8, y = 3
+x = 8, y = 3
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: رجیستر ساختگی روی PC (میکروکنترلری)</div>
+<p>می‌خواهیم منطق رجیستر را روی PC آزمایش کنیم، بدون سخت‌افزار. یک متغیر معمولی <code>fake_odr</code> نقش رجیستر <code>ODR</code> را بازی می‌کند و توابع تو فقط آدرسش را می‌گیرند. روی برد واقعی همین توابع کار می‌کنند، فقط به‌جای <code>&amp;fake_odr</code> آدرس رجیستر واقعی داده می‌شود.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> اگر رجیستر ۰ باشد و <code>reg_set</code> را با ماسک <code>(1U&lt;&lt;5)|(1U&lt;&lt;0)</code> صدا بزنیم، مقدار چند می‌شود؟ (به هگز جواب بده.)</li>
+  <li><b>حل:</b> سه تابع <code>reg_set</code>، <code>reg_clear</code> و <code>reg_toggle</code> بنویس که <code>uint32_t *reg</code> و <code>uint32_t mask</code> بگیرند (از الگوهای درس <a href="3-1.html">۳.۱</a>).</li>
+  <li><b>چالش:</b> در برد واقعی چه چیزی باید در تعریف پارامتر عوض شود؟ (راهنمایی: کلمه‌ای که در بخش «اندازه» دیدی.)</li>
+</ol>
+<details><summary>راهنمایی</summary><p>هرکدام یک خط است: <code>*reg |= mask;</code>، <code>*reg &amp;= ~mask;</code> و <code>*reg ^= mask;</code>. برای چالش: <code>volatile</code>.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="regsim.c">
+$ ./regsim
+after set    : 0x00000021
+after clear  : 0x00000020
+after toggle : 0x00000000
+after toggle : 0x00000020
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="regsim.c" data-lang="c" data-verify="host" id="ex3">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+static void reg_set(uint32_t *reg, uint32_t mask)
+{
+    *reg |= mask;
+}
+
+static void reg_clear(uint32_t *reg, uint32_t mask)
+{
+    *reg &amp;= ~mask;
+}
+
+static void reg_toggle(uint32_t *reg, uint32_t mask)
+{
+    *reg ^= mask;
+}
+
+int main(void)
+{
+    uint32_t fake_odr = 0;                  // رجیستر ساختگی روی PC
+
+    reg_set(&amp;fake_odr, (1U &lt;&lt; 5) | (1U &lt;&lt; 0));
+    printf("after set    : 0x%08X\n", (unsigned)fake_odr);
+    reg_clear(&amp;fake_odr, 1U &lt;&lt; 0);
+    printf("after clear  : 0x%08X\n", (unsigned)fake_odr);
+    reg_toggle(&amp;fake_odr, 1U &lt;&lt; 5);
+    printf("after toggle : 0x%08X\n", (unsigned)fake_odr);
+    reg_toggle(&amp;fake_odr, 1U &lt;&lt; 5);
+    printf("after toggle : 0x%08X\n", (unsigned)fake_odr);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="4-7"><b class="what">reg_set.</b> الگوی «روشن» از درس <a href="3-1.html">۳.۱</a> روی مقداری که <code>reg</code> به آن اشاره می‌کند. پارامتر <code>uint32_t *reg</code> یعنی «آدرس یک رجیستر ۳۲ بیتی».</li>
+  <li data-lines="9-12"><b class="what">reg_clear.</b> الگوی «خاموش»: AND با ماسک برعکس‌شده.</li>
+  <li data-lines="14-17"><b class="what">reg_toggle.</b> الگوی «برعکس» با XOR.</li>
+  <li data-lines="21"><b class="what">رجیستر ساختگی.</b> یک <code>uint32_t</code> معمولی در RAM.</li>
+  <li data-lines="23-30"><b class="what">استفاده.</b> بیت‌های ۵ و ۰ روشن می‌شوند (<code>0x21</code>)، بیت ۰ خاموش می‌شود (<code>0x20</code>) و بیت ۵ دو بار برعکس می‌شود (خاموش، دوباره روشن).
+    <span class="why">روی برد واقعی پارامتر را <code>volatile uint32_t *reg</code> می‌کنیم و به‌جای <code>&amp;fake_odr</code> آدرس رجیستر (مثلا <code>(volatile uint32_t *)0x40020014</code>) را می‌دهیم. همین سه تابع دو دنیا را به هم وصل می‌کند: تست روی PC، اجرا روی MCU.</span></li>
+</ol>
+<pre class="term" data-from="regsim.c">
+$ ./regsim
+after set    : 0x00000021
+after clear  : 0x00000020
+after toggle : 0x00000000
+after toggle : 0x00000020
+</pre></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>اشاره‌گر را با «ترس» شروع نکن. تقریبا همه در همین درس دو جا گیر می‌کنند: اول <b>فرق بین p و *p</b> (آدرس در برابر مقدارِ آن آدرس) و دوم <b>ستارهٔ اعلان در برابر ستارهٔ باز کردن</b>. هر وقت گیج شدی، سه قفسه روی کاغذ بکش، آدرس بنویس و با مداد پیکان بکش. تقریبا همهٔ باگ‌های اشاره‌گر با یک نقاشی حل می‌شوند. عادتی که در میکروکنترلر جانت را نجات می‌دهد: هر اشاره‌گر را همان لحظه مقدار بده (آدرس یا <code>NULL</code>) و پیش از باز کردن هر اشاره‌گری که از بیرون می‌آید، بررسی‌اش کن.</p></div>
+
+<div class="sum"><h2>خلاصهٔ یک‌دقیقه‌ای</h2>
+<ul>
+  <li>اشاره‌گر = متغیری که مقدارش <b>آدرس</b> یک متغیر دیگر است. مثل کاغذ نشانی یا لینک، نه ماکت.</li>
+  <li><code>&amp;x</code> آدرسِ x؛ <code>int *p</code> اعلان اشاره‌گر به int؛ <code>*p</code> مقدارِ خانه‌ای که p نشان می‌دهد (خواندن و نوشتن).</li>
+  <li>اندازهٔ اشاره‌گر به معماری بستگی دارد: ۴ بایت در STM32 و ESP32، ۸ بایت در PC ۶۴ بیتی.</li>
+  <li>با اشاره‌گر، تابع می‌تواند متغیر بیرونی را عوض کند (swap واقعی) و چند نتیجه بدهد (پارامتر خروجی + کد وضعیت).</li>
+  <li>چهار حالت: معتبر، <code>NULL</code> (بررسی کن)، وحشی (مقدار اولیه بده)، آویزان (به متغیر مرده اشاره می‌کند).</li>
+  <li>تله: <code>int *a, b</code> فقط a را اشاره‌گر می‌کند؛ بدون <code>&amp;</code> هنگام فراخوانی، بدون <code>*</code> هنگام نوشتن.</li>
+  <li>در میکروکنترلر رجیسترها هم آدرس‌اند: <code>*(volatile uint32_t *)0x40020014</code> رجیستر ODR پورت A است. (ادامه در ۳.۳ و ۳.۶)</li>
+</ul></div>
+
+</article>
+</body>
+</html>

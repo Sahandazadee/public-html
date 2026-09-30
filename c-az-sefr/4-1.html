@@ -1,0 +1,1111 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>پیش‌پردازنده و ماکرو · C برای میکروکنترلر</title>
+<meta name="description" content="پیش‌پردازنده C و ماکرو: #include، #define، ماکروی تابع‌مانند و تله‌هایش، کامپایل شرطی، include guard و مثال‌های STM32 و ESP32، با کد خط‌به‌خط و خروجی واقعی.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="4-1">
+
+<p class="lede">تا اینجا هر چه نوشتی، مستقیم به کامپایلر رسید. ولی پیش از کامپایلر یک ایستگاه کوچک هست که <b>فقط با متن کار می‌کند</b>: کپی می‌کند، جایگزین می‌کند و بعضی تکه‌ها را دور می‌اندازد. تقریبا هر پروژهٔ واقعی برای STM32 و ESP32 از آن برای پیکربندی برد، نام‌گذاری رجیسترها و روشن‌کردن لاگ استفاده می‌کند. در این درس یاد می‌گیری این ایستگاه چه می‌کند و چرا یک جفت پرانتز جا افتاده می‌تواند ساعت‌ها وقتت را بگیرد.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>بگویی پیش‌پردازنده چه می‌کند و چه نمی‌کند، و نتیجه‌اش را با <code>gcc -E</code> ببینی</li>
+    <li>ثابت را با <code>#define</code>، <code>const</code> و <code>enum</code> بسازی و فرقشان را بدانی</li>
+    <li>ماکروی تابع‌مانند را درست (با پرانتز و <code>do { } while (0)</code>) بنویسی</li>
+    <li>کد را برای چند برد با <code>#if</code>، <code>#ifdef</code> و <code>-D</code> شرطی کامپایل کنی</li>
+    <li>include guard بنویسی و خطای «redefinition» را رفع کنی</li>
+    <li>ماکروهای رجیستر (<code>BIT</code>، <code>REG32</code>) بخوانی و بنویسی</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="1-4.html">۱.۴</a> (چهار مرحلهٔ ساخت و <code>#include</code>)</li>
+    <li>درس <a href="2-6.html">۲.۶</a> (تابع) و <a href="3-1.html">۳.۱</a> (عملگر بیتی و ماسک)</li>
+    <li>درس <a href="3-6.html">۳.۶</a> (رجیستر و <code>volatile</code>) برای بخش آخر</li>
+    <li>فقط <code>gcc</code> روی رایانه؛ سخت‌افزار لازم نیست</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایده اصلی: «پیدا کن و جایگزین کن» پیش از چاپ</h2>
+<p>فرض کن پایان‌نامه‌ای نوشته‌ای و اسم استاد راهنما را ۴۰ بار تایپ کرده‌ای. روز آخر معلوم می‌شود اسمش را غلط نوشته‌ای. راهش این نیست که ۴۰ جا را دستی درست کنی؛ در ویرایشگر «پیدا کن و جایگزین کن» را می‌زنی. ویرایشگر معنی جمله را نمی‌فهمد؛ فقط <b>متن را عوض می‌کند</b>.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>یک کارمند چاپخانه را تصور کن که پیش از چاپ، پایان‌نامه را با یک برگهٔ دستور می‌خواند: «هر جا نوشته <i>نام‌استاد</i>، بنویس دکتر احمدی»؛ «این فصل را فقط در نسخهٔ رنگی بگذار»؛ «پیوست ۲ را از فایل دیگر بیاور و همین‌جا بچسبان». او هیچ‌چیز از محتوای علمی نمی‌فهمد. فقط دستورهای متنی را اجرا می‌کند و بعد نسخهٔ تمیز را به چاپگر می‌دهد. <b>پیش‌پردازنده</b> (<span class="term" data-t="preprocessor">preprocessor</span>) در C همین کارمند است و چاپگر همان کامپایلر.</p></div>
+
+<p>خط‌هایی که با <code>#</code> شروع می‌شوند (<code>#include</code>، <code>#define</code>، <code>#if</code> و...) دستور این کارمندند و به آن‌ها <b>دستورهای پیش‌پردازنده</b> می‌گوییم. کامپایلر هرگز آن‌ها را نمی‌بیند؛ چون پیش‌پردازنده اول همه را اجرا و پاک می‌کند.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 250" role="img" aria-label="مسیر فایل C: فایل main.c با دستورهای #، سپس پیش‌پردازنده، سپس متن خالص C بدون #، سپس کامپایلر، سپس کد ماشین">
+  <defs><marker id="ar1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">پیش‌پردازنده اولین ایستگاه است و فقط متن را ویرایش می‌کند</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="613" y="60" width="122" height="84" rx="12" fill="#ffd60a"/>
+    <rect x="466" y="60" width="122" height="84" rx="12" fill="#ff9a4d"/>
+    <rect x="319" y="60" width="122" height="84" rx="12" fill="#fff"/>
+    <rect x="172" y="60" width="122" height="84" rx="12" fill="#7ea3ff"/>
+    <rect x="25" y="60" width="122" height="84" rx="12" fill="#3ddc97"/>
+  </g>
+  <g fill="#15120a" font-size="15" font-weight="800" text-anchor="middle">
+    <text x="674" y="90">فایل منبع</text><text x="527" y="90">پیش‌پردازنده</text><text x="380" y="90">متن خالص C</text><text x="233" y="90">کامپایلر</text><text x="86" y="90">کد ماشین</text>
+  </g>
+  <g fill="#15120a" font-size="12.5" text-anchor="middle">
+    <text x="674" y="114">شامل خط‌های #</text><text x="674" y="133">main.c</text>
+    <text x="527" y="114">کپی، جایگزینی،</text><text x="527" y="133">حذف تکه‌ها</text>
+    <text x="380" y="114">دیگر هیچ #</text><text x="380" y="133">باقی نمانده</text>
+    <text x="233" y="114">نوع‌ها را می‌سنجد</text><text x="233" y="133">و ترجمه می‌کند</text>
+    <text x="86" y="114">فایل شیء</text><text x="86" y="133">main.o</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M613 102H592" marker-end="url(#ar1)"/><path d="M466 102H445" marker-end="url(#ar1)"/><path d="M319 102H298" marker-end="url(#ar1)"/><path d="M172 102H151" marker-end="url(#ar1)"/>
+  </g>
+  <g class="mono" font-size="13" direction="ltr" text-anchor="middle" fill="#15120a">
+    <text x="527" y="188">gcc -E main.c</text>
+  </g>
+  <text x="527" y="210" text-anchor="middle" class="s-tx" font-size="13">این دستور همین ایستگاه را نشان می‌دهد</text>
+  <text x="233" y="188" text-anchor="middle" class="s-tx" font-size="13">اینجا خطای «نوع» و «اسم ناشناخته»</text>
+  <text x="233" y="208" text-anchor="middle" class="s-tx" font-size="13">پیدا می‌شود، نه در پیش‌پردازنده</text>
+</svg></div>
+<figcaption>چهار مرحلهٔ ساخت را در درس <a href="1-4.html">۱.۴</a> دیدی. اینجا مرحلهٔ اول را از نزدیک می‌بینیم: پیش‌پردازنده معنی برنامه را نمی‌فهمد؛ فقط متن را تغییر می‌دهد.</figcaption></figure>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: «فقط متن» یعنی چه؟</div>
+<p>پیش‌پردازنده نمی‌داند <code>int</code> چیست، تابع چیست یا حتی <code>MAX_TEMP</code> عدد است یا اسم. فقط «تکه‌های متن» (به اصطلاح <i>توکن</i>‌ها) را می‌بیند و طبق دستورهایش جابه‌جا می‌کند. به همین دلیل خطاهایی که در ماکروها می‌بینی عجیب‌اند: خطا را <b>کامپایلر</b> روی متنِ جایگزین‌شده می‌گیرد، نه روی چیزی که تو نوشتی.</p></div>
+
+<h2 id="include"><span class="en">#include</span>: چسباندن یک فایل</h2>
+<p>دستور <code>#include</code> ساده‌ترین دستور است: <b>کل محتوای یک فایل را به‌جای همین خط می‌چسباند</b>. در درس‌های قبل همیشه <code>#include &lt;stdio.h&gt;</code> را نوشتی. یعنی متن فایل <code>stdio.h</code> (اعلان <code>printf</code> و دوستانش) عینا اینجا کپی می‌شود.</p>
+<p>دو شکل دارد:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>شکل</th><th>کجا دنبال فایل می‌گردد؟</th><th>کاربرد</th></tr></thead>
+<tbody>
+<tr><td><code>#include &lt;stdio.h&gt;</code></td><td>پوشه‌های کتابخانهٔ کامپایلر (سیستمی)</td><td>هدرهای استاندارد و کتابخانه‌های خارجی</td></tr>
+<tr><td><code>#include "uart.h"</code></td><td>اول کنار همین فایل؛ اگر نبود، همان پوشه‌های سیستمی</td><td>هدرهای خودت در پروژه</td></tr>
+</tbody></table></div>
+<p>یک برنامهٔ خالی که فقط <code>stdio.h</code> را وارد کند، بعد از پیش‌پردازش حدود ۳۰۰ خط می‌شود (با <code>gcc -E -P</code> روی این نسخه: ۳۰۵ خط و بدون <code>-P</code> حدود ۸۱۵ خط). تعداد دقیق به نسخهٔ کامپایلر بستگی دارد؛ مهم این است که <b>هدر فقط اعلان است</b> و چیزی به حجم Flash اضافه نمی‌کند (در درس <a href="4-2.html">۴.۲</a> بیشتر).</p>
+
+<h2 id="define"><span class="en">#define</span>: نام‌گذاری یک تکه متن</h2>
+<p>ساده‌ترین شکل <code>#define</code> یعنی: «از این به بعد هر جا این اسم را دیدی، این متن را جایش بگذار». به چنین اسمی <b>ماکرو</b> (<span class="term" data-t="macro">macro</span>) می‌گویند.</p>
+
+<div class="code" data-file="define_basic.c" data-lang="c" data-verify="host" id="code1">
+<pre>
+#include &lt;stdio.h&gt;
+
+#define MAX_TEMP   80          // ثابت عددی
+#define LED_COUNT  4
+#define GREETING   "hello"     // ثابت رشته‌ای
+
+int main(void)
+{
+    int limit = MAX_TEMP;
+    int leds[LED_COUNT] = {0};
+    printf("%s: limit=%d, leds=%zu\n", GREETING, limit, sizeof(leds) / sizeof(leds[0]));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code1">
+  <li data-lines="3-5"><b class="what">سه ماکرو.</b> بعد از <code>#define</code> اول اسم می‌آید، بعد فاصله، بعد متنی که باید جایش بنشیند تا آخر خط. <b>نقطه‌ویرگول لازم نیست</b> (خودش جزو متن می‌شود!).
+    <span class="why">اسم ماکرو را حروف بزرگ می‌نویسند تا در نگاه اول معلوم باشد «این ثابت است، متغیر نیست».</span></li>
+  <li data-lines="9"><b class="what">مصرف ماکرو.</b> پیش‌پردازنده <code>MAX_TEMP</code> را با <code>80</code> عوض می‌کند. کامپایلر فقط <code>int limit = 80;</code> را می‌بیند.
+    <span class="why">هیچ قفسه‌ای در RAM برای <code>MAX_TEMP</code> ساخته نمی‌شود؛ عدد ۸۰ مستقیم داخل دستور ماشین می‌نشیند.</span></li>
+  <li data-lines="10"><b class="what">اندازهٔ آرایه از ماکرو.</b> اندازهٔ آرایه باید ثابت باشد و <code>LED_COUNT</code> همین‌جا به ۴ تبدیل می‌شود. اگر روزی ۶ LED شد، فقط خط ۴ عوض می‌شود.</li>
+  <li data-lines="11"><b class="what">چاپ.</b> <code>GREETING</code> به رشتهٔ <code>"hello"</code> تبدیل می‌شود. عبارت <code>sizeof(leds) / sizeof(leds[0])</code> تعداد عنصرها را می‌دهد (درس <a href="2-7.html">۲.۷</a>).</li>
+</ol>
+<pre class="term" data-from="define_basic.c">
+$ gcc -std=c11 -Wall -Wextra -o define_basic define_basic.c
+$ ./define_basic
+hello: limit=80, leds=4
+</pre>
+
+<p>حالا ببین پیش‌پردازنده واقعا چه ساخت. دستور <code>gcc -E</code> فقط همین ایستگاه را اجرا می‌کند و متن را چاپ می‌کند (<code>-P</code> خط‌های کمکی را حذف می‌کند تا خروجی کوتاه شود). این خروجی <b>آخرین خط‌های</b> نتیجه است؛ بالای آن محتوای <code>stdio.h</code> است:</p>
+<pre class="term" data-nocheck>
+$ gcc -E -P define_basic.c | tail -8
+
+int main(void)
+{
+    int limit = 80;
+    int leds[4] = {0};
+    printf("%s: limit=%d, leds=%zu\n", "hello", limit, sizeof(leds) / sizeof(leds[0]));
+    return 0;
+}
+</pre>
+<p>هیچ <code>#define</code> و هیچ <code>MAX_TEMP</code> باقی نمانده. این دستور <code>gcc -E</code> مهم‌ترین ابزار این درس است: هر وقت ماکرویی رفتار عجیبی داشت، خروجی <code>-E</code> را نگاه کن و ببین کامپایلر واقعا چه خوانده.</p>
+
+<h3 id="three">سه راه برای ثابت: <code>#define</code>، <code>const</code> و <code>enum</code></h3>
+<p>در درس <a href="2-1.html">۲.۱</a> ثابت را با <code>const</code> ساختی. <code>#define</code> راه دوم است و <code>enum</code> (درس <a href="3-4.html">۳.۴</a>) راه سوم. هر کدام جای خودش را دارد:</p>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th><code>#define N 4</code></th><th><code>const int n = 4;</code></th><th><code>enum { N = 4 };</code></th></tr></thead>
+<tbody>
+<tr><td>نوع دارد؟</td><td>خیر (فقط متن)</td><td>بله</td><td>عدد صحیح</td></tr>
+<tr><td>قفسه در حافظه؟</td><td>خیر</td><td>معمولا بله (در Flash یا RAM)</td><td>خیر</td></tr>
+<tr><td>اندازهٔ آرایهٔ ساده</td><td>می‌شود</td><td>در C فقط به‌عنوان آرایهٔ با طول متغیر (VLA)؛ در MCU نیاز نیست و ازش پرهیز می‌کنیم</td><td>می‌شود</td></tr>
+<tr><td>دامنه (scope)</td><td>از خط تعریف تا آخر فایل، بدون توجه به <code>{ }</code></td><td>مثل متغیر عادی</td><td>مثل متغیر عادی</td></tr>
+<tr><td>دیباگر اسمش را نشان می‌دهد؟</td><td>معمولا خیر</td><td>بله</td><td>بله</td></tr>
+<tr><td>مناسب برای</td><td>پیکربندی، عدد سخت‌افزاری، رشته</td><td>مقدار ثابت با نوع مشخص</td><td>مجموعه‌ای از مقدارهای مرتبط</td></tr>
+</tbody></table></div>
+<div class="callout tip"><div class="ct">قاعدهٔ سرانگشتی</div>
+<p>برای «یک عدد با معنی» که نوع مهم است (مثل <code>const uint32_t timeout_ms = 500;</code>) از <code>const</code> استفاده کن. برای چند حالت هم‌خانواده (حالت‌های ماشین حالت) از <code>enum</code>. برای چیزی که فقط متن یا <b>مقدار زمان کامپایل</b> است (شمارهٔ پایه، اندازهٔ بافر، آدرس رجیستر) از <code>#define</code>. در پروژه‌های MCU هر سه را می‌بینی؛ مهم این است که فرقشان را بدانی.</p></div>
+
+<h3 id="semi">تلهٔ اول: نقطه‌ویرگول آخر ماکرو</h3>
+<p>چون ماکرو «هر چیزی تا آخر خط» را جایگزین می‌کند، نقطه‌ویرگول هم جزو جایگزین می‌شود. این باگ مبتدی‌ها را ببین:</p>
+
+<div class="code" data-file="semi.c" data-lang="c" data-verify="host-fail" id="code2">
+<pre>
+#include &lt;stdio.h&gt;
+
+#define MAX_TEMP 80;            // اشتباه: ; جزو ماکرو می‌شود
+
+int main(void)
+{
+    int t = 90;
+    if (t &gt; MAX_TEMP) {
+        printf("too hot\n");
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code2">
+  <li data-lines="3"><b class="what">ماکروی خراب.</b> متن جایگزین <code>80;</code> است، با نقطه‌ویرگول.
+    <span class="why">پیش‌پردازنده نمی‌فهمد <code>;</code> «پایان دستور» است؛ برایش فقط یک نویسه است.</span></li>
+  <li data-lines="8"><b class="what">مصرف در شرط.</b> بعد از جایگزینی می‌شود <code>if (t &gt; 80;)</code> و کامپایلر پرانتز ناقص می‌بیند.
+    <span class="why">خطا در خط ۸ گزارش می‌شود، ولی علتش خط ۳ است. برای همین یک <code>note</code> اضافه می‌آید که می‌گوید «in expansion of macro».</span></li>
+</ol>
+<pre class="term" data-kind="err" data-from="semi.c">
+semi.c: In function 'main':
+semi.c:3:20: error: expected ')' before ';' token
+semi.c:8:13: note: in expansion of macro 'MAX_TEMP'
+</pre>
+<p>قاعده: <b>پیام خطا به ماکرو اشاره کرد، تعریف ماکرو را بخوان.</b> و <code>#define</code> را هرگز با <code>;</code> تمام نکن.</p>
+
+<h2 id="funcmacro">ماکروی تابع‌مانند و چهار تله‌اش</h2>
+<p>ماکرو می‌تواند پارامتر هم بگیرد و شبیه تابع رفتار کند. مثلا «بزرگ‌ترِ دو عدد»:</p>
+<pre class="term" data-kind="cmd">
+#define MAX(a, b)  ((a) &gt; (b) ? (a) : (b))
+</pre>
+<p>اما فرق بزرگی با تابع دارد: <b>تابع مقدار را کپی می‌کند، ماکرو متن را کپی می‌کند</b>. هر جا <code>a</code> بود، دقیقا همان متنی می‌نشیند که به ماکرو دادی. تفاوت به‌نظر کوچک است ولی سه چهار تله از آن می‌آید.</p>
+
+<h3 id="paren">تلهٔ ۱: پرانتز فراموش‌شده</h3>
+<div class="code" data-file="square.c" data-lang="c" data-verify="host" id="code3">
+<pre>
+#include &lt;stdio.h&gt;
+
+#define SQUARE_BAD(x)  x * x
+#define SQUARE(x)      ((x) * (x))
+
+int main(void)
+{
+    int n = 3;
+    printf("bad : %d\n", SQUARE_BAD(n + 1));
+    printf("good: %d\n", SQUARE(n + 1));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code3">
+  <li data-lines="3"><b class="what">نسخهٔ بی‌پرانتز.</b> متن جایگزین فقط <code>x * x</code> است. پس <code>SQUARE_BAD(n + 1)</code> می‌شود <code>n + 1 * n + 1</code>.
+    <span class="why">ضرب قبل از جمع اجرا می‌شود (درس <a href="2-3.html">۲.۳</a>، تقدم عملگرها). یعنی <code>n + (1 * n) + 1</code> = ۳ + ۳ + ۱ = ۷، نه ۱۶.</span></li>
+  <li data-lines="4"><b class="what">نسخهٔ درست.</b> پرانتز دور <b>هر پارامتر</b> و دور <b>کل عبارت</b> می‌نشیند. حالا می‌شود <code>((n + 1) * (n + 1))</code>.
+    <span class="why">پرانتز دور پارامتر جلوی تقدم عملگر را می‌گیرد؛ پرانتز دور کل عبارت جلوی وقتی را که ماکرو داخل عبارت بزرگ‌تری می‌نشیند (مثلا <code>10 / SQUARE(2)</code>).</span></li>
+  <li data-lines="9-10"><b class="what">دو چاپ.</b> همان ورودی، دو جواب متفاوت.</li>
+</ol>
+<pre class="term" data-from="square.c">
+$ ./square
+bad : 7
+good: 16
+</pre>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 270" role="img" aria-label="جایگزینی متنی SQUARE_BAD(n + 1) به n + 1 * n + 1 و محاسبه ۷؛ در برابر SQUARE با پرانتز و نتیجه ۱۶">
+  <defs><marker id="ar2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">ماکرو متن را کپی می‌کند؛ ترتیب محاسبه را پرانتزها تعیین می‌کنند</text>
+  <rect x="24" y="44" width="712" height="94" rx="14" fill="#ff86b3" stroke="#15120a" stroke-width="3"/>
+  <text x="380" y="70" text-anchor="middle" fill="#15120a" font-size="14.5" font-weight="800">بدون پرانتز</text>
+  <g class="mono" font-size="19" font-weight="800" fill="#15120a" text-anchor="middle" direction="ltr">
+    <text x="190" y="102">SQUARE_BAD(n + 1)</text>
+    <text x="560" y="102">n + 1 * n + 1</text>
+  </g>
+  <path d="M330 96H420" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar2)"/>
+  <text x="380" y="88" text-anchor="middle" fill="#15120a" font-size="12.5">جایگزینی</text>
+  <text x="380" y="126" text-anchor="middle" fill="#15120a" font-size="13.5" font-weight="700">ضرب اول: n + (1*n) + 1 = 3 + 3 + 1 = 7</text>
+  <rect x="24" y="154" width="712" height="94" rx="14" fill="#3ddc97" stroke="#15120a" stroke-width="3"/>
+  <text x="380" y="180" text-anchor="middle" fill="#15120a" font-size="14.5" font-weight="800">با پرانتز</text>
+  <g class="mono" font-size="19" font-weight="800" fill="#15120a" text-anchor="middle" direction="ltr">
+    <text x="190" y="212">SQUARE(n + 1)</text>
+    <text x="560" y="212">((n + 1) * (n + 1))</text>
+  </g>
+  <path d="M330 206H420" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar2)"/>
+  <text x="380" y="198" text-anchor="middle" fill="#15120a" font-size="12.5">جایگزینی</text>
+  <text x="380" y="236" text-anchor="middle" fill="#15120a" font-size="13.5" font-weight="700">4 * 4 = 16</text>
+</svg></div>
+<figcaption>با <code>n = 3</code> این دو ماکرو دو جواب می‌دهند. تابع معمولی چنین مشکلی ندارد چون آرگومان را <b>اول حساب می‌کند</b> و بعد کپی می‌کند.</figcaption></figure>
+
+<h3 id="twice">تلهٔ ۲: آرگومان چند بار حساب می‌شود</h3>
+<p>در ماکرو، متنِ آرگومان هر بار که پارامتر ظاهر می‌شود <b>دوباره اجرا</b> می‌شود. اگر آرگومان اثر جانبی (<span class="term" data-t="sideeffect">side effect</span>) داشته باشد، یعنی چیزی را عوض کند (مثل <code>y++</code>)، دو بار عوض می‌شود.</p>
+
+<div class="code" data-file="maxdouble.c" data-lang="c" data-verify="host" id="code4">
+<pre>
+#include &lt;stdio.h&gt;
+
+#define MAX(a, b)  ((a) &gt; (b) ? (a) : (b))
+
+int main(void)
+{
+    int x = 5;
+    int y = 5;
+    int m = MAX(x, y++);     // y++ دو جا کپی می‌شود!
+    printf("m=%d y=%d\n", m, y);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code4">
+  <li data-lines="3"><b class="what">MAX با پرانتز درست.</b> پارامتر <code>b</code> دو بار در متن آمده: یک بار در مقایسه و یک بار در شاخهٔ جواب.</li>
+  <li data-lines="9"><b class="what">مصرف با اثر جانبی.</b> بعد از جایگزینی می‌شود <code>((x) &gt; (y++) ? (x) : (y++))</code>. مقایسه یک <code>y++</code> اجرا می‌کند و چون ۵ &gt; ۵ نادرست است، شاخهٔ دوم هم <code>y++</code> را دوباره اجرا می‌کند.
+    <span class="why">با تابع، <code>y++</code> یک‌بار حساب می‌شد و <code>y</code> می‌شد ۶. اینجا ۷ شد. انتظار داشتی <code>m</code> ۵ باشد؛ شد ۶.</span></li>
+  <li data-lines="10"><b class="what">چاپ.</b> نتیجه را ببین.</li>
+</ol>
+<pre class="term" data-from="maxdouble.c">
+$ ./maxdouble
+m=6 y=7
+</pre>
+<p>با <code>gcc -E -P</code> می‌بینی دقیقا همین متن ساخته شده است:</p>
+<pre class="term" data-nocheck>
+$ gcc -E -P maxdouble.c | tail -6
+    int x = 5;
+    int y = 5;
+    int m = ((x) &gt; (y++) ? (x) : (y++));
+    printf("m=%d y=%d\n", m, y);
+    return 0;
+}
+</pre>
+<p>خودت هم ببین. اجرا را قدم‌به‌قدم دنبال کن و توجه کن <code>y</code> چند بار عوض می‌شود:</p>
+
+<div class="widget" data-w="mem" data-config='{"title":"MAX(x, y++): آرگومان دو بار اجرا می‌شود","code":["int x = 5;","int y = 5;","int m = MAX(x, y++);"],"intro":"سه قفسه داریم. روی بعدی بزن.","cells":[{"addr":"0x20000000","name":"x","val":null,"kind":"var"},{"addr":"0x20000004","name":"y","val":null,"kind":"var"},{"addr":"0x20000008","name":"m","val":null,"kind":"var"}],"steps":[{"line":0,"set":{"0":5},"hot":[0],"say":"x برابر ۵."},{"line":1,"set":{"1":5},"hot":[1],"say":"y برابر ۵."},{"line":2,"set":{"1":6},"hot":[1],"say":"ماکرو باز شد: شرط (x) &gt; (y++) اجرا شد. مقدار y (یعنی ۵) با x مقایسه شد و ۵ &gt; ۵ نادرست است. اما y++ همین‌جا y را ۶ کرد."},{"line":2,"set":{"1":7,"2":6},"hot":[1,2],"say":"چون شرط نادرست بود، شاخهٔ (y++) هم اجرا شد: مقدار ۶ را به m داد و y را ۷ کرد. یعنی y دو بار افزایش پیدا کرد."}]}'></div>
+
+<h3 id="multi">تلهٔ ۳: ماکرو با چند دستور و <code>if</code></h3>
+<p>گاهی ماکرو باید چند دستور را با هم اجرا کند (مثلا جابه‌جا کردن دو مقدار). اگر ساده بنویسی، وسط <code>if</code> می‌شکند:</p>
+
+<div class="code" data-file="swap_bad.c" data-lang="c" data-verify="host-fail" id="code5">
+<pre>
+#include &lt;stdio.h&gt;
+
+#define SWAP_BAD(a, b)  tmp = a; a = b; b = tmp;
+
+int main(void)
+{
+    int x = 2, y = 1, tmp;
+    if (x &gt; y)
+        SWAP_BAD(x, y)
+    else
+        printf("already ordered\n");
+    printf("%d %d\n", x, y);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code5">
+  <li data-lines="3"><b class="what">ماکرو با سه دستور.</b> متنش سه دستور جدا با <code>;</code> است.</li>
+  <li data-lines="8-11"><b class="what">مصرف بدون آکولاد.</b> <code>if</code> بدون آکولاد فقط یک دستور بعدی را کنترل می‌کند. پس فقط <code>tmp = x;</code> زیر <code>if</code> است و دو دستور دیگر بیرونش می‌افتند. بعد <code>else</code> جفت ندارد.
+    <span class="why">قاعدهٔ ۲.۴ را یادت هست؟ «همیشه آکولاد». اینجا مشکل از ماکرو است، ولی آکولاد فراموش‌شده آن را پنهان کرده. حتی کامپایلر هشدار می‌دهد که «macro expands to multiple statements».</span></li>
+</ol>
+<pre class="term" data-kind="err" data-from="swap_bad.c">
+swap_bad.c: In function 'main':
+swap_bad.c:10:5: error: 'else' without a previous 'if'
+</pre>
+
+<p>راه‌حل استاندارد، پیچیدن دستورها در <code>do { ... } while (0)</code> است. این حلقه <b>دقیقا یک بار</b> اجرا می‌شود (شرطش صفر است) و از بیرون مثل «یک دستور» رفتار می‌کند که با <code>;</code> تمام می‌شود:</p>
+
+<div class="code" data-file="swap_good.c" data-lang="c" data-verify="host" id="code6">
+<pre>
+#include &lt;stdio.h&gt;
+
+#define SWAP_INT(a, b)  do { int tmp_ = (a); (a) = (b); (b) = tmp_; } while (0)
+
+int main(void)
+{
+    int x = 2, y = 1;
+    if (x &gt; y)
+        SWAP_INT(x, y);
+    else
+        printf("already ordered\n");
+    printf("%d %d\n", x, y);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code6">
+  <li data-lines="3"><b class="what">do-while صفر.</b> بدنه یک بلوک است (پس می‌تواند متغیر محلی <code>tmp_</code> داشته باشد و اسمش با متغیرهای بیرون تداخل نمی‌کند) و <code>while (0)</code> آن را دقیقا یک‌بار اجرا می‌کند.
+    <span class="why">در انتها <code>;</code> نگذاشتیم. آن نقطه‌ویرگول را کاربر ماکرو (خط ۹) می‌نویسد. اگر خود ماکرو هم <code>;</code> داشت، <code>if ... else</code> باز می‌شکست.</span></li>
+  <li data-lines="8-11"><b class="what">بدون شکستن else.</b> حالا <code>SWAP_INT(x, y);</code> در نگاه <code>if</code> فقط یک دستور است و <code>else</code> جفت درست دارد.</li>
+</ol>
+<pre class="term" data-from="swap_good.c">
+$ ./swap_good
+1 2
+</pre>
+
+<div class="callout warn"><div class="ct">تلهٔ ۴: ماکرو نوع ندارد و دیباگ‌پذیر نیست</div>
+<p>ماکرو با <code>int</code> و <code>float</code> یکسان رفتار می‌کند و کامپایلر نوع را قبل از جایگزینی نمی‌سنجد. در ماکرو نمی‌شود قدم‌به‌قدم (step) رفت، و اسمش در دیباگر معمولا دیده نمی‌شود. برای همین <b>اگر می‌توانی، تابع <code>static inline</code> بنویس</b> (درس <a href="2-6.html">۲.۶</a>). ماکرو را برای کارهایی نگه دار که تابع نمی‌تواند: ساختن اسم، شرطی‌کردن کد، و ثابت‌های زمان کامپایل.</p></div>
+
+<div class="table-wrap"><table>
+<thead><tr><th>ماکروی تابع‌مانند</th><th><code>static inline</code> تابع</th></tr></thead>
+<tbody>
+<tr><td>نوع ندارد؛ با هر نوعی کار می‌کند</td><td>نوع مشخص دارد؛ کامپایلر بررسی می‌کند</td></tr>
+<tr><td>آرگومان ممکن است چند بار اجرا شود</td><td>آرگومان یک‌بار حساب می‌شود</td></tr>
+<tr><td>پرانتز و <code>do-while</code> لازم دارد</td><td>ساده و امن</td></tr>
+<tr><td>دیباگر معمولا نمی‌بیند</td><td>می‌توان قدم‌به‌قدم رفت</td></tr>
+<tr><td>سریع (بدون فراخوانی)</td><td>با بهینه‌سازی معمولا به همان سرعت (کامپایلر inline می‌کند)</td></tr>
+</tbody></table></div>
+
+<h2 id="cond">کامپایل شرطی: یک کد، چند برد</h2>
+<p>این کار را <b>کامپایل شرطی</b> (<span class="term" data-t="conditional">conditional compilation</span>) می‌گویند. فرض کن پروژه‌ات باید روی Nucleo-F411RE (LED روی PA5) و روی ESP32 DevKit (LED معمولا روی GPIO2) کار کند. دو کپی از کد نمی‌سازی، چون هر اصلاح باید دو بار انجام شود. راه بهتر: یک کد بنویس و به پیش‌پردازنده بگو «اگر برد اول بود این تکه را نگه دار، اگر دوم بود آن یکی را».</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>دفترچهٔ راهنمای یک لوازم خانگی که برای چند کشور چاپ می‌شود: «اگر نسخهٔ ایران: صفحهٔ ۳؛ اگر نسخهٔ ترکیه: صفحهٔ ۴». هر نسخهٔ چاپ‌شده فقط یکی از آن‌ها را دارد. بقیه اصلا چاپ نمی‌شود.</p></div>
+
+<p>دستورهای اصلی:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>دستور</th><th>معنی</th></tr></thead>
+<tbody>
+<tr><td><code>#ifdef X</code></td><td>اگر ماکروی <code>X</code> تعریف شده است (مقدارش مهم نیست)</td></tr>
+<tr><td><code>#ifndef X</code></td><td>اگر <code>X</code> تعریف نشده است</td></tr>
+<tr><td><code>#if عبارت</code></td><td>اگر عبارت (با اعداد و ماکروها) غیرصفر است. اسمِ تعریف‌نشده صفر حساب می‌شود</td></tr>
+<tr><td><code>#elif عبارت</code></td><td>وگرنه اگر...</td></tr>
+<tr><td><code>#else</code></td><td>وگرنه</td></tr>
+<tr><td><code>#endif</code></td><td>پایان بلوک؛ همیشه لازم است</td></tr>
+<tr><td><code>#error "متن"</code></td><td>کامپایل را با این پیام متوقف کن</td></tr>
+<tr><td><code>defined(X)</code></td><td>داخل <code>#if</code>: «آیا X تعریف شده؟» (برای ترکیب با <code>&amp;&amp;</code> و <code>||</code>)</td></tr>
+</tbody></table></div>
+
+<div class="code" data-file="cond.c" data-lang="c" data-verify="host" id="code7">
+<pre>
+#include &lt;stdio.h&gt;
+
+#ifndef BOARD              // اگر از بیرون (-D) داده نشده بود
+#define BOARD 1            // پیش‌فرض: Nucleo
+#endif
+
+#if BOARD == 1
+#define LED_PIN    5
+#define BOARD_NAME "nucleo-f411re"
+#elif BOARD == 2
+#define LED_PIN    2
+#define BOARD_NAME "esp32-devkit"
+#else
+#error "Unknown BOARD"
+#endif
+
+#ifdef DEBUG
+#define LOG(msg) printf("[debug] %s\n", msg)
+#else
+#define LOG(msg) ((void)0)     // در نسخهٔ نهایی هیچ نمی‌شود
+#endif
+
+int main(void)
+{
+    printf("board=%s led_pin=%d\n", BOARD_NAME, LED_PIN);
+    LOG("starting");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code7">
+  <li data-lines="3-5"><b class="what">مقدار پیش‌فرض.</b> اگر هنوز <code>BOARD</code> تعریف نشده، آن را ۱ بگذار. این شبیه «اگر کاربر چیزی نگفت، مقدار عادی».
+    <span class="why">بدون این خط، وقتی <code>-DBOARD=...</code> ندهی، <code>BOARD</code> صفر حساب می‌شود و به <code>#error</code> می‌رسی.</span></li>
+  <li data-lines="7-9"><b class="what">برد ۱.</b> اگر <code>BOARD</code> برابر ۱ بود، پایه ۵ (LD2 روی Nucleo) و نام برد را تعریف کن.</li>
+  <li data-lines="10-12"><b class="what">برد ۲.</b> وگرنه اگر ۲ بود، پایهٔ ۲ (LED رایج روی ESP32 DevKit).</li>
+  <li data-lines="13-15"><b class="what">مقدار ناشناخته.</b> <code>#error</code> کامپایل را متوقف می‌کند. بهتر از اینکه برنامه با پایهٔ اشتباه ساخته شود و ساعت‌ها دنبال LED بگردی.
+    <span class="why">خطا را از زمان اجرا (روی برد، سخت‌ترین جای ممکن برای دیباگ) به زمان کامپایل آوردی.</span></li>
+  <li data-lines="17-21"><b class="what">لاگ شرطی.</b> اگر <code>DEBUG</code> تعریف شده باشد، <code>LOG(msg)</code> چاپ می‌کند؛ وگرنه به <code>((void)0)</code> تبدیل می‌شود، یعنی «هیچ‌کاری» و هیچ کدی تولید نمی‌شود.
+    <span class="why"><code>(void)0</code> به‌جای ماکروی خالی: تا <code>LOG("x");</code> هنوز یک دستور معتبر بماند.</span></li>
+  <li data-lines="25"><b class="what">مصرف پایه و نام.</b> فقط همان شاخه‌ای که فعال شده وجود دارد.</li>
+  <li data-lines="26"><b class="what">مصرف LOG.</b> بسته به <code>DEBUG</code> یا چاپ می‌کند یا هیچ.</li>
+</ol>
+<pre class="term" data-from="cond.c">
+$ gcc -std=c11 -Wall -Wextra -o cond cond.c
+$ ./cond
+board=nucleo-f411re led_pin=5
+</pre>
+<p>حالا همان فایل را <b>بدون تغییر</b> با پرچم‌های <code>-D</code> (تعریف ماکرو از خط فرمان) کامپایل می‌کنیم. <code>-DBOARD=2</code> مثل این است که بالای فایل <code>#define BOARD 2</code> نوشته باشی:</p>
+<pre class="term" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -DBOARD=2 -DDEBUG -o cond cond.c
+$ ./cond
+board=esp32-devkit led_pin=2
+[debug] starting
+</pre>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 330" role="img" aria-label="یک فایل منبع با دو شاخه و دو ساخت: با BOARD برابر ۱ خروجی LED_PIN پنج است و با BOARD برابر ۲ خروجی LED_PIN دو">
+  <defs><marker id="ar3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">یک فایل منبع، دو ساخت مختلف</text>
+  <rect x="250" y="44" width="260" height="150" rx="12" fill="#fff" stroke="#15120a" stroke-width="3"/>
+  <g class="mono" font-size="13.5" font-weight="700" fill="#15120a" direction="ltr">
+    <text x="266" y="70">#if BOARD == 1</text>
+    <text x="284" y="92" fill="#15120a">#define LED_PIN 5</text>
+    <text x="266" y="114">#elif BOARD == 2</text>
+    <text x="284" y="136">#define LED_PIN 2</text>
+    <text x="266" y="158">#else</text>
+    <text x="284" y="178">#error</text>
+  </g>
+  <rect x="266" y="76" width="228" height="22" rx="4" fill="#ffd60a" opacity="0.55"/>
+  <rect x="266" y="120" width="228" height="22" rx="4" fill="#7ea3ff" opacity="0.55"/>
+  <g class="mono" font-size="13.5" font-weight="700" fill="#15120a" direction="ltr">
+    <text x="284" y="92">#define LED_PIN 5</text>
+    <text x="284" y="136">#define LED_PIN 2</text>
+  </g>
+  <path d="M300 196L150 246" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar3)"/>
+  <path d="M460 196L610 246" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar3)"/>
+  <g class="mono" font-size="13" font-weight="700" direction="ltr" text-anchor="middle" fill="#15120a">
+    <text x="190" y="216" class="s-tx">-DBOARD=1</text>
+    <text x="570" y="216" class="s-tx">-DBOARD=2</text>
+  </g>
+  <rect x="28" y="252" width="240" height="60" rx="12" fill="#ffd60a" stroke="#15120a" stroke-width="3"/>
+  <rect x="492" y="252" width="240" height="60" rx="12" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/>
+  <g fill="#15120a" font-size="14" font-weight="800" text-anchor="middle">
+    <text x="148" y="278">فایل ساخته‌شده برای Nucleo</text>
+    <text x="612" y="278">فایل ساخته‌شده برای ESP32</text>
+  </g>
+  <g fill="#15120a" font-size="12.5" text-anchor="middle">
+    <text x="148" y="299">فقط خط زرد باقی می‌ماند</text>
+    <text x="612" y="299">فقط خط آبی باقی می‌ماند</text>
+  </g>
+</svg></div>
+<figcaption>شاخه‌ای که انتخاب نشده، پیش از رسیدن به کامپایلر پاک می‌شود. پس در فایل نهایی نه جایی می‌گیرد و نه خطایی از آن می‌آید (به‌جز خطای نوشتاری <code>#</code> خودش).</figcaption></figure>
+
+<p>و ببین اگر مقدار اشتباه بدهیم، <code>#error</code> چه می‌کند. این‌جا مقدار را داخل فایل گذاشته‌ایم تا بشود وارسی کرد؛ در عمل با <code>-DBOARD=3</code> همین اتفاق می‌افتد:</p>
+<div class="code" data-file="board_err.c" data-lang="c" data-verify="host-fail" id="code8">
+<pre>
+#include &lt;stdio.h&gt;
+
+#define BOARD 3
+
+#if BOARD == 1
+#define LED_PIN 5
+#elif BOARD == 2
+#define LED_PIN 2
+#else
+#error "Unknown BOARD"
+#endif
+
+int main(void)
+{
+    printf("led_pin=%d\n", LED_PIN);
+    return 0;
+}
+</pre></div>
+<pre class="term" data-kind="err" data-from="board_err.c">
+board_err.c:10:2: error: #error "Unknown BOARD"
+board_err.c: In function 'main':
+board_err.c:15:28: error: 'LED_PIN' undeclared (first use in this function)
+</pre>
+<p>خط اول <b>علت</b> است. خط بعدی <b>پیامد</b> است (چون <code>LED_PIN</code> هیچ‌وقت تعریف نشد). مثل همیشه: <b>اولین خطا را بخوان</b> و بقیه را نادیده بگیر تا آن درست شود.</p>
+
+<div class="callout info"><div class="ct">چرا این «#if» است و «if» معمولی نیست؟</div>
+<p>در <code>if (BOARD == 1)</code> معمولی هر دو شاخه در فایل ماشین می‌مانند (کامپایلر ممکن است شاخهٔ مرده را حذف کند، ولی هر دو شاخه باید <b>معتبر</b> باشند و کامپایل شوند). در <code>#if</code> شاخهٔ رد‌شده حتی نباید وجود داشته باشد. برای کدی که از نظر سخت‌افزار روی برد دیگر نمی‌شود کامپایل شود (مثلا نام رجیستری که فقط روی یک تراشه هست) <b>فقط <code>#if</code> جواب می‌دهد</b>. برای رفتار متفاوت در زمان اجرا (مثلا کاربر حالت را عوض می‌کند) <code>if</code> معمولی.</p></div>
+
+<h2 id="guard">include guard: جلوگیری از دوبار چسباندن</h2>
+<p>فرض کن <code>main.c</code> دو هدر را وارد می‌کند: <code>point.h</code> و <code>shape.h</code>. ولی <code>shape.h</code> خودش هم <code>point.h</code> را وارد می‌کند. نتیجه: <code>point.h</code> <b>دو بار</b> در یک فایل می‌نشیند و <code>struct point</code> دو بار تعریف می‌شود. این ماجرا در پروژه‌های بزرگ دائم پیش می‌آید، چون هدرها هدر دیگر را می‌خوانند. اول بدون محافظ:</p>
+
+<div class="code" data-file="point.h" data-lang="c" data-verify="host-fail" data-project="noguard_demo" id="ng1">
+<pre>
+struct point {
+    int x;
+    int y;
+};
+</pre></div>
+<div class="code" data-file="shape.h" data-lang="c" data-verify="host-fail" data-project="noguard_demo" id="ng2">
+<pre>
+#include "point.h"
+
+struct segment {
+    struct point a;
+    struct point b;
+};
+</pre></div>
+<div class="code" data-file="main.c" data-lang="c" data-verify="host-fail" data-project="noguard_demo" id="ng3">
+<pre>
+#include &lt;stdio.h&gt;
+#include "point.h"
+#include "shape.h"
+
+int main(void)
+{
+    struct segment s = { {0, 0}, {3, 4} };
+    printf("%d\n", s.b.x + s.b.y);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ng3">
+  <li data-lines="2-3"><b class="what">دو هدر.</b> اول <code>point.h</code> چسبانده می‌شود (تعریف اول). بعد <code>shape.h</code> که داخلش دوباره <code>point.h</code> است (تعریف دوم!).
+    <span class="why">هر چند به‌نظر کار عاقلانه‌ای کرده‌ایم (هر فایل هدرهای مورد نیازش را می‌آورد)، ولی نتیجهٔ چسباندن دو تعریف یکسان است و C تعریف مجدد یک <code>struct</code> را نمی‌پذیرد.</span></li>
+</ol>
+<pre class="term" data-kind="err" data-from="noguard_demo">
+point.h:1:8: error: redefinition of 'struct point'
+</pre>
+<p>راهش <b>include guard</b> (<span class="term" data-t="includeguard">نگهبان include</span>) است: هر هدر را در یک <code>#ifndef</code> می‌پیچیم که فقط بار اول اجازهٔ ورود بدهد.</p>
+
+<div class="code" data-file="point.h" data-lang="c" data-verify="host" data-project="guard_demo" id="g1">
+<pre>
+#ifndef POINT_H
+#define POINT_H
+
+struct point {
+    int x;
+    int y;
+};
+
+#endif /* POINT_H */
+</pre></div>
+<div class="code" data-file="shape.h" data-lang="c" data-verify="host" data-project="guard_demo" id="g2">
+<pre>
+#ifndef SHAPE_H
+#define SHAPE_H
+
+#include "point.h"
+
+struct segment {
+    struct point a;
+    struct point b;
+};
+
+#endif /* SHAPE_H */
+</pre></div>
+<div class="code" data-file="main.c" data-lang="c" data-verify="host" data-project="guard_demo" id="g3">
+<pre>
+#include &lt;stdio.h&gt;
+#include "point.h"
+#include "shape.h"
+
+int main(void)
+{
+    struct segment s = { {0, 0}, {3, 4} };
+    printf("%d\n", s.b.x + s.b.y);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="g1">
+  <li data-lines="1-2"><b class="what">اگر هنوز نیامده...</b> <code>#ifndef POINT_H</code> می‌پرسد «ماکروی <code>POINT_H</code> تعریف شده؟». بار اول نه؛ پس وارد می‌شود و بلافاصله <code>POINT_H</code> را تعریف می‌کند (پرچم «من آمدم»).</li>
+  <li data-lines="4-7"><b class="what">محتوای هدر.</b> فقط بار اول کپی می‌شود.</li>
+  <li data-lines="9"><b class="what">پایان.</b> <code>#endif</code> بلوک را می‌بندد. کامنت کنارش فقط برای خواندن راحت‌تر است.
+    <span class="why">بار دوم که همین هدر چسبانده شود، <code>POINT_H</code> تعریف شده است، پس تمام محتوا تا <code>#endif</code> دور انداخته می‌شود.</span></li>
+</ol>
+<pre class="term" data-from="guard_demo">
+$ gcc -std=c11 -Wall -Wextra -o guard_demo main.c
+$ ./guard_demo
+7
+</pre>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="main.c اول point.h را وارد می‌کند و محتوا وارد می‌شود و POINT_H تعریف می‌شود؛ بار دوم از راه shape.h، POINT_H تعریف شده و محتوا رد می‌شود">
+  <defs><marker id="ar4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">include guard: بار دوم، تمام هدر پرش می‌خورد</text>
+  <rect x="546" y="44" width="190" height="86" rx="12" fill="#ffd60a" stroke="#15120a" stroke-width="3"/>
+  <text x="641" y="70" text-anchor="middle" fill="#15120a" font-size="14.5" font-weight="800">main.c</text>
+  <g class="mono" font-size="13" fill="#15120a" direction="ltr" text-anchor="middle">
+    <text x="641" y="94">#include "point.h"</text><text x="641" y="116">#include "shape.h"</text>
+  </g>
+  <rect x="30" y="44" width="230" height="86" rx="12" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/>
+  <text x="145" y="70" text-anchor="middle" fill="#15120a" font-size="14.5" font-weight="800">shape.h</text>
+  <g class="mono" font-size="13" fill="#15120a" direction="ltr" text-anchor="middle">
+    <text x="145" y="94">#include "point.h"</text>
+    <text x="145" y="116">struct segment { ... }</text>
+  </g>
+  <path d="M546 116H264" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar4)"/>
+  <text x="405" y="108" text-anchor="middle" class="s-tx" font-size="12.5">وارد کردن دوم</text>
+  <path d="M641 130V166" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar4)"/>
+  <path d="M145 130V166" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar4)"/>
+  <rect x="516" y="172" width="220" height="106" rx="12" fill="#3ddc97" stroke="#15120a" stroke-width="3"/>
+  <text x="626" y="196" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">بار اول: POINT_H تعریف‌نشده</text>
+  <g fill="#15120a" font-size="12.5" text-anchor="middle">
+    <text x="626" y="220">وارد شو، محتوا را بچسبان</text>
+    <text x="626" y="240">و POINT_H را تعریف کن</text>
+    <text x="626" y="262">خروجی: struct point یک بار</text>
+  </g>
+  <rect x="30" y="172" width="230" height="106" rx="12" fill="#ff86b3" stroke="#15120a" stroke-width="3"/>
+  <text x="145" y="196" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">بار دوم: POINT_H تعریف‌شده</text>
+  <g fill="#15120a" font-size="12.5" text-anchor="middle">
+    <text x="145" y="220">تا #endif همه را دور بینداز</text>
+    <text x="145" y="240">هیچ‌چیز نمی‌چسبد</text>
+    <text x="145" y="262">خروجی: بدون خطا</text>
+  </g>
+</svg></div>
+<figcaption>پیش‌پردازنده ماکروهایی را که تا حالا تعریف شده‌اند به یاد دارد. include guard از همین حافظه استفاده می‌کند.</figcaption></figure>
+
+<div class="callout tip"><div class="ct">اسم guard و <code>#pragma once</code></div>
+<ul>
+<li>اسم guard باید در کل پروژه یکتا باشد. قاعدهٔ رایج: نام فایل با حرف بزرگ و <code>_H</code>: <code>UART_H</code>، <code>SENSOR_CONFIG_H</code>. دو هدر با اسم guard یکسان یکی را از کار می‌اندازد و پیدا کردنش دردسر دارد.</li>
+<li>راه کوتاه‌تر <code>#pragma once</code> است. تقریبا همهٔ کامپایلرهای رایج (GCC، Clang، IAR، Keil) می‌فهمند، ولی جزو استاندارد C نیست. در پروژه‌ای که ممکن است کامپایلر عوض شود، <code>#ifndef</code> امن‌تر است و همه‌جا کار می‌کند.</li>
+<li>هر <code>.h</code> که خودت می‌نویسی از اول guard داشته باشد. این یک عادت بی‌هزینه است.</li>
+</ul></div>
+
+<h2 id="tools">چند ابزار دیگر پیش‌پردازنده</h2>
+
+<h3 id="hash"><code>#</code> و <code>##</code> داخل ماکرو</h3>
+<p>داخل تعریف ماکرو دو عملگر ویژه هست:</p>
+<ul>
+<li><code>#x</code> (<span class="term" data-t="stringify">stringify</span>): متن آرگومان را به <b>رشته</b> تبدیل می‌کند. <code>SHOW(a * b)</code> می‌تواند خود عبارت را هم چاپ کند.</li>
+<li><code>a##b</code> (<span class="term" data-t="tokenpaste">چسباندن توکن</span>): دو تکه را به هم می‌چسباند و <b>اسم تازه</b> می‌سازد. <code>reg_##name</code> با <code>moder</code> می‌شود <code>reg_moder</code>.</li>
+</ul>
+<p>و کامپایلر چند ماکروی آماده هم دارد: <code>__FILE__</code> (نام فایل)، <code>__LINE__</code> (شمارهٔ خط) و <code>__STDC_VERSION__</code> (نسخهٔ استاندارد). <code>__func__</code> هم نام تابع جاری را می‌دهد؛ این یکی در واقع ماکرو نیست، بلکه اسمی است که خود کامپایلر می‌سازد ولی مصرفش مشابه است.</p>
+
+<div class="code" data-file="stringify.c" data-lang="c" data-verify="host" id="code9">
+<pre>
+#include &lt;stdio.h&gt;
+
+#define SHOW(expr)  printf(#expr " = %d\n", (expr))
+#define REG(name)   reg_##name
+
+int reg_moder = 1;
+int reg_odr = 32;
+
+int main(void)
+{
+    int a = 6;
+    int b = 7;
+    SHOW(a * b);
+    SHOW(a + b);
+    printf("%d %d\n", REG(moder), REG(odr));
+    printf("file=%s line=%d func=%s\n", __FILE__, __LINE__, __func__);
+    printf("std=%ld\n", __STDC_VERSION__);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code9">
+  <li data-lines="3"><b class="what">نمایش عبارت و مقدارش.</b> <code>#expr</code> متن آرگومان را در گیومه می‌گذارد؛ دو رشتهٔ کنار هم در C به‌هم می‌چسبند (<code>"a * b" " = %d\n"</code>). خود <code>(expr)</code> مقدار را حساب می‌کند.
+    <span class="why">این کار با تابع ممکن نیست؛ تابع فقط مقدار عبارت را می‌بیند و متنِ آن را نه. در دیباگ لاگ، این ترفند خیلی کاربرد دارد.</span></li>
+  <li data-lines="4"><b class="what">ساختن اسم.</b> <code>REG(moder)</code> به <code>reg_moder</code> تبدیل می‌شود، یعنی اسم متغیر از تکه‌ها ساخته می‌شود.</li>
+  <li data-lines="13-14"><b class="what">دو بار SHOW.</b> هر کدام عبارت خودش را چاپ می‌کند.</li>
+  <li data-lines="15"><b class="what">چاپ دو متغیر با REG.</b> بعد از جایگزینی می‌شود <code>reg_moder</code> و <code>reg_odr</code>.</li>
+  <li data-lines="16-17"><b class="what">ماکروهای آماده.</b> فایل، شماره خط، نام تابع، و نسخهٔ استاندارد (<code>201112</code> یعنی C11).
+    <span class="why">در لاگ خطا، نام فایل و شمارهٔ خط ارزش بالایی دارد. بدون اینکه دستی بنویسی، همیشه درست است.</span></li>
+</ol>
+<pre class="term" data-from="stringify.c">
+$ ./stringify
+a * b = 42
+a + b = 13
+1 32
+file=stringify.c line=16 func=main
+std=201112
+</pre>
+
+<h3 id="xmacro">ماکرو با ماکرو: ترفند X-macro</h3>
+<p>گاهی یک فهرست را باید در دو جا داشته باشی؛ مثلا نام حالت‌های ماشین حالت هم به‌شکل <code>enum</code> هم به‌شکل رشته برای لاگ. اگر دو فهرست جدا بنویسی، روزی یکی را عوض می‌کنی و دیگری یادت می‌رود. راه‌حل <b>X-macro</b> (<span class="term" data-t="xmacro">X-macro</span>) است: فهرست را فقط یک‌بار بنویس و به ماکرو بگو هر ردیف را چطور بسازد.</p>
+
+<div class="code" data-file="xmacro.c" data-lang="c" data-verify="host" id="code10">
+<pre>
+#include &lt;stdio.h&gt;
+
+#define STATE_LIST(X) \
+    X(IDLE)           \
+    X(SAMPLING)       \
+    X(ALARM)
+
+#define AS_ENUM(name)   STATE_##name,
+#define AS_TEXT(name)   #name,
+
+enum state { STATE_LIST(AS_ENUM) STATE_COUNT };
+
+static const char *const state_name[] = { STATE_LIST(AS_TEXT) };
+
+int main(void)
+{
+    for (int s = 0; s &lt; STATE_COUNT; s++) {
+        printf("%d = %s\n", s, state_name[s]);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code10">
+  <li data-lines="3-6"><b class="what">فهرست یکتا.</b> <code>STATE_LIST</code> ماکرویی است که یک ماکروی دیگر (<code>X</code>) را می‌گیرد و برای هر حالت صدایش می‌زند. آخر خط‌ها <code>\</code> یعنی «ادامهٔ همین خط در خط بعد».
+    <span class="why">فهرست حالت‌ها فقط همین‌جاست. حالت جدید بخواهی، فقط یک خط اضافه می‌کنی.</span></li>
+  <li data-lines="8-9"><b class="what">دو دستور کار.</b> <code>AS_ENUM</code> از هر نام، <code>STATE_نام,</code> می‌سازد. <code>AS_TEXT</code> از هر نام، رشتهٔ <code>"نام",</code> می‌سازد.</li>
+  <li data-lines="11-13"><b class="what">استفاده دو بار.</b> یک بار فهرست را با <code>AS_ENUM</code> باز می‌کنیم و می‌شود <code>STATE_IDLE, STATE_SAMPLING, STATE_ALARM,</code> و یک بار با <code>AS_TEXT</code> و می‌شود <code>"IDLE", "SAMPLING", "ALARM",</code>. آخرین عضو <code>STATE_COUNT</code> تعداد حالت‌ها را می‌دهد.
+    <span class="why">اندیس آرایهٔ اسم‌ها و مقدار enum همیشه هم‌ترتیب‌اند، چون از یک فهرست ساخته شده‌اند. در درس <a href="4-6.html">۴.۶</a> (ماشین حالت) از همین ترفند استفاده می‌کنیم.</span></li>
+  <li data-lines="17-19"><b class="what">چاپ.</b> حلقه از صفر تا تعداد حالت‌ها می‌رود و اسم هر حالت را چاپ می‌کند.</li>
+</ol>
+<pre class="term" data-from="xmacro.c">
+$ ./xmacro
+0 = IDLE
+1 = SAMPLING
+2 = ALARM
+</pre>
+
+<h3 id="sa"><code>_Static_assert</code>: بررسی شرط هنگام کامپایل</h3>
+<p><code>_Static_assert(شرط, "پیام")</code> در C11 شرطی را <b>در زمان کامپایل</b> می‌سنجد. اگر نادرست بود، ساخت متوقف می‌شود. از ماکرو نیست، ولی همان‌جا استفاده می‌شود که ماکروها: اطمینان از فرضیات سخت‌افزاری قبل از اینکه کد روی برد برود. مثلا «این ساختار باید ۵ بایت باشد چون پروتکل ۵ بایتی است»:</p>
+
+<div class="code" data-file="sa.c" data-lang="c" data-verify="host-fail" id="code11">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+struct packet {
+    uint8_t  id;
+    uint32_t value;
+};
+
+_Static_assert(sizeof(uint32_t) == 4, "uint32_t must be 4 bytes");
+_Static_assert(sizeof(struct packet) == 5, "packet must be 5 bytes");
+
+int main(void)
+{
+    printf("ok\n");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code11">
+  <li data-lines="4-7"><b class="what">ساختار با padding.</b> یک بایت <code>id</code> و ۴ بایت <code>value</code>. ولی از درس <a href="3-4.html">۳.۴</a> می‌دانی کامپایلر بعد از <code>id</code> سه بایت خالی (padding) می‌گذارد تا <code>value</code> هم‌تراز شود؛ پس اندازه ۸ است، نه ۵.</li>
+  <li data-lines="9"><b class="what">شرط درست.</b> <code>uint32_t</code> همیشه ۴ بایت است؛ این خط بی‌صدا رد می‌شود.</li>
+  <li data-lines="10"><b class="what">شرط نادرست.</b> <code>sizeof(struct packet)</code> برابر ۸ است. ساخت با پیام خودمان می‌ایستد.
+    <span class="why">اگر این بررسی نبود، پروتکل با بایت‌های اضافی می‌فرستادی و دنبال باگ ارتباط می‌گشتی. حالا کامپایلر همان لحظه می‌گوید.</span></li>
+</ol>
+<pre class="term" data-kind="err" data-from="sa.c">
+sa.c:10:1: error: static assertion failed: "packet must be 5 bytes"
+</pre>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: ماکرو در مقابل کامپایلر، چه کسی زودتر است؟</div>
+<p>ترتیب کار: ۱) پیش‌پردازنده (ماکروها، <code>#if</code>، <code>#include</code>)، ۲) کامپایلر (نوع، <code>sizeof</code>، <code>_Static_assert</code>)، ۳) لینکر. در <code>#if</code> نمی‌توانی <code>sizeof(int)</code> بنویسی، چون در مرحلهٔ ۱ هنوز کسی نوع‌ها را نمی‌شناسد. برای همین <code>_Static_assert</code> که در مرحلهٔ ۲ است، جای درست برای بررسی اندازهٔ نوع‌هاست.</p></div>
+
+<h2 id="embedded">در STM32 و ESP32: ماکرو کجا به کار می‌آید؟</h2>
+<p>ماکرو در دنیای embedded بسیار پرکاربرد است، به‌خصوص برای سه کار:</p>
+<ol class="steps">
+  <li><b>اسم دادن به آدرس‌ها و بیت‌ها.</b> به‌جای <code>*(volatile uint32_t *)0x40020018 = 0x20</code> می‌نویسی <code>GPIOA_BSRR = BIT(LED_PIN)</code>.</li>
+  <li><b>پیکربندی برد.</b> پایه‌ها، کلاک، اندازهٔ بافر‌ها یک‌جا در یک هدر <code>board.h</code>.</li>
+  <li><b>لاگ و دیباگ شرطی.</b> در نسخهٔ نهایی هیچ کدی تولید نمی‌کنند.</li>
+</ol>
+<p>این‌جا نمونهٔ اولی را می‌بینی: همان LED درس <a href="3-6.html">۳.۶</a> (PA5 روی Nucleo-F411RE) با ماکروهای خوانا. هر خط را با آدرس‌های درس ۳.۶ مقایسه کن؛ چیز تازه‌ای نیست، فقط اسم‌گذاری شده است.</p>
+
+<div class="code" data-file="led_macros.c" data-lang="c" data-verify="arm" id="code12">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define BIT(n)          (1UL &lt;&lt; (n))
+#define REG32(addr)     (*(volatile uint32_t *)(addr))
+
+#define RCC_AHB1ENR     REG32(0x40023830UL)
+#define GPIOA_BASE      0x40020000UL
+#define GPIOA_MODER     REG32(GPIOA_BASE + 0x00UL)
+#define GPIOA_BSRR      REG32(GPIOA_BASE + 0x18UL)
+
+#define LED_PIN         5U
+#define LED_ON()        (GPIOA_BSRR = BIT(LED_PIN))
+#define LED_OFF()       (GPIOA_BSRR = BIT(LED_PIN + 16U))
+
+void led_init(void)
+{
+    RCC_AHB1ENR |= BIT(0);
+    GPIOA_MODER &amp;= ~(3UL &lt;&lt; (LED_PIN * 2U));
+    GPIOA_MODER |= (1UL &lt;&lt; (LED_PIN * 2U));
+}
+
+void led_blink_once(void)
+{
+    LED_ON();
+    LED_OFF();
+}
+</pre></div>
+<ol class="walk" data-for="code12">
+  <li data-lines="3"><b class="what">BIT(n).</b> عدد یک را <code>n</code> خانه به چپ می‌برد، یعنی فقط بیت شمارهٔ <code>n</code> روشن است (درس <a href="3-1.html">۳.۱</a>). <code>1UL</code> یعنی عدد بی‌علامت ۳۲ بیتی؛ با <code>1</code> ساده و <code>n = 31</code> رفتار تعریف‌نشده می‌گرفتی.
+    <span class="why">پرانتز دور <code>n</code> و دور کل عبارت؛ همان قاعدهٔ تلهٔ ۱.</span></li>
+  <li data-lines="4"><b class="what">REG32(addr).</b> عدد <code>addr</code> را به اشاره‌گر به <code>volatile uint32_t</code> تبدیل و بلافاصله <code>*</code> می‌زند: یعنی «خودِ رجیستر در آن آدرس» (درس <a href="3-6.html">۳.۶</a>). چون ماکرو است، هم می‌شود در آن نوشت (<code>= ...</code>) و هم خواند.</li>
+  <li data-lines="6-9"><b class="what">اسم‌های رجیستر.</b> <code>RCC_AHB1ENR</code> در آدرس <code>0x40023830</code> (پایهٔ RCC <code>0x40023800</code> + آفست <code>0x30</code>). <code>GPIOA_MODER</code> آفست ۰ و <code>GPIOA_BSRR</code> آفست <code>0x18</code> از پایهٔ <code>0x40020000</code> است.</li>
+  <li data-lines="11-13"><b class="what">LED_PIN و ماکروهای روشن/خاموش.</b> نوشتن بیت ۵ در BSRR پایه را ۱ می‌کند. بیت ۲۱ (۵ + ۱۶) آن را صفر می‌کند.
+    <span class="why">چون خودش به‌شکل «تابع بدون پارامتر» نوشته شده (<code>LED_ON()</code>)، در کد خوانا است، و اگر بعدا خواستی به تابع واقعی تبدیل کنی، جای فراخوانی‌ها عوض نمی‌شود.</span></li>
+  <li data-lines="15-20"><b class="what">راه‌اندازی.</b> ساعت GPIOA را روشن می‌کند (بیت ۰ RCC_AHB1ENR) و بیت‌های ۱۰ و ۱۱ MODER را طوری می‌گذارد که <code>01</code> (خروجی) شود.</li>
+  <li data-lines="22-26"><b class="what">یک چشمک.</b> خوانایی کد نسبت به آدرس‌های خام قابل مقایسه نیست.</li>
+</ol>
+<p>خودت با رجیستر بازی کن. روی بیت‌ها بزن و ببین <code>BIT(5)</code> چه عددی می‌دهد:</p>
+<div class="widget" data-w="bits" data-width="16" data-reg="GPIOA_ODR" data-title="BIT(5) فقط بیت ۵ را روشن می‌کند" data-fields='[{"name":"PIN5 (LED)","hi":5,"lo":5}]'></div>
+
+<p>در ESP32 (ESP-IDF) رجیستر را مستقیم نمی‌نویسی و از تابع‌های درایور استفاده می‌کنی. اما ماکرو همان‌جا هم هست: پیکربندی تراشه و برد با ماکروهایی که سیستم ساخت (<code>menuconfig</code>) از تنظیمات تو می‌سازد، به شکل <code>CONFIG_...</code> و در ادامهٔ هدرها. نمونه: انتخاب پایهٔ LED بسته به تراشه.</p>
+
+<div class="code" data-file="blink_pin.c" data-lang="c" data-verify="frag" id="code13">
+<pre>
+#include "driver/gpio.h"
+
+#if CONFIG_IDF_TARGET_ESP32
+#define BLINK_GPIO  GPIO_NUM_2
+#else
+#error "Set BLINK_GPIO for this chip"
+#endif
+
+static void led_init(void)
+{
+    gpio_reset_pin(BLINK_GPIO);
+    gpio_set_direction(BLINK_GPIO, GPIO_MODE_OUTPUT);
+}
+</pre></div>
+<ol class="walk" data-for="code13">
+  <li data-lines="3-7"><b class="what">انتخاب پایه بر اساس تراشه.</b> <code>CONFIG_IDF_TARGET_ESP32</code> را سیستم ساخت ESP-IDF برای ESP32 کلاسیک تعریف می‌کند. برای تراشه‌های دیگر خطای واضح می‌دهیم تا پایه اشتباه نماند.
+    <span class="why">این نمونه فقط برای نمایش الگو است و در محیط این درس کامپایل نمی‌شود؛ جزئیات در مستندات رسمی ESP-IDF و درس <a href="5-6.html">۵.۶</a>.</span></li>
+  <li data-lines="9-13"><b class="what">استفاده.</b> بقیهٔ کد فقط <code>BLINK_GPIO</code> را می‌شناسد و به تراشه کاری ندارد.</li>
+</ol>
+
+<h3 id="magic">عدد جادویی و ماکرو</h3>
+<p>عدد «جادویی» (<span class="term" data-t="magicnumber">magic number</span>) عددی است که در کد ظاهر می‌شود و معنایش معلوم نیست. مثلا <code>if (adc &gt; 3722)</code>. شش ماه بعد کسی نمی‌داند ۳۷۲۲ چیست. با <code>#define ADC_ALARM_LEVEL 3722</code> اسم و یک مکان برای تغییر داری. هر عدد مهم را یک‌جا و با اسم معنی‌دار (و واحد، مثل درس <a href="2-1.html">۲.۱</a>) بنویس.</p>
+
+<div class="callout warn"><div class="ct">خطا در ماکروی سخت‌افزار: ثابت‌ها را <code>UL</code> بنویس</div>
+<p>در <code>#define GPIOA_BASE 0x40020000</code> عدد به‌عنوان <code>int</code> یا <code>unsigned int</code> یا <code>long</code> تفسیر می‌شود که به کامپایلر بستگی دارد. با پسوند <code>UL</code> صریح می‌گویی «بی‌علامت و ۳۲ بیت یا بیشتر». در محاسبهٔ آدرس و بیت، ابهام نوع باگ‌های پنهان می‌سازد (درس <a href="2-2.html">۲.۲</a>).</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">با <code>#define SQUARE_BAD(x) x * x</code> و <code>int n = 3;</code> عبارت <code>SQUARE_BAD(n + 1)</code> چه عددی می‌دهد؟</p>
+  <ol>
+    <li data-why="۱۶ جواب تابع معمولی یا ماکروی با پرانتز است. این ماکرو پرانتز ندارد و متن را همان‌طور کپی می‌کند.">۱۶</li>
+    <li>۷</li>
+    <li data-why="۹ برای x*x با x=3 می‌شد؛ ولی آرگومان n + 1 است و متنش کپی می‌شود.">۹</li>
+    <li data-why="کامپایل درست است؛ n + 1 * n + 1 یک عبارت معتبر است و خطایی ندارد. اشکال، نتیجهٔ اشتباه است.">خطای کامپایل می‌دهد</li>
+  </ol>
+  <div class="fb">متن می‌شود <code>n + 1 * n + 1</code>. ضرب قبل از جمع است: ۳ + (۱×۳) + ۱ = ۷. برای همین پرانتز دور هر پارامتر لازم است.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">پیش‌پردازنده دقیقا چه کاری با کد انجام می‌دهد؟</p>
+  <ol>
+    <li data-why="بررسی نوع کار کامپایلر است. پیش‌پردازنده اصلا نوع نمی‌شناسد.">نوع متغیرها را می‌سنجد و خطای نوع را پیدا می‌کند</li>
+    <li data-why="ترجمه به کد ماشین کار کامپایلر و اسمبلر است، نه پیش‌پردازنده.">کد C را به کد ماشین تبدیل می‌کند</li>
+    <li>فقط متن برنامه را با <code>#include</code>، <code>#define</code> و <code>#if</code> ویرایش می‌کند و به کامپایلر می‌دهد</li>
+    <li data-why="اتصال فایل‌ها کار لینکر است و در آخرین مرحله انجام می‌شود، نه اولین.">فایل‌های شیء را به هم وصل می‌کند</li>
+  </ol>
+  <div class="fb">پیش‌پردازنده فقط متن را عوض می‌کند: چسباندن، جایگزینی، حذف. هر چیز دیگری (نوع، ترجمه، اتصال) مرحلهٔ بعد است.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">کدام خط باعث خطا در <code>if (t &gt; LIMIT)</code> می‌شود؟</p>
+  <ol>
+    <li><code>#define LIMIT 100;</code></li>
+    <li data-why="این تعریف درست است؛ نقطه‌ویرگول ندارد و متن جایگزین 100 است."><code>#define LIMIT 100</code></li>
+    <li data-why="این هم درست است؛ پرانتز اضافی مشکلی نمی‌سازد."><code>#define LIMIT (100)</code></li>
+    <li data-why="پسوند U مشکلی نمی‌سازد؛ فقط عدد را بی‌علامت می‌کند."><code>#define LIMIT 100U</code></li>
+  </ol>
+  <div class="fb">نقطه‌ویرگول جزو متن جایگزین می‌شود: <code>if (t &gt; 100;)</code> که معتبر نیست. در ماکروی ثابت هرگز <code>;</code> نگذار.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">include guard برای چه کاری است؟</p>
+  <ol>
+    <li data-why="سرعت کامپایل فرق چندانی نمی‌کند؛ هدف اصلی جلوگیری از خطاست.">تا هدر سریع‌تر خوانده شود</li>
+    <li data-why="RAM و Flash با هدر تغییر نمی‌کند؛ هدر فقط اعلان دارد.">تا هدر در حافظهٔ میکروکنترلر جا نگیرد</li>
+    <li data-why="محافظت در برابر خواندن یا دسترسی نیست؛ ربطی به امنیت ندارد.">تا فایل دیگران نتوانند هدر را ببینند</li>
+    <li>تا اگر هدر چند بار وارد شد، محتوایش فقط یک بار در فایل بنشیند</li>
+  </ol>
+  <div class="fb">بار اول ماکروی guard تعریف می‌شود؛ بار بعد <code>#ifndef</code> نادرست است و کل محتوا پرش می‌شود. اگر نبود، <code>struct</code> دو بار تعریف می‌شد و کامپایلر خطای redefinition می‌داد.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">در پروژه‌ای برای دو برد، <code>#ifdef DEBUG</code> با یک <code>LOG(...)</code> نوشته‌ای. اگر <code>DEBUG</code> تعریف <b>نشود</b>، نسخهٔ نهایی روی برد چه می‌شود؟</p>
+  <ol>
+    <li data-why="نه، پیش‌پردازنده این کد را کاملا حذف می‌کند؛ نه اجرا می‌شود و نه شرطی است.">کد لاگ در Flash هست ولی اجرا نمی‌شود</li>
+    <li data-why="خطا نمی‌دهد. حالت غیر debug مسیر عادی است و باید بدون خطا کامپایل شود.">کامپایل با خطا تمام می‌شود</li>
+    <li>کد لاگ اصلا در فایل ماشین نیست و هیچ حجمی نمی‌گیرد</li>
+    <li data-why="لاگ چاپ نمی‌شود؛ ماکرو به ((void)0) تبدیل شده که کاری نمی‌کند.">لاگ چاپ می‌شود ولی کندتر</li>
+  </ol>
+  <div class="fb">شاخهٔ غیرفعال پیش از کامپایلر پاک می‌شود. پس روی MCU با Flash کوچک، لاگ‌های debug در نسخهٔ نهایی هیچ هزینه‌ای ندارند.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">با ماکروی <code>MAX(a, b) ((a) &gt; (b) ? (a) : (b))</code> و مقدارهای <code>x = 5</code>، <code>y = 5</code>، بعد از <code>int m = MAX(x, y++);</code> مقدارِ <code>y</code> چند است؟</p>
+  <ol>
+    <li data-why="این جواب فرض می‌کند y++ فقط یک بار اجرا می‌شود؛ ولی ماکرو متن آرگومان را دو بار کپی می‌کند.">۶</li>
+    <li>۷</li>
+    <li data-why="مقدار y با y++ عوض می‌شود؛ ثابت نمی‌ماند.">۵</li>
+    <li data-why="۸ اگر سه بار افزایش می‌یافت می‌شد؛ اینجا دو بار اجرا می‌شود.">۸</li>
+  </ol>
+  <div class="fb"><code>y++</code> در مقایسه و در شاخهٔ دوم هر دو اجرا می‌شود: y از ۵ به ۶ و بعد ۷ می‌رسد و <code>m</code> برابر ۶ می‌ماند. برای همین اثر جانبی داخل آرگومان ماکرو ممنوع است.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: ماکروهای MIN، MAX و CLAMP</div>
+<p>می‌خواهیم ماکروهای <code>MIN</code>، <code>MAX</code> و <code>CLAMP(v, lo, hi)</code> را بنویسیم که مقدار را در بازهٔ <code>[lo, hi]</code> نگه می‌دارد. سپس با یک ماکروی ناقص مقایسه می‌کنیم.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> با <code>#define DOUBLE_BAD(x) x * 2</code>، عبارت <code>DOUBLE_BAD(3 + 1)</code> چه عددی می‌دهد؟ (اول حدس بزن.)</li>
+  <li><b>حل:</b> <code>DOUBLE</code> درست را با پرانتز بنویس و هر دو را چاپ کن.</li>
+  <li><b>چالش:</b> <code>CLAMP</code> را با ترکیب <code>MIN</code> و <code>MAX</code> بنویس و با سه ورودی <code>-5</code>، <code>50</code>، <code>250</code> و بازهٔ <code>[0, 100]</code> امتحان کن.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>برای CLAMP اول <code>MAX(v, lo)</code> را بگیر (پایین‌تر از lo نشود) و نتیجه را با <code>MIN(..., hi)</code> کوچک‌تر کن. پرانتز دور همه چیز.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="ex1.c">
+$ ./ex1
+bad    = 5
+good   = 8
+clamp  = 0 50 100
+</pre>
+<p>جواب قسمت الف: <code>3 + 1 * 2</code> = ۵، نه ۸.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="ex1.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stdio.h&gt;
+
+#define MIN(a, b)         ((a) &lt; (b) ? (a) : (b))
+#define MAX(a, b)         ((a) &gt; (b) ? (a) : (b))
+#define CLAMP(v, lo, hi)  MIN(MAX((v), (lo)), (hi))
+#define DOUBLE_BAD(x)     x * 2
+#define DOUBLE(x)         ((x) * 2)
+
+int main(void)
+{
+    printf("bad    = %d\n", DOUBLE_BAD(3 + 1));
+    printf("good   = %d\n", DOUBLE(3 + 1));
+    printf("clamp  = %d %d %d\n", CLAMP(-5, 0, 100), CLAMP(50, 0, 100), CLAMP(250, 0, 100));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="3-4"><b class="what">MIN و MAX.</b> پرانتز دور هر پارامتر و دور کل عبارت.</li>
+  <li data-lines="5"><b class="what">CLAMP از ترکیب.</b> اول با MAX از پایین محدود می‌شود و بعد با MIN از بالا. هر کدام از پارامترها با پرانتز پوشیده شده‌اند.
+    <span class="why">هر پارامتر (<code>v</code>، <code>lo</code>، <code>hi</code>) فقط یک بار در ماکروی بیرونی می‌آید، ولی در MAX و MIN هر کدام دو بار کپی می‌شود. پس آرگومان‌ها را بدون اثر جانبی بده.</span></li>
+  <li data-lines="6-7"><b class="what">DOUBLE.</b> نسخهٔ بد <code>3 + 1 * 2</code> می‌شود و نسخهٔ خوب <code>((3 + 1) * 2)</code>.</li>
+  <li data-lines="11-13"><b class="what">چاپ.</b> عدد ۵ و ۸ و سه نتیجه از CLAMP.</li>
+</ol>
+<pre class="term" data-from="ex1.c">
+$ ./ex1
+bad    = 5
+good   = 8
+clamp  = 0 50 100
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: باگ را در ماکروها پیدا کن</div>
+<p>این هدر چهار مشکل دارد. هر کدام را پیدا کن و نسخهٔ درست را بنویس:</p>
+<div class="code" data-lang="c" id="ex2bad"><pre>
+#define BUFFER_SIZE 64;
+#define AVG(a, b) a + b / 2
+#define STOP_MOTOR() motor_off(); led_off();
+
+struct config { int id; };
+</pre></div>
+<ol class="parts">
+  <li>مشکل <code>BUFFER_SIZE</code> چیست و آرایهٔ <code>uint8_t buf[BUFFER_SIZE];</code> چه می‌شود؟</li>
+  <li>چرا <code>AVG(4, 8)</code> عدد ۶ نمی‌دهد؟ (عددی که می‌دهد چیست؟)</li>
+  <li>در <code>if (fault) STOP_MOTOR();</code> چه چیزی درست کار نمی‌کند؟ و برای هدر، چه چیزی جا افتاده است که اگر این فایل از دو جا وارد شود خطا می‌دهد؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>مورد اول: تلهٔ نقطه‌ویرگول. دوم: پرانتز دور پارامتر و کل. سوم: <code>do { } while (0)</code>. و برای <code>struct</code>: include guard.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="ex2.c">
+$ ./ex2
+avg=6
+motor_off led_off
+buf=64
+</pre>
+<p>با نسخهٔ خراب: <code>AVG(4, 8)</code> برابر <code>4 + 8 / 2</code> یعنی ۸ می‌شود؛ و <code>led_off()</code> حتی وقتی <code>fault</code> نیست هم اجرا می‌شود.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="table-wrap"><table><thead><tr><th>بخش</th><th>مشکل</th><th>اصلاح</th></tr></thead><tbody>
+<tr><td>الف</td><td>نقطه‌ویرگول جزو ماکرو شده؛ <code>uint8_t buf[64;];</code> خطای نوشتاری می‌دهد</td><td><code>#define BUFFER_SIZE 64</code></td></tr>
+<tr><td>ب</td><td>پرانتز ندارد: <code>4 + 8 / 2</code> = ۸</td><td><code>#define AVG(a, b) (((a) + (b)) / 2)</code></td></tr>
+<tr><td>پ</td><td>دو دستور بدون بلوک؛ <code>led_off()</code> از <code>if</code> بیرون می‌افتد. هدر هم guard ندارد</td><td><code>do { ... } while (0)</code> و <code>#ifndef CONFIG_H ... #endif</code></td></tr>
+</tbody></table></div>
+<div class="code" data-file="ex2.c" data-lang="c" data-verify="host" id="ex2">
+<pre>
+#include &lt;stdio.h&gt;
+
+#define BUFFER_SIZE 64
+#define AVG(a, b) (((a) + (b)) / 2)
+
+static void motor_off(void) { printf("motor_off "); }
+static void led_off(void) { printf("led_off\n"); }
+
+#define STOP_MOTOR() do { motor_off(); led_off(); } while (0)
+
+int main(void)
+{
+    int fault = 1;
+    unsigned char buf[BUFFER_SIZE];
+
+    printf("avg=%d\n", AVG(4, 8));
+    if (fault)
+        STOP_MOTOR();
+    else
+        printf("running\n");
+    printf("buf=%zu\n", sizeof(buf));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="3"><b class="what">ثابت بدون ;.</b> <code>unsigned char buf[64]</code> می‌شود.</li>
+  <li data-lines="4"><b class="what">AVG با پرانتز.</b> حالا <code>(((4) + (8)) / 2)</code> = ۶.</li>
+  <li data-lines="6-7"><b class="what">دو تابع کمکی.</b> برای نمایش اینکه هر کدام اجرا شد.</li>
+  <li data-lines="9"><b class="what">STOP_MOTOR درست.</b> هر دو دستور داخل یک بلوک و ماکرو مثل یک دستور رفتار می‌کند.
+    <span class="why">شرط <code>if (fault)</code> حالا هر دو تابع را کنترل می‌کند و <code>else</code> جفت دارد.</span></li>
+  <li data-lines="16-21"><b class="what">مصرف‌ها.</b> ورودی <code>fault = 1</code> است پس هر دو تابع اجرا می‌شود.</li>
+</ol>
+<pre class="term" data-from="ex2.c">
+$ ./ex2
+avg=6
+motor_off led_off
+buf=64
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: ماکروهای بیت برای رجیستر شبیه‌سازی‌شده</div>
+<p>روی PC رجیستر واقعی نداریم؛ پس یک متغیر <code>uint32_t fake_odr</code> را شبیهٔ رجیستر <code>GPIOA_ODR</code> می‌گیریم. ماکروهایی بساز که بیت را روشن/خاموش/برعکس کند.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> اگر رجیستر صفر باشد و <code>SET_BIT(fake_odr, 5)</code> بزنیم، مقدارش (به hex) چیست؟ (کمک: درس <a href="3-1.html">۳.۱</a>)</li>
+  <li><b>حل:</b> ماکروهای <code>SET_BIT</code>، <code>CLR_BIT</code>، <code>TOGGLE_BIT</code> و <code>TEST_BIT</code> را با کمک <code>BIT(n)</code> بنویس و نتیجه را چاپ کن.</li>
+  <li><b>ارتباط با سخت‌افزار:</b> عددی که باید در BSRR بنویسی تا پایه ۵ <b>خاموش</b> شود چیست؟ (BSRR: بیت‌های ۱۶ تا ۳۱ باعث reset می‌شوند.) چاپ کن.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>ماسک را با <code>BIT(n)</code> بساز. روشن: <code>|=</code>. خاموش: <code>&amp;= ~</code>. برعکس: <code>^=</code>. آزمون: شیفت به راست و <code>&amp; 1</code>. برای BSRR: <code>BIT(5 + 16)</code>.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="ex3.c">
+$ ./ex3
+after set    : 0x0020
+after toggle : 0x0000
+final        : 0x0020, led=1
+BSRR off     : 0x00200000
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="ex3.c" data-lang="c" data-verify="host" id="ex3">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+#define BIT(n)            (1UL &lt;&lt; (n))
+#define SET_BIT(r, n)     ((r) |= BIT(n))
+#define CLR_BIT(r, n)     ((r) &amp;= ~BIT(n))
+#define TOGGLE_BIT(r, n)  ((r) ^= BIT(n))
+#define TEST_BIT(r, n)    (((r) &gt;&gt; (n)) &amp; 1UL)
+
+#define LED_PIN 5U
+
+static uint32_t fake_odr = 0;
+
+int main(void)
+{
+    SET_BIT(fake_odr, LED_PIN);
+    printf("after set    : 0x%04lX\n", (unsigned long)fake_odr);
+    TOGGLE_BIT(fake_odr, LED_PIN);
+    printf("after toggle : 0x%04lX\n", (unsigned long)fake_odr);
+    SET_BIT(fake_odr, 0);
+    SET_BIT(fake_odr, LED_PIN);
+    CLR_BIT(fake_odr, 0);
+    printf("final        : 0x%04lX, led=%lu\n", (unsigned long)fake_odr, TEST_BIT(fake_odr, LED_PIN));
+    printf("BSRR off     : 0x%08lX\n", BIT(LED_PIN + 16U));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="4-8"><b class="what">پنج ماکرو.</b> هر کدام فقط <code>BIT(n)</code> را به‌کار می‌برد. <code>r</code> و <code>n</code> هر دو در پرانتزند.
+    <span class="why">آرگومان <code>r</code> در این ماکروها فقط یک‌بار در متن می‌آید، پس <code>SET_BIT(reg++, 1)</code> نامعتبر است ولی <code>SET_BIT(reg, i)</code> امن است.</span></li>
+  <li data-lines="10"><b class="what">پایه LED.</b> شمارهٔ پایه یک‌جا و با اسم.</li>
+  <li data-lines="12"><b class="what">رجیستر ساختگی.</b> یک متغیر ۳۲ بیتی است؛ روی MCU همین ماکروها روی رجیستر <code>volatile</code> کار می‌کنند.</li>
+  <li data-lines="16-19"><b class="what">روشن و برعکس.</b> <code>0x0020</code> = بیت ۵. بعد از toggle دوباره صفر.</li>
+  <li data-lines="20-23"><b class="what">ترکیب و آزمون.</b> بیت ۰ را روشن و خاموش می‌کنیم و بیت ۵ را دوباره روشن؛ در نهایت فقط بیت ۵ است.</li>
+  <li data-lines="24"><b class="what">مقدار BSRR برای خاموش.</b> <code>BIT(5 + 16)</code> = <code>0x00200000</code>. نوشتن این عدد در BSRR پایه ۵ را صفر می‌کند.</li>
+</ol>
+<pre class="term" data-from="ex3.c">
+$ ./ex3
+after set    : 0x0020
+after toggle : 0x0000
+final        : 0x0020, led=1
+BSRR off     : 0x00200000
+</pre></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>ماکرو وسوسه‌انگیز است، چون کوتاه و سریع می‌نویسی و «هر جا کار می‌کند». مبتدی‌ها معمولا دو جا گیر می‌کنند: اول <b>پرانتزها</b> (ماکرو بدون پرانتز درست کار می‌کند تا روزی که یک عبارت مرکب را به آن بدهی) و دوم <b>پیام خطای ماکرو</b> که به خط مصرف اشاره می‌کند، نه تعریف. یادت باشد <code>gcc -E</code> را بزنی و خروجی را ببینی. یک قاعدهٔ ساده: اگر تابع <code>static inline</code> کار را انجام می‌دهد، تابع بنویس. ماکرو را برای کارهایی نگه دار که فقط ماکرو می‌تواند: ثابت زمان کامپایل، کامپایل شرطی و ساختن اسم.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li>پیش‌پردازنده اولین ایستگاه ساخت است و <b>فقط متن</b> را ویرایش می‌کند: <code>#include</code> می‌چسباند، <code>#define</code> جایگزین می‌کند، <code>#if</code> تکه‌ای را نگه می‌دارد یا دور می‌اندازد. نتیجه را با <code>gcc -E</code> ببین.</li>
+  <li>ثابت‌های ماکرو بدون <code>;</code> و بدون نوع‌اند. ثابت با نوع را با <code>const</code> بساز و حالت‌ها را با <code>enum</code>.</li>
+  <li>ماکروی تابع‌مانند: پرانتز دور هر پارامتر و دور کل؛ آرگومان با اثر جانبی (<code>x++</code>) ممنوع؛ چند دستور را در <code>do { } while (0)</code> بپیچ؛ اگر می‌شود <code>static inline</code> بنویس.</li>
+  <li>کامپایل شرطی: <code>#if</code>، <code>#ifdef</code>، <code>#elif</code>، <code>#error</code> و <code>-D</code>. یک کد برای چند برد، و لاگ debug که در نسخهٔ نهایی هیچ حجمی نمی‌گیرد.</li>
+  <li>هر <code>.h</code> باید include guard داشته باشد.</li>
+  <li><code>#</code> رشته می‌سازد، <code>##</code> اسم می‌چسباند، X-macro یک فهرست را دو جا می‌کارد، <code>_Static_assert</code> فرضیات را هنگام کامپایل می‌سنجد.</li>
+  <li>در MCU: ماکرو برای <code>BIT(n)</code>، <code>REG32(addr)</code>، اسم رجیستر و پیکربندی برد. ثابت‌های سخت‌افزار را با <code>UL</code> بنویس.</li>
+</ul>
+<p>درس بعد: <a href="4-2.html">۴.۲ پروژهٔ چندفایلی: header، extern و build</a>.</p></div>
+
+</article>
+</body>
+</html>
