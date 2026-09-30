@@ -104,10 +104,10 @@ static void test_table_of_scenarios(void)
         { "1110001110",  2, 1 },
     };
     for (unsigned r = 0; r < (sizeof(rows) / sizeof(rows[0])); r++) {
-        char msg[64];
         setUp();
         feed(rows[r].pattern);
         if ((presses != rows[r].presses) || (releases != rows[r].releases)) {
+            char msg[64];
             (void)snprintf(msg, sizeof(msg), "row %u \"%s\": presses=%u releases=%u",
                            r, rows[r].pattern, presses, releases);
             TEST_FAIL_MESSAGE(msg);
