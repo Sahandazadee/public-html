@@ -1,0 +1,1768 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>تست واحد روی PC · C برای میکروکنترلر</title>
+<meta name="description" content="چطور کد میکروکنترلر را روی PC تست کنیم: مینی‌فریم‌ورک به سبک Unity، بافر حلقوی و ماشین حالت، mock با اشاره‌گر تابع، پوشش با gcov و نمونهٔ CI.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="6-4">
+
+<p class="lede">تا حالا هر بار کدی نوشتی، برد را فلش کرده‌ای و با چشم نگاه کرده‌ای «درست کار می‌کند؟». این روش برای پنج خط کد خوب است، ولی برای هزار خط، مثل چک‌کردن پل با راه‌رفتن روی آن است. در این درس یاد می‌گیری کد میکروکنترلر را <b>روی رایانهٔ خودت، در چند میلی‌ثانیه و بدون هیچ سخت‌افزاری</b> تست کنی: یک فریم‌ورک کوچک می‌نویسیم، بافر حلقوی و ماشین حالت درس‌های قبل را با آن می‌آزماییم، سخت‌افزار را با «مانکن آزمایش تصادف» (mock) جایگزین می‌کنیم و در آخر می‌بینیم تست‌ها چقدر از کد را دیده‌اند.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>بگویی چرا بیشتر منطق برنامهٔ MCU را باید روی PC تست کرد و چه چیزهایی را نمی‌شود</li>
+    <li>یک هدر تست به سبک Unity بنویسی و بفهمی <code>TEST_ASSERT_...</code> و <code>RUN_TEST</code> زیر کاپوت چه می‌کنند</li>
+    <li>تست را با الگوی «آماده‌کن ← اجرا کن ← بسنج» (AAA) و با اسم‌های گویا بنویسی</li>
+    <li>با روش TDD یک تابع کوچک را «قرمز ← سبز ← مرتب» بسازی</li>
+    <li>بافر حلقوی و ماشین حالت debounce را تست کنی، از جمله مرزها و سرریز شمارنده</li>
+    <li>وابستگی سخت‌افزاری را با اشاره‌گر تابع یا پیوند جایگزین کنی (fake، stub، mock)</li>
+    <li>با <code>gcov</code> پوشش تست را بخوانی و یک فایل CI ساده بنویسی</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس‌های <a href="4-5.html">۴.۵</a> (بافر حلقوی) و <a href="4-6.html">۴.۶</a> (ماشین حالت): همان کدها را اینجا تست می‌کنیم</li>
+    <li>درس <a href="4-3.html">۴.۳</a> (اشاره‌گر به تابع) و <a href="4-2.html">۴.۲</a> (پروژهٔ چندفایلی و <code>make</code>)</li>
+    <li>درس <a href="6-3.html">۶.۳</a> (پرچم‌های هشدار) و <a href="6-2.html">۶.۲</a> (رفتار تعریف‌نشده)؛ ASan/UBSan در <a href="6-1.html">۶.۱</a></li>
+    <li><code>gcc</code>، <code>make</code> و <code>gcov</code> روی PC (Linux، macOS، یا WSL/MSYS2 روی Windows)</li>
+    <li>سخت‌افزار لازم نیست</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: قطعه را روی میز آزمایش امتحان کن</h2>
+<p>سازندهٔ ماشین قبل از سوار کردن ترمز روی ماشین، آن را روی یک <b>میز آزمایش</b> می‌گذارد: فشار می‌دهد، گرم می‌کند، ده هزار بار می‌فشارد. اگر ترمز خراب باشد، اینجا می‌فهمد و لازم نیست ماشین را در جاده بشکند. حتی حالت‌هایی را که در جاده خطرناک است (روغن تمام شده) روی میز به‌راحتی می‌سازد.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>در آزمایش تصادف، به‌جای آدم واقعی یک <b>مانکن</b> پشت فرمان می‌نشانند که همه‌جا سنسور دارد. مانکن را می‌شود صدها بار برخورد داد و «اعداد» را خواند. در تست نرم‌افزار هم به‌جای سخت‌افزار واقعی (سنسور، UART) یک مانکن نرم‌افزاری می‌گذاریم که هر جوابی که ما بخواهیم بدهد و ثبت کند چه چیزی از آن خواسته شده است.</p></div>
+
+<p><span class="term" data-t="unittest">تست واحد</span> (unit test) یعنی همین: یک «واحد» کوچک کد (یک تابع یا یک ماژول مثل بافر حلقوی) را جدا از بقیه، با ورودی‌های مشخص اجرا می‌کنیم و خروجی را با جواب درست مقایسه می‌کنیم. هر بار که کد را عوض کنی، همهٔ تست‌ها دوباره در چند ثانیه اجرا می‌شوند و اگر چیزی که قبلا درست کار می‌کرد خراب شود (به این می‌گویند <span class="term" data-t="regression">رگرسیون</span>)، همان لحظه می‌فهمی.</p>
+
+<h2 id="why">چرا روی PC؟ و چه چیزی را نمی‌شود روی PC تست کرد؟</h2>
+<p>کد MCU را روی خودِ برد هم می‌شود تست کرد، ولی هر بار باید کامپایل، فلش، ریست، و خروجی را از UART خواند: دقیقه‌ها. روی PC همان کار چند میلی‌ثانیه است. مزیت‌ها:</p>
+<ul>
+  <li><b>سرعت:</b> صدها تست در یک ثانیه؛ پس هر بار که ذخیره می‌کنی اجرایشان می‌کنی.</li>
+  <li><b>ابزار بهتر:</b> <code>gdb</code>، ASan و UBSan (درس‌های ۶.۱ و ۶.۲)، <code>gcov</code> و <code>valgrind</code> روی PC هست؛ روی MCU ندارید یا سخت است.</li>
+  <li><b>حالت‌های خطا:</b> سنسور خراب، UART که پر شده، بایت ناقص: روی PC یک خط کد است، روی میز کار پیدا کردنش سخت.</li>
+  <li><b>خودکار:</b> بدون سخت‌افزار می‌شود در سرور (CI) هم اجرا کرد، بارها و بی‌خسته.</li>
+</ul>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 330" role="img" aria-label="سه لایهٔ تست به شکل هرم: پایین منطق خالص روی PC با تست‌های بسیار سریع، وسط درایور با mock روی PC، بالا تست روی برد واقعی و HIL با تست‌های کم و کند">
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">هر چیزی را جایی تست کن که ارزان‌تر است</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="250" y="46" width="260" height="76" rx="12" fill="#ff86b3"/>
+    <rect x="140" y="132" width="480" height="76" rx="12" fill="#ffd60a"/>
+    <rect x="30" y="218" width="700" height="76" rx="12" fill="#3ddc97"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle">
+    <text x="380" y="78" font-size="15" font-weight="800">روی برد واقعی و HIL</text>
+    <text x="380" y="102" font-size="12.5">رجیستر، زمان‌بندی، وقفه، پریفرال</text>
+    <text x="380" y="164" font-size="15" font-weight="800">روی PC، با mock به‌جای سخت‌افزار</text>
+    <text x="380" y="188" font-size="12.5">درایور سنسور، پروتکل، منطق ارسال</text>
+    <text x="380" y="250" font-size="15" font-weight="800">روی PC، منطق خالص</text>
+    <text x="380" y="274" font-size="12.5">بافر حلقوی، ماشین حالت، CRC، پارسر، ریاضی</text>
+  </g>
+  <text x="380" y="318" text-anchor="middle" class="s-tx" font-size="13.5">بالا: کم، کند و گران (دقیقه تا ساعت) ← پایین: زیاد، میلی‌ثانیه‌ای و ارزان</text>
+</svg></div>
+<figcaption>بیشتر کد یک پروژهٔ خوب در دو لایهٔ پایین است؛ پس بیشترش روی PC تست می‌شود. فقط ته‌مانده به برد واقعی می‌رسد.</figcaption></figure>
+
+<div class="callout warn"><div class="ct">تست روی PC چه چیزی را نمی‌بیند؟</div>
+<p>PC یک <b>MCU دیگر</b> است: <code>int</code> و اشاره‌گر ۶۴ بیتی، <code>long</code> ۶۴ بیت (درس <a href="2-2.html">۲.۲</a>)، کامپایلر و بهینه‌ساز متفاوت، حافظهٔ فراوان. تست PC نمی‌تواند اثبات کند که رجیستر درست تنظیم شده، زمان‌بندی کافی است، یا وقفه سر وقت می‌آید. راه حل: <b>منطق را از سخت‌افزار جدا کن</b> (درس‌های ۵.۷ و ۴.۳)، منطق را روی PC تست کن، و برای لایهٔ سخت‌افزاری چند تست روی برد نگه دار (بخش آخر). تست PC «کافی» نیست، ولی «لازم» است.</p></div>
+
+<h2 id="manual">قدم صفر: بدون هیچ فریم‌ورکی</h2>
+<p>ساده‌ترین تست چیست؟ یک <code>main</code> که تابع را صدا می‌زند و با <code>if</code> نتیجه را چک می‌کند. تابعی می‌خواهیم که دو عدد ۸ بیتی را جمع کند و <b>اگر از ۲۵۵ گذشت روی ۲۵۵ بماند</b> (جمع اشباع‌شده، درس <a href="4-7.html">۴.۷</a>). این نسخهٔ اول ساده‌لوحانه است:</p>
+
+<div class="code" data-file="manual.c" data-lang="c" data-verify="host" data-exit="1" id="manual">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+/* نسخهٔ اول: ساده‌لوحانه */
+static uint8_t sat_add_u8(uint8_t a, uint8_t b)
+{
+    return (uint8_t)(a + b);
+}
+
+int main(void)
+{
+    int failures = 0;
+    if (sat_add_u8(10, 20) != 30) { printf("FAIL 1\n"); failures++; }
+    if (sat_add_u8(200, 100) != 255) { printf("FAIL 2\n"); failures++; }
+    printf("%d failures\n", failures);
+    return failures;
+}
+</pre></div>
+
+<ol class="walk" data-for="manual">
+  <li data-lines="4-8"><b class="what">تابع تحت‌آزمون.</b> جمع را در <code>uint8_t</code> برمی‌گرداند. ۲۰۰ + ۱۰۰ = ۳۰۰ اما در یک بایت جا نمی‌شود و «دور می‌زند».
+    <span class="why">این باگ عمدی است تا ببینیم تست آن را می‌گیرد.</span></li>
+  <li data-lines="13-14"><b class="what">دو بررسی دستی.</b> اگر نتیجه با انتظار نخواند، پیام چاپ می‌کنیم و شمارندهٔ شکست را زیاد می‌کنیم.
+    <span class="why">این کار ساده است ولی هر بررسی چهار خط تکراری می‌خواهد و پیام‌ها فقط می‌گویند «FAIL 2»؛ نمی‌گویند چه عددی انتظار داشتیم و چه عددی گرفتیم.</span></li>
+  <li data-lines="15-16"><b class="what">کد خروج.</b> برنامه <code>failures</code> را برمی‌گرداند: صفر یعنی همه‌چیز خوب. سرور CI فقط همین را نگاه می‌کند.
+    <span class="why">قرارداد پایه‌ای همهٔ تست‌ها: «کد خروج ۰ = موفق، غیرصفر = شکست» (درس <a href="1-4.html">۱.۴</a>).</span></li>
+</ol>
+<pre class="term" data-from="manual.c">
+$ gcc -std=c11 -Wall -Wextra -o manual manual.c
+$ ./manual
+FAIL 2
+1 failures
+</pre>
+<p>(کد خروج برنامه ۱ است؛ <code>echo $?</code> آن را نشان می‌دهد.) کار می‌کند، ولی ناراحت‌کننده است: فقط شمارهٔ بررسی را می‌گوید و اگر ۵۰ بررسی داشتیم، باید خودمان بشماریم. یک فریم‌ورک باید این کارها را بکند: <b>اسم بدهد به هر تست، اولین شکست را با «انتظار / نتیجه» گزارش کند، و بقیهٔ تست‌ها را ادامه بدهد.</b></p>
+
+<h2 id="framework">فریم‌ورک کوچک: minitest.h</h2>
+<p>فریم‌ورک‌های واقعی برای C زیادند. معروف‌ترین آن‌ها <b>Unity</b> از پروژهٔ ThrowTheSwitch است: فقط یک <code>unity.c</code> و یک <code>unity.h</code>، کوچک، بدون وابستگی، و روی خودِ MCU هم اجرا می‌شود؛ همراهش <b>Ceedling</b> (سیستم ساخت که تست‌ها را پیدا می‌کند و برنامهٔ اصلی‌شان را خودش می‌سازد) و <b>CMock</b> (که از روی فایل هدر شما mock تولید می‌کند) می‌آیند. دیگران: CppUTest، cmocka، Check و Google Test (مخصوص C++). سایت رسمی Unity: <a href="https://www.throwtheswitch.org" target="_blank" rel="noopener">throwtheswitch.org</a>.</p>
+<p>برای اینکه «جادو» نباشد، در این درس <b>خودمان</b> یک هدر بسیار کوچک به همان سبک می‌نویسیم. اسم ماکروها را عمدا مثل Unity گذاشته‌ایم (<code>TEST_ASSERT_EQUAL_INT</code>، <code>RUN_TEST</code>، <code>setUp</code>، <code>tearDown</code>) تا وقتی روزی Unity واقعی را برداشتی، همه‌چیز آشنا باشد. ایدهٔ اصلی: هر تست یک تابع <code>void f(void)</code> است؛ اگر یک <code>TEST_ASSERT</code> شکست بخورد، پیام را چاپ می‌کند و با <code>longjmp</code> از همان تست بیرون می‌پرد؛ بقیهٔ تست‌ها ادامه می‌یابند.</p>
+
+<div class="callout deep"><div class="ct">setjmp و longjmp چیست؟</div>
+<p><code>setjmp(env)</code> یک «نشانگر کتاب» در کد می‌گذارد (اولین بار صفر برمی‌گرداند). <code>longjmp(env, 1)</code> از هر عمق تودرتوی توابع به همان نشانگر می‌پرد و این بار <code>setjmp</code> عدد ۱ برمی‌گرداند. برای فریم‌ورک تست عالی است، چون <code>assert</code> می‌تواند داخل تابع کمکی یا حتی داخل mock باشد و باز هم تست جاری فوری تمام شود. در کد محصول (MCU) از آن دوری کن: قانون ۱ ناسا (درس <a href="6-3.html">۶.۳</a>) آن را ممنوع می‌کند.</p></div>
+
+<div class="code" data-file="minitest.h" data-lang="c" data-verify="make" data-project="unit" id="mth">
+<pre>
+#ifndef MINITEST_H
+#define MINITEST_H
+
+#include &lt;setjmp.h&gt;
+#include &lt;stdarg.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+/* فریم‌ورک کوچک به سبک Unity. هر فایل test_*.c یک برنامهٔ مستقل است. */
+typedef struct {
+    const char *name;       /* تست جاری */
+    unsigned    run;        /* چند تست اجرا شد */
+    unsigned    failed;     /* چند تست رد شد */
+    int         failed_now; /* تست جاری رد شده؟ */
+    jmp_buf     env;        /* نقطهٔ بازگشت بعد از شکست */
+} mt_state_t;
+
+static mt_state_t mt;
+
+void setUp(void);           /* تست‌نویس تعریفشان می‌کند (مثل Unity) */
+void tearDown(void);
+
+static inline _Noreturn void mt_fail(const char *file, int line, const char *fmt, ...)
+{
+    va_list ap;
+    printf("%s:%d:%s:FAIL: ", file, line, mt.name);
+    va_start(ap, fmt);
+    vprintf(fmt, ap);
+    va_end(ap);
+    printf("\n");
+    mt.failed_now = 1;
+    longjmp(mt.env, 1);     /* بقیهٔ همین تست اجرا نمی‌شود */
+}
+
+static inline void mt_run(const char *file, int line, const char *name, void (*fn)(void))
+{
+    mt.name = name;
+    mt.run++;
+    mt.failed_now = 0;
+    setUp();
+    if (setjmp(mt.env) == 0) {
+        fn();
+    }
+    tearDown();
+    if (mt.failed_now) {
+        mt.failed++;
+    } else {
+        printf("%s:%d:%s:PASS\n", file, line, name);
+    }
+}
+
+static inline int mt_end(void)
+{
+    printf("-----------------------\n%u Tests %u Failures\n%s\n",
+           mt.run, mt.failed, (mt.failed == 0U) ? "OK" : "FAIL");
+    return (mt.failed == 0U) ? 0 : 1;
+}
+
+#define TEST_BEGIN()   ((void)0)
+#define RUN_TEST(fn)   mt_run(__FILE__, __LINE__, #fn, (fn))
+#define TEST_END()     mt_end()
+
+#define TEST_ASSERT_TRUE(c) \
+    do { if (!(c)) { mt_fail(__FILE__, __LINE__, "Expected TRUE: %s", #c); } } while (0)
+#define TEST_ASSERT_FALSE(c) \
+    do { if (c) { mt_fail(__FILE__, __LINE__, "Expected FALSE: %s", #c); } } while (0)
+#define TEST_ASSERT_NULL(p) \
+    do { if ((p) != NULL) { mt_fail(__FILE__, __LINE__, "Expected NULL: %s", #p); } } while (0)
+#define TEST_ASSERT_NOT_NULL(p) \
+    do { if ((p) == NULL) { mt_fail(__FILE__, __LINE__, "Expected not NULL: %s", #p); } } while (0)
+
+#define TEST_ASSERT_EQUAL_INT(exp, act) \
+    do { long long e_ = (long long)(exp), a_ = (long long)(act); \
+         if (e_ != a_) { mt_fail(__FILE__, __LINE__, "Expected %lld Was %lld", e_, a_); } } while (0)
+#define TEST_ASSERT_EQUAL_HEX(exp, act) \
+    do { unsigned long long e_ = (unsigned long long)(exp), a_ = (unsigned long long)(act); \
+         if (e_ != a_) { mt_fail(__FILE__, __LINE__, "Expected 0x%llX Was 0x%llX", e_, a_); } } while (0)
+#define TEST_ASSERT_EQUAL_STRING(exp, act) \
+    do { const char *e_ = (exp), *a_ = (act); \
+         if (strcmp(e_, a_) != 0) { mt_fail(__FILE__, __LINE__, "Expected \"%s\" Was \"%s\"", e_, a_); } } while (0)
+#define TEST_ASSERT_EQUAL_MEMORY(exp, act, n) \
+    do { if (memcmp((exp), (act), (n)) != 0) { mt_fail(__FILE__, __LINE__, "Memory differs (%s)", #act); } } while (0)
+#define TEST_FAIL_MESSAGE(msg) mt_fail(__FILE__, __LINE__, "%s", (msg))
+
+#endif /* MINITEST_H */
+</pre></div>
+
+<ol class="walk" data-for="mth">
+  <li data-lines="1-2,85"><b class="what">نگهبان include.</b> مثل هر هدر (درس <a href="4-2.html">۴.۲</a>).</li>
+  <li data-lines="4-7"><b class="what">هدرهای لازم.</b> <code>setjmp.h</code> برای پرش، <code>stdarg.h</code> برای تابعی با آرگومان متغیر (مثل <code>printf</code>)، <code>string.h</code> برای <code>strcmp</code> و <code>memcmp</code>.</li>
+  <li data-lines="9-16,18"><b class="what">وضعیت فریم‌ورک.</b> اسم تست جاری، شمارندهٔ اجراشده‌ها و ردشده‌ها، و <code>env</code>: همان نشانگر کتاب <code>setjmp</code>. هر فایل <code>test_*.c</code> برنامهٔ مستقل است، پس یک نمونهٔ <code>static</code> کافی است.</li>
+  <li data-lines="20-21"><b class="what">setUp و tearDown.</b> فقط اعلان شده‌اند؛ نویسندهٔ تست تعریفشان می‌کند. <code>setUp</code> قبل از هر تست اجرا می‌شود (صحنه‌چینی) و <code>tearDown</code> بعد از آن.
+    <span class="why">اگر صحنه را هر بار از نو نچینی، تست‌ها به هم گره می‌خورند (تمرین ۲).</span></li>
+  <li data-lines="23-33"><b class="what">گزارش شکست.</b> «فایل:خط:اسم‌تست:FAIL: پیام» را چاپ می‌کند (قالبی که ویرایشگرها می‌فهمند)، علامت می‌زند که تست رد شد و با <code>longjmp</code> بیرون می‌پرد. <code>_Noreturn</code> (C11) یعنی این تابع برنمی‌گردد.
+    <span class="why"><code>static inline</code> یعنی اگر تستی از این تابع استفاده نکرد، هشدار «تابع بلااستفاده» نمی‌آید و <code>-Werror</code> نمی‌شکند (درس <a href="6-3.html">۶.۳</a>).</span></li>
+  <li data-lines="35-50"><b class="what">اجرای یک تست.</b> اسم را ثبت می‌کند، <code>setUp</code> را می‌زند، <code>setjmp</code> می‌گذارد و تست را اجرا می‌کند. بعد از شکست، اجرا از همان <code>setjmp</code> (این بار با مقدار ۱) به <code>tearDown</code> می‌رسد. آخر: <code>PASS</code> یا شمارش ردشده.
+    <span class="why"><code>tearDown</code> حتی بعد از شکست اجرا می‌شود؛ پس منابع گم نمی‌شوند.</span></li>
+  <li data-lines="52-57,59-61"><b class="what">جمع‌بندی و ماکروهای اجرا.</b> <code>mt_end</code> شمار تست‌ها را چاپ می‌کند و کد خروج ۰ یا ۱ می‌دهد؛ همان قرارداد CI. <code>RUN_TEST(fn)</code> اسم تابع را با <code>#fn</code> به رشته تبدیل می‌کند (درس <a href="4-1.html">۴.۱</a>) و شمارهٔ خط را هم می‌فرستد.</li>
+  <li data-lines="63-70"><b class="what">بررسی درست/غلط و NULL.</b> هر ماکرو شرط را داخل <code>do { } while (0)</code> می‌پیچد (ماکروی امن) و متن شرط را با <code>#c</code> در پیام می‌آورد.</li>
+  <li data-lines="72-77"><b class="what">مقایسهٔ عدد.</b> هر دو طرف یک بار حساب و در <code>long long</code> (یا بی‌علامت) ریخته می‌شوند؛ پیام «Expected … Was …» می‌گوید انتظار چه بود و چه شد.
+    <span class="why">اگر مستقیم <code>(exp) != (act)</code> می‌نوشتیم، ماکرو آرگومان‌ها را دوبار ارزیابی می‌کرد و <code>TEST_ASSERT_EQUAL_INT(1, next())</code> دوبار <code>next()</code> را صدا می‌زد (تلهٔ ماکرو، درس ۴.۱).</span></li>
+  <li data-lines="78-83"><b class="what">رشته، حافظه و شکست دستی.</b> <code>strcmp</code> و <code>memcmp</code> محتوا را مقایسه می‌کنند (نه آدرس را!). <code>TEST_FAIL_MESSAGE</code> برای وقتی که شرط را خودت جداگانه بررسی کرده‌ای.</li>
+</ol>
+
+<p>حالا فریم‌ورک را روی همان تابع جمع اشباع‌شده امتحان می‌کنیم. این‌بار هر تست یک <b>رفتار</b> با اسم روشن است. ابتدا هدر کوچک و بعد فایل تست:</p>
+
+<div class="code" data-file="satmath.h" data-lang="c" data-verify="make" data-project="unit" id="smh">
+<pre>
+#ifndef SATMATH_H
+#define SATMATH_H
+
+#include &lt;stdint.h&gt;
+
+/* جمع اشباع‌شده: اگر از ۲۵۵ بگذرد روی ۲۵۵ می‌ماند (دور نمی‌زند) */
+uint8_t sat_add_u8(uint8_t a, uint8_t b);
+
+#endif /* SATMATH_H */
+</pre></div>
+
+<div class="code" data-file="test_satmath.c" data-lang="c" data-verify="make" data-project="unit" id="tsm">
+<pre>
+#include "minitest.h"
+#include "satmath.h"
+
+void setUp(void) {}
+void tearDown(void) {}
+
+static void test_small_values_add_normally(void)
+{
+    TEST_ASSERT_EQUAL_INT(30, sat_add_u8(10, 20));
+}
+
+static void test_zero_is_neutral(void)
+{
+    TEST_ASSERT_EQUAL_INT(200, sat_add_u8(200, 0));
+}
+
+static void test_result_saturates_at_255(void)
+{
+    TEST_ASSERT_EQUAL_INT(255, sat_add_u8(200, 100));
+}
+
+static void test_exactly_255_is_not_clipped(void)
+{
+    TEST_ASSERT_EQUAL_INT(255, sat_add_u8(250, 5));
+}
+
+int main(void)
+{
+    TEST_BEGIN();
+    RUN_TEST(test_small_values_add_normally);
+    RUN_TEST(test_zero_is_neutral);
+    RUN_TEST(test_result_saturates_at_255);
+    RUN_TEST(test_exactly_255_is_not_clipped);
+    return TEST_END();
+}
+</pre></div>
+
+<ol class="walk" data-for="tsm">
+  <li data-lines="1-2"><b class="what">هدر فریم‌ورک و ماژول تحت‌آزمون.</b></li>
+  <li data-lines="4-5"><b class="what">setUp و tearDown خالی.</b> این تابع‌ها حالت ندارند و لازم نیست چیزی آماده کنند؛ ولی باید تعریف شوند تا لینک شود.</li>
+  <li data-lines="7-25"><b class="what">چهار تست، هر کدام یک ادعا.</b> اسم‌ها جمله‌اند («جمع اشباع در ۲۵۵ می‌ماند»)، نه <code>test1</code>. وقتی یکی رد شد، فقط از اسمش می‌فهمی چه چیزی خراب است.
+    <span class="why">چهارمی (۲۵۰ + ۵ = ۲۵۵) مرز را تست می‌کند: دقیقا رسیدن به سقف نباید «اشباع» حساب شود. باگ‌ها در مرزها لانه می‌کنند (قانون <span class="en">off-by-one</span>).</span></li>
+  <li data-lines="27-35"><b class="what">main = فهرست تست‌ها.</b> هر تست با <code>RUN_TEST</code> ثبت می‌شود و کد خروج فریم‌ورک برمی‌گردد.</li>
+</ol>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="مسیر اجرای یک تست: RUN_TEST، setUp، تابع تست، tearDown و نتیجه؛ اگر assert شکست بخورد، mt_fail پیام را چاپ می‌کند و با longjmp به بعد از setjmp برمی‌گردد">
+  <defs><marker id="ar64a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">یک تست از دید فریم‌ورک</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="620" y="60" width="110" height="64" rx="12" fill="#ffd60a"/>
+    <rect x="480" y="60" width="110" height="64" rx="12" fill="#7ea3ff"/>
+    <rect x="320" y="60" width="130" height="64" rx="12" fill="#3ddc97"/>
+    <rect x="180" y="60" width="110" height="64" rx="12" fill="#7ea3ff"/>
+    <rect x="30" y="60" width="120" height="64" rx="12" fill="#ffd60a"/>
+    <rect x="290" y="190" width="200" height="64" rx="12" fill="#ff86b3"/>
+  </g>
+  <g fill="#15120a" font-size="14.5" font-weight="800" text-anchor="middle">
+    <text x="675" y="88">RUN_TEST</text><text x="675" y="108" font-size="12" font-weight="600" class="mono">mt_run</text>
+    <text x="535" y="88">setUp</text><text x="535" y="108" font-size="12" font-weight="600">صحنه را بچین</text>
+    <text x="385" y="88">تابع تست</text><text x="385" y="108" font-size="12" font-weight="600">Act و Assert</text>
+    <text x="235" y="88">tearDown</text><text x="235" y="108" font-size="12" font-weight="600">جمع کن</text>
+    <text x="90" y="88">PASS</text><text x="90" y="108" font-size="12" font-weight="600">یا شمارش FAIL</text>
+    <text x="390" y="216">assert شکست خورد</text><text x="390" y="238" font-size="12.5" font-weight="600">mt_fail چاپ می‌کند</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M618 92H594" marker-end="url(#ar64a)"/><path d="M478 92H454" marker-end="url(#ar64a)"/>
+    <path d="M318 92H294" marker-end="url(#ar64a)"/><path d="M178 92H154" marker-end="url(#ar64a)"/>
+    <path d="M385 126V188" marker-end="url(#ar64a)"/>
+    <path d="M290 222H235V128" marker-end="url(#ar64a)"/>
+  </g>
+  <text x="330" y="164" class="s-tx" font-size="13" font-weight="700" text-anchor="end">شرط غلط</text>
+  <text x="228" y="168" class="s-tx" font-size="13" font-weight="700" text-anchor="end">longjmp</text>
+  <text x="380" y="284" text-anchor="middle" class="s-tx" font-size="13.5">بعد از شکست، بقیهٔ همان تست اجرا نمی‌شود ولی tearDown و تست‌های بعدی اجرا می‌شوند</text>
+</svg></div>
+<figcaption>مسیر عادی از راست به چپ است. شکست یک میان‌بر است: پیام، پرش و ادامه از <span class="en">tearDown</span>.</figcaption></figure>
+
+<h2 id="aaa">الگوی AAA و اسم تست</h2>
+<p>یک تست خوب سه بخش دارد؛ به آن <span class="term" data-t="aaa">AAA</span> می‌گویند:</p>
+<ol class="steps">
+  <li><b>Arrange (آماده‌کن):</b> صحنه را بچین: متغیرها، ورودی‌ها، mock. <span class="en">setUp</span> بخشی از این کار را برای همه می‌کند.</li>
+  <li><b>Act (اجرا کن):</b> <b>یک</b> کار را انجام بده؛ معمولا یک تابع را صدا بزن.</li>
+  <li><b>Assert (بسنج):</b> نتیجه را با انتظار مقایسه کن.</li>
+</ol>
+<p>و پنج ویژگی تست خوب را به‌خاطر بسپار (به آن FIRST می‌گویند): <b>سریع</b> (Fast)، <b>مستقل</b> از تست‌های دیگر (Independent)، <b>تکرارپذیر</b> با هر بار همان نتیجه (Repeatable)، <b>خودبسنده در گزارش</b> یعنی فقط PASS/FAIL و نه «نگاه کن و خودت تشخیص بده» (Self-validating)، و <b>به‌موقع</b> یعنی همراه یا قبل از کد نوشته شود (Timely).</p>
+<div class="callout tip"><div class="ct">اسم تست، مستند کد است</div>
+<p>اسم را مثل جمله بنویس: «چه چیزی، تحت چه شرطی، چه نتیجه‌ای». <code>test_full_buffer_rejects_new_byte</code> بهتر از <code>test_put_2</code> است. اسم خوب یعنی وقتی CI قرمز شد، بدون باز کردن فایل می‌فهمی چه رفتاری شکسته است. و یک تست، یک دلیل برای شکستن: اگر یک تست ده <code>ASSERT</code> دربارهٔ چند رفتار دارد، وقتی رد شد نمی‌دانی مشکل کجاست.</p></div>
+
+<h2 id="tdd">TDD: اول تست، بعد کد</h2>
+<p><span class="term" data-t="tdd">TDD</span> (توسعهٔ تست‌محور) یک عادت است: <b>اول تستی می‌نویسی که رد می‌شود</b>، بعد <b>کمترین کد</b> را می‌نویسی که آن را قبول کند، بعد <b>مرتب می‌کنی</b> (تست‌ها ضامن‌اند که چیزی خراب نشود). به آن چرخهٔ «قرمز، سبز، مرتب» می‌گویند.</p>
+
+
+<p>ببین با همان جمع اشباع‌شده چه شد. اول تست‌ها را نوشتیم (همان چهار تست بالا) و نسخهٔ ساده‌لوحانهٔ <code>(uint8_t)(a + b)</code> را زیرشان گذاشتیم. این خروجی اجرای واقعی است:</p>
+<pre class="term" data-kind="cmd">
+$ gcc -std=c11 -Wall -Wextra -Wconversion -Wshadow -Werror test_satmath.c satmath.c -o t
+$ ./t
+test_satmath.c:30:test_small_values_add_normally:PASS
+test_satmath.c:31:test_zero_is_neutral:PASS
+test_satmath.c:19:test_result_saturates_at_255:FAIL: Expected 255 Was 44
+test_satmath.c:33:test_exactly_255_is_not_clipped:PASS
+-----------------------
+4 Tests 1 Failures
+FAIL
+$ echo $?
+1
+</pre>
+<p><b>قرمز:</b> «انتظار ۲۵۵، نتیجه ۴۴» (چون ۳۰۰ mod ۲۵۶ = ۴۴). <b>سبز:</b> جمع را در <code>unsigned</code> انجام می‌دهیم و سقف می‌گذاریم (همان <code>satmath.c</code> بالا). چون تست‌ها هستند، جرأت می‌کنیم <b>مرتب</b> هم بکنیم (مثلا اسم متغیر یا ساختار را عوض کنیم) و اگر چیزی خراب شود ثانیه‌ای می‌فهمیم:</p>
+
+<div class="code" data-file="satmath.c" data-lang="c" data-verify="make" data-project="unit" id="smc">
+<pre>
+#include "satmath.h"
+
+uint8_t sat_add_u8(uint8_t a, uint8_t b)
+{
+    unsigned sum = (unsigned)a + (unsigned)b;   // در نوع پهن‌تر جمع می‌کنیم
+    return (sum &gt; 255U) ? 255U : (uint8_t)sum;
+}
+</pre></div>
+
+<ol class="walk" data-for="smc">
+  <li data-lines="3-7"><b class="what">جمع در نوع پهن‌تر.</b> <code>uint8_t</code> در محاسبه به <code>int</code> ارتقا می‌یابد، ولی ما صریحا <code>unsigned</code> می‌گیریم تا سرریز نداشته باشیم. اگر از ۲۵۵ گذشت، ۲۵۵ را برمی‌گردانیم؛ وگرنه cast امن است، چون مطمئنیم جا می‌شود.
+    <span class="why">این همان الگوی «اول بسنج، بعد cast کن» درس <a href="6-3.html">۶.۳</a> است.</span></li>
+</ol>
+
+<div class="callout info"><div class="ct">TDD همیشه لازم نیست</div>
+<p>TDD برای توابع «حسابی» و ماژول‌های منطقی (پارسر، بافر، FSM، ریاضی) عالی است. برای کد ورود و خروج سخت‌افزار (تنظیم رجیستر) سخت‌تر است. اهمیت اصلی‌اش این است که کد را <b>قابل‌تست</b> طراحی می‌کند: تابعی که هم‌زمان رجیستر می‌خواند و منطق دارد، تست نمی‌شود؛ پس ناچار آن‌ها را جدا می‌کنی، و طراحی بهتر می‌شود.</p></div>
+
+<h2 id="ring">تست واقعی ۱: بافر حلقوی</h2>
+<p>از همان بافر حلقوی درس <a href="4-5.html">۴.۵</a> استفاده می‌کنیم؛ کد را بدون هیچ تغییری آورده‌ایم (اگر یادت رفته، بازش کن):</p>
+
+<details><summary>ringbuf.h و ringbuf.c (بدون تغییر از درس ۴.۵)</summary>
+<div class="code" data-file="ringbuf.h" data-lang="c" data-verify="make" data-project="unit" id="rbh">
+<pre>
+#ifndef RINGBUF_H
+#define RINGBUF_H
+
+#include &lt;stdbool.h&gt;
+#include &lt;stdint.h&gt;
+
+#ifndef RB_SIZE
+#define RB_SIZE 8U              /* ظرفیت بافر؛ باید توان ۲ باشد */
+#endif
+#define RB_MASK (RB_SIZE - 1U)
+
+_Static_assert((RB_SIZE &amp; RB_MASK) == 0U &amp;&amp; RB_SIZE &lt;= 32768U,
+               "RB_SIZE must be a power of two, at most 32768");
+
+typedef struct {
+    volatile uint8_t  data[RB_SIZE];
+    volatile uint16_t head;     /* شمارندهٔ نوشتن: فقط تولیدکننده عوضش می‌کند */
+    volatile uint16_t tail;     /* شمارندهٔ خواندن: فقط مصرف‌کننده عوضش می‌کند */
+} ringbuf_t;
+
+void     rb_init(ringbuf_t *rb);
+uint16_t rb_count(const ringbuf_t *rb);
+bool     rb_is_empty(const ringbuf_t *rb);
+bool     rb_is_full(const ringbuf_t *rb);
+bool     rb_put(ringbuf_t *rb, uint8_t byte);
+bool     rb_get(ringbuf_t *rb, uint8_t *out);
+
+#endif /* RINGBUF_H */
+</pre></div>
+<div class="code" data-file="ringbuf.c" data-lang="c" data-verify="make" data-project="unit" id="rbc">
+<pre>
+#include "ringbuf.h"
+
+void rb_init(ringbuf_t *rb)
+{
+    rb-&gt;head = 0;
+    rb-&gt;tail = 0;
+}
+
+uint16_t rb_count(const ringbuf_t *rb)
+{
+    return (uint16_t)(rb-&gt;head - rb-&gt;tail);
+}
+
+bool rb_is_empty(const ringbuf_t *rb)
+{
+    return rb-&gt;head == rb-&gt;tail;
+}
+
+bool rb_is_full(const ringbuf_t *rb)
+{
+    return rb_count(rb) == RB_SIZE;
+}
+
+bool rb_put(ringbuf_t *rb, uint8_t byte)
+{
+    if (rb_is_full(rb)) {
+        return false;                       // جا نیست؛ بایت جدید را نمی‌پذیریم
+    }
+    rb-&gt;data[rb-&gt;head &amp; RB_MASK] = byte;    // اول داده را بنویس
+    rb-&gt;head++;                             // بعد اعلام کن که تازه چیزی آمده
+    return true;
+}
+
+bool rb_get(ringbuf_t *rb, uint8_t *out)
+{
+    if (rb_is_empty(rb)) {
+        return false;
+    }
+    *out = rb-&gt;data[rb-&gt;tail &amp; RB_MASK];    // اول داده را بردار
+    rb-&gt;tail++;                             // بعد جا را آزاد اعلام کن
+    return true;
+}
+</pre></div>
+</details>
+
+<p>چه چیزهایی را باید تست کرد؟ یک فهرست خوب از «مرزها» می‌سازیم: بافر <b>خالی</b>، بافر <b>پر</b>، رسیدن به <b>انتهای آرایه</b> و برگشتن به اول (wrap)، و چیزی که در درس ۴.۵ فقط اشاره شد: <b>شمارندهٔ ۱۶ بیتی که از ۶۵۵۳۵ به ۰ برمی‌گردد</b>. آن را فقط بعد از هزاران عملیات می‌بینی؛ روی برد شاید هفته‌ها بعد، ولی روی PC یک حلقه‌ی ۷۰۰۰۰ تایی، چند میلی‌ثانیه است:</p>
+
+<div class="code" data-file="test_ringbuf.c" data-lang="c" data-verify="make" data-project="unit" id="trb">
+<pre>
+#include "minitest.h"
+#include "ringbuf.h"
+
+static ringbuf_t rb;
+
+void setUp(void)
+{
+    rb_init(&amp;rb);               // هر تست با یک بافر تازه شروع می‌کند
+}
+
+void tearDown(void) {}
+
+/* کمکی: n بایت با مقدار first, first+1, ... می‌گذارد */
+static void fill(uint8_t first, unsigned n)
+{
+    for (unsigned i = 0; i &lt; n; i++) {
+        TEST_ASSERT_TRUE(rb_put(&amp;rb, (uint8_t)(first + i)));
+    }
+}
+
+static void test_new_buffer_is_empty(void)
+{
+    TEST_ASSERT_TRUE(rb_is_empty(&amp;rb));
+    TEST_ASSERT_FALSE(rb_is_full(&amp;rb));
+    TEST_ASSERT_EQUAL_INT(0, rb_count(&amp;rb));
+}
+
+static void test_bytes_come_out_in_same_order(void)
+{
+    uint8_t out = 0;
+    fill(10, 3);
+    TEST_ASSERT_EQUAL_INT(3, rb_count(&amp;rb));
+    TEST_ASSERT_TRUE(rb_get(&amp;rb, &amp;out));
+    TEST_ASSERT_EQUAL_INT(10, out);
+    TEST_ASSERT_TRUE(rb_get(&amp;rb, &amp;out));
+    TEST_ASSERT_EQUAL_INT(11, out);
+    TEST_ASSERT_TRUE(rb_get(&amp;rb, &amp;out));
+    TEST_ASSERT_EQUAL_INT(12, out);
+    TEST_ASSERT_TRUE(rb_is_empty(&amp;rb));
+}
+
+static void test_full_buffer_rejects_new_byte(void)
+{
+    fill(0, RB_SIZE);
+    TEST_ASSERT_TRUE(rb_is_full(&amp;rb));
+    TEST_ASSERT_FALSE(rb_put(&amp;rb, 99));
+    TEST_ASSERT_EQUAL_INT(RB_SIZE, rb_count(&amp;rb));      // چیزی عوض نشد
+}
+
+static void test_get_on_empty_leaves_output_untouched(void)
+{
+    uint8_t out = 0x5A;
+    TEST_ASSERT_FALSE(rb_get(&amp;rb, &amp;out));
+    TEST_ASSERT_EQUAL_HEX(0x5A, out);
+}
+
+static void test_wraps_around_the_end_of_storage(void)
+{
+    uint8_t out = 0;
+    fill(0, RB_SIZE);                       // پر
+    for (unsigned i = 0; i &lt; 3; i++) {      // سه‌تا خالی می‌کنیم
+        TEST_ASSERT_TRUE(rb_get(&amp;rb, &amp;out));
+    }
+    fill(100, 3);                           // این سه‌تا از ابتدای آرایه شروع می‌شوند
+    TEST_ASSERT_TRUE(rb_is_full(&amp;rb));
+    for (unsigned i = 3; i &lt; RB_SIZE; i++) {
+        TEST_ASSERT_TRUE(rb_get(&amp;rb, &amp;out));
+        TEST_ASSERT_EQUAL_INT(i, out);
+    }
+    for (uint8_t v = 100; v &lt; 103; v++) {
+        TEST_ASSERT_TRUE(rb_get(&amp;rb, &amp;out));
+        TEST_ASSERT_EQUAL_INT(v, out);
+    }
+    TEST_ASSERT_TRUE(rb_is_empty(&amp;rb));
+}
+
+static void test_counters_survive_16_bit_wrap(void)
+{
+    uint8_t out = 0;
+    for (uint32_t i = 0; i &lt; 70000U; i++) { // بیش از ۶۵۵۳۶ عملیات
+        TEST_ASSERT_TRUE(rb_put(&amp;rb, (uint8_t)i));
+        TEST_ASSERT_TRUE(rb_get(&amp;rb, &amp;out));
+        TEST_ASSERT_EQUAL_INT((uint8_t)i, out);
+    }
+    TEST_ASSERT_TRUE(rb_is_empty(&amp;rb));
+    fill(1, RB_SIZE);                       // هنوز ظرفیت کامل دارد
+    TEST_ASSERT_TRUE(rb_is_full(&amp;rb));
+}
+
+int main(void)
+{
+    TEST_BEGIN();
+    RUN_TEST(test_new_buffer_is_empty);
+    RUN_TEST(test_bytes_come_out_in_same_order);
+    RUN_TEST(test_full_buffer_rejects_new_byte);
+    RUN_TEST(test_get_on_empty_leaves_output_untouched);
+    RUN_TEST(test_wraps_around_the_end_of_storage);
+    RUN_TEST(test_counters_survive_16_bit_wrap);
+    return TEST_END();
+}
+</pre></div>
+
+<ol class="walk" data-for="trb">
+  <li data-lines="4-9"><b class="what">setUp: بافر تازه.</b> قبل از هر تست بافر از نو ساخته می‌شود.
+    <span class="why">قانون «مستقل»: اجرای یک تست نباید نتیجهٔ تست دیگر را عوض کند (تمرین ۲).</span></li>
+  <li data-lines="13-19"><b class="what">تابع کمکی.</b> <code>fill</code> چند بایت پشت‌سرهم می‌گذارد و هر بار می‌سنجد که <code>rb_put</code> موفق بوده.</li>
+  <li data-lines="21-40"><b class="what">حالت آغازین و ترتیب FIFO.</b> بافر نو خالی است؛ بایت‌ها به همان ترتیبی که رفتند بیرون می‌آیند.</li>
+  <li data-lines="42-48"><b class="what">بافر پر.</b> <code>RB_SIZE</code> بایت می‌گیرد؛ بایت بعدی رد می‌شود و شمارنده هنوز ۸ است.</li>
+  <li data-lines="50-55"><b class="what">خواندن از بافر خالی.</b> <code>rb_get</code> <code>false</code> برمی‌گرداند و <code>*out</code> دست‌نخورده می‌ماند (۰x5A همان می‌ماند).
+    <span class="why">این یک «قرارداد» است که تست می‌کند؛ تماس‌گیرنده روی آن حساب می‌کند (درس <a href="6-3.html">۶.۳</a>).</span></li>
+  <li data-lines="57-75"><b class="what">چرخش در انتهای آرایه.</b> پر می‌کنیم، ۳ تا برمی‌داریم، ۳ تا دیگر می‌گذاریم: این سه بایت به ابتدای آرایه می‌روند و بافر دوباره پر می‌شود.
+    <span class="why">اینجا ماسک <code>&amp; RB_MASK</code> کار می‌کند. اگر فراموشش کنیم، این تست (و UBSan) می‌گیرد؛ در «تست را تست کن» می‌بینی.</span></li>
+  <li data-lines="77-88"><b class="what">دور زدن شمارنده‌ها.</b> ۷۰۰۰۰ بار یک بایت می‌گذاریم و برمی‌داریم؛ <code>head</code> و <code>tail</code> (۱۶ بیتی) از ۶۵۵۳۵ عبور می‌کنند و همه‌چیز باید درست بماند.
+    <span class="why">قاعدهٔ CERT به نام INT30-C (درس ۶.۳): دور زدن بی‌علامت باید آگاهانه باشد. این تست ثابت می‌کند تفریق <code>head - tail</code> با دور زدن هم درست کار می‌کند.</span></li>
+  <li data-lines="90-100"><b class="what">main.</b> شش تست ثبت می‌شوند.</li>
+</ol>
+
+<h2 id="fsm">تست واقعی ۲: ماشین حالت debounce</h2>
+<p>ماشین‌های حالت فوق‌العاده تست‌پذیرند: ورودی‌ها یک دنباله‌اند و خروجی‌ها رویدادهایی که می‌شود شمرد. کد debounce دکمهٔ درس <a href="4-6.html">۴.۶</a> را برمی‌داریم (بدون تغییر):</p>
+
+<details><summary>button.h و button.c (بدون تغییر از درس ۴.۶)</summary>
+<div class="code" data-file="button.h" data-lang="c" data-verify="make" data-project="unit" id="bth">
+<pre>
+#ifndef BUTTON_H
+#define BUTTON_H
+
+#include &lt;stdbool.h&gt;
+
+#ifndef BTN_STABLE_TICKS
+#define BTN_STABLE_TICKS 3U     /* چند tick پشت‌سرهم یکسان بماند تا معتبر باشد */
+#endif
+
+typedef enum {
+    BTN_RELEASED,           /* رها و پایدار */
+    BTN_PRESS_CANDIDATE,    /* تازه پایین دیده شد؛ منتظر تأیید */
+    BTN_PRESSED,            /* پایین و پایدار */
+    BTN_RELEASE_CANDIDATE   /* تازه بالا دیده شد؛ منتظر تأیید */
+} btn_state_t;
+
+typedef enum {
+    BTN_EV_NONE,
+    BTN_EV_PRESS,           /* یک بار، لحظهٔ فشرده شدن معتبر */
+    BTN_EV_RELEASE          /* یک بار، لحظهٔ رها شدن معتبر */
+} btn_event_t;
+
+typedef struct {
+    btn_state_t state;
+    unsigned count;         /* چند نمونهٔ یکسان پشت‌سرهم دیده‌ایم */
+} button_t;
+
+void button_init(button_t *b);
+btn_event_t button_step(button_t *b, bool raw_pressed);   /* هر tick یک بار */
+const char *button_state_name(btn_state_t s);
+
+#endif /* BUTTON_H */
+</pre></div>
+<div class="code" data-file="button.c" data-lang="c" data-verify="make" data-project="unit" id="btc">
+<pre>
+#include "button.h"
+
+void button_init(button_t *b)
+{
+    b-&gt;state = BTN_RELEASED;
+    b-&gt;count = 0;
+}
+
+btn_event_t button_step(button_t *b, bool raw_pressed)
+{
+    btn_event_t ev = BTN_EV_NONE;
+
+    switch (b-&gt;state) {
+    case BTN_RELEASED:
+        if (raw_pressed) {
+            b-&gt;state = BTN_PRESS_CANDIDATE;
+            b-&gt;count = 1;
+        }
+        break;
+
+    case BTN_PRESS_CANDIDATE:
+        if (!raw_pressed) {
+            b-&gt;state = BTN_RELEASED;            // فقط نویز بود
+        } else if (++b-&gt;count &gt;= BTN_STABLE_TICKS) {
+            b-&gt;state = BTN_PRESSED;
+            ev = BTN_EV_PRESS;                  // معتبر شد
+        }
+        break;
+
+    case BTN_PRESSED:
+        if (!raw_pressed) {
+            b-&gt;state = BTN_RELEASE_CANDIDATE;
+            b-&gt;count = 1;
+        }
+        break;
+
+    case BTN_RELEASE_CANDIDATE:
+        if (raw_pressed) {
+            b-&gt;state = BTN_PRESSED;             // پرش دکمه، هنوز پایین است
+        } else if (++b-&gt;count &gt;= BTN_STABLE_TICKS) {
+            b-&gt;state = BTN_RELEASED;
+            ev = BTN_EV_RELEASE;
+        }
+        break;
+    }
+    return ev;
+}
+
+const char *button_state_name(btn_state_t s)
+{
+    static const char *const names[] = {
+        "RELEASED", "PRESS_CANDIDATE", "PRESSED", "RELEASE_CANDIDATE"
+    };
+    return names[s];
+}
+</pre></div>
+</details>
+
+<p>ایدهٔ کار: یک تابع کمکی به‌نام <code>feed</code> رشته‌ای از صفر و یک (<code>"0111000"</code>: یک=دکمه پایین) را tick به tick به ماشین می‌دهد و رویدادها را می‌شمارد. تست‌ها همه به شکل «این دنباله را بده؛ اینقدر PRESS و اینقدر RELEASE بگیر» می‌شوند. نتیجه خیلی خواناست:</p>
+
+<div class="code" data-file="test_button.c" data-lang="c" data-verify="make" data-project="unit" id="tbt">
+<pre>
+#include "minitest.h"
+#include "button.h"
+
+static button_t btn;
+static unsigned presses;
+static unsigned releases;
+
+void setUp(void)
+{
+    button_init(&amp;btn);
+    presses = 0;
+    releases = 0;
+}
+
+void tearDown(void) {}
+
+/* کمکی: رشتهٔ '0'/'1' را tick به tick به دکمه می‌دهد و رویدادها را می‌شمارد */
+static void feed(const char *pattern)
+{
+    for (unsigned i = 0; pattern[i] != '\0'; i++) {
+        btn_event_t ev = button_step(&amp;btn, pattern[i] == '1');
+        if (ev == BTN_EV_PRESS) {
+            presses++;
+        } else if (ev == BTN_EV_RELEASE) {
+            releases++;
+        }
+    }
+}
+
+static void test_starts_released_without_events(void)
+{
+    TEST_ASSERT_EQUAL_INT(BTN_RELEASED, btn.state);
+    feed("0000");
+    TEST_ASSERT_EQUAL_INT(0, presses + releases);
+}
+
+static void test_short_noise_is_ignored(void)
+{
+    feed("01010100");
+    TEST_ASSERT_EQUAL_INT(0, presses);
+    TEST_ASSERT_EQUAL_INT(BTN_RELEASED, btn.state);
+}
+
+static void test_press_needs_exactly_the_stable_count(void)
+{
+    for (unsigned i = 0; i &lt; BTN_STABLE_TICKS - 1U; i++) {
+        feed("1");
+    }
+    TEST_ASSERT_EQUAL_INT(0, presses);          // یکی کم است
+    feed("1");
+    TEST_ASSERT_EQUAL_INT(1, presses);          // همین‌جا معتبر شد
+    TEST_ASSERT_EQUAL_INT(BTN_PRESSED, btn.state);
+}
+
+static void test_holding_does_not_repeat_the_event(void)
+{
+    feed("0");
+    for (unsigned i = 0; i &lt; 50; i++) {
+        feed("1");
+    }
+    TEST_ASSERT_EQUAL_INT(1, presses);
+    TEST_ASSERT_EQUAL_INT(0, releases);
+}
+
+static void test_bounce_while_pressed_is_not_a_release(void)
+{
+    feed("111");
+    feed("0110");                                // پرش کوتاه وسط فشار
+    TEST_ASSERT_EQUAL_INT(1, presses);
+    TEST_ASSERT_EQUAL_INT(0, releases);
+}
+
+static void test_full_cycle_twice(void)
+{
+    feed("0111000");
+    feed("0111000");
+    TEST_ASSERT_EQUAL_INT(2, presses);
+    TEST_ASSERT_EQUAL_INT(2, releases);
+    TEST_ASSERT_EQUAL_INT(BTN_RELEASED, btn.state);
+}
+
+static void test_state_names_are_readable(void)
+{
+    TEST_ASSERT_EQUAL_STRING("RELEASED", button_state_name(BTN_RELEASED));
+    TEST_ASSERT_EQUAL_STRING("PRESSED", button_state_name(BTN_PRESSED));
+}
+
+/* تست جدولی: هر سطر یک سناریو با نتیجهٔ مورد انتظار */
+typedef struct {
+    const char *pattern;
+    unsigned    presses;
+    unsigned    releases;
+} scenario_t;
+
+static void test_table_of_scenarios(void)
+{
+    static const scenario_t rows[] = {
+        { "",            0, 0 },
+        { "1",           0, 0 },
+        { "111",         1, 0 },
+        { "1101110",     1, 0 },
+        { "111000",      1, 1 },
+        { "11100100",    1, 0 },
+        { "1110001110",  2, 1 },
+    };
+    for (unsigned r = 0; r &lt; (sizeof(rows) / sizeof(rows[0])); r++) {
+        char msg[64];
+        setUp();
+        feed(rows[r].pattern);
+        if ((presses != rows[r].presses) || (releases != rows[r].releases)) {
+            (void)snprintf(msg, sizeof(msg), "row %u \"%s\": presses=%u releases=%u",
+                           r, rows[r].pattern, presses, releases);
+            TEST_FAIL_MESSAGE(msg);
+        }
+    }
+}
+
+int main(void)
+{
+    TEST_BEGIN();
+    RUN_TEST(test_starts_released_without_events);
+    RUN_TEST(test_short_noise_is_ignored);
+    RUN_TEST(test_press_needs_exactly_the_stable_count);
+    RUN_TEST(test_holding_does_not_repeat_the_event);
+    RUN_TEST(test_bounce_while_pressed_is_not_a_release);
+    RUN_TEST(test_full_cycle_twice);
+    RUN_TEST(test_state_names_are_readable);
+    RUN_TEST(test_table_of_scenarios);
+    return TEST_END();
+}
+</pre></div>
+
+<ol class="walk" data-for="tbt">
+  <li data-lines="4-13"><b class="what">وضعیت مشترک و setUp.</b> دکمه و دو شمارنده هر بار صفر می‌شوند.</li>
+  <li data-lines="17-28"><b class="what">تابع feed.</b> رشته را کاراکتر به کاراکتر ورودی خام می‌کند و رویدادها را می‌شمارد.
+    <span class="why">این یک «زبان کوچک تست» است: <code>feed("0111000")</code> از هر شرح فارسی گویاتر است.</span></li>
+  <li data-lines="30-42"><b class="what">شروع و نویز.</b> بی‌ورودی بی‌رویداد؛ پرش‌های تک‌تیکی هیچ رویدادی نمی‌سازند. کل هدف debounce همین است.</li>
+  <li data-lines="44-53"><b class="what">مرز دقیق.</b> با <code>BTN_STABLE_TICKS - 1</code> نمونهٔ پایین هنوز رویدادی نیست؛ با یکی بیشتر، PRESS.
+    <span class="why">از ثابت خود هدر استفاده کرده‌ایم، نه عدد ۳؛ اگر ثابت را ۵ کنی، تست درست می‌ماند.</span></li>
+  <li data-lines="55-71"><b class="what">نگه‌داشتن و پرش.</b> ۵۰ tick پایین‌ماندن فقط یک رویداد می‌دهد؛ یک لحظه صفر شدن وسط فشار، رها شدن حساب نمی‌شود.</li>
+  <li data-lines="73-86"><b class="what">دو چرخهٔ کامل و اسم حالت‌ها.</b> ماشین به حالت اول برمی‌گردد. تست اسم حالت‌ها برای بخش «پوشش» است.</li>
+  <li data-lines="88-116"><b class="what">تست جدولی.</b> هر سطر یک سناریو (دنباله + نتیجه) است. اگر سطری شکست خورد، شمارهٔ سطر و رشته را در پیام می‌آوریم.
+    <span class="why">افزودن سناریو یعنی افزودن یک خط، نه یک تابع. بیشتر تست‌های ماشین حالت و پارسر همین‌طورند.</span></li>
+  <li data-lines="118-130"><b class="what">main.</b> هشت تست ثبت می‌شود.</li>
+</ol>
+
+<div class="callout example"><div class="ct">وقتی خودِ تست اشتباه است</div>
+<p>در اولین نسخهٔ جدول من برای سناریوی <code>"1110001110"</code> نوشته بودم «۱ فشار، ۱ رها». اجرای واقعی گفت:</p>
+<pre class="term" data-kind="cmd">
+test_button.c:107:test_table_of_scenarios:FAIL: row 6 "1110001110": presses=2 releases=1
+</pre>
+<p>ماشین درست بود و من اشتباه حساب کرده بودم: <code>111</code> فشار اول، <code>000</code> رها، و <code>111</code> بعدی فشار دوم است (آخری <code>0</code> تنها کافی نیست تا رها شود). ۲ فشار و ۱ رها درست بود. تست هم کد را می‌سنجد و هم فهم تو را؛ وقتی دو چیز نمی‌خواند، هر دو را چک کن.</p></div>
+
+<h2 id="doubles">وابستگی سخت‌افزاری: mock و seam</h2>
+<p>ماژول‌های بالا خالص بودند و به هیچ سخت‌افزاری نیاز نداشتند. ولی درایور یک سنسور روی I2C چطور؟ روی PC که I2C نداریم! راه حل: در نقطه‌ای که کد به سخت‌افزار می‌رسد یک <span class="term" data-t="seam">درز</span> (seam) بگذار، جایی که بتوانی بدون عوض‌کردن کد اصلی، چیز دیگری را وارد کنی. مثل پریز برق: دستگاه فقط به «پریز» وصل است و برایش مهم نیست پشت دیوار شبکهٔ شهری است یا یک ژنراتور.</p>
+
+<div class="callout analogy"><div class="ct">مثال: دوبلور</div>
+<p>در فیلم، صحنهٔ خطرناک را «دوبلور» (stunt double) انجام می‌دهد؛ بازیگر اصلی سالم می‌ماند و کارگردان همان صحنه را می‌گیرد. به همین دلیل اسم عمومی این چیزها <span class="term" data-t="testdouble">test double</span> است. چند نوع دارد و بین آدم‌ها اسم‌ها کمی قاطی می‌شود:</p></div>
+
+<div class="table-wrap"><table>
+<thead><tr><th>نوع</th><th>چه می‌کند</th><th>مثال</th></tr></thead>
+<tbody>
+<tr><td><b>dummy</b></td><td>فقط برای پرکردن پارامتر؛ هیچ‌وقت استفاده نمی‌شود</td><td><code>NULL</code> یا اشاره‌گر بی‌مصرف</td></tr>
+<tr><td><b><span class="term" data-t="stub">stub</span></b></td><td>جواب‌های حاضرآماده می‌دهد تا کد ما را به مسیر دلخواه ببرد</td><td>«خواندن ثبات همیشه ۰x58 برمی‌گرداند»</td></tr>
+<tr><td><b>spy</b></td><td>ثبت می‌کند چه‌کسی با چه آرگومانی صدایش زد</td><td>شمارندهٔ <code>calls</code> و <code>last_reg</code></td></tr>
+<tr><td><b><span class="term" data-t="mockobj">mock</span></b></td><td>مثل spy ولی <b>انتظارها را خودش می‌داند</b> و ناسازگاری را اعلام می‌کند (ابزار CMock/cmocka)</td><td>«انتظار دارم دقیقا یک بار با آدرس ۰x76 صدا زده شود»</td></tr>
+<tr><td><b><span class="term" data-t="fake">fake</span></b></td><td>نسخهٔ ساده ولی واقعا کارکن</td><td>یک EEPROM ساختگی با آرایهٔ RAM که هم می‌نویسد و هم می‌خواند</td></tr>
+</tbody></table></div>
+<p>در عمل نام «mock» را برای همهٔ این‌ها به‌کار می‌برند؛ آنچه ما می‌نویسیم ترکیب stub و spy است. مهم فهمیدن کار است، نه اسم.</p>
+
+<p>سه راه برای ساختن درز داریم:</p>
+<ol class="steps">
+  <li><b>اشاره‌گر تابع (زمان اجرا):</b> ماژول به‌جای صدا زدن مستقیم I2C، از یک struct از اشاره‌گر تابع (<code>bus_ops_t</code>) استفاده می‌کند؛ درس <a href="4-3.html">۴.۳</a> و <a href="5-7.html">۵.۷</a>. برد یکی می‌دهد، تست یکی دیگر. <b>بهترین انتخاب</b> برای درایورها.</li>
+  <li><b>جایگزینی هنگام لینک:</b> تابعی را فقط اعلان می‌کنی (<code>hal_delay_ms</code>) و فایل پیاده‌سازی را برای تست نمی‌سازی؛ فایل تست تعریف دیگری از همان نام می‌دهد. GNU ld گزینهٔ <code>--wrap</code> و نمادهای <code>weak</code> (درس <a href="5-1.html">۵.۱</a>) هم دارد.</li>
+  <li><b>پیش‌پردازنده:</b> <code>#ifdef UNIT_TEST</code> داخل کد اصلی. آخرین انتخاب؛ چون کدی که تست می‌کنی با کدی که ارسال می‌شود فرق می‌کند.</li>
+</ol>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 320" role="img" aria-label="ماژول sensor.c از دو درز عبور می‌کند: اشاره‌گر تابع read_reg و تابع hal_delay_ms؛ در محصول به کد برد و در تست به mock وصل می‌شوند">
+  <defs><marker id="ar64c" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">یک ماژول، دو درز، دو دنیا</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="230" y="40" width="300" height="52" rx="12" fill="#7ea3ff"/>
+    <rect x="80" y="128" width="210" height="52" rx="12" fill="#ffd60a"/>
+    <rect x="470" y="128" width="210" height="52" rx="12" fill="#ffd60a"/>
+    <rect x="20" y="218" width="170" height="70" rx="12" fill="#ff9a4d"/>
+    <rect x="200" y="218" width="170" height="70" rx="12" fill="#3ddc97"/>
+    <rect x="390" y="218" width="170" height="70" rx="12" fill="#ff9a4d"/>
+    <rect x="570" y="218" width="170" height="70" rx="12" fill="#3ddc97"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-weight="800">
+    <text x="380" y="72" font-size="15" class="mono">sensor.c</text>
+    <text x="185" y="152" font-size="13.5" class="mono">bus_ops_t.read_reg</text><text x="185" y="171" font-size="12" font-weight="600">درز ۱: اشاره‌گر تابع</text>
+    <text x="575" y="152" font-size="13.5" class="mono">hal_delay_ms()</text><text x="575" y="171" font-size="12" font-weight="600">درز ۲: نام در زمان لینک</text>
+    <text x="105" y="246" font-size="13.5">I2C واقعی</text><text x="105" y="266" font-size="12" font-weight="600">روی برد (محصول)</text>
+    <text x="285" y="246" font-size="13.5" class="mono">mock_read_reg</text><text x="285" y="266" font-size="12" font-weight="600">در تست روی PC</text>
+    <text x="475" y="246" font-size="13.5" class="mono">hal_stm32.c</text><text x="475" y="266" font-size="12" font-weight="600">روی برد (محصول)</text>
+    <text x="655" y="246" font-size="13.5" class="mono">test_sensor.c</text><text x="655" y="266" font-size="12" font-weight="600">فقط ثبت می‌کند</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M300 94L210 126" marker-end="url(#ar64c)"/><path d="M460 94L550 126" marker-end="url(#ar64c)"/>
+    <path d="M150 182L105 216" marker-end="url(#ar64c)"/><path d="M220 182L285 216" marker-end="url(#ar64c)"/>
+    <path d="M540 182L475 216" marker-end="url(#ar64c)"/><path d="M610 182L655 216" marker-end="url(#ar64c)"/>
+  </g>
+  <text x="380" y="308" text-anchor="middle" class="s-tx" font-size="13.5">کد اصلی sensor.c در هر دو دنیا کاملا یکی است؛ فقط چیزی که پشت درز وصل شده فرق دارد</text>
+</svg></div>
+<figcaption>نارنجی: دنیای برد. سبز: دنیای تست. کد <span class="en">sensor.c</span> نمی‌داند در کدام دنیاست.</figcaption></figure>
+
+<p>حالا مثال واقعی: درایور سنسور با یک تابع <code>sensor_probe</code>. کارش این است که ثبات شناسهٔ تراشه (آدرس ۰xD0 روی آدرس I2C ۰x76) را بخواند و ببیند مقدارش ۰x60 است (شناسهٔ BME280 در برگهٔ داده) یا نه؛ اگر گذرگاه خطا داد، تا سه بار با ۲ میلی‌ثانیه صبر تلاش کند. اول هدرها:</p>
+
+<details><summary>hal.h: اعلان تابع تأخیر</summary>
+<div class="code" data-file="hal.h" data-lang="c" data-verify="make" data-project="unit" id="halh">
+<pre>
+#ifndef HAL_H
+#define HAL_H
+
+#include &lt;stdint.h&gt;
+
+/* روی برد واقعی در hal_stm32.c پیاده می‌شود؛ روی PC، فایل تست تعریفش می‌کند */
+void hal_delay_ms(uint32_t ms);
+
+#endif /* HAL_H */
+</pre></div>
+</details>
+
+<div class="code" data-file="sensor.h" data-lang="c" data-verify="make" data-project="unit" id="snh">
+<pre>
+#ifndef SENSOR_H
+#define SENSOR_H
+
+#include &lt;stdint.h&gt;
+
+#define SENSOR_ADDR            0x76U    /* آدرس I2C */
+#define SENSOR_REG_ID          0xD0U    /* ثبات شناسهٔ تراشه */
+#define SENSOR_CHIP_ID         0x60U    /* مقداری که باید در آن ثبات باشد */
+#define SENSOR_RETRIES         3U
+#define SENSOR_RETRY_DELAY_MS  2U
+
+/* لایهٔ انتقال: هر برد یک نسخه از این تابع می‌دهد (I2C واقعی یا mock) */
+typedef struct {
+    int   (*read_reg)(void *ctx, uint8_t dev, uint8_t reg, uint8_t *value);  /* ۰ = موفق */
+    void   *ctx;
+} bus_ops_t;
+
+typedef enum {
+    SENSOR_OK = 0,
+    SENSOR_ERR_ARG,     /* اشاره‌گر NULL */
+    SENSOR_ERR_BUS,     /* خطای ارتباط پس از چند بار تلاش */
+    SENSOR_ERR_ID       /* تراشه جواب داد ولی شناسه اشتباه است */
+} sensor_status_t;
+
+sensor_status_t sensor_probe(const bus_ops_t *bus);
+
+#endif /* SENSOR_H */
+</pre></div>
+
+<ol class="walk" data-for="snh">
+  <li data-lines="6-10"><b class="what">ثابت‌های نام‌دار.</b> آدرس، ثبات، شناسه، تعداد تلاش و مکث. تست هم از همین‌ها استفاده می‌کند.</li>
+  <li data-lines="12-16"><b class="what">درز ۱: bus_ops_t.</b> یک تابع <code>read_reg</code> که با <code>0</code> موفقیت را اعلام می‌کند و یک <code>ctx</code> (اشاره‌گر <code>void*</code> به هر داده‌ای که پیاده‌ساز لازم دارد). روی برد واقعی <code>ctx</code> اشاره‌گر به دستگیرهٔ I2C است؛ در تست به mock.
+    <span class="why">پارامتر <code>ctx</code> باعث می‌شود mock بدون متغیر سراسری کار کند: هر نمونه وضعیت خودش را دارد (این همان «دستگیرهٔ مات» درس ۵.۷ است).</span></li>
+  <li data-lines="18-23"><b class="what">وضعیت‌های صریح.</b> به‌جای <code>-1</code>: اشاره‌گر خالی، خطای گذرگاه، شناسهٔ اشتباه. سه چیزی که باید جدا تشخیص داد.</li>
+</ol>
+
+<div class="code" data-file="sensor.c" data-lang="c" data-verify="make" data-project="unit" id="snc">
+<pre>
+#include "sensor.h"
+#include "hal.h"
+#include &lt;stddef.h&gt;
+
+sensor_status_t sensor_probe(const bus_ops_t *bus)
+{
+    if ((bus == NULL) || (bus-&gt;read_reg == NULL)) {
+        return SENSOR_ERR_ARG;
+    }
+    for (unsigned attempt = 0U; attempt &lt; SENSOR_RETRIES; attempt++) {
+        uint8_t id = 0U;
+        if (bus-&gt;read_reg(bus-&gt;ctx, SENSOR_ADDR, SENSOR_REG_ID, &amp;id) == 0) {
+            return (id == SENSOR_CHIP_ID) ? SENSOR_OK : SENSOR_ERR_ID;
+        }
+        if ((attempt + 1U) &lt; SENSOR_RETRIES) {
+            hal_delay_ms(SENSOR_RETRY_DELAY_MS);    // قبل از تلاش بعدی کمی صبر
+        }
+    }
+    return SENSOR_ERR_BUS;
+}
+</pre></div>
+
+<ol class="walk" data-for="snc">
+  <li data-lines="7-9"><b class="what">دروازه.</b> اشاره‌گر <code>NULL</code> رد می‌شود (برنامه‌نویسی دفاعی، درس <a href="6-3.html">۶.۳</a>).</li>
+  <li data-lines="10-14"><b class="what">تلاش با سقف.</b> حداکثر <code>SENSOR_RETRIES</code> بار. اگر گذرگاه موفق بود، همان‌جا شناسه را می‌سنجد و برمی‌گردد. برای شناسهٔ اشتباه دوباره تلاش نمی‌کنیم؛ چون تراشه جواب داده و جواب اشتباه است.
+    <span class="why">حلقهٔ سقف‌دار، قانون ۲ ناسا.</span></li>
+  <li data-lines="15-17"><b class="what">درز ۲: مکث.</b> بین تلاش‌ها <code>hal_delay_ms</code> را صدا می‌زند؛ بعد از آخرین تلاش لازم نیست صبر کند.</li>
+  <li data-lines="19"><b class="what">خطای گذرگاه.</b> همهٔ تلاش‌ها شکست خوردند.</li>
+</ol>
+
+<p>حالا فایل تست. در آن هر دو درز را پر می‌کنیم: <code>hal_delay_ms</code> را خودمان تعریف می‌کنیم (نه پیاده‌سازی برد) و برای <code>bus_ops_t</code> یک mock می‌سازیم که جواب‌ها را از یک <b>سناریوی از پیش نوشته‌شده</b> می‌خواند:</p>
+
+<div class="code" data-file="test_sensor.c" data-lang="c" data-verify="make" data-project="unit" id="tsn">
+<pre>
+#include "minitest.h"
+#include "sensor.h"
+#include "hal.h"
+
+/* ---- درگاه پیوندی (link seam): جایگزین hal_delay_ms واقعی ---- */
+static uint32_t total_delay_ms;
+void hal_delay_ms(uint32_t ms)
+{
+    total_delay_ms += ms;               // صبر واقعی نمی‌کنیم؛ فقط ثبت می‌کنیم
+}
+
+/* ---- ماکِ گذرگاه: جواب‌ها از یک سناریوی از پیش نوشته‌شده می‌آیند ---- */
+#define MAX_CALLS 8U
+typedef struct {
+    int      result[MAX_CALLS];         /* هر فراخوانی چه کد برگرداند */
+    uint8_t  value[MAX_CALLS];          /* و چه مقداری در *value بگذارد */
+    unsigned calls;                     /* چند بار صدا زده شد */
+    uint8_t  last_dev;                  /* آخرین آرگومان‌ها (جاسوس) */
+    uint8_t  last_reg;
+} mock_bus_t;
+
+static mock_bus_t mock;
+static bus_ops_t  bus;
+
+static int mock_read_reg(void *ctx, uint8_t dev, uint8_t reg, uint8_t *value)
+{
+    mock_bus_t *m = ctx;
+    if (m-&gt;calls &gt;= MAX_CALLS) {
+        TEST_FAIL_MESSAGE("unexpected extra bus call");
+    }
+    m-&gt;last_dev = dev;
+    m-&gt;last_reg = reg;
+    *value = m-&gt;value[m-&gt;calls];
+    return m-&gt;result[m-&gt;calls++];
+}
+
+void setUp(void)
+{
+    memset(&amp;mock, 0, sizeof(mock));
+    bus.read_reg = mock_read_reg;
+    bus.ctx = &amp;mock;
+    total_delay_ms = 0;
+}
+
+void tearDown(void) {}
+
+static void test_correct_chip_id_gives_ok(void)
+{
+    mock.value[0] = 0x60;
+    TEST_ASSERT_EQUAL_INT(SENSOR_OK, sensor_probe(&amp;bus));
+    TEST_ASSERT_EQUAL_INT(1, mock.calls);
+    TEST_ASSERT_EQUAL_HEX(0x76, mock.last_dev);     // آدرس درست صدا زده شد؟
+    TEST_ASSERT_EQUAL_HEX(0xD0, mock.last_reg);     // ثبات درست خوانده شد؟
+    TEST_ASSERT_EQUAL_INT(0, total_delay_ms);
+}
+
+static void test_wrong_chip_id_is_reported(void)
+{
+    mock.value[0] = 0x58;                           // شناسهٔ تراشهٔ دیگری
+    TEST_ASSERT_EQUAL_INT(SENSOR_ERR_ID, sensor_probe(&amp;bus));
+    TEST_ASSERT_EQUAL_INT(1, mock.calls);           // برای شناسهٔ غلط تلاش مجدد نمی‌کنیم
+}
+
+static void test_retries_after_bus_errors(void)
+{
+    mock.result[0] = -1;
+    mock.result[1] = -1;
+    mock.value[2]  = 0x60;                          // بار سوم جواب می‌دهد
+    TEST_ASSERT_EQUAL_INT(SENSOR_OK, sensor_probe(&amp;bus));
+    TEST_ASSERT_EQUAL_INT(3, mock.calls);
+    TEST_ASSERT_EQUAL_INT(2 * SENSOR_RETRY_DELAY_MS, total_delay_ms);
+}
+
+static void test_gives_up_after_all_retries_fail(void)
+{
+    for (unsigned i = 0; i &lt; MAX_CALLS; i++) {
+        mock.result[i] = -1;
+    }
+    TEST_ASSERT_EQUAL_INT(SENSOR_ERR_BUS, sensor_probe(&amp;bus));
+    TEST_ASSERT_EQUAL_INT(SENSOR_RETRIES, mock.calls);
+    TEST_ASSERT_EQUAL_INT(2 * SENSOR_RETRY_DELAY_MS, total_delay_ms);   // بعد از آخری صبر نمی‌کند
+}
+
+static void test_null_arguments_are_rejected(void)
+{
+    bus_ops_t empty = { NULL, NULL };
+    TEST_ASSERT_EQUAL_INT(SENSOR_ERR_ARG, sensor_probe(NULL));
+    TEST_ASSERT_EQUAL_INT(SENSOR_ERR_ARG, sensor_probe(&amp;empty));
+    TEST_ASSERT_EQUAL_INT(0, mock.calls);
+}
+
+int main(void)
+{
+    TEST_BEGIN();
+    RUN_TEST(test_correct_chip_id_gives_ok);
+    RUN_TEST(test_wrong_chip_id_is_reported);
+    RUN_TEST(test_retries_after_bus_errors);
+    RUN_TEST(test_gives_up_after_all_retries_fail);
+    RUN_TEST(test_null_arguments_are_rejected);
+    return TEST_END();
+}
+</pre></div>
+
+<ol class="walk" data-for="tsn">
+  <li data-lines="5-10"><b class="what">درز پیوندی.</b> تعریف <code>hal_delay_ms</code> در فایل تست است؛ به‌جای صبر واقعی فقط مجموع میلی‌ثانیه‌ها را ثبت می‌کند.
+    <span class="why">اگر واقعا صبر می‌کردیم، تست‌ها کند می‌شدند.</span></li>
+  <li data-lines="12-23"><b class="what">ساختار mock.</b> آرایهٔ کدهای برگشتی و مقدارها (سناریو)، شمارندهٔ فراخوانی و آخرین آرگومان‌ها (جاسوس).</li>
+  <li data-lines="25-35"><b class="what">تابع mock.</b> آرگومان‌ها را ثبت می‌کند و جواب بعدی سناریو را می‌دهد؛ اگر بیش از انتظار صدا زده شود، همان‌جا تست را رد می‌کند.
+    <span class="why"><code>TEST_FAIL_MESSAGE</code> از داخل mock هم کار می‌کند، چون <code>longjmp</code> از هر عمقی برمی‌گردد.</span></li>
+  <li data-lines="37-45"><b class="what">setUp.</b> mock را صفر می‌کند و به <code>bus</code> وصل می‌کند؛ مکث ثبت‌شده هم صفر می‌شود.</li>
+  <li data-lines="47-62"><b class="what">مسیر خوشحال و شناسهٔ اشتباه.</b> ۰x60 یعنی OK؛ علاوه بر نتیجه، بررسی می‌کنیم <b>درست</b> صدا زده شده باشد (آدرس ۰x76، ثبات ۰xD0): «بررسی رفتار» فقط با spy ممکن است. ۰x58 (شناسهٔ تراشهٔ مشابه BMP280) رد می‌شود و تلاش دوباره نمی‌کند.</li>
+  <li data-lines="64-82"><b class="what">تلاش مجدد و تسلیم.</b> دو خطا و بعد موفقیت: سه فراخوانی و دو مکث. همهٔ تلاش‌ها خطا: <code>SENSOR_ERR_BUS</code> بعد از <code>SENSOR_RETRIES</code> فراخوانی و فقط ۲ مکث. این‌ها سخت‌ترین مسیرها روی سخت‌افزار واقعی‌اند (باید کابل را قطع کنی!) ولی اینجا چند خط.</li>
+  <li data-lines="84-90"><b class="what">ورودی‌های NULL.</b> هم اشاره‌گر خالی و هم struct بدون تابع، بدون دست‌زدن به گذرگاه.</li>
+  <li data-lines="92-101"><b class="what">main.</b> پنج تست.</li>
+</ol>
+
+<div class="callout warn"><div class="ct">mock بیش‌ازحد سخت‌گیر، تست شکننده می‌سازد</div>
+<p>اگر تست را طوری بنویسی که «دقیقا این ترتیب از این فراخوانی‌ها»، با هر تغییر بی‌ضرر در پیاده‌سازی رد شود، تست‌ها را دور می‌ریزی. قاعده: <b>رفتار قابل‌مشاهده</b> را بسنج (چه برگشت، چه چیزی به گذرگاه فرستاده شد)، نه جزئیات درونی. و mock را برای کد <b>خودت</b> بساز؛ به‌جای mock کردن کتابخانه‌های بیرونی (مثل HAL شرکت ST)، یک لایهٔ نازک خودت بین آن‌ها بگذار و آن را mock کن.</p></div>
+
+<h2 id="make">همه با یک دستور: Makefile</h2>
+<p>تا اینجا پنج برنامهٔ تست داریم و اگر بخواهیم هر کدام را جدا بسازیم و اجرا کنیم، خسته‌کننده است. یک <code>Makefile</code> (درس <a href="4-2.html">۴.۲</a>) می‌نویسیم که <b>خودش هر فایل <code>test_*.c</code> را پیدا کند</b>؛ افزودن تست جدید فقط ساختن یک فایل است. روش: کدهای اصلی (غیر از تست‌ها) را در یک کتابخانهٔ ایستا (<code>libsrc.a</code>) جمع می‌کنیم؛ هر تست فقط با همان بخش از آن که لازم دارد لینک می‌شود. مثلا <code>test_ringbuf</code> اصلا <code>sensor.o</code> را نمی‌کشد؛ و <code>test_sensor</code> تعریف <code>hal_delay_ms</code> را از فایل خودش می‌گیرد.</p>
+
+<div class="code" data-file="Makefile" data-lang="make" data-verify="make" data-project="unit" id="mk">
+<pre>
+CC     = gcc
+WARN   = -Wall -Wextra -Wconversion -Wshadow -Wstrict-prototypes -Werror
+CFLAGS = -std=c11 $(WARN) -O0 -g --coverage -fsanitize=address,undefined
+BUILD  = build
+
+SRCS  := $(filter-out test_%.c,$(wildcard *.c))
+OBJS  := $(SRCS:%.c=$(BUILD)/%.o)
+TESTS := $(patsubst test_%.c,$(BUILD)/test_%,$(wildcard test_*.c))
+
+all: test coverage
+
+$(BUILD):
+	mkdir -p $(BUILD)
+
+$(BUILD)/%.o: %.c $(wildcard *.h) | $(BUILD)
+	$(CC) $(CFLAGS) -c $&lt; -o $@
+
+$(BUILD)/libsrc.a: $(OBJS)
+	ar rcs $@ $^
+
+$(BUILD)/test_%: test_%.c $(BUILD)/libsrc.a $(wildcard *.h)
+	$(CC) $(CFLAGS) $&lt; -L$(BUILD) -lsrc -o $@
+
+test: $(TESTS)
+	@fail=0; for t in $(TESTS); do echo "=== $$t"; ./$$t || fail=1; done; exit $$fail
+
+coverage: test
+	@echo "=== coverage"
+	@gcov -n -o $(BUILD) $(SRCS)
+
+clean:
+	rm -rf $(BUILD) *.gcov
+
+.PHONY: all test coverage clean
+</pre></div>
+
+<ol class="walk" data-for="mk">
+  <li data-lines="1-4"><b class="what">متغیرها.</b> پرچم‌های سخت‌گیر درس ۶.۳ با <code>-Werror</code>؛ بدون بهینه‌سازی و با اطلاعات دیباگ (<code>-O0 -g</code>)؛ <code>--coverage</code> برای gcov (بخش بعد)؛ و <code>-fsanitize=address,undefined</code> برای ASan و UBSan (درس‌های ۶.۱ و ۶.۲).
+    <span class="why">هر تست، بدون هزینهٔ اضافه، زیر ذره‌بین دو sanitizer اجرا می‌شود؛ روی PC می‌توانی، روی MCU نه.</span></li>
+  <li data-lines="6-8"><b class="what">پیدا کردن فایل‌ها.</b> <code>wildcard</code> فایل‌های <code>.c</code> را می‌گیرد؛ آن‌هایی که با <code>test_</code> شروع می‌شوند تست‌اند و بقیه «کد اصلی».</li>
+  <li data-lines="10"><b class="what">هدف پیش‌فرض.</b> <code>make</code> بی‌آرگومان، هم تست می‌کند هم پوشش را می‌گیرد.</li>
+  <li data-lines="12-16"><b class="what">پوشهٔ ساخت و قاعدهٔ .o.</b> همهٔ خروجی‌ها در <code>build/</code> می‌روند تا پوشهٔ اصلی تمیز بماند. اگر هر هدری عوض شود، همه دوباره ساخته می‌شوند (ساده ولی درست).</li>
+  <li data-lines="18-19"><b class="what">کتابخانهٔ ایستا.</b> <code>ar</code> فایل‌های <code>.o</code> را در یک آرشیو می‌گذارد.</li>
+  <li data-lines="21-22"><b class="what">ساخت هر تست.</b> <code>test_X.c</code> را با آرشیو لینک می‌کند. لینکر از آرشیو فقط فایل‌هایی را برمی‌دارد که نمادی از آن‌ها لازم است.</li>
+  <li data-lines="24-25"><b class="what">اجرای همه.</b> هر تست اجرا می‌شود؛ اگر یکی شکست بخورد، ادامه می‌دهیم ولی در آخر با کد غیرصفر خارج می‌شویم.
+    <span class="why">چون یک شکست نباید تست‌های دیگر را پنهان کند؛ ولی CI باید قرمز شود.</span></li>
+  <li data-lines="27-29"><b class="what">پوشش.</b> <code>gcov</code> روی فایل‌های اصلی (نه تست‌ها) اجرا می‌شود. <code>-n</code> یعنی فقط خلاصه بنویس.</li>
+  <li data-lines="31-34"><b class="what">پاک‌سازی و اسم‌های ساختگی.</b> <code>.PHONY</code> یعنی <code>all</code>، <code>test</code> و ... اسم فایل نیستند.</li>
+</ol>
+
+<p>خروجی <code>make</code> روی پوشهٔ ما (اجرای واقعی؛ چند خط اول و آخر):</p>
+<pre class="term" data-kind="cmd">
+$ make
+mkdir -p build
+gcc -std=c11 -Wall -Wextra -Wconversion -Wshadow -Wstrict-prototypes -Werror -O0 -g --coverage -fsanitize=address,undefined -c button.c -o build/button.o
+...
+=== build/test_ringbuf
+test_ringbuf.c:93:test_new_buffer_is_empty:PASS
+test_ringbuf.c:94:test_bytes_come_out_in_same_order:PASS
+test_ringbuf.c:95:test_full_buffer_rejects_new_byte:PASS
+test_ringbuf.c:96:test_get_on_empty_leaves_output_untouched:PASS
+test_ringbuf.c:97:test_wraps_around_the_end_of_storage:PASS
+test_ringbuf.c:98:test_counters_survive_16_bit_wrap:PASS
+-----------------------
+6 Tests 0 Failures
+OK
+...
+=== coverage
+File 'button.c'
+Lines executed:100.00% of 34
+File 'logger.c'
+Lines executed:100.00% of 18
+File 'ringbuf.c'
+Lines executed:100.00% of 22
+File 'sat_sub.c'
+Lines executed:100.00% of 4
+File 'satmath.c'
+Lines executed:100.00% of 3
+File 'sensor.c'
+Lines executed:100.00% of 10
+Lines executed:100.00% of 91
+</pre>
+<p>(فایل‌های <code>logger</code> و <code>sat_sub</code> مال تمرین‌های آخر درس‌اند؛ اگر هنوز نساخته‌ای، در فهرست نمی‌آیند.)</p>
+
+<h3 id="mutate">تست را تست کن</h3>
+<p>چطور بفهمیم تست‌ها واقعا قوی‌اند؟ عمدا یک باگ در کد بگذار و ببین تست می‌گیرد یا نه (به این کار «جهش» می‌گویند). در <code>ringbuf.c</code> ماسک را در <code>rb_put</code> برداشتم (<code>rb-&gt;data[rb-&gt;head]</code> به‌جای <code>rb-&gt;data[rb-&gt;head &amp; RB_MASK]</code>) و اجرا کردم. اجرای واقعی:</p>
+<pre class="term" data-kind="cmd">
+ringbuf.c:29:13: runtime error: index 8 out of bounds for type 'uint8_t [8]'
+test_ringbuf.c:93:test_new_buffer_is_empty:PASS
+test_ringbuf.c:94:test_bytes_come_out_in_same_order:PASS
+test_ringbuf.c:95:test_full_buffer_rejects_new_byte:PASS
+test_ringbuf.c:96:test_get_on_empty_leaves_output_untouched:PASS
+test_ringbuf.c:65:test_wraps_around_the_end_of_storage:FAIL: Expected TRUE: rb_is_full(&amp;rb)
+test_ringbuf.c:83:test_counters_survive_16_bit_wrap:FAIL: Expected 8 Was 0
+-----------------------
+6 Tests 2 Failures
+FAIL
+</pre>
+<p>دو نگهبان با هم گرفتند: UBSan (خط اول: اندیس ۸ بیرون آرایهٔ ۸تایی) و دو تست ما (چرخش و دور زدن شمارنده). جالب است که سه تست ساده هنوز قبول شدند: فقط تست‌های مرزی باگ را می‌گیرند؛ ارزش تست مرزی همین است. (خط UBSan اول آمده چون <code>stderr</code> بافر ندارد.)</p>
+
+<h2 id="cov">پوشش با gcov</h2>
+<p>«تست‌هایم چقدر از کد را دیده‌اند؟» را <span class="term" data-t="coverage">پوشش کد</span> (code coverage) جواب می‌دهد. ابزار <span class="term" data-t="gcov">gcov</span> همراه <code>gcc</code> است و مثل مأمور آمارگیری عمل می‌کند: هنگام اجرا برای هر خط شماره می‌زند چند بار اجرا شد. سه مرحله:</p>
+<ol class="steps">
+  <li><b>کامپایل با <code>--coverage</code>.</b> کامپایلر کد شمارنده اضافه می‌کند و فایل <code>.gcno</code> (نقشهٔ بلوک‌ها) می‌سازد. مقایسه دقیق خط‌ها به <code>-O0</code> نیاز دارد.</li>
+  <li><b>اجرا.</b> با پایان برنامه فایل <code>.gcda</code> (شمارنده‌ها) نوشته می‌شود؛ چند اجرا روی هم جمع می‌شوند.</li>
+  <li><b>گزارش.</b> <code>gcov file.c</code> فایل <code>file.c.gcov</code> می‌سازد: هر خط، شمارهٔ اجرا؛ خط ناپیموده با <code>#####</code>.</li>
+</ol>
+<p>همان‌طور که در Makefile دیدی، همه‌چیز خودکار است. ولی برای دیدن ریز نتیجه، این نسخهٔ دستی را ببین. این اجرا برای دفعه‌ای است که هنوز تست «اسم حالت‌ها» را در <code>test_button.c</code> ننوشته بودم:</p>
+<pre class="term" data-kind="cmd">
+$ gcc -std=c11 --coverage -O0 -c button.c
+$ gcc -std=c11 --coverage -O0 test_button.c button.o -o test_button
+$ ./test_button
+...
+7 Tests 0 Failures
+OK
+$ gcov button.c
+File 'button.c'
+Lines executed:94.12% of 34
+Creating 'button.c.gcov'
+$ grep -n "#####" -A3 button.c.gcov
+    #####:   49:const char *button_state_name(btn_state_t s)
+        -:   50:{
+        -:   51:    static const char *const names[] = {
+        -:   52:        "RELEASED", "PRESS_CANDIDATE", "PRESSED", "RELEASE_CANDIDATE"
+    #####:   54:    return names[s];
+</pre>
+<p>تمام تست‌ها سبز بودند ولی <code>button_state_name</code> هرگز اجرا نشده بود (۹۴٪). یک تست دو خطی (<code>test_state_names_are_readable</code> در فایل بالا) آن را به ۱۰۰٪ رساند. در ستون چپ خروجی <code>.gcov</code> شمارندهٔ هر خط را می‌بینی؛ مثلا خط <code>switch</code> ماشین حالت ۱۲۲ بار اجرا شده است (یک بار برای هر tick همهٔ تست‌ها).</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>سنجه</th><th>می‌پرسد</th><th>پرچم <code>gcov</code></th></tr></thead>
+<tbody>
+<tr><td><b>خط</b> (line)</td><td>این خط حداقل یک بار اجرا شد؟</td><td>پیش‌فرض</td></tr>
+<tr><td><b>شاخه</b> (branch)</td><td>هر دو طرف هر <code>if</code>/<code>case</code> دیده شد؟</td><td><code>-b</code></td></tr>
+<tr><td><b>MC/DC</b></td><td>هر شرط در یک عبارت، مستقل روی نتیجه اثر گذاشت؟</td><td>ابزار تخصصی (در استانداردهای ایمنی)</td></tr>
+</tbody></table></div>
+<p>با <code>gcov -b button.c</code> می‌بینیم شاخه‌ها ۹۴٪ هستند حتی وقتی خط‌ها ۱۰۰٪ شوند: یکی از شاخه‌های <code>switch(b-&gt;state)</code> مربوط به «حالتی که در هیچ <code>case</code> نیست» است و هیچ تستی آن را نمی‌زند (چون <code>enum</code> معتبر است). این دقیقا همان <code>default</code> است که MISRA (درس ۶.۳) می‌خواهد. پوشش شاخه سخت‌گیرتر از پوشش خط است.</p>
+
+<div class="callout warn"><div class="ct">۱۰۰٪ پوشش یعنی «اجرا شد»، نه «درست است»</div>
+<p>پوشش فقط می‌گوید <b>کجاها را تست‌ها دیده‌اند</b>. تستی بدون هیچ <code>ASSERT</code> هم پوشش ۱۰۰٪ می‌دهد و چیزی را ثابت نمی‌کند. پوشش پایین اطلاعات مفیدی است («این بخش هرگز تست نشده»)؛ پوشش بالا تضمین نیست. عددی مثل «۸۰٪» را هدف کورکورانهٔ تیم نکن؛ به‌جایش <code>.gcov</code> را بخوان و ببین کدام خط‌ها مهم و بی‌تست‌اند. برای گزارش زیباتر (HTML، عدد تجمیعی) <code>gcovr</code> و <code>lcov</code> وجود دارند.</p></div>
+
+<h2 id="ci">CI: هر بار push، تست خودکار</h2>
+<p><span class="term" data-t="contint">CI</span> (یکپارچه‌سازی پیوسته، continuous integration) یعنی یک سرور، هر بار که کدی را در مخزن می‌گذاری، پروژه را از نو می‌سازد، تست می‌زند و نتیجه را می‌گوید. مثل بازرسی که هر بار کارگاه را بازدید می‌کند، حتی اگر تو یادت رفته باشد تست بزنی. برای اینکه CI بتواند کار کند، <b>تست باید با یک دستور و بدون دخالت انسان اجرا شود و با کد خروج جواب بدهد</b>؛ همان‌طور که ساختیم. این نمونهٔ یک فایل برای GitHub Actions است (نام و ساختار مطابق مستندات فعلی GitHub است؛ نسخه‌ها را در مستندات رسمی وارسی کن). فرض کرده‌ایم فایل‌های این درس در پوشهٔ <code>unit/</code> مخزن هستند:</p>
+
+<div class="code" data-file="tests.yml" data-lang="text" data-verify="frag" id="yml">
+<pre>
+name: unit-tests
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: unit
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cppcheck
+        run: sudo apt-get update &amp;&amp; sudo apt-get install -y cppcheck
+
+      - name: Static analysis
+        run: cppcheck -q --error-exitcode=1 --enable=warning,style --inline-suppr .
+
+      - name: Unit tests and coverage
+        run: make
+
+      - name: Coverage report
+        run: gcov -o build $(ls *.c | grep -v '^test_') &gt; coverage.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: unit/coverage.txt
+</pre></div>
+
+<ol class="walk" data-for="yml">
+  <li data-lines="1-2"><b class="what">چه موقع.</b> با هر <code>push</code> و هر <code>pull_request</code>.</li>
+  <li data-lines="4-9"><b class="what">یک کار روی Ubuntu.</b> همهٔ دستورها داخل پوشهٔ <code>unit</code> اجرا می‌شوند.</li>
+  <li data-lines="10-11"><b class="what">گرفتن کد.</b> مخزن را روی ماشین CI می‌آورد.</li>
+  <li data-lines="13-17"><b class="what">تحلیل ایستا.</b> <code>cppcheck</code> (درس ۶.۳) با <code>--error-exitcode=1</code>: اگر هشداری بدهد، مرحله قرمز می‌شود.
+    <span class="why">هشداری که کسی ندیده، وجود ندارد. CI آن را جلوی چشم همه می‌گذارد.</span></li>
+  <li data-lines="19-20"><b class="what">تست و پوشش.</b> همان <code>make</code> که خودت اجرا می‌کنی. اگر تستی رد شود، کد خروج غیرصفر است و کل کار قرمز می‌شود.</li>
+  <li data-lines="22-28"><b class="what">ذخیرهٔ گزارش.</b> گزارش پوشش را به‌عنوان فایل پیوست نگه می‌دارد تا بعدا بخوانی.</li>
+</ol>
+<p>نکته: اگر CI روی سرور <code>make</code> را با <code>-Werror</code> و ASan اجرا کند، دقیقا همان چیزی است که روی رایانهٔ خودت اجرا کردی؛ «روی سیستم من کار می‌کرد» (که بهانهٔ معروف است) کمتر پیش می‌آید. این‌جا فقط ساختن روی PC را داریم؛ ساختن «فرم واقعی» (با <code>arm-none-eabi-gcc</code>) هم در همین CI می‌تواند یک مرحلهٔ دیگر باشد تا بدانی برای مقصد هم کامپایل می‌شود.</p>
+
+<h2 id="target">فراتر از PC: روی برد، شبیه‌ساز و HIL</h2>
+<p>تست PC همه‌چیز نیست. جدول زیر گزینه‌ها را کنار هم می‌گذارد:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>روش</th><th>کجا اجرا می‌شود</th><th>چه چیزی را می‌گیرد</th><th>هزینه</th></tr></thead>
+<tbody>
+<tr><td>تست PC</td><td>رایانهٔ توسعه یا CI</td><td>منطق، حالت‌های خطا، مرزها</td><td>خیلی کم</td></tr>
+<tr><td>شبیه‌ساز (QEMU، Renode)</td><td>CPU مجازی مقصد</td><td>اندازهٔ <code>int</code>، ترتیب بایت، کد کامپایل‌شدهٔ مقصد؛ بخشی از پریفرال‌ها</td><td>کم تا متوسط</td></tr>
+<tr><td>تست روی خود MCU</td><td>برد واقعی؛ نتیجه با UART یا semihosting به PC می‌رسد</td><td>رجیستر، وقفه، زمان‌بندی واقعی، کامپایلر مقصد</td><td>متوسط</td></tr>
+<tr><td><span class="term" data-t="hil">HIL</span> (hardware-in-the-loop)</td><td>برد واقعی وصل به یک دستگاه که ورودی‌ها را می‌سازد</td><td>کل سیستم: ADC واقعی، موتور، حسگر</td><td>گران</td></tr>
+</tbody></table></div>
+<p>Unity طوری نوشته شده که روی خود MCU هم اجرا شود (فقط باید خروجی‌اش را به یک UART بفرستی). ESP-IDF خودش کامپوننت Unity را همراه دارد؛ برای راه‌اندازی، به بخش «Unit Testing» مستندات <a href="https://docs.espressif.com/projects/esp-idf/" target="_blank" rel="noopener">ESP-IDF</a> نگاه کن. برای STM32 معمولا منطق را در فایل‌های مستقل از HAL نگه می‌دارند و روی PC تست می‌کنند؛ لایهٔ پریفرال را روی برد یا با شبیه‌ساز.</p>
+
+<div class="callout tip"><div class="ct">قانون کاربردی</div>
+<p>منطق را در فایل‌هایی بنویس که <b>هیچ <code>#include</code> ای از HAL یا رجیستر نداشته باشند</b> (مثل <code>ringbuf.c</code>). این فایل‌ها هم روی PC و هم روی MCU کامپایل می‌شوند و تست PC آن‌ها را کاملا می‌سنجد. سخت‌افزار در فایل‌های جدا و نازک بماند.</p></div>
+
+<h2 id="mcu">در STM32 و ESP32 یعنی چه؟</h2>
+<ul>
+  <li><b>همان کد، دو دنیا.</b> <code>ringbuf.c</code>، <code>button.c</code> و <code>sensor.c</code> بدون هیچ تغییر روی STM32 (با <code>arm-none-eabi-gcc</code>) و ESP32 (با ESP-IDF) هم کامپایل می‌شوند؛ چون فقط به <code>stdint.h</code> و <code>stdbool.h</code> تکیه دارند و سخت‌افزار را از راه <code>bus_ops_t</code> می‌گیرند.</li>
+  <li><b>پیاده‌سازی واقعی <code>bus_ops_t</code>.</b> روی STM32 تابعی با HAL/رجیستر I2C و روی ESP32 تابعی با <code>i2c</code> ESP-IDF؛ هر دو همان امضای <code>read_reg</code> را دارند. تست PC آن را نمی‌بیند، ولی بقیهٔ منطق (تلاش مجدد، بررسی شناسه) کاملا تست شده است.</li>
+  <li><b>تفاوت‌های PC و MCU.</b> روی PC، <code>int</code> ۳۲ بیتی است و اشاره‌گر ۶۴ بیتی؛ یک تست که <code>sizeof(void*)</code> را فرض کند ممکن است روی MCU فرق کند. همیشه از <code>stdint.h</code> استفاده کن (درس ۲.۲) و یک بار هم کد را با کامپایلر مقصد بساز.</li>
+  <li><b>وقفه‌ها.</b> تست تک‌رشته‌ای رقابت (race) را نمی‌بیند. می‌توانی «توالی رخداد» را دستی شبیه‌سازی کنی (تابع «ISR» را وسط عملیات صدا بزنی)، ولی برای ثابت‌کردن SPSC بودن بافر باید طراحی (درس ۴.۵) و بازبینی را هم داشته باشی.</li>
+</ul>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+
+<div class="quiz" data-answer="3">
+  <p class="q">کدام مورد را <b>نمی‌شود</b> با تست واحد روی PC ثابت کرد؟</p>
+  <ol>
+    <li data-why="این دقیقا کار تست PC است: منطق FIFO خالص، بدون سخت‌افزار.">بافر حلقوی بایت‌ها را به ترتیب برمی‌گرداند</li>
+    <li data-why="با mock می‌توانیم خطای گذرگاه را بسازیم و مسیر تلاش مجدد را تست کنیم.">اگر گذرگاه I2C خطا بدهد، درایور سه بار تلاش می‌کند</li>
+    <li>رجیستر <code>MODER</code> واقعی برد مقدار درست گرفته و پایه PA5 واقعا LED را روشن می‌کند</li>
+    <li data-why="این منطق ماشین حالت است و روی PC کاملا قابل‌تست است.">دکمه با ۳ نمونهٔ پایدار «فشرده» حساب می‌شود</li>
+  </ol>
+  <div class="fb">PC سخت‌افزار برد را ندارد؛ آنچه به رجیستر و پایهٔ واقعی مربوط است باید روی برد، شبیه‌ساز یا HIL دیده شود. منطق را روی PC تست کن و لایهٔ سخت‌افزاری را نازک نگه دار.</div>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="q">این تست چه ایرادی دارد؟</p>
+  <div class="code" data-lang="c" id="qc1"><pre>
+static void test_put(void)
+{
+    rb_put(&amp;rb, 5);
+    uint8_t out;
+    rb_get(&amp;rb, &amp;out);
+}
+</pre></div>
+  <ol>
+    <li>هیچ <code>TEST_ASSERT</code> ندارد؛ همیشه «PASS» می‌شود و چیزی را ثابت نمی‌کند</li>
+    <li data-why="static بودن تابع تست عیب نیست؛ حتی خوب است تا فقط همین فایل ببیندش.">تابع تست نباید <code>static</code> باشد</li>
+    <li data-why="پارامتر void درست است؛ تست‌ها معمولا <code>void f(void)</code> هستند.">پارامتر <code>void</code> ندارد</li>
+    <li data-why="مقدار out قبل از get بی‌مقدار است ولی مشکل اصلی نبود assert است.">متغیر <code>out</code> مقدار اولیه ندارد</li>
+  </ol>
+  <div class="fb">تستی که چیزی را نمی‌سنجد، فقط پوشش می‌دهد و اطمینان کاذب می‌سازد. اولین سؤال درباره هر تست: «اگر کد خراب شود، این تست قرمز می‌شود؟» (این‌جا: نه.)</div>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="q">تابع <code>sensor_probe</code> از <code>bus-&gt;read_reg(...)</code> استفاده می‌کند و مستقیم I2C را صدا نمی‌زند. این چه فایده‌ای برای تست دارد؟</p>
+  <ol>
+    <li data-why="اشاره‌گر تابع معمولا کمی کندتر است، نه سریع‌تر؛ و ربطی به هدف ندارد.">برنامه روی برد سریع‌تر می‌شود</li>
+    <li>در تست، می‌شود یک تابع ساختگی (mock) وصل کرد که جواب‌های دلخواه بدهد و آرگومان‌ها را ثبت کند</li>
+    <li data-why="اشاره‌گر تابع ربطی به sanitizer ندارد؛ ASan همچنان لازم است.">دیگر به ASan نیازی نیست</li>
+    <li data-why="اشاره‌گر تابع خطای گذرگاه را حذف نمی‌کند؛ فقط به ما اجازه می‌دهد شبیه‌سازی‌اش کنیم.">خطای گذرگاه هیچ‌وقت پیش نمی‌آید</li>
+  </ol>
+  <div class="fb">این «درز» (seam) است: نقطه‌ای که می‌توانی بدون تغییر کد اصلی، چیز دیگری را جایگزین کنی. با آن مسیر خطا را هم به‌سادگی می‌سازی.</div>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="q">خروجی <code>gcov</code> می‌گوید <code>Lines executed:100.00%</code> ولی در برنامه باگ پیدا می‌شود. چرا؟</p>
+  <ol>
+    <li data-why="gcov درست کار می‌کند؛ ایراد از تفسیر ماست.">gcov خراب است</li>
+    <li data-why="پوشش ۱۰۰٪ یعنی همهٔ خط‌ها اجرا شده‌اند، نه اینکه ۱۰۰٪ باگ‌ها پیدا شده‌اند.">تست‌ها باید اجرا نشده باشند</li>
+    <li>پوشش فقط می‌گوید هر خط اجرا شده؛ اگر تست چیزی را نسنجد یا ورودی مرزی نداشته باشد، باگ می‌ماند</li>
+    <li data-why="پرچم -O0 نتیجه را دقیق‌تر می‌کند و ربطی به از دست رفتن باگ ندارد.">چون از <code>-O0</code> استفاده کرده‌ایم</li>
+  </ol>
+  <div class="fb">پوشش می‌گوید «کجا را ندیده‌ایم»، نه «همه‌چیز درست است». کیفیت به assertها و انتخاب ورودی‌های مرزی بستگی دارد. برای همین «جهش» (خراب‌کردن عمدی کد) را هم امتحان کن.</div>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="q">دو تست را جدا اجرا می‌کنی و هر دو سبزند، ولی با هم یکی قرمز می‌شود. مشکل معمولا چیست؟</p>
+  <ol>
+    <li data-why="کامپایلر ربطی ندارد؛ مشکل از داده‌ای است که بین تست‌ها مانده.">کامپایلر تست‌ها را قاطی می‌کند</li>
+    <li>تست‌ها به هم وابسته‌اند: وضعیت مشترک (مثلا بافر <code>static</code>) بین تست‌ها ریست نمی‌شود</li>
+    <li data-why="assert در هر تست مستقل کار می‌کند و به تعداد تست‌ها ربطی ندارد.">تعداد تست‌ها بیش از حد است</li>
+    <li data-why="تست‌های سریع مشکلی نیستند؛ سرعت یکی از ویژگی‌های خوب است.">تست‌ها خیلی سریع‌اند</li>
+  </ol>
+  <div class="fb">قانون «مستقل بودن»: هر تست باید در <code>setUp</code> صحنه را از نو بچیند. تمرین ۲ همین باگ را دارد.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: TDD برای تفریق اشباع‌شده</div>
+<p>می‌خواهیم <code>uint8_t sat_sub_u8(uint8_t a, uint8_t b)</code> بنویسیم: <code>a - b</code>، ولی اگر نتیجه منفی می‌شود، ۰ برگرداند (نه دور بزند و ۲۴۶ شود).</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> پیش از نوشتن کد، فهرستی از ۴ تا ۵ تست بنویس (نام و ورودی و خروجی) که مرزها را بپوشاند. کدام‌شان باگ نسخهٔ ساده‌لوحانهٔ <code>(uint8_t)(a - b)</code> را می‌گیرد؟</li>
+  <li><b>حل:</b> فایل <code>test_sat_sub.c</code> را با <code>minitest.h</code> بنویس، رد شدنش را ببین (قرمز)، بعد <code>sat_sub.c</code> را بنویس (سبز).</li>
+  <li><b>چالش:</b> همه‌چیز را بدون تغییر <code>Makefile</code> اجرا کن: فقط فایل‌های <code>sat_sub.h</code>، <code>sat_sub.c</code> و <code>test_sat_sub.c</code> را به پوشه بیفزا و <code>make</code> بزن. چرا کار می‌کند؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>مرزها: معمولی (۱۰۰ − ۳۰)، تفریق صفر، مساوی (۵۰ − ۵۰)، منفی‌شدن (۱۰ − ۲۰ و ۰ − ۲۵۵). نسخهٔ ساده‌لوحانه فقط روی «منفی‌شدن» رد می‌شود. برای چالش: <code>wildcard</code> در Makefile.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-kind="cmd">
+=== build/test_sat_sub
+test_sat_sub.c:31:test_normal_subtraction:PASS
+test_sat_sub.c:32:test_subtracting_zero_changes_nothing:PASS
+test_sat_sub.c:33:test_equal_operands_give_zero:PASS
+test_sat_sub.c:34:test_negative_result_saturates_at_zero:PASS
+-----------------------
+4 Tests 0 Failures
+OK
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="sat_sub.h" data-lang="c" data-verify="make" data-project="unit" id="ssh">
+<pre>
+#ifndef SAT_SUB_H
+#define SAT_SUB_H
+
+#include &lt;stdint.h&gt;
+
+/* تفریق اشباع‌شده: اگر نتیجه منفی شود روی ۰ می‌ماند (دور نمی‌زند) */
+uint8_t sat_sub_u8(uint8_t a, uint8_t b);
+
+#endif /* SAT_SUB_H */
+</pre></div>
+<div class="code" data-file="sat_sub.c" data-lang="c" data-verify="make" data-project="unit" id="ssc">
+<pre>
+#include "sat_sub.h"
+
+uint8_t sat_sub_u8(uint8_t a, uint8_t b)
+{
+    if (b &gt;= a) {
+        return 0U;                  // نتیجه صفر یا منفی می‌شد
+    }
+    return (uint8_t)(a - b);
+}
+</pre></div>
+<div class="code" data-file="test_sat_sub.c" data-lang="c" data-verify="make" data-project="unit" id="tss">
+<pre>
+#include "minitest.h"
+#include "sat_sub.h"
+
+void setUp(void) {}
+void tearDown(void) {}
+
+static void test_normal_subtraction(void)
+{
+    TEST_ASSERT_EQUAL_INT(70, sat_sub_u8(100, 30));
+}
+
+static void test_subtracting_zero_changes_nothing(void)
+{
+    TEST_ASSERT_EQUAL_INT(255, sat_sub_u8(255, 0));
+}
+
+static void test_equal_operands_give_zero(void)
+{
+    TEST_ASSERT_EQUAL_INT(0, sat_sub_u8(50, 50));
+}
+
+static void test_negative_result_saturates_at_zero(void)
+{
+    TEST_ASSERT_EQUAL_INT(0, sat_sub_u8(10, 20));
+    TEST_ASSERT_EQUAL_INT(0, sat_sub_u8(0, 255));
+}
+
+int main(void)
+{
+    TEST_BEGIN();
+    RUN_TEST(test_normal_subtraction);
+    RUN_TEST(test_subtracting_zero_changes_nothing);
+    RUN_TEST(test_equal_operands_give_zero);
+    RUN_TEST(test_negative_result_saturates_at_zero);
+    return TEST_END();
+}
+</pre></div>
+<ol class="walk" data-for="ssc">
+  <li data-lines="3-9"><b class="what">مقایسه پیش از تفریق.</b> اگر <code>b &gt;= a</code>، نتیجه صفر یا منفی می‌شد؛ پس ۰. وگرنه <code>a - b</code> حتما بین ۱ تا ۲۵۵ است و cast امن.
+    <span class="why">پیش از تفریق مقایسه می‌کنیم، نه بعد (برای بی‌علامت‌ها «بعد» دیگر دیر است).</span></li>
+</ol>
+<ol class="walk" data-for="tss">
+  <li data-lines="7-26"><b class="what">چهار تست مرزی.</b> معمولی، صفر، مساوی، و دو حالت منفی (کوچک‌تر و صفر منهای بیشینه).</li>
+</ol>
+<p>چرا بدون تغییر Makefile کار می‌کند؟ <code>wildcard</code> هر <code>test_*.c</code> را پیدا می‌کند و <code>sat_sub.c</code> خودکار به <code>libsrc.a</code> می‌رود. اگر <code>make</code> بزنی، همین چهار تست را در فهرست می‌بینی.</p></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: تستی که «گاهی» رد می‌شود (باگ‌یابی)</div>
+<p>این فایل دو تست دارد که هر کدام تنها اجرا شود، سبز است. ولی وقتی با هم اجرا می‌شوند یکی قرمز می‌شود.</p>
+<div class="code" data-lang="c" id="ex2bad"><pre>
+#include "minitest.h"
+#include "ringbuf.h"
+
+static ringbuf_t rb;                    // یک بار برای همهٔ تست‌ها
+
+void setUp(void) {}                     // فراموش شده: بافر ریست نمی‌شود!
+void tearDown(void) {}
+
+static void test_put_three_bytes(void)
+{
+    for (uint8_t i = 0; i &lt; 3; i++) {
+        TEST_ASSERT_TRUE(rb_put(&amp;rb, i));
+    }
+    TEST_ASSERT_EQUAL_INT(3, rb_count(&amp;rb));
+}
+
+static void test_new_buffer_is_empty(void)
+{
+    TEST_ASSERT_TRUE(rb_is_empty(&amp;rb));
+}
+
+int main(void)
+{
+    TEST_BEGIN();
+    RUN_TEST(test_put_three_bytes);
+    RUN_TEST(test_new_buffer_is_empty);
+    return TEST_END();
+}
+</pre></div>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> خروجی را با ترتیب فعلی <code>RUN_TEST</code> پیش‌بینی کن. اگر جای دو خط <code>RUN_TEST</code> را عوض کنیم چه می‌شود؟</li>
+  <li><b>حل:</b> باگ را رفع کن.</li>
+  <li><b>چالش:</b> چطور می‌توان تست‌ها را طوری اجرا کرد که این نوع وابستگی، خودبه‌خود لو برود؟ (فکر کن: ترتیب اجرا.)</li>
+</ol>
+<details><summary>راهنمایی</summary><p>بافر <code>static</code> است و <code>test_put_three_bytes</code> سه بایت در آن می‌گذارد و کسی پاکشان نمی‌کند. قانون FIRST: «مستقل». جای درست برای آماده‌سازی صحنه: <code>setUp</code>.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>خروجی اجرای واقعی با ترتیب فعلی، و بعد با ترتیب معکوس:</p>
+<pre class="term" data-kind="cmd">
+test_shared_state.c:25:test_put_three_bytes:PASS
+test_shared_state.c:19:test_new_buffer_is_empty:FAIL: Expected TRUE: rb_is_empty(&amp;rb)
+-----------------------
+2 Tests 1 Failures
+FAIL
+(با ترتیب معکوس:)
+rev.c:25:test_new_buffer_is_empty:PASS
+rev.c:26:test_put_three_bytes:PASS
+-----------------------
+2 Tests 0 Failures
+OK
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="test_shared_state.c" data-lang="c" data-verify="make" data-project="unit" id="tss2">
+<pre>
+#include "minitest.h"
+#include "ringbuf.h"
+
+static ringbuf_t rb;
+
+void setUp(void)
+{
+    rb_init(&amp;rb);                       // درمان: هر تست بافر تازه می‌گیرد
+}
+
+void tearDown(void) {}
+
+static void test_put_three_bytes(void)
+{
+    for (uint8_t i = 0; i &lt; 3; i++) {
+        TEST_ASSERT_TRUE(rb_put(&amp;rb, i));
+    }
+    TEST_ASSERT_EQUAL_INT(3, rb_count(&amp;rb));
+}
+
+static void test_new_buffer_is_empty(void)
+{
+    TEST_ASSERT_TRUE(rb_is_empty(&amp;rb));
+}
+
+int main(void)
+{
+    TEST_BEGIN();
+    RUN_TEST(test_put_three_bytes);
+    RUN_TEST(test_new_buffer_is_empty);
+    return TEST_END();
+}
+</pre></div>
+<ol class="walk" data-for="tss2">
+  <li data-lines="6-9"><b class="what">درمان: setUp.</b> هر تست با <code>rb_init</code> بافر تازه‌ای می‌گیرد؛ پس ترتیب اجرا دیگر مهم نیست.
+    <span class="why">در نسخهٔ خراب، بافر <code>static</code> بود و نتیجهٔ یک تست به تست بعدی «نشت» می‌کرد. بد آنکه اگر ترتیب <code>RUN_TEST</code> را عکس کنی، هر دو سبز می‌شوند و باگ پنهان می‌ماند؛ بدترین حالت.</span></li>
+</ol>
+<p>برای چالش: اجرای تست‌ها به ترتیب معکوس یا تصادفی (بعضی فریم‌ورک‌ها این گزینه را دارند) این وابستگی را لو می‌دهد. ساده‌ترین راه در فریم‌ورک ما: یک بار فهرست <code>RUN_TEST</code> را وارونه کن و ببین چیزی رد می‌شود یا نه.</p></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: mock برای UART (سخت‌افزار)</div>
+<p>روی سخت‌افزار واقعی، تابع نوشتن UART ممکن است <b>فقط بخشی از بایت‌ها</b> را بپذیرد (FIFO پر است) یا خطا بدهد. تابع <code>log_line</code> زیر یک خط لاگ را با <code>\r\n</code> می‌فرستد و در صورت ارسال ناقص، ادامه می‌دهد.</p>
+
+<div class="code" data-file="logger.h" data-lang="c" data-verify="make" data-project="unit" id="lgh">
+<pre>
+#ifndef LOGGER_H
+#define LOGGER_H
+
+#include &lt;stddef.h&gt;
+#include &lt;stdint.h&gt;
+
+#define LOG_MAX_TEXT 62U            /* حداکثر طول متن (بدون \r\n) */
+
+/* لایهٔ انتقال (مثلا UART): تعداد بایت‌های واقعا فرستاده‌شده را برمی‌گرداند؛ منفی = خطا */
+typedef struct {
+    int   (*write)(void *ctx, const uint8_t *data, size_t n);
+    void   *ctx;
+} tx_ops_t;
+
+typedef enum {
+    LOG_OK = 0,
+    LOG_ERR_ARG = -1,
+    LOG_ERR_TOO_LONG = -2,
+    LOG_ERR_IO = -3
+} log_status_t;
+
+/* متن را همراه با "\r\n" می‌فرستد و ارسال ناقص را ادامه می‌دهد */
+log_status_t log_line(const tx_ops_t *tx, const char *text);
+
+#endif /* LOGGER_H */
+</pre></div>
+<div class="code" data-file="logger.c" data-lang="c" data-verify="make" data-project="unit" id="lgc">
+<pre>
+#include "logger.h"
+#include &lt;string.h&gt;
+
+log_status_t log_line(const tx_ops_t *tx, const char *text)
+{
+    uint8_t buf[LOG_MAX_TEXT + 2U];
+    size_t  len;
+    size_t  sent = 0U;
+
+    if ((tx == NULL) || (tx-&gt;write == NULL) || (text == NULL)) {
+        return LOG_ERR_ARG;
+    }
+    len = strlen(text);
+    if (len &gt; LOG_MAX_TEXT) {
+        return LOG_ERR_TOO_LONG;
+    }
+    memcpy(buf, text, len);
+    buf[len] = (uint8_t)'\r';
+    buf[len + 1U] = (uint8_t)'\n';
+    len += 2U;
+
+    while (sent &lt; len) {                        // هر دور لااقل یک بایت پیش می‌رود
+        int n = tx-&gt;write(tx-&gt;ctx, &amp;buf[sent], len - sent);
+        if (n &lt;= 0) {
+            return LOG_ERR_IO;
+        }
+        sent += (size_t)n;
+    }
+    return LOG_OK;
+}
+</pre></div>
+
+<ol class="walk" data-for="lgc">
+  <li data-lines="10-12"><b class="what">دروازه.</b> اشاره‌گر خالی رد می‌شود.</li>
+  <li data-lines="13-20"><b class="what">ساخت پیام.</b> طول را می‌سنجد، متن و <code>\r\n</code> را در بافر محلی می‌گذارد.</li>
+  <li data-lines="22-28"><b class="what">ارسال با ادامه.</b> هر دور <code>write</code> را صدا می‌زند؛ اگر <code>n &lt;= 0</code> خطا؛ وگرنه <code>sent</code> جلو می‌رود.
+    <span class="why">چون هر دور یک بایت یا بیشتر پیش می‌رود (وگرنه خروج با خطا)، حلقه حتما تمام می‌شود؛ قانون ۲ ناسا.</span></li>
+</ol>
+
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> اگر <code>write</code> در هر فراخوانی فقط ۲ بایت بپذیرد، برای <code>"hello"</code> (۷ بایت با <code>\r\n</code>) چند بار صدا زده می‌شود؟</li>
+  <li><b>حل:</b> فایل <code>test_logger.c</code> را با یک mock بنویس که (الف) حداکثر <code>max_chunk</code> بایت می‌پذیرد، (ب) همه‌چیز را ضبط می‌کند، (پ) در فراخوانی شمارهٔ دلخواه خطا می‌دهد. چهار تست: عادی، ارسال ناقص، بدون پیشرفت (۰ بایت) و خطا وسط کار.</li>
+  <li><b>چالش:</b> اگر <code>log_line</code> شرط <code>n &lt;= 0</code> را نداشت، تست <code>max_chunk = 0</code> چه می‌شد؟ و دو تست دیگر اضافه کن: متن بیش از <code>LOG_MAX_TEXT</code> و اشاره‌گر <code>NULL</code>.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>mock مثل <code>mock_bus_t</code> بخش «حالت» دارد (بافر ضبط، شمارندهٔ فراخوانی) و از <code>ctx</code> به آن دسترسی پیدا می‌کند. برای «بلند» یک آرایهٔ <code>LOG_MAX_TEXT + 2</code> بایتی از <code>'x'</code> بساز.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-kind="cmd">
+=== build/test_logger
+test_logger.c:75:test_line_is_sent_with_crlf:PASS
+test_logger.c:76:test_partial_writes_are_continued:PASS
+test_logger.c:77:test_zero_progress_is_an_io_error:PASS
+test_logger.c:78:test_error_in_the_middle_is_reported:PASS
+-----------------------
+4 Tests 0 Failures
+OK
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="test_logger.c" data-lang="c" data-verify="make" data-project="unit" id="tlg">
+<pre>
+#include "minitest.h"
+#include "logger.h"
+
+/* ماک UART: در هر فراخوانی حداکثر max_chunk بایت می‌پذیرد و همه را ضبط می‌کند */
+typedef struct {
+    uint8_t  sent[128];
+    size_t   total;
+    size_t   max_chunk;         /* سقف بایت در هر فراخوانی (شبیه FIFO پر) */
+    unsigned calls;
+    int      fail_on_call;      /* شمارهٔ فراخوانی‌ای که خطا بدهد؛ ۰ = هرگز */
+} mock_tx_t;
+
+static mock_tx_t uart;
+static tx_ops_t  tx;
+
+static int mock_write(void *ctx, const uint8_t *data, size_t n)
+{
+    mock_tx_t *m = ctx;
+    m-&gt;calls++;
+    if ((int)m-&gt;calls == m-&gt;fail_on_call) {
+        return -1;
+    }
+    if (n &gt; m-&gt;max_chunk) {
+        n = m-&gt;max_chunk;
+    }
+    memcpy(&amp;m-&gt;sent[m-&gt;total], data, n);
+    m-&gt;total += n;
+    return (int)n;
+}
+
+void setUp(void)
+{
+    memset(&amp;uart, 0, sizeof(uart));
+    uart.max_chunk = 100;
+    tx.write = mock_write;
+    tx.ctx = &amp;uart;
+}
+
+void tearDown(void) {}
+
+static void test_line_is_sent_with_crlf(void)
+{
+    TEST_ASSERT_EQUAL_INT(LOG_OK, log_line(&amp;tx, "hello"));
+    TEST_ASSERT_EQUAL_INT(7, uart.total);
+    TEST_ASSERT_EQUAL_MEMORY("hello\r\n", uart.sent, 7);
+    TEST_ASSERT_EQUAL_INT(1, uart.calls);
+}
+
+static void test_partial_writes_are_continued(void)
+{
+    uart.max_chunk = 2;                             // UART فقط دو بایت می‌پذیرد
+    TEST_ASSERT_EQUAL_INT(LOG_OK, log_line(&amp;tx, "hello"));
+    TEST_ASSERT_EQUAL_MEMORY("hello\r\n", uart.sent, 7);
+    TEST_ASSERT_EQUAL_INT(4, uart.calls);           // 2+2+2+1 بایت
+}
+
+static void test_zero_progress_is_an_io_error(void)
+{
+    uart.max_chunk = 0;                             // هیچ بایتی نمی‌پذیرد
+    TEST_ASSERT_EQUAL_INT(LOG_ERR_IO, log_line(&amp;tx, "hello"));
+    TEST_ASSERT_EQUAL_INT(1, uart.calls);           // حلقه بی‌پایان نشد
+}
+
+static void test_error_in_the_middle_is_reported(void)
+{
+    uart.max_chunk = 3;
+    uart.fail_on_call = 2;
+    TEST_ASSERT_EQUAL_INT(LOG_ERR_IO, log_line(&amp;tx, "hello"));
+    TEST_ASSERT_EQUAL_INT(3, uart.total);           // فقط تکهٔ اول رفته
+}
+
+int main(void)
+{
+    TEST_BEGIN();
+    RUN_TEST(test_line_is_sent_with_crlf);
+    RUN_TEST(test_partial_writes_are_continued);
+    RUN_TEST(test_zero_progress_is_an_io_error);
+    RUN_TEST(test_error_in_the_middle_is_reported);
+    return TEST_END();
+}
+</pre></div>
+<ol class="walk" data-for="tlg">
+  <li data-lines="4-14"><b class="what">وضعیت mock.</b> بافر ضبط، جمع بایت‌ها، سقف هر فراخوانی، شمارندهٔ فراخوانی و شمارهٔ فراخوانی خطادار؛ یک نمونه از آن و یک <code>tx_ops_t</code> که به آن وصل می‌شود.</li>
+  <li data-lines="16-29"><b class="what">تابع mock.</b> شمارنده را زیاد می‌کند؛ اگر نوبت خطا باشد <code>-1</code> می‌دهد؛ وگرنه حداکثر <code>max_chunk</code> بایت را ضبط می‌کند و تعداد را برمی‌گرداند (ارسال ناقص).</li>
+  <li data-lines="31-37"><b class="what">setUp.</b> mock را صفر می‌کند و ظرفیتی بزرگ می‌دهد (پیش‌فرض: همه‌چیز را یک‌جا می‌پذیرد).</li>
+  <li data-lines="49-55"><b class="what">ارسال ناقص.</b> با ۲ بایت در هر فراخوانی، ۷ بایت در ۴ فراخوانی می‌رسد (۲+۲+۲+۱) و محتوای نهایی همان است.</li>
+  <li data-lines="57-62"><b class="what">بدون پیشرفت.</b> UART هیچ بایتی نمی‌پذیرد؛ باید <code>LOG_ERR_IO</code> برگردد و فقط یک فراخوانی رخ دهد؛ یعنی حلقه بی‌پایان نشد.
+    <span class="why">این تست یک ویژگی سخت‌افزاری را بدون سخت‌افزار ثابت می‌کند: «اگر UART قفل شد، تابع ما قفل نمی‌شود.»</span></li>
+</ol>
+<p>چالش: بدون سقف/شرط <code>n &lt;= 0</code>، با <code>max_chunk = 0</code> حلقه برای همیشه می‌چرخید؛ و تست هم هرگز تمام نمی‌شد. تست تنها «قرمز» نمی‌شود، «گیر می‌کند»؛ پس در CI معمولا برای هر تست یک <b>مهلت</b> (timeout) می‌گذارند.</p></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>معمولا سه جا گیر می‌کنند. اول: <b>«تست ننوشتم چون وقت نداشتم».</b> درست است که نوشتن تست وقت می‌برد؛ ولی هر ساعتی که برای دیباگ روی برد می‌گذارد را ده برابر می‌کند. با ماژول‌های کوچک منطقی شروع کن (بافر، CRC، پارسر)؛ آن‌ها ارزان‌ترین و پرسودترین تست‌اند. دوم: <b>کدی می‌نویسند که تست‌پذیر نیست</b> (تابعی که هم رجیستر می‌خواند، هم تصمیم می‌گیرد، هم <code>printf</code> می‌کند). راه درست: تصمیم را در یک تابع خالص بگذار و سخت‌افزار را از راه یک اشاره‌گر تابع بده. سوم: <b>پوشش را هدف می‌کنند.</b> تیمی که «۹۰٪ پوشش» می‌خواهد و بعد تست بی‌assert می‌نویسد، خودش را گول می‌زند. یک پیشنهاد عملی برای امروز: بافر حلقوی خودت را با <code>make</code> این درس تست کن، بعد یک باگ عمدی بگذار و ببین تست می‌گیرد. وقتی اولین‌بار یک تست باگی را گرفت که خودت فراموش کرده بودی، دیگر بدون آن نمی‌نویسی.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li><b>چرا PC؟</b> سریع، ابزار عالی (gdb، ASan، gcov)، حالت‌های خطا آسان، و قابل‌اجرا در CI. ولی جای برد واقعی را نمی‌گیرد؛ منطق را جدا کن و روی PC تست کن.</li>
+  <li><b>فریم‌ورک:</b> هر تست یک تابع؛ <code>TEST_ASSERT_...</code> در شکست پیام «انتظار/نتیجه» چاپ می‌کند و با <code>longjmp</code> از تست خارج می‌شود؛ <code>setUp</code>/<code>tearDown</code> صحنه را می‌چینند؛ کد خروج ۰ یا ۱ برای CI. Unity، Ceedling و CMock نسخهٔ حرفه‌ای همین ایده‌اند.</li>
+  <li><b>تست خوب:</b> AAA، یک ادعا در هر تست، اسم گویا، مرزها (خالی، پر، چرخش، دور زدن شمارنده)، و FIRST (سریع، مستقل، تکرارپذیر، خودبسنده، به‌موقع).</li>
+  <li><b>TDD:</b> قرمز ← سبز ← مرتب. تستی که هرگز قرمز ندیده‌ای معتبر نیست؛ گاهی خود تست غلط است.</li>
+  <li><b>seam و mock:</b> اشاره‌گر تابع (<code>bus_ops_t</code> با <code>ctx</code>) یا جایگزینی هنگام لینک؛ mock جواب‌ها را از سناریو می‌گیرد و فراخوانی‌ها را ثبت می‌کند. رفتار قابل‌مشاهده را بسنج، نه جزئیات درونی.</li>
+  <li><b>پوشش:</b> <code>--coverage -O0</code>، اجرا، <code>gcov</code>؛ <code>#####</code> = ندیده‌ایم. ۱۰۰٪ یعنی «اجرا شد»، نه «درست است». برای اطمینان از تست‌ها: باگ عمدی بگذار.</li>
+  <li><b>CI:</b> <code>make</code> با <code>-Werror</code> و sanitizer، <code>cppcheck</code> و <code>gcov</code> را با هر push اجرا می‌کند. تست روی برد، شبیه‌ساز و HIL لایه‌های بعدی‌اند.</li>
+  <li>بعدی: <a href="6-5.html">۶.۵ بهینه‌سازی، اندازهٔ کد و فایل map</a>.</li>
+</ul></div>
+
+</article>
+</body>
+</html>

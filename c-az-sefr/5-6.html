@@ -1,0 +1,1156 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESP32 با C خالص: ESP-IDF و FreeRTOS · C برای میکروکنترلر</title>
+<meta name="description" content="ساختار پروژهٔ ESP-IDF، app_main، چشمک با درایور gpio، task و اولویت در FreeRTOS، صف، mutex، esp_err_t و لاگ؛ همراه با شبیه‌سازی زمان‌بند روی PC.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+
+<article class="page" data-page="5-6">
+
+<p class="lede">تا اینجا روی STM32 هر کار را خودمان از صفر می‌ساختیم: startup، رجیستر، وقفه، زمان‌بند. ESP32 راه دیگری دارد: یک <b>فریم‌ورک آماده</b> به اسم ESP-IDF که خودش راه‌اندازی را انجام می‌دهد و یک سیستم‌عامل زمان‌واقعی کوچک (FreeRTOS) در دلش دارد. تو فقط <code>app_main</code> را می‌نویسی و کار را به چند «task» تقسیم می‌کنی. در این درس همان C قبلی را با این ابزار به کار می‌بریم و منطق زمان‌بندی‌اش را روی PC هم شبیه‌سازی می‌کنیم.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>ساختار پروژهٔ ESP-IDF و دستورهای <code>idf.py</code> را بشناسی</li>
+    <li>با <code>app_main</code>، درایور <code>gpio</code> و <code>ESP_LOGI</code> یک چشمک بنویسی</li>
+    <li>task بسازی، اولویت و اندازهٔ stack را درست انتخاب کنی</li>
+    <li>با صف (queue) و mutex اطلاعات را بین task ها امن جابه‌جا کنی</li>
+    <li>ISR را به task وصل کنی (الگوی «ISR ← صف ← task»)</li>
+    <li>خطاهای <code>esp_err_t</code> را با <code>ESP_ERROR_CHECK</code> مدیریت کنی</li>
+    <li>منطق زمان‌بندی (اولویت، تأخیر، صف) را روی PC شبیه‌سازی و بخوانی</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="5-3.html">۵.۳</a> (وقفه و ISR) و <a href="5-4.html">۵.۴</a> (زمان‌بند همکاری و تیک)</li>
+    <li>درس <a href="4-3.html">۴.۳</a> (اشاره‌گر به تابع؛ task یک تابع است) و <a href="4-5.html">۴.۵</a> (بافر حلقوی؛ صف همان است)</li>
+    <li>برای اجرای واقعی: یک برد ESP32 (DevKit) و ESP-IDF نسخهٔ ۵.x. <b>بدون برد</b>: بخش شبیه‌سازی روی PC به‌طور کامل اجرا می‌شود</li>
+    <li>کدهای ESP-IDF این درس در این محیط کامپایل نمی‌شوند؛ آن‌ها را از مستندات رسمی بررسی می‌کنیم و با احتیاط نوشته‌ایم</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: آشپزی که چند قابلمه دارد</h2>
+<p>یک آشپز تنها را تصور کن که سه قابلمه روی اجاق دارد: برنج، خورش و سوپ. او همه‌جا نمی‌ایستد که برنج جوش بیاید. یک قابلمه را که گذاشت بپزد، سراغ خردکردن سبزی می‌رود؛ وقتی زمان‌سنج زنگ زد، برمی‌گردد. اگر بوی سوختن بیاید (اضطراری)، همه‌چیز را ول می‌کند و اول همان را حل می‌کند.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>هر قابلمه یک <b>task</b> است (کاری با فهرست مراحل خودش). آشپز یک <b>زمان‌بند</b> (scheduler) است که تصمیم می‌گیرد الان کدام قابلمه نوبت دارد. «صبر تا جوش‌آمدن» یعنی <b>بلاک‌شدن</b>: task خودش می‌گوید «تا ۵ ثانیه کاری با من نداشته باش». «بوی سوختن» یعنی اولویت بالاتر. و «سطل قابل‌حمل که آشپز رد می‌کند» همان <b>صف</b> است.</p></div>
+
+<p>در درس ۵.۴ یک زمان‌بند همکاری ساختیم: هر کار خودش زود برمی‌گشت. اینجا <b>FreeRTOS</b> (سیستم‌عامل زمان‌واقعی، <span class="term" data-t="rtos">RTOS</span>) کار سخت‌تر را می‌کند: هر task حلقهٔ بی‌پایان خودش را دارد و زمان‌بند، بدون اینکه task خبر داشته باشد، اجرای آن را نگه می‌دارد و CPU را به task دیگر می‌دهد. برای همین به آن <b>پیشدستی‌کننده</b> (<span class="term" data-t="preemptive">preemptive</span>) می‌گویند.</p>
+
+<h2 id="what">ESP-IDF چیست و با چیزهای دیگر چه فرقی دارد؟</h2>
+<p><span class="term" data-t="espidf">ESP-IDF</span> (Espressif IoT Development Framework) فریم‌ورک رسمی Espressif برای ESP32 است، به زبان C. شامل: راه‌انداز و bootloader، درایورهای سخت‌افزار (gpio، uart، i2c، …)، Wi-Fi و Bluetooth، سیستم‌عامل FreeRTOS، و ابزار ساخت (<code>idf.py</code> روی CMake). مستندات رسمی: <a href="https://docs.espressif.com/projects/esp-idf/" target="_blank" rel="noopener">docs.espressif.com</a>.</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>Bare-metal STM32 (درس‌های ۵.۱ تا ۵.۵)</th><th>ESP-IDF</th><th>Arduino-ESP32</th></tr></thead>
+<tbody>
+<tr><td>شروع برنامه</td><td>startup و <code>main</code> را خودت می‌نویسی</td><td>فریم‌ورک راه‌اندازی می‌کند و <code>app_main</code> را صدا می‌زند</td><td><code>setup()</code> و <code>loop()</code></td></tr>
+<tr><td>زبان</td><td>C</td><td>C (و C++)</td><td>C++</td></tr>
+<tr><td>چند کار همزمان</td><td>وقفه + زمان‌بند دستی</td><td>task های FreeRTOS</td><td>همان FreeRTOS، ولی پشت <code>loop()</code> پنهان</td></tr>
+<tr><td>درایور GPIO</td><td>رجیستر خام یا HAL</td><td>API <code>driver/gpio.h</code></td><td><code>digitalWrite</code></td></tr>
+<tr><td>کنترل</td><td>کامل</td><td>بالا</td><td>کمتر، ولی ساده‌تر</td></tr>
+</tbody></table></div>
+<p>یک نکته: Arduino-ESP32 هم روی همین ESP-IDF ساخته شده و <code>loop()</code> در یک task از FreeRTOS اجرا می‌شود. پس فهم این درس به کار با Arduino هم کمک می‌کند. برای دورهٔ کامل‌تر ESP32 (Wi-Fi، Bluetooth و…) به <a href="../esp32-masterclass/index.html">ESP32 Masterclass</a> رجوع کن؛ ما اینجا فقط هستهٔ C را می‌گیریم.</p>
+
+<h2 id="project">پروژه چه شکلی است؟</h2>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 330" role="img" aria-label="ساختار یک پروژهٔ ESP-IDF شامل CMakeLists.txt، پوشهٔ main و sdkconfig در سمت چپ و گردش کار idf.py build و flash و monitor در سمت راست">
+  <defs><marker id="m56a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <rect x="20" y="20" width="330" height="290" rx="12" fill="#ffffff" stroke="#15120a" stroke-width="3"/>
+  <g class="mono" fill="#15120a" font-size="14.5" font-weight="700">
+    <text x="40" y="52">blink/</text>
+    <text x="70" y="86">CMakeLists.txt</text>
+    <text x="70" y="120">sdkconfig</text>
+    <text x="70" y="154">build/</text>
+    <text x="70" y="188">main/</text>
+    <text x="100" y="222">CMakeLists.txt</text>
+    <text x="100" y="256">main.c</text>
+  </g>
+  <g fill="#15120a" font-size="12.5" font-weight="700" text-anchor="start">
+    <text x="335" y="86">تعریف پروژه</text>
+    <text x="335" y="120">تنظیمات (خودکار)</text>
+    <text x="335" y="154">خروجی ساخت</text>
+    <text x="335" y="222">فهرست فایل‌های کد</text>
+    <text x="335" y="256">کد تو: app_main</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="430" y="30" width="300" height="60" rx="10" fill="#ffd60a"/>
+    <rect x="430" y="130" width="300" height="60" rx="10" fill="#3ddc97"/>
+    <rect x="430" y="230" width="300" height="60" rx="10" fill="#7ea3ff"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-weight="800">
+    <text x="580" y="56" class="mono" font-size="15">idf.py build</text><text x="580" y="78" font-size="13">کامپایل و لینک همهٔ فایل‌ها</text>
+    <text x="580" y="156" class="mono" font-size="15">idf.py flash</text><text x="580" y="178" font-size="13">ریختن روی حافظهٔ Flash برد</text>
+    <text x="580" y="256" class="mono" font-size="15">idf.py monitor</text><text x="580" y="278" font-size="13">دیدن لاگ‌های برد روی PC</text>
+  </g>
+  <path d="M580 90V126" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#m56a)"/>
+  <path d="M580 190V226" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#m56a)"/>
+</svg></div>
+<figcaption>چپ: کمترین فایل‌های یک پروژه. راست: سه دستور اصلی. <code>sdkconfig</code> و <code>build/</code> را ابزار می‌سازد؛ دست نزن.</figcaption></figure>
+
+<p>دو فایل <code>CMakeLists.txt</code> لازم است. اولی در ریشهٔ پروژه است و اسم پروژه را می‌گذارد؛ دومی در <code>main/</code> و فهرست فایل‌های کد را می‌گوید (درس <a href="4-2.html">۴.۲</a> CMake را معرفی کرد):</p>
+
+<div class="code" data-file="CMakeLists.txt" data-lang="cmake" data-verify="frag" id="cm1">
+<pre>
+cmake_minimum_required(VERSION 3.16)
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(blink)
+</pre></div>
+<ol class="walk" data-for="cm1">
+  <li data-lines="1"><b class="what">نسخهٔ CMake.</b> حداقل ۳٫۱۶ لازم است (نسخه‌های ESP-IDF ۵.x).</li>
+  <li data-lines="2"><b class="what">وارد کردن قواعد ESP-IDF.</b> <code>IDF_PATH</code> متغیری است که اسکریپت <code>export</code> هنگام آماده‌سازی محیط می‌گذارد و به پوشهٔ ESP-IDF اشاره می‌کند.
+    <span class="why">همهٔ کار سنگین ساخت (کامپایلر، لینکر، bootloader) در همین فایل ESP-IDF است. این خط باید <b>قبل از</b> <code>project()</code> باشد.</span></li>
+  <li data-lines="3"><b class="what">نام پروژه.</b> فایل نهایی <code>build/blink.bin</code> می‌شود.</li>
+</ol>
+
+<div class="code" data-file="main/CMakeLists.txt" data-lang="cmake" data-verify="frag" id="cm2">
+<pre>
+idf_component_register(SRCS "main.c"
+                       INCLUDE_DIRS ".")
+</pre></div>
+<ol class="walk" data-for="cm2">
+  <li data-lines="1-2"><b class="what">ثبت مؤلفه.</b> <code>main</code> یک «مؤلفه» (component) است: فایل‌های کدش (<code>SRCS</code>) و پوشه‌های هدرش (<code>INCLUDE_DIRS</code>). هر ماژول جدید که بسازی، یک پوشه با همین فایل خواهد بود.</li>
+</ol>
+
+<p>دستورها را در یک ترمینال آماده‌شده (اسکریپت <code>export</code> ESP-IDF اجرا شده) این‌طور می‌زنی. نام درگاه سریال برد بسته به سیستم عامل فرق دارد؛ <code>/dev/ttyUSB0</code> نمونهٔ لینوکس است و روی ویندوز چیزی مثل <code>COM3</code>:</p>
+
+<div class="code" data-file="idf-commands.sh" data-lang="sh" data-verify="frag" id="sh1">
+<pre>
+idf.py set-target esp32
+idf.py build
+idf.py -p /dev/ttyUSB0 flash monitor
+idf.py menuconfig
+</pre></div>
+<ol class="walk" data-for="sh1">
+  <li data-lines="1"><b class="what">انتخاب تراشه.</b> یک‌بار برای هر پروژه: ESP32 کلاسیک. تراشه‌های دیگر (esp32s3، esp32c3) اسم دیگری دارند.</li>
+  <li data-lines="2"><b class="what">ساخت.</b> کامپایل و لینک؛ نتیجه در <code>build/</code>.</li>
+  <li data-lines="3"><b class="what">فلش و مانیتور.</b> فایل را روی برد می‌ریزد و بلافاصله لاگ‌های برد را نشان می‌دهد. با <code>Ctrl+]</code> از مانیتور خارج می‌شوی.</li>
+  <li data-lines="4"><b class="what">تنظیمات.</b> منوی متنی برای تنظیمات فریم‌ورک (سرعت CPU، اندازهٔ stack ها، نرخ تیک FreeRTOS، …). نتیجه در فایل <code>sdkconfig</code> ذخیره می‌شود.
+    <span class="why"><code>sdkconfig</code> را با دست ویرایش نکن؛ ابزار آن را می‌سازد. اگر می‌خواهی تنظیم پیش‌فرض پروژه‌ات ثابت باشد، آن را در <code>sdkconfig.defaults</code> بنویس.</span></li>
+</ol>
+
+<h2 id="hello">app_main: چشمک با درایور GPIO</h2>
+<p>در STM32 خودت <code>main</code> را نوشتی و ساعت‌ها را روشن کردی. در ESP-IDF فریم‌ورک این‌ها را انجام می‌دهد و بعد <code>app_main</code> را در یک task صدا می‌زند. یک تفاوت مهم: <code>app_main</code> <b>می‌تواند تمام شود</b>؛ اگر برگردد، آن task حذف می‌شود و بقیهٔ task ها به کارشان ادامه می‌دهند.</p>
+
+<div class="code" data-file="blink_main.c" data-lang="c" data-verify="frag" id="c1">
+<pre>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "driver/gpio.h"
+#include "esp_log.h"
+
+#define LED_GPIO GPIO_NUM_2
+
+static const char *TAG = "blink";
+
+void app_main(void)
+{
+    gpio_config_t cfg = {
+        .pin_bit_mask = 1ULL &lt;&lt; LED_GPIO,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&amp;cfg));
+
+    int level = 0;
+    for (;;) {
+        level = !level;
+        gpio_set_level(LED_GPIO, level);
+        ESP_LOGI(TAG, "LED = %d", level);
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
+</pre></div>
+<ol class="walk" data-for="c1">
+  <li data-lines="1-4"><b class="what">هدرها.</b> هدر FreeRTOS باید <b>اول</b> بیاید، بعد <code>task.h</code> (برای <code>vTaskDelay</code>)، درایور GPIO و لاگ.
+    <span class="why">هدرهای FreeRTOS به تعریف‌هایی از <code>FreeRTOS.h</code> وابسته‌اند؛ اگر ترتیب را برعکس کنی، خطاهای عجیب کامپایل می‌گیری.</span></li>
+  <li data-lines="6"><b class="what">شمارهٔ پایه.</b> روی بسیاری از DevKit های ESP32 LED آبی روی GPIO2 است؛ برد تو ممکن است فرق کند. مشخصات برد را نگاه کن.</li>
+  <li data-lines="8"><b class="what">برچسب لاگ.</b> رشتهٔ کوتاهی که پشت هر پیام لاگ می‌آید تا بفهمی از کدام ماژول است.</li>
+  <li data-lines="10-11"><b class="what">نقطهٔ شروع.</b> <code>app_main</code> جای <code>main</code> است. بدون آرگومان.</li>
+  <li data-lines="12-18"><b class="what">پیکربندی پایه.</b> struct ای که مشخص می‌کند کدام پایه‌ها (ماسک بیتی ۶۴ بیتی، پس <code>1ULL</code>)، چه حالتی (خروجی)، مقاومت‌های pull غیرفعال و بدون وقفه.
+    <span class="why">مقداردهی نامزد (درس ۳.۴) می‌گذارد فقط فیلدهای لازم را بنویسی و بقیه صفر بمانند. ماسک <code>1ULL &lt;&lt; n</code> همان ماسک بیتی درس ۳.۱ است، برای پایه‌های چندتایی.</span></li>
+  <li data-lines="19"><b class="what">اجرای پیکربندی.</b> <code>gpio_config</code> یک <code>esp_err_t</code> برمی‌گرداند. <code>ESP_ERROR_CHECK</code> اگر خطا بود، پیام و مسیر خطا را چاپ می‌کند و برنامه را متوقف می‌کند (بخش بعد).</li>
+  <li data-lines="21-24"><b class="what">حلقهٔ بی‌پایان.</b> حالت را برعکس می‌کند و پایه را می‌نویسد. همان الگوی super loop.</li>
+  <li data-lines="25"><b class="what">لاگ.</b> <code>ESP_LOGI</code> (اطلاعات) پیام را با زمان و برچسب روی پورت سریال می‌فرستد. مثل <code>printf</code> با قالب <code>%d</code>، ولی سطح‌بندی‌شده.</li>
+  <li data-lines="26"><b class="what">تأخیر بدون هدر دادن CPU.</b> <code>vTaskDelay</code> این task را ۵۰۰ms «بلاک» می‌کند؛ در آن مدت CPU می‌تواند کار دیگری کند. <code>pdMS_TO_TICKS</code> میلی‌ثانیه را به «تیک» تبدیل می‌کند (بخش تأخیر).
+    <span class="why">در درس ۲.۵ یک حلقهٔ انتظار مشغول (busy-wait) نوشتیم که CPU را می‌سوزاند. این یکی به سیستم‌عامل می‌گوید «مرا بعدا بیدار کن».</span></li>
+</ol>
+
+<pre class="term" data-nocheck>
+$ idf.py -p /dev/ttyUSB0 flash monitor
+...
+I (312) blink: LED = 1
+I (812) blink: LED = 0
+I (1312) blink: LED = 1
+</pre>
+<p>(خروجی نمونه است. عدد داخل پرانتز زمان از بوت به میلی‌ثانیه است و روی برد تو فرق می‌کند.) قالب هر خط لاگ: <code>سطح (زمان) برچسب: پیام</code>، که سطح می‌تواند <code>E</code> (خطا)، <code>W</code> (هشدار)، <code>I</code> (اطلاعات)، <code>D</code> (دیباگ) یا <code>V</code> (جزئی) باشد.</p>
+
+<h2 id="esperr">esp_err_t و ESP_ERROR_CHECK</h2>
+<p>بیشتر توابع ESP-IDF یک <span class="term" data-t="esperr">esp_err_t</span> برمی‌گردانند: یک عدد صحیح که <code>ESP_OK</code> (صفر) یعنی موفق و هر مقدار دیگر یک خطای مشخص است، مثل <code>ESP_ERR_INVALID_ARG</code>. این همان قرارداد «صفر یعنی خوب» است که در درس‌های قبل و درس ۵.۷ دیدی. دو راه برای مصرف دارد:</p>
+<ul>
+  <li><code>ESP_ERROR_CHECK(expr)</code>: اگر نتیجه <code>ESP_OK</code> نبود، نام خطا، فایل و شمارهٔ خط را چاپ می‌کند و برنامه را متوقف (abort) می‌کند. برای خطاهایی که «نباید هرگز رخ بدهند» (مثل پیکربندی اولیه) مناسب است.</li>
+  <li>مقایسهٔ دستی: <code>if (err != ESP_OK) { ... }</code> برای خطاهایی که انتظارشان را داری (مثل تایم‌اوت) و باید ادامه بدهی. <code>esp_err_to_name(err)</code> نام متنی خطا را می‌دهد.</li>
+</ul>
+<div class="callout warn"><div class="ct">ESP_ERROR_CHECK در محصول نهایی</div>
+<p>توقف کامل هنگام یک خطا برای دیباگ عالی است ولی در دستگاهی که سال‌ها در دیوار می‌ماند، ممکن است بهتر باشد خطا را ثبت کنی و بازیابی کنی (یا راه‌اندازی مجدد کنترل‌شده). نتیجه‌گیری را به منطق محصول واگذار کن، نه به یک ماکرو.</p></div>
+
+<h2 id="tasks">task: قابلمه‌های ما</h2>
+<p>یک <span class="term" data-t="rtostask">task</span> (وظیفه) یک تابع C معمولی است که <b>حلقهٔ بی‌پایان خودش</b> را دارد و <b>stack مخصوص خودش</b> را. FreeRTOS چند task را نگه می‌دارد و هر لحظه یکی را روی CPU می‌گذارد. هر task در یکی از چهار حالت است:</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 330" role="img" aria-label="چهار حالت task: آماده، در حال اجرا، بلاک‌شده و معلق، و رویدادهایی که آن‌ها را جابه‌جا می‌کند">
+  <defs><marker id="m56b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="40" y="130" width="160" height="70" rx="12" fill="#ffd60a"/>
+    <rect x="560" y="130" width="160" height="70" rx="12" fill="#3ddc97"/>
+    <rect x="300" y="250" width="160" height="60" rx="12" fill="#7ea3ff"/>
+    <rect x="300" y="16" width="160" height="60" rx="12" fill="#e3e0d6"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-weight="800">
+    <text x="120" y="160" font-size="15">آماده</text><text x="120" y="182" font-size="12.5" class="mono">Ready</text>
+    <text x="640" y="160" font-size="15">در حال اجرا</text><text x="640" y="182" font-size="12.5" class="mono">Running</text>
+    <text x="380" y="278" font-size="15">بلاک‌شده</text><text x="380" y="298" font-size="12.5" class="mono">Blocked</text>
+    <text x="380" y="44" font-size="15">معلق</text><text x="380" y="64" font-size="12.5" class="mono">Suspended</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M200 148C300 118 460 118 556 148" marker-end="url(#m56b)"/>
+    <path d="M560 184C460 214 300 214 204 184" marker-end="url(#m56b)"/>
+    <path d="M620 204L462 262" marker-end="url(#m56b)"/>
+    <path d="M300 268L160 204" marker-end="url(#m56b)"/>
+    <path d="M600 126L462 62" stroke-dasharray="6 5" marker-end="url(#m56b)"/>
+    <path d="M300 56L160 126" stroke-dasharray="6 5" marker-end="url(#m56b)"/>
+  </g>
+  <g class="s-tx" font-size="12.5" font-weight="700" text-anchor="middle">
+    <text x="380" y="112">زمان‌بند بالاترین اولویت را انتخاب می‌کند</text>
+    <text x="380" y="236">پیشدستی یا yield</text>
+    <text x="588" y="252">vTaskDelay یا صف خالی</text>
+    <text x="190" y="252">زمان گذشت یا داده رسید</text>
+    <text x="596" y="88" class="mono">vTaskSuspend</text>
+    <text x="176" y="92" class="mono">vTaskResume</text>
+  </g>
+</svg></div>
+<figcaption>فقط task «در حال اجرا» روی CPU است (روی ESP32 دوهسته‌ای، یکی روی هر هسته). task ای که منتظر است «بلاک‌شده» است و CPU مصرف نمی‌کند.</figcaption></figure>
+
+<p>ساختن یک task:</p>
+<div class="code" data-file="task_create.c" data-lang="c" data-verify="frag" id="c2">
+<pre>
+static void blink_task(void *arg)
+{
+    for (;;) {
+        gpio_set_level(LED_GPIO, 1);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        gpio_set_level(LED_GPIO, 0);
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
+
+void app_main(void)
+{
+    BaseType_t ok = xTaskCreate(blink_task, "blink", 2048, NULL, 5, NULL);
+    if (ok != pdPASS) {
+        ESP_LOGE(TAG, "cannot create task");
+    }
+}
+</pre></div>
+<ol class="walk" data-for="c2">
+  <li data-lines="1"><b class="what">امضای task.</b> هر task تابعی است با یک پارامتر <code>void *</code> و بدون مقدار برگشتی.
+    <span class="why">پارامتر <code>void *</code> برای پاس‌دادن هر داده‌ای است (درس ۳.۳: <code>void*</code>). ما فعلا استفاده نمی‌کنیم و <code>NULL</code> می‌فرستیم.</span></li>
+  <li data-lines="2-9"><b class="what">حلقهٔ بی‌پایان.</b> task باید <b>هرگز برنگردد</b>. اگر تابع تمام شود، برنامه دچار خطای جدی می‌شود؛ اگر واقعا می‌خواهی تمام شود، آخرش <code>vTaskDelete(NULL)</code> صدا بزن (یعنی «خودم را حذف کن»).</li>
+  <li data-lines="13"><b class="what">ساخت.</b> شش آرگومان: تابع، اسم (برای دیباگ)، اندازهٔ stack، پارامتر، اولویت و اشاره‌گری که دستگیرهٔ task را بگیرد (اینجا <code>NULL</code>، یعنی «لازم ندارم»).
+    <span class="why">در ESP-IDF اندازهٔ stack <b>بر حسب بایت</b> است (۲۰۴۸ بایت). در FreeRTOS اصلی برحسب «کلمه» است؛ این یک تفاوت رایج بین منابع است.</span></li>
+  <li data-lines="14-16"><b class="what">بررسی نتیجه.</b> <code>pdPASS</code> یعنی موفق. اگر حافظهٔ کافی نباشد، task ساخته نمی‌شود.</li>
+</ol>
+
+<div class="table-wrap"><table>
+<thead><tr><th>ویژگی task</th><th>معنی</th><th>نکته</th></tr></thead>
+<tbody>
+<tr><td>اولویت (<span class="term" data-t="rtosprio">priority</span>)</td><td>عدد بزرگ‌تر = مهم‌تر. بین ۰ تا ۲۴ در تنظیم معمول</td><td>task بیکار (idle) اولویت ۰ دارد. task اصلی (<code>app_main</code>) معمولا ۱</td></tr>
+<tr><td>اندازهٔ stack</td><td>حافظهٔ متغیرهای محلی و فراخوانی‌های این task، بایت</td><td>کم باشد: سرریز و بازراه‌اندازی؛ زیاد باشد: RAM هدر می‌رود</td></tr>
+<tr><td>اسم</td><td>فقط برای دیباگ و لاگ</td><td>کوتاه و یکتا بگذار</td></tr>
+<tr><td>پارامتر</td><td>یک <code>void *</code> به داده</td><td>باید تا آخر عمر task معتبر بماند (پایین‌تر می‌بینی)</td></tr>
+</tbody></table></div>
+
+<div class="callout tip"><div class="ct">چقدر stack؟</div>
+<p>یک task ساده که فقط GPIO می‌نویسد با ۲۰۴۸ بایت کار می‌کند، ولی هر <code>ESP_LOGI</code> و <code>printf</code> مقداری stack مصرف می‌کند (چند صد بایت)؛ در task هایی که لاگ می‌زنند ۳۰۷۲ تا ۴۰۹۶ بایت شروع خوبی است. برای اندازه‌گیری واقعی، <code>uxTaskGetStackHighWaterMark(NULL)</code> کمترین فضای خالی stack تا این لحظه را می‌گوید (واحدش را در مستندات نسخهٔ خودت تأیید کن). نگذار به صفر نزدیک شود.</p></div>
+
+<h2 id="delay">تیک و تأخیر: «۵ میلی‌ثانیه» ممکن است صفر شود!</h2>
+<p>زمان‌بند FreeRTOS با یک <span class="term" data-t="rtostick">تیک</span> (tick) کار می‌کند؛ درست مثل تیک SysTick درس ۵.۴. هر تیک، زمان‌بند نگاه می‌کند کدام task باید بیدار شود. نرخ تیک را ثابت <code>configTICK_RATE_HZ</code> تعیین می‌کند؛ در ESP-IDF معمولا ۱۰۰ هرتز است (یعنی <b>هر تیک ۱۰ میلی‌ثانیه</b>؛ در <code>menuconfig</code> قابل‌تغییر است). <code>vTaskDelay</code> «تیک» می‌گیرد، نه میلی‌ثانیه. ماکرو <code>pdMS_TO_TICKS(ms)</code> آن‌ها را تبدیل می‌کند: تقریبا <code>ms × HZ / 1000</code> با تقسیم صحیح.</p>
+
+<p>پس هر زمانی که مضرب ۱۰ میلی‌ثانیه نباشد، گرد <b>پایین</b> می‌شود (درس ۲.۳: تقسیم صحیح اعشار را دور می‌اندازد). آزمایش کن:</p>
+
+<div class="code" data-file="tick_round.c" data-lang="c" data-verify="host" id="c3">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+#define HZ 100u                     /* مقدار پیش‌فرض تیک در ESP-IDF */
+
+int main(void)
+{
+    static const uint32_t want_ms[] = { 5u, 30u, 999u, 1500u };
+
+    for (unsigned i = 0; i &lt; sizeof want_ms / sizeof want_ms[0]; i++) {
+        uint32_t ticks = want_ms[i] * HZ / 1000u;   /* مثل pdMS_TO_TICKS */
+        uint32_t real_ms = ticks * 1000u / HZ;      /* زمانی که واقعا می‌گذرد */
+        printf("want %4u ms -&gt; %3u ticks -&gt; %4u ms\n",
+               (unsigned)want_ms[i], (unsigned)ticks, (unsigned)real_ms);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="c3">
+  <li data-lines="4"><b class="what">نرخ تیک.</b> ۱۰۰ هرتز، پیش‌فرض ESP-IDF.</li>
+  <li data-lines="8"><b class="what">زمان‌های خواسته.</b> چهار مقدار میلی‌ثانیه.</li>
+  <li data-lines="11"><b class="what">همان فرمول.</b> ضرب پیش از تقسیم، تا خطای گرد کمتر شود (درس ۲.۳).</li>
+  <li data-lines="12"><b class="what">زمان واقعی.</b> تیک‌ها را دوباره به میلی‌ثانیه برمی‌گردانیم تا ببینیم چقدر واقعا صبر می‌شود.
+    <span class="why">این نشان می‌دهد ۹۹۹ms در عمل ۹۹۰ms می‌شود و ۵ms صفر تیک.</span></li>
+</ol>
+<pre class="term" data-from="tick_round.c">
+$ gcc -std=c11 -Wall -Wextra -o tick_round tick_round.c
+$ ./tick_round
+want    5 ms ->   0 ticks ->    0 ms
+want   30 ms ->   3 ticks ->   30 ms
+want  999 ms ->  99 ticks ->  990 ms
+want 1500 ms -> 150 ticks -> 1500 ms
+</pre>
+
+<div class="widget" data-w="mem" data-config='{"title":"چرا pdMS_TO_TICKS(5) صفر می‌شود؟","code":["uint32_t hz = 100;","uint32_t ms = 5;","uint32_t ticks = ms * hz / 1000;"],"intro":"نرخ تیک ۱۰۰ هرتز است. روی بعدی بزن.","cells":[{"addr":"0x3FFB0000","name":"hz","val":null,"kind":"var"},{"addr":"0x3FFB0004","name":"ms","val":null,"kind":"var"},{"addr":"0x3FFB0008","name":"ticks","val":null,"kind":"var"}],"steps":[{"line":0,"set":{"0":100},"hot":[0],"say":"هر ثانیه ۱۰۰ تیک؛ پس هر تیک ۱۰ میلی‌ثانیه است."},{"line":1,"set":{"1":5},"hot":[1],"say":"می‌خواهیم ۵ میلی‌ثانیه صبر کنیم، یعنی نصف یک تیک."},{"line":2,"set":{"2":0},"hot":[2],"say":"۵ × ۱۰۰ = ۵۰۰ و ۵۰۰ ÷ ۱۰۰۰ در تقسیم صحیح <b>۰</b> است. صفر تیک یعنی «تقریبا هیچ صبر نکن»: task فقط اجرا را به بقیه می‌دهد و فوری برمی‌گردد."}]}'></div>
+
+<div class="callout warn"><div class="ct">دو تله</div>
+<ul>
+<li><b>زمان کوتاه‌تر از یک تیک:</b> <code>vTaskDelay(pdMS_TO_TICKS(5))</code> با نرخ ۱۰۰ هرتز عملا صفر است. برای تأخیرهای کوتاه‌تر از یک تیک روش دیگری لازم است (تایمر سخت‌افزاری یا <code>esp_timer</code>؛ در مستندات ببین).</li>
+<li><b>رانش (drift):</b> <code>vTaskDelay(500)</code> بعد از کاری که ۲۰ms طول کشید، دورهٔ واقعی را ۵۲۰ می‌کند. برای دورهٔ دقیق، <code>vTaskDelayUntil(&amp;last, ticks)</code> را با <code>last = xTaskGetTickCount()</code> اولیه به کار ببر. مثل «last += period» زمان‌بند درس ۵.۴ عمل می‌کند.</li>
+</ul></div>
+
+<h2 id="queue">صف: پیام‌رسان امن بین task ها</h2>
+<p>دو task چطور اطلاعات رد و بدل کنند؟ ساده‌ترین راه یک متغیر سراسری است، ولی همان مشکلات «رقابت» درس ۵.۳ را دارد. راه بهتر: <span class="term" data-t="rtosqueue">صف</span> (queue). این همان بافر حلقوی درس ۴.۵ است که FreeRTOS آن را ایمن کرده و task ها را هم می‌خواباند و بیدار می‌کند: task ای که از صفِ خالی می‌خواند، بلاک می‌شود و وقتی پیام رسید بیدار می‌شود.</p>
+
+<p>یک نکته که خیلی‌ها را می‌گیرد: صف <b>کپی</b> می‌کند، نه اشاره. <code>xQueueSend(q, &amp;item, ...)</code> محتوای <code>item</code> را به صف کپی می‌کند؛ بعدش اگر متغیر محلی را عوض کنی، پیام داخل صف عوض نمی‌شود.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 312" role="img" aria-label="صف با چهار خانه: task تولیدکننده پیام را به خانهٔ صف کپی می‌کند و task مصرف‌کننده آن را از صف به متغیر محلی خودش کپی می‌کند">
+  <defs><marker id="m56c" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" class="s-tx" text-anchor="middle" font-size="15" font-weight="800">هر پیام دو بار کپی می‌شود: به صف و از صف</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="20" y="100" width="170" height="110" rx="12" fill="#7ea3ff"/>
+    <rect x="570" y="100" width="170" height="110" rx="12" fill="#ff86b3"/>
+    <rect x="240" y="128" width="70" height="60" fill="#ffd60a"/><rect x="310" y="128" width="70" height="60" fill="#ffd60a"/><rect x="380" y="128" width="70" height="60" fill="#ffffff"/><rect x="450" y="128" width="70" height="60" fill="#ffffff"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-weight="800">
+    <text x="105" y="128" font-size="14.5">task تولیدکننده</text>
+    <text x="655" y="128" font-size="14.5">task مصرف‌کننده</text>
+  </g>
+  <g fill="#15120a" text-anchor="middle" class="mono" font-size="13" font-weight="700">
+    <text x="105" y="158">sample_t s</text><text x="105" y="180">value = 7</text>
+    <text x="655" y="158">sample_t s</text><text x="655" y="180">value = 5</text>
+    <text x="275" y="164">5</text><text x="345" y="164">6</text>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-size="12.5" font-weight="700">
+    <text x="380" y="84">صف: ۴ خانه، هر خانه یک sample_t</text>
+    <text x="275" y="120">قدیمی‌ترین</text><text x="345" y="120">بعدی</text>
+    <text x="415" y="120">خالی</text><text x="485" y="120">خالی</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M105 214C105 276 415 276 415 192" marker-end="url(#m56c)" stroke-dasharray="6 5"/>
+    <path d="M275 192C275 246 655 246 655 214" marker-end="url(#m56c)"/>
+  </g>
+  <g class="s-tx" text-anchor="middle" font-size="12.5" font-weight="700">
+    <text x="190" y="284" class="mono">xQueueSend</text><text x="190" y="302">کپی به انتهای صف</text>
+    <text x="570" y="266" class="mono">xQueueReceive</text><text x="570" y="284">کپی از ابتدای صف</text>
+  </g>
+</svg></div>
+<figcaption>صف یک بافر حلقوی FIFO با اندازهٔ ثابت است. تولیدکننده و مصرف‌کننده مستقیم به هم دسترسی ندارند، پس نه رقابت است و نه اشاره‌گر آویزان.</figcaption></figure>
+
+<p>معنی «کپی» را با یک صف ساده روی PC ببین (همان رفتار، با <code>memcpy</code>):</p>
+
+<div class="code" data-file="queue_copy.c" data-lang="c" data-verify="host" id="c4">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+typedef struct { uint8_t id; int16_t value; } msg_t;
+
+#define Q_LEN 3
+
+typedef struct {
+    msg_t slot[Q_LEN];
+    unsigned head;      // جای خواندن بعدی
+    unsigned count;     // تعداد پیام‌های موجود
+} queue_t;
+
+/* مثل xQueueSend: پیام را «کپی» می‌کند؛ اگر پر بود 0 برمی‌گرداند */
+static int q_send(queue_t *q, const msg_t *item)
+{
+    if (q-&gt;count == Q_LEN) {
+        return 0;
+    }
+    memcpy(&amp;q-&gt;slot[(q-&gt;head + q-&gt;count) % Q_LEN], item, sizeof *item);
+    q-&gt;count++;
+    return 1;
+}
+
+/* مثل xQueueReceive: قدیمی‌ترین پیام را در out کپی می‌کند */
+static int q_recv(queue_t *q, msg_t *out)
+{
+    if (q-&gt;count == 0u) {
+        return 0;
+    }
+    memcpy(out, &amp;q-&gt;slot[q-&gt;head], sizeof *out);
+    q-&gt;head = (q-&gt;head + 1u) % Q_LEN;
+    q-&gt;count--;
+    return 1;
+}
+
+int main(void)
+{
+    queue_t q = { .head = 0u, .count = 0u };
+    msg_t m = { .id = 1, .value = 100 };
+
+    printf("send 1: %d\n", q_send(&amp;q, &amp;m));
+    m.value = 200;                       // بعد از ارسال، نسخهٔ محلی را عوض می‌کنیم
+    m.id = 2;
+    printf("send 2: %d\n", q_send(&amp;q, &amp;m));
+    m.id = 3;
+    printf("send 3: %d\n", q_send(&amp;q, &amp;m));
+    m.id = 4;
+    printf("send 4: %d (queue full)\n", q_send(&amp;q, &amp;m));
+
+    msg_t got;
+    while (q_recv(&amp;q, &amp;got)) {
+        printf("recv: id=%u value=%d\n", (unsigned)got.id, (int)got.value);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="c4">
+  <li data-lines="5"><b class="what">نوع پیام.</b> یک struct کوچک. صف اندازهٔ ثابت از این نوع دارد (پیام‌های بزرگ را با اشاره‌گر یا بافر جدا بفرست).</li>
+  <li data-lines="9-13"><b class="what">صف ساده.</b> آرایهٔ سه‌خانه‌ای، جای خواندن (<code>head</code>) و تعداد. همان بافر حلقوی درس ۴.۵.</li>
+  <li data-lines="15-24"><b class="what">ارسال.</b> اگر پر بود ۰ برمی‌گرداند (مثل <code>xQueueSend</code> با تایم‌اوت صفر)؛ وگرنه محتوا را با <code>memcpy</code> در خانهٔ بعدی می‌گذارد.
+    <span class="why"><code>memcpy</code> یعنی کپی، نه اشاره: بعد از ارسال، صف نسخهٔ خودش را دارد.</span></li>
+  <li data-lines="26-36"><b class="what">دریافت.</b> قدیمی‌ترین پیام را در <code>out</code> کپی می‌کند و از صف کم می‌کند.</li>
+  <li data-lines="41-45"><b class="what">تغییر بعد از ارسال.</b> بعد از ارسال اول، <code>m</code> را عوض می‌کنیم (مقدار ۲۰۰).</li>
+  <li data-lines="46-50"><b class="what">ارسال دوم و سوم و چهارم.</b> صف سه‌خانه است؛ چهارمی رد می‌شود.</li>
+  <li data-lines="52-55"><b class="what">خواندن همه.</b> ترتیب خروج همان ترتیب ورود است (FIFO).</li>
+</ol>
+<pre class="term" data-from="queue_copy.c">
+$ ./queue_copy
+send 1: 1
+send 2: 1
+send 3: 1
+send 4: 0 (queue full)
+recv: id=1 value=100
+recv: id=2 value=200
+recv: id=3 value=200
+</pre>
+<p>پیام اول هنوز ۱۰۰ است، هرچند بعد از ارسال <code>m.value</code> را ۲۰۰ کردیم. برای همین در FreeRTOS هم بعد از <code>xQueueSend</code> می‌توانی متغیر محلی را آزادانه تغییر بدهی یا از تابع خارج شوی.</p>
+
+<div class="widget" data-w="mem" data-config='{"title":"صف کپی می‌کند: تغییر بعد از ارسال اثر ندارد","code":["msg_t m = { .value = 100 };","xQueueSend(q, &m, 0);","m.value = 200;","xQueueReceive(q, &got, 0);"],"intro":"به آدرس‌ها توجه کن: m، خانهٔ صف و got سه جای جدا هستند.","cells":[{"addr":"0x3FFB1000","name":"m.value","val":null,"kind":"var"},{"addr":"0x3FFB2000","name":"slot0 (در صف)","val":null,"kind":"var"},{"addr":"0x3FFB1004","name":"got.value","val":null,"kind":"var"}],"steps":[{"line":0,"set":{"0":100},"hot":[0],"say":"متغیر محلی m با مقدار ۱۰۰ ساخته شد."},{"line":1,"set":{"1":100},"hot":[1],"say":"محتوای m در خانهٔ صف <b>کپی</b> شد. اکنون دو نسخه از ۱۰۰ داریم."},{"line":2,"set":{"0":200},"hot":[0],"say":"فقط m عوض شد. خانهٔ صف هنوز ۱۰۰ است."},{"line":3,"set":{"2":100},"hot":[2],"say":"مصرف‌کننده ۱۰۰ می‌گیرد، نه ۲۰۰. برای همین ارسال با صف امن است."}]}'></div>
+
+<p>حالا نسخهٔ واقعی. یک task هر ثانیه یک نمونه می‌فرستد و task دیگر آن را چاپ می‌کند:</p>
+
+<div class="code" data-file="pipe_main.c" data-lang="c" data-verify="frag" id="c5">
+<pre>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+#include "esp_log.h"
+
+static const char *TAG = "pipe";
+static QueueHandle_t s_queue;
+
+typedef struct {
+    int32_t value;
+} sample_t;
+
+static void sensor_task(void *arg)
+{
+    int32_t v = 0;
+    for (;;) {
+        sample_t s = { .value = v++ };
+        if (xQueueSend(s_queue, &amp;s, pdMS_TO_TICKS(10)) != pdTRUE) {
+            ESP_LOGW(TAG, "queue full, sample lost");
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+static void logger_task(void *arg)
+{
+    sample_t s;
+    for (;;) {
+        if (xQueueReceive(s_queue, &amp;s, portMAX_DELAY) == pdTRUE) {
+            ESP_LOGI(TAG, "got %d", (int)s.value);
+        }
+    }
+}
+
+void app_main(void)
+{
+    s_queue = xQueueCreate(8, sizeof(sample_t));
+    if (s_queue == NULL) {
+        ESP_LOGE(TAG, "no memory for queue");
+        return;
+    }
+    xTaskCreate(sensor_task, "sensor", 3072, NULL, 5, NULL);
+    xTaskCreate(logger_task, "logger", 3072, NULL, 5, NULL);
+}
+</pre></div>
+<ol class="walk" data-for="c5">
+  <li data-lines="7"><b class="what">دستگیرهٔ صف.</b> <code>QueueHandle_t</code> یک اشاره‌گر مات (درس ۴.۲) به ساختار داخلی صف است. <code>static</code> یعنی فقط همین فایل آن را می‌بیند.</li>
+  <li data-lines="9-11"><b class="what">نوع پیام.</b> struct ثابت‌اندازه؛ صف با <code>sizeof</code> آن ساخته می‌شود.</li>
+  <li data-lines="13-23"><b class="what">تولیدکننده.</b> هر بار یک نمونه می‌سازد و می‌فرستد. سومین آرگومان <code>xQueueSend</code> یعنی «اگر صف پر بود تا ۱۰ms صبر کن». اگر نشد، هشدار می‌دهد.
+    <span class="why">هرگز بی‌کران صبر نکن مگر مطمئن باشی؛ task ای که برای همیشه بلاک شود، ردی نمی‌گذارد. با تایم‌اوت، مشکل را در لاگ می‌بینی.</span></li>
+  <li data-lines="25-33"><b class="what">مصرف‌کننده.</b> <code>portMAX_DELAY</code> یعنی «تا وقتی پیام برسد بلاک بمان»؛ در این حالت CPU مصرف نمی‌شود. برمی‌گردد <code>pdTRUE</code> اگر پیام آمد.</li>
+  <li data-lines="37"><b class="what">ساخت صف.</b> ۸ خانه، هر کدام به اندازهٔ <code>sample_t</code>. اگر حافظه نباشد <code>NULL</code> برمی‌گردد.</li>
+  <li data-lines="38-41"><b class="what">بررسی ساخت.</b> بدون این بررسی، task ها با اشاره‌گر <code>NULL</code> شروع می‌کنند و برنامه می‌ترکد.</li>
+  <li data-lines="42-44"><b class="what">دو task هم‌اولویت.</b> هر دو اولویت ۵. بعد از اینکه <code>app_main</code> برگرداند، فریم‌ورک آن را حذف می‌کند و این دو ادامه می‌دهند.</li>
+</ol>
+
+<div class="callout tip"><div class="ct">ISR ← صف ← task</div>
+<p>الگویی که در درس <a href="5-3.html">۵.۳</a> دیدی همین‌جا کامل می‌شود. ISR فقط پیام را در صف می‌گذارد و task کار سنگین را می‌کند. در ISR فقط نسخهٔ <code>...FromISR</code> مجاز است، چون نسخهٔ عادی ممکن است بلاک شود.</p></div>
+
+<div class="code" data-file="isr_to_queue.c" data-lang="c" data-verify="frag" id="c5b">
+<pre>
+static void IRAM_ATTR on_button(void *arg)
+{
+    uint32_t gpio_num = (uint32_t)arg;
+    BaseType_t woken = pdFALSE;
+
+    xQueueSendFromISR(s_queue, &amp;gpio_num, &amp;woken);
+    /* اگر woken درست شد، task مهم‌تری بیدار شده و در پایان ISR باید
+       yield شود (portYIELD_FROM_ISR؛ شکل دقیقش را در مستندات نسخهٔ خودت ببین) */
+}
+</pre></div>
+<ol class="walk" data-for="c5b">
+  <li data-lines="1"><b class="what">ISR.</b> <code>IRAM_ATTR</code> کد را در RAM داخلی می‌گذارد (درس ۵.۳). پارامتر همان چیزی است که هنگام ثبت ISR داده‌ای.</li>
+  <li data-lines="3-4"><b class="what">مقدار و پرچم.</b> شمارهٔ پایه را از پارامتر برمی‌داریم؛ <code>woken</code> را «نه» می‌گذاریم.</li>
+  <li data-lines="6"><b class="what">فرستادن.</b> نسخهٔ ISR با ۳ آرگومان: صف، اشاره‌گر به پیام (کپی می‌شود)، و اشاره‌گر به <code>woken</code>. هرگز بلاک نمی‌شود؛ اگر صف پر باشد، پیام را دور می‌ریزد.
+    <span class="why">ISR نباید منتظر بماند (درس ۵.۳)؛ برای همین تایم‌اوت ندارد.</span></li>
+  <li data-lines="7-8"><b class="what">ییلد.</b> اگر پیام یک task پراولویت‌تر را بیدار کرد، باید پیش از برگشت از ISR به زمان‌بند اطلاع داده شود تا بی‌درنگ آن task اجرا شود، نه در تیک بعدی.</li>
+</ol>
+
+<h2 id="sync">اشتراک داده: mutex و semaphore</h2>
+<p>گاهی داده باید مشترک باشد (مثلا یک شمارنده یا یک بافر بزرگ). وقتی دو task همزمان <code>counter++</code> بزنند، همان رقابت درس ۵.۳ رخ می‌دهد: <code>++</code> سه قدم دارد (خواندن، افزودن، نوشتن) و task دیگر می‌تواند وسطش وارد شود. دو ابزار:</p>
+<ul>
+  <li><span class="term" data-t="mutex">mutex</span> (قفل): «فقط یک نفر داخل اتاق». task قفل را می‌گیرد (<code>xSemaphoreTake</code>)، کارش را می‌کند و آزاد می‌کند (<code>xSemaphoreGive</code>). task دوم اگر بخواهد بگیرد، بلاک می‌شود تا اولی آزاد کند.</li>
+  <li><span class="term" data-t="semaphore">semaphore</span> دودویی (چراغ خبر): «یک اتفاق افتاد». ISR آن را می‌دهد (<code>xSemaphoreGiveFromISR</code>) و task منتظر را بیدار می‌کند. مالکی ندارد.</li>
+</ul>
+
+<div class="code" data-file="mutex_use.c" data-lang="c" data-verify="frag" id="c6">
+<pre>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
+static SemaphoreHandle_t s_lock;
+static uint32_t s_counter;
+
+static void bump(void)
+{
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+        s_counter++;
+        xSemaphoreGive(s_lock);
+    }
+}
+
+void app_main(void)
+{
+    s_lock = xSemaphoreCreateMutex();
+    /* ... ساخت task هایی که bump() را صدا می‌زنند ... */
+}
+</pre></div>
+<ol class="walk" data-for="c6">
+  <li data-lines="4-5"><b class="what">داده و قفلش.</b> شمارنده مشترک و یک دستگیره برای قفل.</li>
+  <li data-lines="7-13"><b class="what">بخش بحرانی.</b> قفل را می‌گیرد (تا ۱۰۰ms صبر)، شمارنده را عوض می‌کند، قفل را آزاد می‌کند.
+    <span class="why">قفل باید <b>همیشه</b> آزاد شود؛ اگر <code>Take</code> موفق شد و بین آن و <code>Give</code> یک <code>return</code> اضافه کردی، همه‌چیز برای همیشه قفل می‌ماند (deadlock).</span></li>
+  <li data-lines="17"><b class="what">ساخت.</b> <code>xSemaphoreCreateMutex</code> در پایان <code>NULL</code> برمی‌گرداند اگر حافظه نباشد؛ در کد واقعی بررسی کن.</li>
+</ol>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: چرا mutex و semaphore دودویی یکی نیستند؟</div>
+<p>mutex «وارونگی اولویت» (priority inversion) را کنترل می‌کند: اگر task کم‌اولویت قفل را دارد و task پراولویت منتظر است، FreeRTOS اولویت اولی را موقتا بالا می‌برد تا زودتر تمام کند و قفل را آزاد کند. semaphore این را ندارد. برای «حفاظت از داده» mutex بگیر؛ برای «اطلاع‌رسانی رویداد» semaphore یا صف.</p></div>
+
+<div class="callout warn"><div class="ct">قانون ساده برای اشتراک</div>
+<p>اول سعی کن اصلا چیزی را به اشتراک نگذاری: به‌جای متغیر مشترک، <b>پیام</b> بفرست. اگر مجبوری، داده را با mutex محافظت کن. و در ISR هرگز mutex نگیر (فقط نسخهٔ <code>FromISR</code> صف و semaphore).</p></div>
+
+<h2 id="sim">شبیه‌سازی: زمان‌بند را روی PC ببین</h2>
+<p>بدون برد هم می‌توان «منطق» یک RTOS را دید. برنامهٔ زیر یک <b>زمان‌بند همکاری کوچک</b> است که سه رفتار FreeRTOS را تقلید می‌کند: اولویت، تأخیر (<code>vTaskDelay</code>) و بلاک روی صف. هر task یک تابع «قدم» است که کارش را می‌کند و درخواست می‌دهد: «۵ تیک مرا بخوابان» یا «تا وقتی صف پیام ندارد بلاک کن». این همان کاری است که <code>vTaskDelay</code> و <code>xQueueReceive</code> واقعی می‌کنند، فقط ما بدون تغییر stack (که به زبان اسمبلی نیاز دارد) و با یک درخواست ساده شبیه‌سازی می‌کنیم.</p>
+
+<div class="code" data-file="mini_rtos.c" data-lang="c" data-verify="host" id="c7">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+#define Q_LEN 4
+
+typedef enum { REQ_DELAY, REQ_WAIT_Q, REQ_YIELD } req_kind_t;
+typedef enum { T_READY, T_DELAYED, T_WAIT_Q } tstate_t;
+
+typedef struct { req_kind_t kind; uint32_t ticks; } req_t;
+
+typedef struct task task_t;
+struct task {
+    const char *name;
+    uint8_t prio;                   // عدد بزرگ‌تر = اولویت بالاتر
+    tstate_t state;
+    uint32_t wake_at;
+    req_t (*step)(void);            // یک دور از «حلقهٔ بی‌نهایت» task
+};
+
+static uint32_t g_tick;
+static int q_buf[Q_LEN];
+static unsigned q_head, q_count;
+
+static req_t task_blink(void);
+static req_t task_sensor(void);
+static req_t task_logger(void);
+
+static task_t tasks[] = {
+    { "blink",  1u, T_READY, 0u, task_blink  },
+    { "sensor", 2u, T_READY, 0u, task_sensor },
+    { "logger", 3u, T_READY, 0u, task_logger },
+    { NULL, 0u, T_READY, 0u, NULL }
+};
+
+static void wake_waiters(void)      // مثل بیدار شدن task منتظر صف
+{
+    for (unsigned i = 0; tasks[i].name != NULL; i++) {
+        if (tasks[i].state == T_WAIT_Q) {
+            tasks[i].state = T_READY;
+        }
+    }
+}
+
+static int q_put(int v)
+{
+    if (q_count == Q_LEN) {
+        return 0;
+    }
+    q_buf[(q_head + q_count) % Q_LEN] = v;
+    q_count++;
+    wake_waiters();
+    return 1;
+}
+
+static req_t task_blink(void)
+{
+    static int on;                  // حالت بین دورها می‌ماند
+    on = !on;
+    printf("t=%2u  blink   LED %s\n", (unsigned)g_tick, on ? "on" : "off");
+    return (req_t){ REQ_DELAY, 5u };
+}
+
+static req_t task_sensor(void)
+{
+    static int value;
+    value += 10;
+    printf("t=%2u  sensor  put %d\n", (unsigned)g_tick, value);
+    q_put(value);
+    return (req_t){ REQ_DELAY, 4u };
+}
+
+static req_t task_logger(void)
+{
+    if (q_count == 0u) {
+        return (req_t){ REQ_WAIT_Q, 0u };
+    }
+    int v = q_buf[q_head];
+    q_head = (q_head + 1u) % Q_LEN;
+    q_count--;
+    printf("t=%2u  logger  got %d\n", (unsigned)g_tick, v);
+    return (req_t){ REQ_YIELD, 0u };
+}
+
+static task_t *pick_next(void)
+{
+    task_t *best = NULL;
+    for (unsigned i = 0; tasks[i].name != NULL; i++) {
+        if (tasks[i].state == T_READY &amp;&amp; (best == NULL || tasks[i].prio &gt; best-&gt;prio)) {
+            best = &amp;tasks[i];
+        }
+    }
+    return best;
+}
+
+int main(void)
+{
+    unsigned idle = 0;
+
+    for (g_tick = 0; g_tick &lt;= 12u; g_tick++) {
+        for (unsigned i = 0; tasks[i].name != NULL; i++) {
+            if (tasks[i].state == T_DELAYED &amp;&amp; tasks[i].wake_at &lt;= g_tick) {
+                tasks[i].state = T_READY;
+            }
+        }
+        if (g_tick == 6u) {
+            printf("t=%2u  ISR     button -&gt; queue\n", (unsigned)g_tick);
+            q_put(99);
+        }
+        int ran = 0;
+        for (task_t *t = pick_next(); t != NULL; t = pick_next()) {
+            req_t r = t-&gt;step();
+            ran = 1;
+            if (r.kind == REQ_DELAY) {
+                t-&gt;state = T_DELAYED;
+                t-&gt;wake_at = g_tick + r.ticks;
+            } else if (r.kind == REQ_WAIT_Q) {
+                t-&gt;state = T_WAIT_Q;
+            }
+        }
+        if (!ran) {
+            idle++;
+        }
+    }
+    printf("idle ticks: %u of 13\n", idle);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="c7">
+  <li data-lines="4"><b class="what">اندازهٔ صف.</b> چهار پیام.</li>
+  <li data-lines="6-9"><b class="what">درخواست task.</b> هر قدم چیزی برمی‌گرداند: «تأخیر بده»، «روی صف بلاک شو» یا «بعد از من دوباره اجرا کن». حالت‌ها: آماده، در تأخیر، منتظر صف.
+    <span class="why">در FreeRTOS واقعی، task خودش وسط تابع بلاک می‌شود چون stack مخصوص خودش را دارد. اینجا با «برگرداندن درخواست» همان اثر را بدون stack جدا می‌سازیم.</span></li>
+  <li data-lines="11-18"><b class="what">ساختار task.</b> اسم، اولویت (عدد بزرگ‌تر مهم‌تر)، حالت، زمان بیداری و تابع قدم.</li>
+  <li data-lines="20-22"><b class="what">داده‌های مشترک.</b> تیک فعلی، بافر صف و ایندکس‌هایش (مثل درس ۴.۵).</li>
+  <li data-lines="28-33"><b class="what">جدول task ها.</b> <code>blink</code> کمترین اولویت، <code>logger</code> بیشترین. آخرین ردیف با <code>NULL</code> پایان جدول است.</li>
+  <li data-lines="35-42"><b class="what">بیدارکردن منتظران.</b> وقتی پیامی به صف رسید، هر task ای که منتظر صف بود «آماده» می‌شود.
+    <span class="why">در FreeRTOS واقعی فقط پراولویت‌ترین منتظر بیدار می‌شود؛ ما ساده‌سازی کرده‌ایم چون فقط یک منتظر داریم.</span></li>
+  <li data-lines="44-53"><b class="what">ارسال به صف.</b> مثل <code>xQueueSend</code>: پر بود ۰، وگرنه می‌گذارد و منتظران را بیدار می‌کند.</li>
+  <li data-lines="55-61"><b class="what">task چشمک.</b> LED را عوض می‌کند و ۵ تیک می‌خوابد. <code>static int on</code> حالتش را بین دورها نگه می‌دارد (به جای متغیر محلی stack خودش).</li>
+  <li data-lines="63-70"><b class="what">task سنسور.</b> هر ۴ تیک یک مقدار به صف می‌فرستد.</li>
+  <li data-lines="72-82"><b class="what">task ثبت‌کننده.</b> اگر صف خالی است، بلاک می‌شود. وگرنه یک پیام برمی‌دارد، چاپ می‌کند و می‌گوید «دوباره مرا اجرا کن» تا بقیهٔ پیام‌ها را هم بردارد.</li>
+  <li data-lines="84-93"><b class="what">انتخاب task.</b> از بین task های «آماده» بالاترین اولویت را برمی‌گرداند. این همان کار <b>زمان‌بند</b> است.</li>
+  <li data-lines="95-97,125-126"><b class="what">main.</b> شمارندهٔ «idle»: تیک هایی که هیچ task ای آماده نبوده.</li>
+  <li data-lines="99"><b class="what">حلقهٔ تیک.</b> ۱۳ تیک شبیه‌سازی می‌شود (۰ تا ۱۲).</li>
+  <li data-lines="100-104"><b class="what">بیدار کردن با زمان.</b> task ای که زمان بیدارشدنش رسیده، آماده می‌شود. مثل مدیریت تیک در FreeRTOS.</li>
+  <li data-lines="105-108"><b class="what">وقفهٔ شبیه‌سازی‌شده.</b> در تیک ۶ یک «دکمه» زده می‌شود و ISR مقدار ۹۹ را در صف می‌گذارد (الگوی ISR ← صف).</li>
+  <li data-lines="109-119"><b class="what">اجرای task ها.</b> تا وقتی task آماده هست، بالاترین اولویت را اجرا کن و درخواستش را ثبت کن.
+    <span class="why">این حلقه نشان می‌دهد چرا task پراولویت زودتر تمام می‌شود و به task کم‌اولویت نوبت می‌رسد فقط وقتی بقیه بلاک باشند.</span></li>
+  <li data-lines="120-124"><b class="what">idle و چاپ.</b> اگر هیچ task ای اجرا نشد، آن تیک «بیکار» است. در سخت‌افزار واقعی همان لحظه‌های idle جایی هستند که ESP32 می‌تواند به حالت کم‌مصرف برود.</li>
+</ol>
+<pre class="term" data-from="mini_rtos.c">
+$ gcc -std=c11 -Wall -Wextra -o mini_rtos mini_rtos.c
+$ ./mini_rtos
+t= 0  sensor  put 10
+t= 0  logger  got 10
+t= 0  blink   LED on
+t= 4  sensor  put 20
+t= 4  logger  got 20
+t= 5  blink   LED off
+t= 6  ISR     button -> queue
+t= 6  logger  got 99
+t= 8  sensor  put 30
+t= 8  logger  got 30
+t=10  blink   LED on
+t=12  sensor  put 40
+t=12  logger  got 40
+idle ticks: 6 of 13
+</pre>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 350" role="img" aria-label="خط زمانی تیک ۰ تا ۱۲: هر مربع یک اجرای task است. logger و sensor در تیک‌های ۰، ۴، ۸، ۱۲؛ blink در ۰، ۵، ۱۰؛ ISR در ۶ که logger را در ۶ بیدار می‌کند؛ تیک‌های ۱، ۲، ۳، ۷، ۹، ۱۱ بیکارند">
+  <defs><marker id="m56d" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" class="s-tx" text-anchor="middle" font-size="15" font-weight="800">اجرای برنامهٔ شبیه‌سازی: هر مربع = یک بار اجرای «قدم» task</text>
+  <g stroke="#15120a" stroke-width="2.5">
+    <rect x="32" y="50" width="36" height="34" fill="#ff86b3"/><rect x="216" y="50" width="36" height="34" fill="#ff86b3"/><rect x="308" y="50" width="36" height="34" fill="#ff86b3"/><rect x="400" y="50" width="36" height="34" fill="#ff86b3"/><rect x="584" y="50" width="36" height="34" fill="#ff86b3"/>
+    <rect x="32" y="100" width="36" height="34" fill="#7ea3ff"/><rect x="216" y="100" width="36" height="34" fill="#7ea3ff"/><rect x="400" y="100" width="36" height="34" fill="#7ea3ff"/><rect x="584" y="100" width="36" height="34" fill="#7ea3ff"/>
+    <rect x="32" y="150" width="36" height="34" fill="#ffd60a"/><rect x="262" y="150" width="36" height="34" fill="#ffd60a"/><rect x="492" y="150" width="36" height="34" fill="#ffd60a"/>
+    <rect x="308" y="200" width="36" height="34" fill="#ff9a4d"/>
+    <rect x="78" y="250" width="36" height="34" fill="#e3e0d6"/><rect x="124" y="250" width="36" height="34" fill="#e3e0d6"/><rect x="170" y="250" width="36" height="34" fill="#e3e0d6"/><rect x="354" y="250" width="36" height="34" fill="#e3e0d6"/><rect x="446" y="250" width="36" height="34" fill="#e3e0d6"/><rect x="538" y="250" width="36" height="34" fill="#e3e0d6"/>
+  </g>
+  <path d="M326 200V150" stroke="#15120a" stroke-width="2.5" stroke-dasharray="5 4" fill="none"/>
+  <path d="M326 200V88" stroke="#15120a" stroke-width="2.5" fill="none" marker-end="url(#m56d)"/>
+  <g fill="#15120a" text-anchor="middle" font-weight="800" font-size="13">
+    <text x="690" y="63" class="mono">logger</text><text x="690" y="80">اولویت ۳</text>
+    <text x="690" y="113" class="mono">sensor</text><text x="690" y="130">اولویت ۲</text>
+    <text x="690" y="163" class="mono">blink</text><text x="690" y="180">اولویت ۱</text>
+    <text x="690" y="216" class="mono">ISR</text><text x="690" y="233">دکمه</text>
+    <text x="690" y="266" class="mono">idle</text><text x="690" y="283">بیکار</text>
+  </g>
+  <path d="M20 296H640" stroke="#15120a" stroke-width="3" fill="none"/>
+  <g class="s-tx mono" text-anchor="middle" font-size="12.5" font-weight="700">
+    <text x="50" y="316">0</text><text x="96" y="316">1</text><text x="142" y="316">2</text><text x="188" y="316">3</text><text x="234" y="316">4</text><text x="280" y="316">5</text><text x="326" y="316">6</text><text x="372" y="316">7</text><text x="418" y="316">8</text><text x="464" y="316">9</text><text x="510" y="316">10</text><text x="556" y="316">11</text><text x="602" y="316">12</text>
+  </g>
+  <text x="380" y="340" class="s-tx" text-anchor="middle" font-size="12.5" font-weight="700">محور افقی = تیک. در تیک ۶ ISR پیام می‌گذارد و logger که پراولویت‌ترین است همان تیک اجرا می‌شود.</text>
+</svg></div>
+<figcaption>همان خروجی، به شکل نمودار. ردیف خاکستری = تیک بیکار (۶ تا). هر جا logger و sensor در یک تیک هستند، ابتدا sensor پیام می‌گذارد و بلافاصله logger پیام را برمی‌دارد.</figcaption></figure>
+
+<p>سه چیز را در خروجی ببین:</p>
+<ul>
+  <li><b>تیک ۰:</b> هر سه آماده‌اند. logger (بالاترین اولویت) اول اجرا می‌شود ولی صف خالی است و بلاک می‌شود. بعد sensor پیام می‌گذارد و logger بیدار می‌شود و <b>پیش از blink</b> اجرا می‌شود؛ چون اولویتش بیشتر است.</li>
+  <li><b>تیک ۶:</b> ISR (شبیه‌سازی‌شده) پیام ۹۹ را می‌گذارد و logger فوری آن را می‌خواند. task ها نیازی به «نگاه‌کردن مدام» ندارند.</li>
+  <li><b>۶ تیک بیکار:</b> بیشتر زمان هیچ کاری نیست. برای همین RTOS ها خوب‌اند: CPU جز وقت لازم، بیکار است و می‌تواند بخوابد.</li>
+</ul>
+
+<div class="callout info"><div class="ct">این شبیه‌سازی چه چیزی را «نشان نمی‌دهد»؟</div>
+<p>در FreeRTOS واقعی هر task stack جدا دارد و زمان‌بند می‌تواند task را <b>وسط اجرا</b> (پیشدستی) قطع کند، حتی وسط یک تابع. در شبیه‌سازی ما، هر قدم تا آخر اجرا می‌شود. پس اینجا «رقابت» نداریم، ولی منطق اولویت و بلاک‌شدن را دیدی؛ همان چیزی که برای طراحی task ها لازم است.</p></div>
+
+<h2 id="pitfalls">تله‌ها: چیزهایی که این‌جا خراب می‌شوند</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>اشتباه</th><th>علامت</th><th>درمان</th></tr></thead>
+<tbody>
+<tr><td>task که تابعش <code>return</code> می‌کند</td><td>پنیک و ریست</td><td>حلقهٔ بی‌پایان یا <code>vTaskDelete(NULL)</code> در آخر</td></tr>
+<tr><td>task پراولویت که هرگز بلاک نمی‌شود</td><td>task های کم‌اولویت اجرا نمی‌شوند؛ پیام «Task watchdog got triggered» (task_wdt)</td><td>هر task باید از راه <code>vTaskDelay</code>، صف یا semaphore بلاک شود</td></tr>
+<tr><td>stack کم</td><td>پیام «A stack overflow in task ... has been detected» و ریست</td><td>اندازه را بیشتر کن؛ با <code>uxTaskGetStackHighWaterMark</code> بسنج</td></tr>
+<tr><td>پارامتر task = اشاره‌گر به متغیر محلی <code>app_main</code></td><td>مقدار آشغال، چون <code>app_main</code> برمی‌گردد و stack آن آزاد می‌شود</td><td>پارامتر را <code>static</code> یا سراسری بگیر (تمرین ۳)</td></tr>
+<tr><td>استفاده از <code>xQueueSend</code> در ISR</td><td>خطای اجرا یا قفل شدن</td><td>فقط <code>xQueueSendFromISR</code></td></tr>
+<tr><td><code>vTaskDelay(pdMS_TO_TICKS(5))</code> با نرخ ۱۰۰ هرتز</td><td>تقریبا هیچ صبری نمی‌شود</td><td>از تیک بیشتر یا تایمر سخت‌افزاری</td></tr>
+<tr><td>متغیر مشترک بدون قفل</td><td>مقدارهای گاه‌به‌گاه غلط</td><td>صف یا mutex</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><div class="ct">Watchdog: نگهبانی که نان‌ندادن را می‌گیرد</div>
+<p><span class="term" data-t="watchdog">Watchdog</span> (سگ نگهبان) تایمری است که اگر به‌موقع «تازه‌اش» نکنی، سیستم را بازراه‌اندازی می‌کند. در ESP-IDF یک watchdog وظیفه (task watchdog) به‌طور معمول روی task بیکار (idle) نظارت می‌کند: اگر یک task پراولویت ثانیه‌ها بلاک نشود، idle اجرا نمی‌شود و watchdog به ریست می‌رساند. علامتش لاگ خطای <code>task_wdt</code> است. زمان دقیق (پیش‌فرض چند ثانیه) در <code>menuconfig</code> است. در تمرین ۲ همین رفتار را روی PC می‌بینی.</p></div>
+
+<h2 id="cores">دو هسته</h2>
+<p>ESP32 کلاسیک دو هستهٔ Xtensa دارد (شماره ۰ و ۱). FreeRTOS در ESP-IDF هر دو را مدیریت می‌کند: task ها به‌طور پیش‌فرض روی هر هسته‌ای که خالی باشد می‌روند. اگر بخواهی task ای را به یک هستهٔ مشخص ببندی (مثلا برای اینکه Wi-Fi که معمولا روی هستهٔ ۰ است مزاحمش نشود)، از <code>xTaskCreatePinnedToCore</code> استفاده کن:</p>
+
+<div class="code" data-file="pinned.c" data-lang="c" data-verify="frag" id="c8">
+<pre>
+xTaskCreatePinnedToCore(worker_task, "worker", 4096, NULL, 5, NULL, 1);
+</pre></div>
+<ol class="walk" data-for="c8">
+  <li data-lines="1"><b class="what">هفت آرگومان.</b> همان شش آرگومان <code>xTaskCreate</code> و آخری شمارهٔ هسته: ۰ یا ۱ (یا <code>tskNO_AFFINITY</code> برای «هرجا»).
+    <span class="why">با دو هسته، دو task واقعا <b>همزمان</b> اجرا می‌شوند، نه با نوبت‌دادن. پس رقابت روی داده‌های مشترک واقعی‌تر و خطرناک‌تر است؛ mutex و صف اهمیت بیشتری پیدا می‌کنند.</span></li>
+</ol>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: چرا «ESP32 دو هسته‌ای» با «پیشدستی» فرق دارد؟</div>
+<p>پیشدستی یعنی زمان‌بند task را قطع می‌کند و دیگری را می‌آورد (تقسیم زمان). دو هسته یعنی دو task واقعا در یک لحظه اجرا می‌شوند (موازی). یک تراشهٔ تک‌هسته‌ای مثل STM32F411 فقط پیشدستی دارد؛ ESP32 هر دو را. ویژگی‌ها را در مستندات ESP-IDF بخش FreeRTOS بخوان: <a href="https://docs.espressif.com/projects/esp-idf/" target="_blank" rel="noopener">docs.espressif.com</a>. برای مفاهیم عمومی FreeRTOS: <a href="https://www.freertos.org" target="_blank" rel="noopener">freertos.org</a>.</p></div>
+
+<h2 id="stm32">در STM32 چه؟</h2>
+<p>همین FreeRTOS روی STM32 هم قابل استفاده است (مثلا از راه CMSIS-RTOS در STM32Cube)، ولی در دورهٔ ما STM32 را bare-metal نگه داشتیم تا سطح پایین را ببینی. الگو یکی است: task، اولویت، صف. آنچه در درس ۵.۴ با «زمان‌بند همکاری» ساختیم، ساده‌ترین شکل همین ایده است؛ وقتی کارها «زمان‌بحرانی» و «مستقل» شدند، RTOS کار را ارزان‌تر می‌کند. مسیر ادامه در درس <a href="7-2.html">۷.۲</a> است.</p>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">وقتی یک task در FreeRTOS <code>vTaskDelay(pdMS_TO_TICKS(500))</code> را صدا می‌زند، چه می‌شود؟</p>
+  <ol>
+    <li data-why="این همان busy-wait است که vTaskDelay دقیقا برای اجتناب از آن ساخته شده. CPU در این مدت کار دیگر انجام می‌دهد.">CPU ۵۰۰ms همان‌جا می‌ایستد و هیچ task دیگری اجرا نمی‌شود</li>
+    <li>task «بلاک» می‌شود و CPU می‌تواند تا ۵۰۰ms کار task های دیگر را اجرا کند</li>
+    <li data-why="task حذف نمی‌شود؛ فقط بلاک می‌شود و بعد از زمان مقرر دوباره آماده می‌گردد.">task حذف می‌شود و باید دوباره ساخته شود</li>
+    <li data-why="نه؛ تأخیر فقط برای همین task است. دیگر task ها نه متوقف می‌شوند و نه قفل.">همهٔ task های دیگر هم ۵۰۰ms متوقف می‌شوند</li>
+  </ol>
+  <div class="fb">بلاک‌شدن یعنی «تا زمان معین کاری با من نداشته باش». اینجا فرق اصلی با حلقهٔ انتظار مشغول است.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">در خروجی برنامهٔ شبیه‌سازی، بلافاصله بعد از خط <code>t= 6  ISR     button -&gt; queue</code> چه چیزی چاپ می‌شود؟</p>
+  <ol>
+    <li data-why="blink تا تیک ۱۰ می‌خوابد؛ در تیک ۶ چیزی از آن چاپ نمی‌شود.">t= 6  blink   LED on</li>
+    <li data-why="sensor هر ۴ تیک اجرا می‌شود: ۰، ۴، ۸، ۱۲؛ تیک ۶ نوبت او نیست.">t= 6  sensor  put 30</li>
+    <li>t= 6  logger  got 99</li>
+    <li data-why="در آن تیک logger پیامی دارد؛ چون ISR همین الان ۹۹ را گذاشته و logger را بیدار کرده است.">idle ticks: 6 of 13</li>
+  </ol>
+  <div class="fb">ISR پیام ۹۹ را در صف می‌گذارد و logger که بلاک روی صف بود، بیدار و آماده می‌شود. چون اولویتش از همه بالاتر است، همان تیک اجرا می‌شود.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">این task چه مشکلی دارد؟ تابع فقط این سه کار را می‌کند: <code>gpio_set_level(LED_GPIO, 1);</code> سپس <code>vTaskDelay(pdMS_TO_TICKS(500));</code> سپس <code>gpio_set_level(LED_GPIO, 0);</code> و بعد تمام می‌شود.</p>
+  <ol>
+    <li data-why="اسم task فقط برای دیباگ است و ربطی به امضای تابع ندارد. void * درست است.">پارامتر <code>void *arg</code> اشتباه است</li>
+    <li data-why="gpio_set_level را در task می‌توان صدا زد؛ مشکل جای دیگری است.">نمی‌توان GPIO را داخل task تغییر داد</li>
+    <li data-why="vTaskDelay درون task کاملا مجاز و رایج است.">نباید vTaskDelay صدا بزند</li>
+    <li>تابع در پایان برمی‌گردد؛ یک task باید حلقهٔ بی‌پایان داشته باشد یا آخرش <code>vTaskDelete(NULL)</code> بزند</li>
+  </ol>
+  <div class="fb">برگشتن از تابع task مجاز نیست؛ آن task با خطا تمام می‌شود. حلقهٔ <code>for (;;)</code> اضافه کن یا بعد از کار، <code>vTaskDelete(NULL)</code> صدا بزن.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">در یک ISR روی ESP32 می‌خواهی پیام را به task بفرستی. کدام درست است؟</p>
+  <ol>
+    <li><code>xQueueSendFromISR(q, &amp;msg, &amp;woken)</code></li>
+    <li data-why="این نسخه‌ای است که ممکن است بلاک شود؛ در ISR اجازه‌اش را نداری.">xQueueSend(q, &amp;msg, portMAX_DELAY)</li>
+    <li data-why="printf در ISR ممنوع است: کند است و ممکن است قفل کند (قواعد ISR درس ۵.۳).">printf("button\n") و برگشتن</li>
+    <li data-why="vTaskDelay فقط برای task مجاز است. ISR وجود ندارد که بتواند بلاک شود.">vTaskDelay(1) تا task بیدار شود</li>
+  </ol>
+  <div class="fb">فقط توابع «FromISR» در ISR مجازند؛ آن‌ها هرگز بلاک نمی‌شوند و به زمان‌بند می‌گویند آیا task مهم‌تری بیدار شده است.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">با نرخ تیک ۱۰۰ هرتز، <code>pdMS_TO_TICKS(5)</code> چند تیک می‌دهد و چرا؟</p>
+  <ol>
+    <li data-why="۵ تیک ۵۰ میلی‌ثانیه است؛ هر تیک ۱۰ms است، نه ۱ms.">۵ تیک، چون هر میلی‌ثانیه یک تیک است</li>
+    <li>۰ تیک، چون ۵×۱۰۰÷۱۰۰۰ در تقسیم صحیح صفر می‌شود</li>
+    <li data-why="ماکرو گرد به بالا نمی‌کند؛ فرمول ساده با تقسیم صحیح است.">۱ تیک، چون همیشه به بالا گرد می‌شود</li>
+    <li data-why="۵۰ تیک ۵۰۰ms است؛ دو مرتبه اشتباه.">۵۰ تیک</li>
+  </ol>
+  <div class="fb">تقسیم صحیح اعشار را دور می‌اندازد. تأخیر کمتر از یک تیک با <code>vTaskDelay</code> ممکن نیست.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">تولیدکننده <code>xQueueSend(q, &amp;m, 0)</code> را صدا می‌زند و بلافاصله <code>m.value = 999</code> می‌کند. مصرف‌کننده چه می‌بیند؟</p>
+  <ol>
+    <li data-why="اگر صف اشاره‌گر نگه می‌داشت درست بود؛ ولی صف کپی محتوا را ذخیره می‌کند.">۹۹۹، چون صف به m اشاره می‌کند</li>
+    <li data-why="پیام از بین نمی‌رود؛ صف نسخهٔ خودش را نگه داشته است.">هیچ چیز؛ پیام از بین می‌رود</li>
+    <li>مقداری که <code>m.value</code> هنگام ارسال داشت، چون صف محتوا را کپی کرده است</li>
+    <li data-why="خطای کامپایل یا اجرا وجود ندارد؛ آزادانه می‌توانی m را عوض کنی.">خطای اجرا، چون m بعد از ارسال قفل است</li>
+  </ol>
+  <div class="fb">صف در FreeRTOS محتوای پیام را کپی می‌کند، برای همین بعد از ارسال می‌توانی متغیر محلی را عوض کنی یا آن را رها کنی.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: گرد کردن رو به بالا</div>
+<p>دیدیم <code>pdMS_TO_TICKS</code> رو به پایین گرد می‌کند و ۵ms صفر تیک می‌شود. تابعی بنویس که رو به بالا گرد کند (حداقل ۱ تیک برای هر زمان مثبت).</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> با نرخ ۱۰۰ هرتز، ۱ms و ۱۱ms چند تیک رو به بالا می‌شوند؟</li>
+  <li><b>حل:</b> تابع <code>ms_to_ticks_ceil</code> را بنویس و جدول مقایسه با نسخهٔ گرد-به-پایین چاپ کن.</li>
+  <li><b>فکر کن:</b> چه ضربی در فرمول لازم است تا برای <code>ms = 999</code> سرریز ۳۲ بیتی رخ ندهد؟ (هر <code>ms</code> تا چه حدی امن است؟)</li>
+</ol>
+<details><summary>راهنمایی</summary><p>گرد به بالا برای تقسیم صحیح: <code>(a + b - 1) / b</code>. اینجا <code>b = 1000</code>. یادت هست در درس ۲.۳؟</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="tick_ceil.c">
+$ ./tick_ceil
+  ms  floor  ceil
+   1      0     1
+   5      0     1
+  10      1     1
+  11      1     2
+ 999     99   100
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="tick_ceil.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+#define HZ 100u
+
+static uint32_t ms_to_ticks_floor(uint32_t ms)
+{
+    return ms * HZ / 1000u;
+}
+
+static uint32_t ms_to_ticks_ceil(uint32_t ms)
+{
+    return (ms * HZ + 999u) / 1000u;
+}
+
+int main(void)
+{
+    static const uint32_t list[] = { 1u, 5u, 10u, 11u, 999u };
+
+    printf("  ms  floor  ceil\n");
+    for (unsigned i = 0; i &lt; sizeof list / sizeof list[0]; i++) {
+        printf("%4u  %5u  %4u\n", (unsigned)list[i],
+               (unsigned)ms_to_ticks_floor(list[i]),
+               (unsigned)ms_to_ticks_ceil(list[i]));
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="6-9"><b class="what">نسخهٔ گرد-به-پایین.</b> همان <code>pdMS_TO_TICKS</code>.</li>
+  <li data-lines="11-14"><b class="what">نسخهٔ گرد-به-بالا.</b> با افزودن <code>999</code> پیش از تقسیم، هر باقی‌ماندهٔ غیرصفر «یک» اضافه می‌کند.
+    <span class="why">۵×۱۰۰ = ۵۰۰؛ ۵۰۰+۹۹۹ = ۱۴۹۹؛ ÷۱۰۰۰ = ۱. ولی ۱۰×۱۰۰ = ۱۰۰۰؛ ۱۰۰۰+۹۹۹ = ۱۹۹۹؛ ÷۱۰۰۰ = ۱ (درست، بدون اضافه).</span></li>
+  <li data-lines="18-25"><b class="what">جدول مقایسه.</b> ۱ و ۵ میلی‌ثانیه با گرد-به-بالا، یک تیک می‌شوند.</li>
+</ol>
+<pre class="term" data-from="tick_ceil.c">
+$ ./tick_ceil
+  ms  floor  ceil
+   1      0     1
+   5      0     1
+  10      1     1
+  11      1     2
+ 999     99   100
+</pre>
+<p>بخش پ: ضرب <code>ms × 100</code> باید در ۳۲ بیت جا شود؛ یعنی <code>ms</code> کمتر از حدود ۴۲ میلیون (۴۲ میلیون × ۱۰۰ ≈ ۴٫۲ میلیارد). برای تأخیرهای چند ساعته (میلیون‌ها ms) به ۶۴ بیت برو (درس ۴.۷). FreeRTOS هم خودش همین نگرانی را با انواع پهن‌تر دارد.</p></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: چرا blink هرگز اجرا نمی‌شود؟</div>
+<p>در این شبیه‌سازی کوچک، task <code>hog</code> اولویت بالاتر دارد و <code>blink</code> اولویت پایین. (عدد <code>budget</code> فقط جلوی حلقهٔ بی‌نهایت شبیه‌سازی را می‌گیرد.) برنامه را اجرا کن و ببین چه می‌شود.</p>
+<div class="code" data-file="starve.c" data-lang="c" data-verify="host" id="ex2bad">
+<pre>
+#include &lt;stdio.h&gt;
+
+typedef struct {
+    const char *name;
+    int prio;
+    int blocks;         // 1 = بعد از هر دور خودش را بلاک می‌کند (مثل vTaskDelay)
+    int runs;
+} task_t;
+
+static task_t tasks[] = {
+    { "hog",  3, 0, 0 },
+    { "blink", 1, 1, 0 },
+};
+
+int main(void)
+{
+    for (int tick = 0; tick &lt; 3; tick++) {
+        int budget = 4;                     // سقف دور در هر تیک، تا شبیه‌سازی گیر نکند
+        int blocked[2] = { 0, 0 };
+        while (budget-- &gt; 0) {
+            int best = -1;
+            for (int i = 0; i &lt; 2; i++) {
+                if (!blocked[i] &amp;&amp; (best &lt; 0 || tasks[i].prio &gt; tasks[best].prio)) {
+                    best = i;
+                }
+            }
+            if (best &lt; 0) {
+                break;
+            }
+            tasks[best].runs++;
+            if (tasks[best].blocks) {
+                blocked[best] = 1;
+            }
+        }
+    }
+    for (int i = 0; i &lt; 2; i++) {
+        printf("%-6s prio=%d runs=%d\n", tasks[i].name, tasks[i].prio, tasks[i].runs);
+    }
+    return 0;
+}
+</pre></div>
+<pre class="term" data-from="starve.c">
+$ ./starve
+hog    prio=3 runs=12
+blink  prio=1 runs=0
+</pre>
+<ol class="parts">
+  <li><b>ببین:</b> blink چند بار اجرا شد؟ چرا؟</li>
+  <li><b>درست کن:</b> یک مقدار در جدول را عوض کن تا هر دو task اجرا شوند (هر کدام سه بار). معادلش در FreeRTOS چیست؟</li>
+  <li><b>سخت‌افزار:</b> روی ESP32 واقعی این اتفاق چه پیامی روی مانیتور ایجاد می‌کند و چرا؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>ستون <code>blocks</code> می‌گوید آیا task در پایان هر دور خودش را بلاک می‌کند (مثل <code>vTaskDelay</code>).</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="starve_fix.c">
+$ ./starve_fix
+hog    prio=3 runs=3
+blink  prio=1 runs=3
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>فقط یک عدد فرق می‌کند: در ردیف <code>hog</code> مقدار <code>blocks</code> از ۰ به ۱ می‌رود:</p>
+<div class="code" data-file="starve_fix.c" data-lang="c" data-verify="host" id="ex2">
+<pre>
+#include &lt;stdio.h&gt;
+
+typedef struct {
+    const char *name;
+    int prio;
+    int blocks;         // 1 = بعد از هر دور خودش را بلاک می‌کند (مثل vTaskDelay)
+    int runs;
+} task_t;
+
+static task_t tasks[] = {
+    { "hog",  3, 1, 0 },
+    { "blink", 1, 1, 0 },
+};
+
+int main(void)
+{
+    for (int tick = 0; tick &lt; 3; tick++) {
+        int budget = 4;                     // سقف دور در هر تیک، تا شبیه‌سازی گیر نکند
+        int blocked[2] = { 0, 0 };
+        while (budget-- &gt; 0) {
+            int best = -1;
+            for (int i = 0; i &lt; 2; i++) {
+                if (!blocked[i] &amp;&amp; (best &lt; 0 || tasks[i].prio &gt; tasks[best].prio)) {
+                    best = i;
+                }
+            }
+            if (best &lt; 0) {
+                break;
+            }
+            tasks[best].runs++;
+            if (tasks[best].blocks) {
+                blocked[best] = 1;
+            }
+        }
+    }
+    for (int i = 0; i &lt; 2; i++) {
+        printf("%-6s prio=%d runs=%d\n", tasks[i].name, tasks[i].prio, tasks[i].runs);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="10-13"><b class="what">جدول.</b> حالا <code>hog</code> هم <code>blocks = 1</code> دارد.
+    <span class="why">در FreeRTOS یعنی <code>hog</code> در هر دور <code>vTaskDelay</code> یا انتظار روی صف دارد. با بلاک‌شدن، اولویت بالایش دیگر مزاحم نیست؛ چون زمان‌بند به task بعدی می‌رسد.</span></li>
+  <li data-lines="20-34"><b class="what">حلقهٔ زمان‌بند.</b> تا وقتی task ای «آماده» است، بالاترین اولویتش را اجرا می‌کند. اگر بالاترین هرگز بلاک نشود، پایین‌تر هرگز نوبت نمی‌گیرد. اسمش «گرسنگی» (<span class="term" data-t="starvation">starvation</span>) است.</li>
+</ol>
+<pre class="term" data-from="starve_fix.c">
+$ ./starve_fix
+hog    prio=3 runs=3
+blink  prio=1 runs=3
+</pre>
+<p>روی ESP32 واقعی، task بیکار (idle) هم اولویت ۰ دارد و اگر hog بلاک نشود، idle اجرا نمی‌شود. بعد از چند ثانیه watchdog وظیفه لاگ <code>task_wdt: Task watchdog got triggered</code> را می‌زند و ممکن است سیستم را ریست کند. قاعدهٔ طلایی: <b>هر task باید بلاک شود</b>، جز اینکه واقعا کار می‌کند.</p></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: دو LED، یک تابع task (ارتباط با سخت‌افزار)</div>
+<p>می‌خواهی دو LED (GPIO2 و GPIO4) با دوره‌های ۵۰۰ و ۲۰۰ میلی‌ثانیه چشمک بزنند، با یک تابع task که برای هر LED یک‌بار ساخته می‌شود و پایه و دوره را از راه پارامتر می‌گیرد. کد ESP-IDF می‌نویسی و این محیط آن را کامپایل نمی‌کند؛ پس با دقت و مطابق مستندات بنویس.</p>
+<ol class="parts">
+  <li><b>ساختار پارامتر:</b> یک <code>struct</code> با <code>gpio</code> و <code>period_ms</code> تعریف کن. پارامتر <code>void *</code> باید به چه چیزی اشاره کند؟</li>
+  <li><b>حل:</b> تابع <code>blink_task</code> را بنویس که به‌جای <code>vTaskDelay</code> از <code>vTaskDelayUntil</code> برای دورهٔ دقیق استفاده کند و در <code>app_main</code> دو task بسازد.</li>
+  <li><b>باگ:</b> اگر پارامتر را با <code>&amp;cfg</code> بفرستی که <code>cfg</code> یک متغیر محلی <code>app_main</code> است، چه می‌شود؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p><code>app_main</code> بعد از ساختن task ها برمی‌گردد. با برگشتن، stack آن آزاد می‌شود. پس متغیر محلی‌اش دیگر معتبر نیست، ولی task ها هنوز دارند به آن اشاره می‌کنند.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary><p>یک LED هر ۵۰۰ms و دیگری هر ۲۰۰ms تغییر حالت می‌دهد (پس دوره‌های کامل ۱۰۰۰ و ۴۰۰ میلی‌ثانیه). اگر پارامتر را محلی بفرستی، رفتار ممکن است در ابتدا درست به نظر برسد و بعد بی‌دلیل خراب شود (رفتار تعریف‌نشده).</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="two_blinkers.c" data-lang="c" data-verify="frag" id="ex3">
+<pre>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "driver/gpio.h"
+
+typedef struct {
+    gpio_num_t gpio;
+    uint32_t period_ms;
+} blink_cfg_t;
+
+static const blink_cfg_t s_cfgs[] = {
+    { GPIO_NUM_2, 500 },
+    { GPIO_NUM_4, 200 },
+};
+
+static void blink_task(void *arg)
+{
+    const blink_cfg_t *cfg = (const blink_cfg_t *)arg;
+    int level = 0;
+    TickType_t last = xTaskGetTickCount();
+
+    gpio_reset_pin(cfg-&gt;gpio);
+    gpio_set_direction(cfg-&gt;gpio, GPIO_MODE_OUTPUT);
+    for (;;) {
+        level = !level;
+        gpio_set_level(cfg-&gt;gpio, level);
+        vTaskDelayUntil(&amp;last, pdMS_TO_TICKS(cfg-&gt;period_ms));
+    }
+}
+
+void app_main(void)
+{
+    for (int i = 0; i &lt; 2; i++) {
+        xTaskCreate(blink_task, "blink", 2048, (void *)&amp;s_cfgs[i], 5, NULL);
+    }
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="5-8"><b class="what">پارامتر کار.</b> پایه و دوره در یک struct.</li>
+  <li data-lines="10-13"><b class="what">داده‌های ثابت سراسری.</b> <code>static const</code>: در Flash، تا آخر برنامه معتبر و هرگز نمی‌میرد.
+    <span class="why">این جواب قسمت باگ است: اشاره‌گر به یک متغیر <code>static</code> یا سراسری همیشه معتبر می‌ماند. اشاره‌گر به متغیر محلی <code>app_main</code> پس از برگشت آویزان می‌شود (درس ۳.۵).</span></li>
+  <li data-lines="17"><b class="what">برگرداندن نوع.</b> <code>void *</code> به <code>const blink_cfg_t *</code> برمی‌گردد (درس ۳.۳).</li>
+  <li data-lines="19"><b class="what">مبدأ زمان.</b> <code>xTaskGetTickCount()</code> زمان فعلی را (به تیک) می‌گیرد؛ <code>vTaskDelayUntil</code> از همین مبدأ دورهٔ ثابت می‌سازد.</li>
+  <li data-lines="21-22"><b class="what">راه‌اندازی پایه.</b> ریست وضعیت پایه و خروجی‌کردن. در کد واقعی نتیجه را با <code>ESP_ERROR_CHECK</code> بگیر؛ اینجا برای کوتاهی ننوشتیم.</li>
+  <li data-lines="23-27"><b class="what">حلقه.</b> حالت را برعکس می‌کند و تا پایان دورهٔ بعدی می‌خوابد.
+    <span class="why"><code>vTaskDelayUntil</code> باعث می‌شود دوره دقیق بماند حتی اگر کار داخل حلقه چند میلی‌ثانیه طول بکشد؛ برخلاف <code>vTaskDelay</code> که دوره را طولانی‌تر می‌کند.</span></li>
+  <li data-lines="30-35"><b class="what">ساخت دو task.</b> یک تابع، دو نمونه، هر کدام با پارامتر خودش و stack خودش.</li>
+</ol></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>در این درس معمولا دو جا گیر می‌کنند. اول: <b>«task مثل تابعی است که موازی اجرا می‌شود»</b>. نه؛ task ها روی یک هسته نوبتی می‌دوند و هر لحظه فقط یکی. پس هر بار خواستی متغیر مشترک بنویسی، بپرس «اگر وسط این خط نوبت عوض شود چه؟». دوم: <b>فراموشی بلاک‌شدن</b>. کد چشمک با <code>vTaskDelay</code> «کار می‌کند» و همین باعث می‌شود یادت برود هر task باید بلاک شود. با یک عادت شروع کن: task هایت را بنویس، و برای هر کدام بپرس «کجا بلاک می‌شود؟». اگر جواب نداری، یک باگ در راه است. و اگر برد نداری، همین شبیه‌سازی را دستکاری کن؛ اولویت‌ها را جابه‌جا کن و ببین چه می‌شود.</p></div>
+
+<div class="sum"><h2>خلاصهٔ یک‌دقیقه‌ای</h2>
+<ul>
+  <li><b>ESP-IDF</b> فریم‌ورک C رسمی ESP32 است؛ <code>idf.py build / flash / monitor</code> و <code>menuconfig</code>. تو <code>app_main</code> را می‌نویسی؛ پروژه دو <code>CMakeLists.txt</code> دارد.</li>
+  <li>لاگ با <code>ESP_LOGI(TAG, ...)</code>؛ خطاها با <code>esp_err_t</code> (<code>ESP_OK</code> = صفر) و <code>ESP_ERROR_CHECK</code>.</li>
+  <li><b>task</b> = تابع با حلقهٔ بی‌پایان و stack خودش (<code>xTaskCreate</code>؛ stack در ESP-IDF برحسب بایت). هرگز <code>return</code> نکن. هر task باید جایی بلاک شود.</li>
+  <li>زمان‌بند FreeRTOS بالاترین اولویتِ آماده را اجرا می‌کند؛ نرخ تیک معمولا ۱۰۰ هرتز است. <code>pdMS_TO_TICKS</code> گرد به پایین می‌کند و ۵ms صفر تیک است. برای دورهٔ دقیق <code>vTaskDelayUntil</code>.</li>
+  <li><b>صف</b> پیام را کپی می‌کند و task ها را می‌خواباند و بیدار می‌کند. الگو: ISR ← <code>xQueueSendFromISR</code> ← task.</li>
+  <li>داده مشترک: بهتر است پیام بفرستی؛ وگرنه mutex. در ISR فقط توابع <code>FromISR</code>.</li>
+  <li>پارامتر task باید تا آخر عمر task معتبر باشد (<code>static</code>، نه متغیر محلی <code>app_main</code>).</li>
+  <li>روی PC می‌توان منطق اولویت، تأخیر و صف را شبیه‌سازی کرد و آزمود؛ شبیه‌سازی پیشدستی و رقابت واقعی را نشان نمی‌دهد.</li>
+</ul>
+<p>درس بعد: <a href="5-7.html">معماری لایه‌ای درایور و HAL</a>؛ چطور کد را طوری بچینیم که هم روی PC آزمایش شود و هم روی STM32 و ESP32 بدون تغییر کار کند.</p></div>
+
+</article>
+</body>
+</html>
