@@ -1,0 +1,1144 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bare-metal روی STM32: GPIO با رجیستر · C برای میکروکنترلر</title>
+<meta name="description" content="چشمک LD2 و خواندن دکمهٔ آبی روی Nucleo-F411RE فقط با رجیستر، هدر رجیستر کوچک، Makefile و ریختن روی برد.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+
+<article class="page" data-page="5-2">
+
+<p class="lede">تا حالا هر کاری که با تراشه کردی، از میان یک «واسطه» رد شده است: کتابخانه، سیستم‌عامل، یا تابعی که کس دیگری نوشته. در این درس واسطه را کنار می‌گذاریم. سه رجیستر را خودت می‌نویسی و چراغ سبز روی برد Nucleo شروع به چشمک‌زدن می‌کند. بعد یک دکمه را می‌خوانی. وقتی این دو کار را بدون هیچ کتابخانه‌ای انجام بدهی، هر کتابخانهٔ سازنده (HAL) برایت شفاف می‌شود.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>LED روی برد (LD2 روی PA5) را فقط با رجیستر، بدون HAL، چشمک بزنی</li>
+    <li>سه قدم «ساعت، حالت، کار» را برای هر پریفرال بگویی و بنویسی</li>
+    <li>دکمهٔ آبی (PC13) را با <span class="en">polling</span> بخوانی و بدانی چرا «فشرده = صفر» است</li>
+    <li>یک هدر رجیستر کوچک شبیه CMSIS بنویسی و آدرس‌هایش را با <code>_Static_assert</code> بسنجی</li>
+    <li>پروژه را با <code>Makefile</code> و <code>arm-none-eabi-gcc</code> بسازی و روی برد بریزی</li>
+    <li>همین برنامه را با HAL و LL مقایسه کنی و بدانی هرکدام کی به‌کار می‌آید</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="3-6.html">۳.۶</a> (رجیستر و <code>volatile</code>) و <a href="3-1.html">۳.۱</a> (ماسک بیتی)</li>
+    <li>درس <a href="4-2.html">۴.۲</a> (Makefile) و آشنایی مقدماتی با <a href="5-1.html">۵.۱</a> (بوت و startup). اینجا نسخهٔ فشردهٔ آن را هم داریم</li>
+    <li>ابزار <code>arm-none-eabi-gcc</code> و <code>make</code> (درس <a href="1-3.html">۱.۳</a>)</li>
+    <li>برد Nucleo-F411RE و کابل USB مناسب آن. بدون برد هم می‌توانی همهٔ کدها را کامپایل کنی و ببینی</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: رفتن سراغ جعبه‌فیوز</h2>
+<p>در ساختمانی لامپ راهرو خراب شده است. دو راه داری. راه اول: به سرایدار زنگ بزنی و بگویی «لطفا لامپ را عوض کن». سرایدار همهٔ کارها را می‌داند و تو چیزی از جزئیات نمی‌فهمی. راه دوم: خودت سراغ جعبه‌فیوز بروی، کلید درست را پیدا کنی و بزنی.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>سرایدار همان <span class="term" data-t="hal">HAL</span> است، کتابخانه‌ای که سازندهٔ تراشه نوشته. جعبه‌فیوز همان رجیسترهاست. کار <span class="term" data-t="baremetal">bare-metal</span> (به فارسی «روی فلز خالی») یعنی <b>بدون سیستم‌عامل و بدون واسطه، مستقیم با رجیستر حرف زدن</b>. سرایدار بد نیست؛ ولی اگر جعبه‌فیوز را ندیده باشی، وقتی سرایدار نیامد یا اشتباه کرد، هیچ کاری از دستت برنمی‌آید.</p></div>
+
+<p>خبر خوب: هر پریفرال STM32 (GPIO، تایمر، UART و…) با همان سه قدم راه می‌افتد. این سه قدم را حفظ کن، چون تا آخر دوره تکرار می‌شوند:</p>
+<ol class="steps">
+  <li><b>ساعت (clock).</b> پریفرال‌ها برای صرفه‌جویی در برق پیش‌فرض بی‌ساعت‌اند. ساعت را در <code>RCC</code> روشن کن.</li>
+  <li><b>حالت (mode).</b> به پریفرال بگو چه کاری بکند. برای GPIO: این پایه ورودی است یا خروجی؟</li>
+  <li><b>کار.</b> حالا واقعا فرمان بده: بنویس، بخوان، صبر کن.</li>
+</ol>
+
+<h2 id="path">مسیر یک فرمان: از CPU تا LED</h2>
+<p>شکل زیر مسیر همین سه قدم برای LD2 را نشان می‌دهد. روی برد Nucleo-F411RE، پایهٔ <code>PA5</code> (پایهٔ ۵ پورت A) از راه یک مقاومت به LED سبز وصل است. پس اگر PA5 را «بالا» کنیم، LED روشن می‌شود.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 310" role="img" aria-label="مسیر فرمان از CPU به RCC و GPIOA و پایه PA5 و LED">
+  <defs><marker id="f52a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">سه نوشتن، سه قدم: ساعت، حالت، کار</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="640" y="100" width="100" height="120" rx="12" fill="#ffd60a"/>
+    <rect x="350" y="40" width="190" height="56" rx="10" fill="#7ea3ff"/>
+    <rect x="322" y="120" width="238" height="164" rx="12" fill="none" stroke-dasharray="7 5"/>
+    <rect x="338" y="168" width="206" height="46" rx="8" fill="#ff86b3"/>
+    <rect x="338" y="226" width="206" height="46" rx="8" fill="#3ddc97"/>
+    <circle cx="240" cy="249" r="9" fill="#fff"/>
+    <rect x="150" y="238" width="62" height="22" fill="#fff"/>
+    <circle cx="80" cy="249" r="24" fill="#ffd60a"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-weight="800">
+    <text x="690" y="152" font-size="17">CPU</text>
+    <text x="690" y="176" font-size="12.5">دستور «ذخیره»</text>
+    <text x="690" y="194" font-size="12.5">به یک آدرس</text>
+    <text x="445" y="63" font-size="14">RCC</text>
+    <text x="445" y="83" font-size="12.5">AHB1ENR بیت ۰ = ۱</text>
+    <text x="441" y="188" font-size="13.5">MODER: بیت‌های ۱۱..۱۰ = ۰۱</text>
+    <text x="441" y="206" font-size="12.5">پایهٔ ۵ خروجی شود</text>
+    <text x="441" y="246" font-size="13.5">BSRR: بیت ۵ یا ۲۱</text>
+    <text x="441" y="264" font-size="12.5">روشن یا خاموش</text>
+    <text x="80" y="254" font-size="13">LD2</text>
+  </g>
+  <text x="441" y="141" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">GPIOA</text>
+  <g class="mono s-tx" font-size="12.5" font-weight="700" text-anchor="middle">
+    <text x="240" y="230">PA5</text><text x="181" y="254">R</text><text x="80" y="300">GND</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#f52a)">
+    <path d="M640 116H610V68H542"/>
+    <path d="M640 150H596V191H546"/>
+    <path d="M640 200H582V249H546"/>
+    <path d="M445 98V118"/>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M322 249H250"/><path d="M231 249H212"/><path d="M150 249H104"/><path d="M80 273V284"/>
+  </g>
+  <g fill="#fff" stroke="#15120a" stroke-width="2.5">
+    <circle cx="625" cy="116" r="10"/><circle cx="625" cy="150" r="10"/><circle cx="625" cy="200" r="10"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-size="13" font-weight="800">
+    <text x="625" y="121">۱</text><text x="625" y="155">۲</text><text x="625" y="205">۳</text>
+  </g>
+  <text x="512" y="113" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="700">ساعت روشن می‌شود</text>
+  <text x="200" y="120" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">اگر قدم ۱ فراموش شود،</text>
+  <text x="200" y="140" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">قدم‌های ۲ و ۳ بی‌صدا بی‌اثرند</text>
+</svg></div>
+<figcaption>سه نوشتن پشت‌سرهم. شماره‌ها ترتیب اجرا را نشان می‌دهند. <span class="en">LD2</span> از راه مقاومت به PA5 وصل است.</figcaption></figure>
+
+<p>هر یک از این سه نوشتن، یک <code>str</code> (ذخیره) به یک آدرس ثابت است. آدرس‌ها از <span class="en">RM0383</span> (مرجع رسمی STM32F411) می‌آیند. برای پروژهٔ امروز فقط این پنج آدرس لازم است:</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>رجیستر</th><th>پایه + آفست</th><th>آدرس نهایی</th><th>کارش امروز</th></tr></thead>
+<tbody>
+<tr><td><code>RCC_AHB1ENR</code></td><td><code>0x40023800 + 0x30</code></td><td><code>0x40023830</code></td><td>روشن‌کردن ساعت پورت‌ها (بیت ۰ = A، بیت ۲ = C)</td></tr>
+<tr><td><code>GPIOA_MODER</code></td><td><code>0x40020000 + 0x00</code></td><td><code>0x40020000</code></td><td>حالت پایه‌های پورت A (۲ بیت برای هر پایه)</td></tr>
+<tr><td><code>GPIOA_BSRR</code></td><td><code>0x40020000 + 0x18</code></td><td><code>0x40020018</code></td><td>روشن/خاموش‌کردن پایه (فقط نوشتنی)</td></tr>
+<tr><td><code>GPIOC_PUPDR</code></td><td><code>0x40020800 + 0x0C</code></td><td><code>0x4002080C</code></td><td>مقاومت بالاکش/پایین‌کش پایه‌های پورت C</td></tr>
+<tr><td><code>GPIOC_IDR</code></td><td><code>0x40020800 + 0x10</code></td><td><code>0x40020810</code></td><td>خواندن سطح پایه‌های ورودی پورت C</td></tr>
+</tbody></table></div>
+
+<h3 id="clock">قدم ۱ در ابزارک: ساعت</h3>
+<p>در ابزارک زیر رجیستر <code>RCC_AHB1ENR</code> (فقط ۸ بیت پایین) را می‌بینی. بیت ۰ را یک کن: ساعت GPIOA روشن می‌شود. بیت ۲ مال GPIOC است (برای دکمه، کمی بعد). در STM32F411 بیت‌های ۵ و ۶ استفاده نمی‌شوند.</p>
+<div class="widget" data-w="bits" data-width="8" data-reg="RCC_AHB1ENR" data-value="0" data-title="RCC_AHB1ENR (۸ بیت پایین): ساعت پورت‌ها" data-fields='[{"name":"GPIOAEN","hi":0,"lo":0,"map":["ساعت A خاموش","ساعت A روشن"]},{"name":"GPIOCEN","hi":2,"lo":2,"map":["ساعت C خاموش","ساعت C روشن"]}]'></div>
+
+<div class="callout warn"><div class="ct">ساعت خاموش = نوشتن بی‌اثر و بی‌صدا</div>
+<p>وقتی ساعت یک پریفرال خاموش است، نوشتن روی رجیسترهایش خطا نمی‌دهد؛ فقط اثر ندارد (و خواندنشان معمولا صفر برمی‌گرداند). برای همین «LED چشمک نمی‌زند» بیشتر از هر علتی به فراموشیِ همین قدم برمی‌گردد. قدم ۱ را همیشه اول بنویس.</p></div>
+
+<h2 id="header">هدر کوچک خودمان: <code>stm32f4.h</code></h2>
+<p>در درس <a href="3-6.html">۳.۶</a> دیدی که می‌شود رجیسترهای یک بخش را با یک <code>struct</code> روکش کرد. حالا همان را جدی می‌کنیم و یک هدر می‌نویسیم که فقط چیزهای لازم این درس را دارد. کار ST در فایل <code>stm32f4xx.h</code> (بخشی از <span class="term" data-t="cmsis">CMSIS</span>) هم همین است، ولی برای همهٔ رجیسترهای همهٔ تراشه‌ها. بعد از نوشتن هدر خودت، خواندن آن فایل بزرگ دیگر ترسناک نیست.</p>
+
+<div class="code" data-file="stm32f4.h" data-lang="c" data-verify="make" data-project="bare" id="hdr">
+<pre>
+#ifndef STM32F4_H
+#define STM32F4_H
+
+#include &lt;stdint.h&gt;
+#include &lt;stddef.h&gt;
+
+typedef struct {
+    volatile uint32_t MODER;    // +0x00
+    volatile uint32_t OTYPER;   // +0x04
+    volatile uint32_t OSPEEDR;  // +0x08
+    volatile uint32_t PUPDR;    // +0x0C
+    volatile uint32_t IDR;      // +0x10
+    volatile uint32_t ODR;      // +0x14
+    volatile uint32_t BSRR;     // +0x18
+    volatile uint32_t LCKR;     // +0x1C
+    volatile uint32_t AFR[2];   // +0x20, +0x24
+} GPIO_TypeDef;
+
+typedef struct {
+    volatile uint32_t CR;       // +0x00
+    volatile uint32_t PLLCFGR;  // +0x04
+    volatile uint32_t CFGR;     // +0x08
+    volatile uint32_t CIR;      // +0x0C
+    volatile uint32_t AHB1RSTR; // +0x10
+    volatile uint32_t AHB2RSTR; // +0x14
+    uint32_t RESERVED0[2];      // +0x18, +0x1C
+    volatile uint32_t APB1RSTR; // +0x20
+    volatile uint32_t APB2RSTR; // +0x24
+    uint32_t RESERVED1[2];      // +0x28, +0x2C
+    volatile uint32_t AHB1ENR;  // +0x30
+} RCC_TypeDef;
+
+#define RCC   ((RCC_TypeDef *)0x40023800u)
+#define GPIOA ((GPIO_TypeDef *)0x40020000u)
+#define GPIOC ((GPIO_TypeDef *)0x40020800u)
+
+#define RCC_AHB1ENR_GPIOAEN (1u &lt;&lt; 0)
+#define RCC_AHB1ENR_GPIOCEN (1u &lt;&lt; 2)
+
+_Static_assert(offsetof(GPIO_TypeDef, IDR) == 0x10, "IDR offset");
+_Static_assert(offsetof(GPIO_TypeDef, BSRR) == 0x18, "BSRR offset");
+_Static_assert(offsetof(RCC_TypeDef, AHB1ENR) == 0x30, "AHB1ENR offset");
+
+#endif /* STM32F4_H */
+</pre></div>
+<ol class="walk" data-for="hdr">
+  <li data-lines="1-2,44"><b class="what">نگهبان include.</b> اگر این هدر دو بار وارد شود (مثلا از دو فایل)، بار دوم نادیده گرفته می‌شود.
+    <span class="why">بدون آن، <code>typedef</code> ها دو بار تعریف می‌شوند و کامپایلر خطا می‌دهد. جزئیات در درس <a href="4-2.html">۴.۲</a>.</span></li>
+  <li data-lines="4-5"><b class="what">دو هدر استاندارد.</b> <code>stdint.h</code> برای <code>uint32_t</code> و <code>stddef.h</code> برای <code>offsetof</code>. هر دو در حالت freestanding هم وجود دارند.
+    <span class="why">این‌ها فقط تعریف نوع و ماکرو هستند و به کتابخانهٔ زمان اجرا نیاز ندارند؛ پس روی تراشه بدون سیستم‌عامل هم مشکلی نیست.</span></li>
+  <li data-lines="7-13,17"><b class="what">روکش GPIO.</b> هر فیلد یک رجیستر ۳۲ بیتی است و ترتیب فیلدها دقیقا ترتیب آدرس‌هاست: <code>MODER</code> در <code>+0x00</code>، <code>IDR</code> در <code>+0x10</code>. کامپایلر فیلدها را پشت هم می‌چیند و چون همه ۴ بایتی‌اند، padding نمی‌آید.
+    <span class="why"><code>volatile</code> روی همهٔ فیلدها حیاتی است: بدون آن کامپایلر می‌تواند خواندن‌های تکراری را حذف کند (درس <a href="3-6.html">۳.۶</a>).</span></li>
+  <li data-lines="14"><b class="what">BSRR.</b> رجیستر فقط‌نوشتنی: بیت‌های ۰ تا ۱۵ = روشن‌کردن پایه‌ها، بیت‌های ۱۶ تا ۳۱ = خاموش‌کردن.</li>
+  <li data-lines="15-16"><b class="what">قفل و توابع جایگزین.</b> <code>LCKR</code> برای قفل‌کردن پیکربندی و <code>AFR[2]</code> (دو رجیستر) برای انتخاب عملکرد جایگزین پایه (در درس‌های ۵.۴ و ۵.۵ لازم می‌شود). امروز به آن‌ها دست نمی‌زنیم، ولی باید در چیدمان باشند تا آدرس بعدی‌ها جابه‌جا نشود.</li>
+  <li data-lines="19-25,31"><b class="what">روکش RCC.</b> همان ایده برای مدیر ساعت‌ها. فقط تا <code>AHB1ENR</code> را نوشته‌ایم؛ بقیه را هر وقت لازم شد اضافه می‌کنیم.</li>
+  <li data-lines="26,29"><b class="what">فضاهای رزرو.</b> بین رجیسترهای واقعی، آدرس‌هایی هست که ST چیزی در آن‌ها نگذاشته. این آرایه‌ها جای خالی را پر می‌کنند تا <code>AHB1ENR</code> دقیقا روی <code>+0x30</code> بنشیند.
+    <span class="why">اگر یکی را جا بیندازی، همهٔ فیلدهای بعدی چند بایت جابه‌جا می‌شوند و روی رجیستر اشتباه می‌نویسی. باگی که دیدنش سخت است؛ برای همین <code>_Static_assert</code> پایین‌تر را داریم.</span></li>
+  <li data-lines="27-28"><b class="what">دو رجیستر ریست.</b> <code>APB1RSTR</code> و <code>APB2RSTR</code>. امروز استفاده نمی‌شوند ولی جایشان را نگه می‌داریم.</li>
+  <li data-lines="30"><b class="what">AHB1ENR.</b> رجیستر ساعت پورت‌های GPIO (و DMA). رجیستر مقصد قدم ۱.</li>
+  <li data-lines="33-35"><b class="what">اشاره‌گر به آدرس ثابت.</b> عدد <code>0x40020000u</code> را به «اشاره‌گر به <code>GPIO_TypeDef</code>» تبدیل می‌کنیم. بعد <code>GPIOA-&gt;BSRR</code> یعنی «فیلد BSRR از ساختاری که روی آدرس 0x40020000 نشسته». پورت C به‌اندازهٔ <code>0x800</code> بعد از A است.
+    <span class="why">کل رجیسترهای یک پورت در یک بلوک ۴۰۰ (هگز) بایتی است و پورت‌ها پشت هم می‌آیند: B = +0x400، C = +0x800.</span></li>
+  <li data-lines="37-38"><b class="what">نام برای بیت‌ها.</b> <code>RCC_AHB1ENR_GPIOAEN</code> از همان الگوی نام‌گذاری ST پیروی می‌کند. <code>(1u &lt;&lt; 0)</code> بهتر از عدد جادویی <code>1</code> خوانده می‌شود.</li>
+  <li data-lines="40-42"><b class="what">بازرس آفست.</b> <code>_Static_assert</code> در زمان کامپایل بررسی می‌کند فاصلهٔ فیلد از ابتدای struct همان عددی است که در <span class="en">RM0383</span> نوشته. اگر نباشد، برنامه کامپایل نمی‌شود.
+    <span class="why">هزینه‌اش صفر است (هیچ کدی روی تراشه نمی‌رود) ولی جلوی یک باگ سخت را می‌گیرد. در بخش بعد ببین چطور کار می‌کند.</span></li>
+</ol>
+
+<p>ببین اگر یک فیلد جا بیفتد چه می‌شود. همان ساختار ولی بدون <code>OSPEEDR</code>:</p>
+
+<div class="code" data-file="bad_offset.c" data-lang="c" data-verify="host-fail" id="badoff">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stddef.h&gt;
+
+typedef struct {
+    volatile uint32_t MODER;
+    volatile uint32_t OTYPER;
+    volatile uint32_t PUPDR;    // OSPEEDR جا افتاده!
+    volatile uint32_t IDR;
+    volatile uint32_t ODR;
+    volatile uint32_t BSRR;
+} GPIO_TypeDef;
+
+_Static_assert(offsetof(GPIO_TypeDef, BSRR) == 0x18, "BSRR offset");
+
+int main(void)
+{
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="badoff">
+  <li data-lines="7-8"><b class="what">فیلد جا افتاده.</b> <code>OSPEEDR</code> نیست، پس <code>PUPDR</code> به‌جای آفست <code>0x0C</code> در <code>0x08</code> می‌نشیند.</li>
+  <li data-lines="9-11"><b class="what">همه بعدی‌ها جابه‌جا.</b> <code>BSRR</code> حالا در <code>0x14</code> است، نه <code>0x18</code>.</li>
+  <li data-lines="13"><b class="what">بازرس.</b> می‌گوید <code>BSRR</code> باید در <code>0x18</code> باشد. نیست؛ پس خطا.
+    <span class="why">بدون این خط، برنامه کامپایل می‌شد و LED به‌جای BSRR روی ODR می‌نوشت؛ نتیجه‌اش رفتاری عجیب بود که ساعت‌ها طول می‌کشید تا پیدا شود.</span></li>
+</ol>
+<pre class="term" data-kind="err" data-from="bad_offset.c">
+bad_offset.c:13:1: error: static assertion failed: "BSRR offset"
+</pre>
+
+<h2 id="startup">شروع و پایان: startup و linker script</h2>
+<p>برد بعد از روشن‌شدن نمی‌داند <code>main</code> کجاست. چیزی باید <b>قبل از main</b> اجرا شود: کدی که حافظه را آماده کند. اسم این کد <span class="term" data-t="startup">startup</span> است و همراهش یک فایل ساختِ حافظه به اسم linker script. درس <a href="5-1.html">۵.۱</a> این دو را کامل توضیح می‌دهد. برای اینکه این درس خودش تنها بایستد، نسخهٔ کوچک کارآمد آن‌ها را اینجا می‌آوریم. اگر ۵.۱ را نخوانده‌ای، فعلا با این دو فایل مثل یک «جعبهٔ سیاه مطمئن» رفتار کن.</p>
+
+<div class="code" data-file="startup.c" data-lang="c" data-verify="make" data-project="bare" id="start">
+<pre>
+#include &lt;stdint.h&gt;
+
+extern uint32_t _estack, _sidata, _sdata, _edata, _sbss, _ebss;
+int main(void);
+
+void Reset_Handler(void);
+void Default_Handler(void);
+void NMI_Handler(void)       __attribute__((weak, alias("Default_Handler")));
+void HardFault_Handler(void) __attribute__((weak, alias("Default_Handler")));
+
+__attribute__((section(".isr_vector"), used))
+void (*const vector_table[])(void) = {
+    (void (*)(void))&amp;_estack,   // کلمهٔ ۰: مقدار اولیهٔ SP
+    Reset_Handler,              // کلمهٔ ۱: نقطهٔ شروع
+    NMI_Handler,                // کلمهٔ ۲
+    HardFault_Handler,          // کلمهٔ ۳
+};
+
+void Reset_Handler(void)
+{
+    uint32_t *src = &amp;_sidata;
+    for (uint32_t *dst = &amp;_sdata; dst &lt; &amp;_edata; ) {
+        *dst++ = *src++;
+    }
+    for (uint32_t *dst = &amp;_sbss; dst &lt; &amp;_ebss; ) {
+        *dst++ = 0u;
+    }
+    main();
+    for (;;) {
+    }
+}
+
+void Default_Handler(void)
+{
+    for (;;) {
+    }
+}
+</pre></div>
+<ol class="walk" data-for="start">
+  <li data-lines="3"><b class="what">نمادهای linker script.</b> <code>_estack</code>، <code>_sdata</code>، <code>_edata</code>، <code>_sidata</code>، <code>_sbss</code>، <code>_ebss</code> متغیر واقعی نیستند؛ <b>مرزهای حافظه‌اند</b> که linker می‌سازد. فقط <b>آدرسشان</b> به‌کار می‌آید (<code>&amp;_sdata</code>).</li>
+  <li data-lines="4,6-7"><b class="what">اعلان‌ها.</b> <code>main</code>، <code>Reset_Handler</code> (اولین کد بعد از روشن‌شدن) و <code>Default_Handler</code> (جایگزین وقفه‌هایی که کسی ننوشته).</li>
+  <li data-lines="8-9"><b class="what">نام‌های ضعیف.</b> <code>weak, alias</code> یعنی «اگر کسی <code>NMI_Handler</code> را جدی تعریف نکرد، همین <code>Default_Handler</code> را بردار». تعریف واقعی همیشه برنده است.
+    <span class="why">در درس <a href="5-3.html">۵.۳</a> فقط با نوشتن تابعی همنام، ISR را جایگزین می‌کنیم.</span></li>
+  <li data-lines="11-12,17"><b class="what">جدول برداری در Flash.</b> آرایهٔ <code>const</code> از اشاره‌گر تابع، با <code>section(".isr_vector")</code> که linker آن را اول Flash (<code>0x08000000</code>) می‌گذارد. <code>used</code> یعنی «حذفش نکن».
+    <span class="why">سخت‌افزار Cortex-M بعد از ریست این جدول را از ابتدای Flash می‌خواند؛ کسی «صدایش نمی‌زند».</span></li>
+  <li data-lines="13-14"><b class="what">دو کلمهٔ اول.</b> کلمهٔ ۰: مقدار اولیهٔ <code>SP</code> (آخرین آدرس RAM؛ پشته به پایین رشد می‌کند). کلمهٔ ۱: آدرس <code>Reset_Handler</code>، جایی که CPU می‌پرد.</li>
+  <li data-lines="15-16"><b class="what">استثناهای ۲ و ۳.</b> NMI و HardFault؛ فعلا هر دو به حلقهٔ بی‌نهایت می‌روند.</li>
+  <li data-lines="19-20,31"><b class="what">Reset_Handler.</b> اولین تابعی که CPU اجرا می‌کند.</li>
+  <li data-lines="21-24"><b class="what">کپی مقدار اولیهٔ .data.</b> مقدار اولیهٔ سراسری‌های مقداردار در Flash است؛ اینجا به RAM کپی می‌شود.
+    <span class="why">RAM بعد از روشن‌شدن آشغال است؛ بدون این کپی <code>int x = 5;</code> سراسری ۵ نمی‌بود (درس <a href="3-5.html">۳.۵</a>). امروز چنین متغیری نداریم ولی کد باید آماده باشد.</span></li>
+  <li data-lines="25-27"><b class="what">صفر کردن .bss.</b> سراسری‌های بی‌مقدار باید صفر باشند؛ قانون C.</li>
+  <li data-lines="28-30"><b class="what">صدا زدن main.</b> حالا حافظه آماده است. اگر main برگشت در حلقه می‌مانیم: روی MCU سیستم‌عاملی نیست که منتظرش باشد.</li>
+  <li data-lines="33-37"><b class="what">Default_Handler.</b> جای امن برای وقفه‌های ناخواسته: در حلقه می‌ماند تا با دیباگر ببینی کجا افتاده‌ای.</li>
+</ol>
+
+<div class="code" data-file="link.ld" data-lang="ld" data-verify="make" data-project="bare" id="ld">
+<pre>
+ENTRY(Reset_Handler)
+
+MEMORY
+{
+    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 512K
+    RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
+}
+
+_estack = ORIGIN(RAM) + LENGTH(RAM);
+
+SECTIONS
+{
+    .isr_vector : {
+        KEEP(*(.isr_vector))
+    } &gt; FLASH
+
+    .text : {
+        *(.text*)
+        *(.rodata*)
+        . = ALIGN(4);
+    } &gt; FLASH
+
+    _sidata = LOADADDR(.data);
+
+    .data : {
+        _sdata = .;
+        *(.data*)
+        . = ALIGN(4);
+        _edata = .;
+    } &gt; RAM AT &gt; FLASH
+
+    .bss : {
+        _sbss = .;
+        *(.bss*)
+        *(COMMON)
+        . = ALIGN(4);
+        _ebss = .;
+    } &gt; RAM
+}
+</pre></div>
+<ol class="walk" data-for="ld">
+  <li data-lines="1"><b class="what">نقطهٔ ورود.</b> برنامه از <code>Reset_Handler</code> شروع می‌شود (برای دیباگر و ابزارها).</li>
+  <li data-lines="3-7"><b class="what">نقشهٔ حافظه.</b> Flash از <code>0x08000000</code> با ۵۱۲ کیلوبایت و RAM از <code>0x20000000</code> با ۱۲۸ کیلوبایت (مشخصات STM32F411).</li>
+  <li data-lines="9"><b class="what">سر پشته.</b> <code>_estack</code> = ابتدای RAM + اندازهٔ آن = <code>0x20020000</code>، یک بعد از آخرین بایت.
+    <span class="why">پشته با هر <code>push</code> اول یکی پایین می‌آید و بعد می‌نویسد؛ پس شروع از «یک بعد از انتها» درست است.</span></li>
+  <li data-lines="11-12,39"><b class="what">SECTIONS.</b> هر بخش خروجی از چه ورودی‌هایی ساخته شود و کجا برود.</li>
+  <li data-lines="13-15"><b class="what">جدول برداری اول.</b> <code>.isr_vector</code> اول Flash می‌رود؛ <code>KEEP</code> از حذف‌شدنش جلوگیری می‌کند.</li>
+  <li data-lines="17-21"><b class="what">کد و ثابت‌ها.</b> <code>.text</code> و <code>.rodata</code> بعد از جدول، در Flash.</li>
+  <li data-lines="23"><b class="what">مبدأ کپی .data.</b> <code>_sidata</code> = آدرس «انبار» مقدارهای اولیه در Flash.</li>
+  <li data-lines="25-30"><b class="what">.data.</b> <code>&gt; RAM AT &gt; FLASH</code>: در زمان اجرا در RAM زندگی می‌کند ولی محتوایش در Flash ذخیره می‌شود. <code>Reset_Handler</code> کپی می‌کند.</li>
+  <li data-lines="32-38"><b class="what">.bss.</b> فقط در RAM جا می‌گیرد؛ فقط مرزهایش را می‌گذاریم تا startup صفرش کند.</li>
+</ol>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: چرا <code>Reset_Handler</code> در C نوشته شد؟</div>
+<p>فایل‌های startup رسمی ST معمولا با اسمبلی نوشته شده‌اند، ولی همین کار در C هم شدنی است، به‌شرطی که تا وقتی حافظه آماده نشده، فقط از متغیرهای محلی استفاده کنیم. در <code>Reset_Handler</code> ما متغیر سراسری نخوانده و ننوشته‌ایم. نکتهٔ ظریف دیگر: اگر با <code>-O2</code> کامپایل کنی، ممکن است gcc حلقه‌ای را که صفر می‌نویسد به تابع <code>memset</code> تبدیل کند، و چون <code>-nostdlib</code> داری، لینک خطای <code>undefined reference to memset</code> بدهد. ما با <code>-Og</code> ساختیم و مشکلی نداشتیم؛ راه‌حل حرفه‌ای در ۵.۱ می‌آید.</p></div>
+
+<h2 id="blink">اولین برنامهٔ واقعی: چشمک LD2</h2>
+<p>حالا همهٔ قطعات آماده‌اند. برنامه‌ای که فقط خودش را به هدر و startup تکیه می‌دهد:</p>
+
+<div class="code" data-file="blink.c" data-lang="c" data-verify="make" data-project="bare" id="blinkc">
+<pre>
+#include "stm32f4.h"
+
+#define LED_PIN 5u
+
+static void delay(volatile uint32_t n)
+{
+    while (n--) {
+    }
+}
+
+int main(void)
+{
+    RCC-&gt;AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+    (void)RCC-&gt;AHB1ENR;
+    GPIOA-&gt;MODER = (GPIOA-&gt;MODER &amp; ~(3u &lt;&lt; (LED_PIN * 2u)))
+                 | (1u &lt;&lt; (LED_PIN * 2u));
+
+    for (;;) {
+        GPIOA-&gt;BSRR = 1u &lt;&lt; LED_PIN;
+        delay(400000u);
+        GPIOA-&gt;BSRR = 1u &lt;&lt; (LED_PIN + 16u);
+        delay(400000u);
+    }
+}
+</pre></div>
+<ol class="walk" data-for="blinkc">
+  <li data-lines="1"><b class="what">هدر خودمان.</b> با گیومه (<code>""</code>) چون در پوشهٔ پروژه است (درس <a href="4-1.html">۴.۱</a>).</li>
+  <li data-lines="3"><b class="what">شمارهٔ پایه.</b> LD2 روی PA5 است. اسم دادن به عدد ۵ کمک می‌کند بعدا اگر LED را عوض کردی فقط یک جا را عوض کنی.</li>
+  <li data-lines="5-9"><b class="what">تأخیر خام.</b> تا صفر می‌شمارد. پارامتر <code>n</code> عمدا <code>volatile</code> است تا کامپایلر حلقهٔ «بی‌کار» را حذف نکند.
+    <span class="why">راه بدی است ولی ساده‌ترین. مشکلش: CPU در این مدت کاری جز شمردن نمی‌کند و زمانش به بهینه‌سازی وابسته است. درس <a href="5-4.html">۵.۴</a> زمان‌بندی درست را می‌آورد.</span></li>
+  <li data-lines="11-12,24"><b class="what">main.</b> اولین کدی که ما نوشتیم و startup صدایش می‌زند.</li>
+  <li data-lines="13"><b class="what">قدم ۱: ساعت.</b> فقط بیت ۰ را یک می‌کنیم (<code>|=</code>) تا ساعت بقیهٔ پورت‌ها دست نخورد.</li>
+  <li data-lines="14"><b class="what">خواندن بی‌مصرف.</b> یک بار رجیستر را می‌خوانیم و دور می‌ریزیم. چون <code>volatile</code> است، حذف نمی‌شود. اثرش: چند چرخه تأخیر تا ساعت پورت واقعا برقرار شود.
+    <span class="why">ST در errata/مستندات بعضی تراشه‌ها همین کار را توصیه می‌کند. هزینه‌اش ناچیز است و از باگ‌های نادر جلوگیری می‌کند.</span></li>
+  <li data-lines="15-16"><b class="what">قدم ۲: حالت.</b> اول دو بیت مربوط به پایهٔ ۵ (بیت‌های ۱۰ و ۱۱) را پاک می‌کنیم، بعد <code>01</code> (خروجی) می‌نویسیم. <code>LED_PIN * 2u</code> چون هر پایه دو بیت دارد.
+    <span class="why">اگر فقط <code>MODER = 1u &lt;&lt; 10</code> می‌نوشتی، حالت همهٔ پایه‌های دیگر (از جمله SWD دیباگر) هم صفر می‌شد. الگوی «پاک کن، بگذار» از درس <a href="3-1.html">۳.۱</a>.</span></li>
+  <li data-lines="18,23"><b class="what">حلقهٔ بی‌نهایت.</b> برنامهٔ MCU هرگز تمام نمی‌شود (super loop، درس <a href="1-4.html">۱.۴</a>).</li>
+  <li data-lines="19"><b class="what">قدم ۳: روشن.</b> بیت ۵ در BSRR = «پایهٔ ۵ را بالا ببر».</li>
+  <li data-lines="21"><b class="what">خاموش.</b> بیت <code>5 + 16</code> = ۲۱ = «پایهٔ ۵ را پایین بیاور».
+    <span class="why">این یک نوشتن واحد است؛ برخلاف <code>ODR |= …</code> که سه مرحله دارد (بخوان، تغییر بده، بنویس) و اگر وقفه‌ای وسط بیاید خراب می‌شود. (درس <a href="3-6.html">۳.۶</a>)</span></li>
+  <li data-lines="20,22"><b class="what">صبر.</b> ۴۰۰ هزار دور شمارش بین دو تغییر.</li>
+</ol>
+
+<div class="callout tip"><div class="ct">چرا LED با «۱» روشن می‌شود؟</div>
+<p>در Nucleo-64 پایهٔ PA5 از راه مقاومت به LED و بعد زمین وصل است. پس بالا رفتن پایه (۳٫۳ ولت) جریان می‌دهد و LED روشن می‌شود. روی برد دیگری ممکن است LED به ۳٫۳ ولت وصل باشد و با «صفر» روشن شود. همیشه شماتیک برد را ببین (درس <a href="1-3.html">۱.۳</a>: datasheet و مستند برد).</p></div>
+
+<h3 id="time">زمان چشمک از کجا می‌آید؟</h3>
+<p>ما تأخیر را با شمارش ساخته‌ایم؛ پس زمانش هم از شمارش می‌آید. برای دیدن هزینهٔ هر دور، دستورهای واقعی تابع <code>delay</code> را از فایل ساخته‌شده خواندیم (<code>arm-none-eabi-objdump -d blink.elf</code>):</p>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-objdump -d blink.elf
+08000010 &lt;delay&gt;:
+ 8000010:	b082      	sub	sp, #8
+ 8000012:	9001      	str	r0, [sp, #4]
+ 8000014:	9b01      	ldr	r3, [sp, #4]
+ 8000016:	1e5a      	subs	r2, r3, #1
+ 8000018:	9201      	str	r2, [sp, #4]
+ 800001a:	2b00      	cmp	r3, #0
+ 800001c:	d1fa      	bne.n	8000014 &lt;delay+0x4&gt;
+ 800001e:	b002      	add	sp, #8
+ 8000020:	4770      	bx	lr
+</pre>
+<p>هر دور شمارش پنج دستور است (<code>ldr</code>، <code>subs</code>، <code>str</code>، <code>cmp</code>، <code>bne</code>). چون <code>n</code> <code>volatile</code> است، هر دور یک خواندن و یک نوشتن روی پشته دارد (همان دو دستورِ <code>ldr</code> و <code>str</code>). اگر هر دور حدود ۸ چرخه طول بکشد (تخمین؛ به تعداد چرخهٔ هر دستور و حافظه بستگی دارد)، با ساعت ۱۶ مگاهرتزِ HSI هر ۴۰۰ هزار دور حدود <code>400000 × 8 ÷ 16000000</code> = ۰٫۲ ثانیه می‌شود. برای همین در شکل بعد، هر نیم‌دور چشمک را حدود ۰٫۲ ثانیه گذاشتیم. دقتش کم است؛ اگر جای دقیق می‌خواهی، از تایمر استفاده کن (درس ۵.۴).</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="نمودار زمانی چشمک: بالا سطح پایه PA5 و پایین فعالیت CPU؛ نوشتن BSRR در لبه‌ها و حلقه تأخیر بین آن‌ها">
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">نمودار زمانی: چه کسی چه وقت کار می‌کند؟ (نه به مقیاس)</text>
+  <g fill="#ffd60a" stroke="none">
+    <rect x="70" y="76" width="150" height="50"/><rect x="370" y="76" width="150" height="50"/>
+  </g>
+  <path d="M70 126V76H220V126H370V76H520V126H670" fill="none" stroke="#15120a" stroke-width="3.5"/>
+  <text x="752" y="104" text-anchor="end" class="s-tx mono" font-size="14" font-weight="800">PA5</text>
+  <text x="752" y="124" text-anchor="end" class="s-tx" font-size="12.5">پایه / LED</text>
+  <g class="mono s-tx" font-size="12.5" font-weight="700" text-anchor="middle">
+    <text x="90" y="64">BSRR = 1&lt;&lt;5</text><text x="390" y="64">BSRR = 1&lt;&lt;5</text>
+    <text x="240" y="146">BSRR = 1&lt;&lt;21</text><text x="540" y="146">BSRR = 1&lt;&lt;21</text>
+  </g>
+  <g stroke="#15120a" stroke-width="2.5">
+    <rect x="70" y="184" width="20" height="34" fill="#ffd60a"/><rect x="90" y="184" width="130" height="34" fill="#7ea3ff"/>
+    <rect x="220" y="184" width="20" height="34" fill="#ffd60a"/><rect x="240" y="184" width="130" height="34" fill="#7ea3ff"/>
+    <rect x="370" y="184" width="20" height="34" fill="#ffd60a"/><rect x="390" y="184" width="130" height="34" fill="#7ea3ff"/>
+    <rect x="520" y="184" width="20" height="34" fill="#ffd60a"/><rect x="540" y="184" width="130" height="34" fill="#7ea3ff"/>
+  </g>
+  <text x="752" y="206" text-anchor="end" class="s-tx mono" font-size="14" font-weight="800">CPU</text>
+  <g fill="#15120a" text-anchor="middle" font-size="12.5" font-weight="700">
+    <text x="155" y="206">delay: ۴۰۰٬۰۰۰ دور</text><text x="305" y="206">delay</text><text x="455" y="206">delay</text><text x="605" y="206">delay</text>
+  </g>
+  <path d="M70 238H670" stroke="#15120a" stroke-width="2.5"/>
+  <g stroke="#15120a" stroke-width="2.5"><path d="M70 232V244"/><path d="M220 232V244"/><path d="M370 232V244"/><path d="M520 232V244"/><path d="M670 232V244"/></g>
+  <g class="mono s-tx" font-size="12.5" font-weight="700" text-anchor="middle">
+    <text x="70" y="262">0 s</text><text x="220" y="262">0.2</text><text x="370" y="262">0.4</text><text x="520" y="262">0.6</text><text x="670" y="262">0.8</text>
+  </g>
+  <text x="380" y="288" text-anchor="middle" class="s-tx" font-size="13">زرد = نوشتن BSRR (چند نانوثانیه)؛ آبی = حلقهٔ شمارش (حدود ۰٫۲ ثانیه). CPU تقریبا همیشه مشغول شمردن است.</text>
+</svg></div>
+<figcaption>هر نیم‌چشمک از یک نوشتن سریع و یک انتظار طولانی ساخته می‌شود. زمان‌ها تخمینی‌اند و به بهینه‌سازی و کلاک وابسته‌اند.</figcaption></figure>
+
+<h2 id="build">ساختن: Makefile واقعی</h2>
+<p>دستور بلند <code>arm-none-eabi-gcc …</code> را نمی‌خواهیم هر بار دستی بنویسیم. طبق درس <a href="4-2.html">۴.۲</a> یک Makefile می‌نویسیم که سه برنامهٔ این درس (<code>blink</code>، <code>button</code>، <code>toggle</code>) را بسازد. نکته: جلوی دستورها یک نویسهٔ Tab است، نه فاصله.</p>
+
+<div class="code" data-file="Makefile" data-lang="make" data-verify="make" data-project="bare" id="mk">
+<pre>
+CC      = arm-none-eabi-gcc
+CFLAGS  = -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -Og
+LDFLAGS = -nostdlib -T link.ld
+PROGS   = blink button toggle
+
+all: $(PROGS:=.bin)
+
+%.elf: %.o startup.o link.ld
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(filter %.o,$^)
+
+%.bin: %.elf
+	arm-none-eabi-objcopy -O binary $&lt; $@
+
+%.o: %.c stm32f4.h
+	$(CC) $(CFLAGS) -c -o $@ $&lt;
+
+.PRECIOUS: %.o %.elf
+
+clean:
+	rm -f *.o *.elf *.bin
+</pre></div>
+<ol class="walk" data-for="mk">
+  <li data-lines="1-3"><b class="what">متغیرها.</b> کامپایلر و پرچم‌ها یک‌جا. <code>-mcpu=cortex-m4 -mthumb</code> = هدف: Cortex-M4 با دستورهای Thumb. <code>-ffreestanding</code> = «کتابخانه‌ای در کار نیست». <code>-Og</code> = بهینه‌سازی سبک و دیباگ‌پذیر. در خط ۳: <code>-nostdlib</code> = کتابخانهٔ استاندارد را لینک نکن، <code>-T link.ld</code> = این linker script.
+    <span class="why">بدون <code>-nostdlib</code>، linker دنبال startup و libc استاندارد رایانه‌ات می‌گردد که برای این تراشه وجود ندارد.</span></li>
+  <li data-lines="4"><b class="what">فهرست برنامه‌ها.</b> سه برنامه؛ اگر چهارمی اضافه کنی فقط همین خط عوض می‌شود.</li>
+  <li data-lines="6"><b class="what">هدف پیش‌فرض.</b> <code>$(PROGS:=.bin)</code> یعنی به هر اسم <code>.bin</code> بچسبان: <code>blink.bin button.bin toggle.bin</code>. با نوشتن <code>make</code> همهٔ این‌ها ساخته می‌شوند.</li>
+  <li data-lines="8-9"><b class="what">قانون لینک.</b> هر <code>X.elf</code> از <code>X.o</code> به‌اضافهٔ <code>startup.o</code> ساخته می‌شود. <code>$@</code> = خود هدف، <code>$(filter %.o,$^)</code> = فقط فایل‌های <code>.o</code> از پیش‌نیازها (تا <code>link.ld</code> به‌عنوان ورودی کامپایلر نرود).
+    <span class="why">پیش‌نیاز بودن <code>link.ld</code> باعث می‌شود اگر آن را عوض کردی، دوباره لینک شود.</span></li>
+  <li data-lines="11-12"><b class="what">ELF به BIN.</b> <code>objcopy -O binary</code> فقط بایت‌هایی را که باید در Flash بروند بیرون می‌کشد (بدون اطلاعات دیباگ).</li>
+  <li data-lines="14-15"><b class="what">کامپایل هر فایل.</b> هر <code>X.c</code> به <code>X.o</code>. اگر <code>stm32f4.h</code> عوض شود همهٔ <code>.o</code> ها دوباره ساخته می‌شوند. <code>$&lt;</code> = اولین پیش‌نیاز (خود <code>.c</code>).</li>
+  <li data-lines="17"><b class="what">فایل‌های میانی را نگه دار.</b> <code>make</code> پیش‌فرض فایل‌های میانی زنجیره‌ای (<code>.o</code> و <code>.elf</code>) را پاک می‌کند. <code>.PRECIOUS</code> این را خاموش می‌کند تا <code>blink.elf</code> برای دیدن با <code>objdump</code> بماند.</li>
+  <li data-lines="19-20"><b class="what">پاک‌سازی.</b> <code>make clean</code> همهٔ خروجی‌ها را حذف می‌کند.</li>
+</ol>
+
+<p>ساختن و نگاه‌کردن به نتیجه (خروجی واقعی، با <span class="en">arm-none-eabi-gcc 13.2.1</span>):</p>
+<pre class="term" data-nocheck>
+$ make blink.bin
+arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -Og -c -o blink.o blink.c
+arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -Og -c -o startup.o startup.c
+arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -Og -nostdlib -T link.ld -o blink.elf blink.o startup.o
+arm-none-eabi-objcopy -O binary blink.elf blink.bin
+$ arm-none-eabi-size blink.elf
+   text	   data	    bss	    dec	    hex	filename
+    172	      0	      0	    172	     ac	blink.elf
+$ arm-none-eabi-objdump -h blink.elf
+Sections:
+Idx Name          Size      VMA       LMA       File off  Algn
+  0 .isr_vector   00000010  08000000  08000000  00001000  2**2
+                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+  1 .text         0000009c  08000010  08000010  00001010  2**2
+                  CONTENTS, ALLOC, LOAD, READONLY, CODE
+</pre>
+<p>یک برنامهٔ چشمک، فقط ۱۷۲ بایت: ۱۶ بایت جدول برداری و ۱۵۶ بایت کد. آدرس شروع (<code>VMA</code>) همان <code>0x08000000</code> است. جدول برداری را هم می‌توانی مستقیم ببینی:</p>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-objdump -s -j .isr_vector blink.elf
+Contents of section .isr_vector:
+ 8000000 00000220 6b000008 69000008 69000008  ... k...i...i...
+</pre>
+<p>بایت‌ها <b>little-endian</b> هستند (درس <a href="1-2.html">۱.۲</a>). پس کلمهٔ اول <code>0x20020000</code> است (سر پشته)، کلمهٔ دوم <code>0x0800006b</code> است: آدرس <code>Reset_Handler</code> (<code>0x0800006a</code>) با بیت ۰ برابر یک، برای حالت Thumb. کلمه‌های سوم و چهارم <code>0x08000069</code>: <code>Default_Handler</code>.</p>
+
+
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 330" role="img" aria-label="خط لوله ساخت: از فایل C تا آبجکت و ELF و BIN و ST-LINK و Flash">
+  <defs><marker id="f52b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">از فایل متنی تا بایت‌هایی در Flash</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="600" y="46" width="140" height="80" rx="12" fill="#ffd60a"/>
+    <rect x="310" y="46" width="140" height="80" rx="12" fill="#7ea3ff"/>
+    <rect x="20" y="46" width="140" height="80" rx="12" fill="#ff86b3"/>
+    <rect x="20" y="206" width="140" height="80" rx="12" fill="#ff9a4d"/>
+    <rect x="310" y="206" width="140" height="80" rx="12" fill="#3ddc97"/>
+    <rect x="600" y="206" width="140" height="80" rx="12" fill="#b394ff"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-weight="800">
+    <text x="670" y="76" font-size="14">سورس C</text><text x="670" y="98" font-size="12.5" class="mono">blink.c startup.c</text>
+    <text x="380" y="76" font-size="14">آبجکت‌ها</text><text x="380" y="98" font-size="12.5" class="mono">blink.o startup.o</text>
+    <text x="90" y="76" font-size="14">ELF</text><text x="90" y="98" font-size="12.5" class="mono">blink.elf</text>
+    <text x="90" y="236" font-size="14">BIN</text><text x="90" y="258" font-size="12.5" class="mono">blink.bin</text>
+    <text x="380" y="236" font-size="14">ST-LINK روی برد</text><text x="380" y="258" font-size="12.5">برنامه‌نویس USB</text>
+    <text x="670" y="236" font-size="14">Flash تراشه</text><text x="670" y="258" font-size="12.5" class="mono">0x08000000</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#f52b)">
+    <path d="M598 86H452"/><path d="M308 86H162"/><path d="M90 128V204"/><path d="M162 246H308"/><path d="M452 246H598"/>
+  </g>
+  <g class="mono s-tx" font-size="12.5" font-weight="700" text-anchor="middle">
+    <text x="525" y="70">arm-none-eabi-gcc</text><text x="525" y="112">-c</text>
+    <text x="235" y="70">link.ld</text>
+    <text x="150" y="172">objcopy</text>
+    <text x="235" y="270">USB</text><text x="525" y="270">SWD</text>
+  </g>
+  <g class="s-tx" font-size="12.5" text-anchor="middle"><text x="235" y="112">لینک</text><text x="235" y="230">ریختن</text></g>
+  <text x="380" y="316" text-anchor="middle" class="s-tx" font-size="13">ELF برای دیباگر و ابزارها؛ BIN فقط بایت‌های خام برای Flash</text>
+</svg></div>
+<figcaption>مسیر ساخت و ریختن. هر پیکان یک ابزار است؛ آنچه به Flash می‌رود همان بایت‌های <span class="en">.bin</span> است.</figcaption></figure>
+
+<h2 id="flash">ریختن روی برد</h2>
+<p>فایل <code>blink.bin</code> را باید به Flash برد برسانی. روی Nucleo یک تراشهٔ دوم هم هست: <span class="term" data-t="stlink">ST-LINK</span>. کار آن این است که با کامپیوتر از راه USB و با تراشهٔ اصلی از راه <span class="term" data-t="swd">SWD</span> حرف بزند. چند راه هست:</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>روش</th><th>چطور</th><th>کی مناسب است؟</th></tr></thead>
+<tbody>
+<tr><td>کشیدن و رها کردن (drag-and-drop)</td><td>برد را با USB وصل کن؛ معمولا مثل فلش‌مموری ظاهر می‌شود (اسمی شبیه <code>NODE_F411RE</code>). فایل <code>.bin</code> را در آن بینداز.</td><td>ساده‌ترین راه برای شروع. بدون نصب ابزار</td></tr>
+<tr><td><span class="term" data-t="openocd">OpenOCD</span></td><td>خط فرمان؛ <code>.elf</code> را می‌ریزد و می‌تواند دیباگ هم بکند</td><td>خودکار، در Makefile و CI، با GDB</td></tr>
+<tr><td>STM32CubeProgrammer</td><td>برنامهٔ رسمی ST، با محیط گرافیکی و خط فرمان</td><td>وقتی می‌خواهی روی تراشه‌های مختلف ST یکسان کار کنی</td></tr>
+<tr><td>IDE (Cube IDE، VS Code + افزونه)</td><td>دکمهٔ Run/Debug همه را پنهان می‌کند</td><td>کار روزمره، وقتی روش را فهمیده‌ای</td></tr>
+</tbody></table></div>
+
+<p>دو نمونه دستور. (این‌ها روی رایانهٔ تو اجرا می‌شوند؛ ما نمی‌توانیم خروجی‌شان را اینجا وارسی کنیم، پس فقط دستور را می‌بینی و نتیجه‌اش را روی برد.)</p>
+<pre class="term" data-kind="cmd">
+$ openocd -f interface/stlink.cfg -f target/stm32f4x.cfg -c "program blink.elf verify reset exit"
+$ STM32_Programmer_CLI -c port=SWD -w blink.bin 0x08000000 -v -rst
+</pre>
+<p>دستور دوم آدرس <code>0x08000000</code> را صریح می‌گیرد چون فایل <code>.bin</code> آدرس ندارد، ولی <code>.elf</code> آدرس هر بخش را با خودش دارد. این یک دلیل دیگر برای نگه‌داشتن ELF است. بعد از ریختن، دکمهٔ سیاه <b>RESET</b> را بزن یا برد را دوباره وصل کن؛ LD2 باید تقریبا هر ۰٫۲ ثانیه عوض شود.</p>
+
+<div class="callout info"><div class="ct">شبیه‌ساز: بدون برد هم می‌شود؟</div>
+<p>بله، تا حدی. <a href="https://renode.io" target="_blank" rel="noopener">Renode</a> یک شبیه‌ساز متن‌باز برای سیستم‌های embedded است که برای خانوادهٔ STM32F4 بردهای نمونه دارد (فهرست دقیقش را در مستندات خودش ببین؛ ما وجود Nucleo-F411RE را در آن تضمین نمی‌کنیم). ما در این دوره از آن فقط به‌عنوان «راهی برای اجرای همین ELFها بدون سخت‌افزار» یاد می‌کنیم؛ کار با آن را وارد نمی‌شویم. برنامه‌های این درس را روی برد واقعی امتحان کن.</p></div>
+
+<h2 id="button">خواندن دکمهٔ آبی: PC13</h2>
+<p>تا اینجا فقط «نوشتیم». حالا «بخوانیم». دکمهٔ آبی <b>B1</b> روی Nucleo به پایهٔ <code>PC13</code> وصل است. برای خواندن آن باید سه چیز را بدانی.</p>
+
+<div class="callout analogy"><div class="ct">مثال: آب در لوله</div>
+<p>لوله‌ای را تصور کن که همیشه از بالا آب دارد (این <b>مقاومت بالاکش</b> است، یعنی <span class="term" data-t="pullup">pull-up</span>). تا کسی چیزی را باز نکند، سر لوله «آب هست» (=۱). دکمه شیری است که لوله را به چاه (زمین) وصل می‌کند: وقتی فشار می‌دهی آب تخلیه می‌شود و سر لوله «آب نیست» (=۰). پس: <b>رها = ۱، فشرده = ۰</b>. این را <span class="term" data-t="activelow">فعال-پایین</span> (active-low) می‌گویند.</p></div>
+
+<ol class="steps">
+  <li><b>ساعت پورت C</b> را روشن کن (<code>RCC_AHB1ENR</code> بیت ۲).</li>
+  <li><b>پایه را ورودی کن.</b> در <code>GPIOC_MODER</code> دو بیت پایهٔ ۱۳ (بیت‌های ۲۷ و ۲۶) را <code>00</code> کن. (پس از ریست معمولا همین‌اند، ولی نوشتنِ صریح خوانا و مطمئن است.)</li>
+  <li><b>سطح پایه</b> را از <code>GPIOC_IDR</code> بخوان. بیت ۱۳ آن سطح PC13 است.</li>
+</ol>
+
+<p>در ابزارک زیر <code>GPIOC_IDR</code> را می‌بینی (۱۶ بیت پایین). حالت «رها» یعنی بیت ۱۳ یک است. با کلیک روی بیت ۱۳ «فشردن» را شبیه‌سازی کن:</p>
+<div class="widget" data-w="bits" data-width="16" data-reg="GPIOC_IDR" data-value="8192" data-title="GPIOC_IDR: سطح پایه‌های پورت C (بیت ۱۳ = دکمهٔ آبی)" data-fields='[{"name":"PC13","hi":13,"lo":13,"map":["فشرده","رها"]}]'></div>
+
+<p>حالا برنامه: LED فقط تا وقتی دکمه فشرده است روشن باشد.</p>
+
+<div class="code" data-file="button.c" data-lang="c" data-verify="make" data-project="bare" id="btn">
+<pre>
+#include "stm32f4.h"
+
+#define LED_PIN    5u
+#define BUTTON_PIN 13u
+
+static int button_pressed(void)
+{
+    return (GPIOC-&gt;IDR &amp; (1u &lt;&lt; BUTTON_PIN)) == 0u;
+}
+
+int main(void)
+{
+    RCC-&gt;AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOCEN;
+    (void)RCC-&gt;AHB1ENR;
+
+    GPIOA-&gt;MODER = (GPIOA-&gt;MODER &amp; ~(3u &lt;&lt; (LED_PIN * 2u)))
+                 | (1u &lt;&lt; (LED_PIN * 2u));
+    GPIOC-&gt;MODER &amp;= ~(3u &lt;&lt; (BUTTON_PIN * 2u));
+    GPIOC-&gt;PUPDR = (GPIOC-&gt;PUPDR &amp; ~(3u &lt;&lt; (BUTTON_PIN * 2u)))
+                 | (1u &lt;&lt; (BUTTON_PIN * 2u));
+
+    for (;;) {
+        if (button_pressed()) {
+            GPIOA-&gt;BSRR = 1u &lt;&lt; LED_PIN;
+        } else {
+            GPIOA-&gt;BSRR = 1u &lt;&lt; (LED_PIN + 16u);
+        }
+    }
+}
+</pre></div>
+<ol class="walk" data-for="btn">
+  <li data-lines="3-4"><b class="what">دو شمارهٔ پایه.</b> LED روی PA5، دکمه روی PC13.</li>
+  <li data-lines="6-9"><b class="what">تابع «فشرده است؟».</b> بیت ۱۳ را جدا می‌کند (<code>&amp; (1u &lt;&lt; 13)</code>) و می‌پرسد صفر است یا نه. صفر = فشرده. نتیجه ۱ (درست) یا ۰.
+    <span class="why">پرانتز دور <code>(1u &lt;&lt; 13)</code> لازم نیست، ولی پرانتزِ <code>(IDR &amp; ماسک)</code> لازم است: <code>==</code> تقدم بالاتری از <code>&amp;</code> دارد و بدون پرانتز کل شرط همیشه نادرست می‌شود (درس <a href="3-1.html">۳.۱</a>).</span></li>
+  <li data-lines="11-12,29"><b class="what">main.</b> اینجا شروع.</li>
+  <li data-lines="13-14"><b class="what">قدم ۱: ساعت دو پورت.</b> A (LED) و C (دکمه) با یک <code>|</code>. بعد یک خواندن بی‌مصرف.</li>
+  <li data-lines="16-17"><b class="what">قدم ۲ برای LED.</b> همان که در blink.c دیدی: PA5 خروجی.</li>
+  <li data-lines="18"><b class="what">قدم ۲ برای دکمه.</b> بیت‌های ۲۷ و ۲۶ را صفر می‌کنیم: <code>00</code> = ورودی. <code>3u &lt;&lt; 26</code> = دو بیت یک.</li>
+  <li data-lines="19-20"><b class="what">بالاکش.</b> در <code>PUPDR</code> مقدار <code>01</code> یعنی «بالاکش فعال». روی Nucleo دکمه از قبل مقاومت بالاکش خارجی دارد، پس این خط معمولا فقط اطمینان است؛ ولی الگوی درستی است که برای هر دکمهٔ دیگری هم کار می‌کند.
+    <span class="why">پایهٔ ورودی‌ای که به هیچ‌چیز وصل نیست «شناور» است و مقدارش تصادفی می‌شود؛ بالاکش آن را روی ۱ نگه می‌دارد.</span></li>
+  <li data-lines="22,28"><b class="what">حلقهٔ بی‌نهایت.</b> پولینگ: مدام بپرس.</li>
+  <li data-lines="23-27"><b class="what">LED دنبال دکمه.</b> فشرده: BSRR بیت ۵ (روشن). رها: بیت ۲۱ (خاموش). چون فقط یک نوشتن است، هر چقدر هم بپرسد ضرر ندارد.
+    <span class="why">این «سطح» را می‌خواند، نه «رویداد» را. ببین در بخش بعد چرا فرق دارد.</span></li>
+</ol>
+
+<div class="callout warn"><div class="ct">اشتباه رایج: کجا برای IDR بنویسیم؟</div>
+<p><code>IDR</code> فقط‌خواندنی است. نوشتن روی آن بی‌اثر است و به‌جای آن باید <code>ODR</code> یا <code>BSRR</code> را بنویسی. هرگز برای خواندن ورودی به <code>ODR</code> نگاه نکن: <code>ODR</code> «آنچه خودت نوشتی» را نگه می‌دارد، نه ولتاژ واقعی پایه.</p></div>
+
+<h2 id="edge">لبه، پرش و «یک بار» بودن</h2>
+<p>برنامهٔ قبل LED را با دکمه روشن نگه می‌دارد. حالا می‌خواهیم مثل چراغ خواب: هر بار که دکمه <b>فشرده شد</b>، LED عوض شود (روشن↔خاموش). این «هر بار» یعنی یک <b>رویداد</b> (فشردن)، نه یک <b>وضعیت</b> (فشرده‌بودن). دکمه ممکن است ده‌ها میلی‌ثانیه پایین بماند و برنامه در این مدت میلیون‌ها بار می‌پرسد. اگر در هر پرسش عوض کنیم، LED تند می‌پرد. باید لحظهٔ تغییر از ۱ به ۰ را بگیریم: <b>لبهٔ پایین‌رونده</b> (<span class="term" data-t="edgedetect">falling edge</span>). راه ساده: وضعیت قبلی را نگه دار و فقط وقتی «قبلا رها بود و حالا فشرده است» عوض کن.</p>
+
+<div class="widget" data-w="mem" data-config='{"title":"تشخیص لبه با was_pressed","code":["now = button_pressed();","if (now &amp;&amp; !was_pressed) led_on = !led_on;","was_pressed = now;"],"intro":"دکمه رها است و LED خاموش. سه متغیر را دنبال کن؛ روی بعدی بزن.","cells":[{"addr":"محلی","name":"now","val":0,"kind":"var"},{"addr":"محلی","name":"was_pressed","val":0,"kind":"var"},{"addr":"محلی","name":"led_on","val":0,"kind":"var"}],"steps":[{"line":0,"set":{"0":0},"hot":[0],"say":"دکمه رها است: now = ۰."},{"line":1,"set":{},"hot":[],"say":"شرط نادرست است (now صفر است)؛ led_on دست نمی‌خورد."},{"line":2,"set":{"1":0},"hot":[1],"say":"was_pressed هم صفر می‌شود (همان‌طور که بود)."},{"line":0,"set":{"0":1},"hot":[0],"say":"<b>دکمه فشرده شد</b>: now = ۱."},{"line":1,"set":{"2":1},"hot":[2],"say":"now برابر ۱ است و was_pressed صفر: <b>لبه!</b> پس led_on عوض می‌شود: ۱."},{"line":2,"set":{"1":1},"hot":[1],"say":"was_pressed = ۱: به‌خاطر می‌سپاریم که دکمه پایین است."},{"line":0,"set":{"0":1},"hot":[0],"say":"هنوز دکمه را نگه داشته‌ای: now = ۱."},{"line":1,"set":{},"hot":[],"say":"now برابر ۱ است ولی was_pressed هم ۱ است: <b>لبه نیست</b>، led_on عوض نمی‌شود. بدون was_pressed، این‌جا هر دور عوض می‌شد و LED می‌لرزید."},{"line":2,"set":{"1":1},"hot":[1],"say":"همان ۱ می‌ماند. این‌طور فقط اولین لحظهٔ فشردن حساب می‌شود."}]}'></div>
+
+<p>همین منطق را با <code>toggle.c</code> روی برد می‌گذاریم. به دو فرق نسبت به <code>button.c</code> دقت کن: دو متغیر وضعیت، و یک تأخیر کوتاه بعد از تشخیص:</p>
+
+<div class="code" data-file="toggle.c" data-lang="c" data-verify="make" data-project="bare" id="tgl">
+<pre>
+#include "stm32f4.h"
+
+#define LED_PIN    5u
+#define BUTTON_PIN 13u
+
+static void delay(volatile uint32_t n)
+{
+    while (n--) {
+    }
+}
+
+static int button_pressed(void)
+{
+    return (GPIOC-&gt;IDR &amp; (1u &lt;&lt; BUTTON_PIN)) == 0u;
+}
+
+int main(void)
+{
+    RCC-&gt;AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOCEN;
+    (void)RCC-&gt;AHB1ENR;
+
+    GPIOA-&gt;MODER = (GPIOA-&gt;MODER &amp; ~(3u &lt;&lt; (LED_PIN * 2u)))
+                 | (1u &lt;&lt; (LED_PIN * 2u));
+    GPIOC-&gt;MODER &amp;= ~(3u &lt;&lt; (BUTTON_PIN * 2u));
+    GPIOC-&gt;PUPDR = (GPIOC-&gt;PUPDR &amp; ~(3u &lt;&lt; (BUTTON_PIN * 2u)))
+                 | (1u &lt;&lt; (BUTTON_PIN * 2u));
+
+    int was_pressed = 0;
+    int led_on = 0;
+
+    for (;;) {
+        int now = button_pressed();
+        if (now &amp;&amp; !was_pressed) {
+            led_on = !led_on;
+            if (led_on) {
+                GPIOA-&gt;BSRR = 1u &lt;&lt; LED_PIN;
+            } else {
+                GPIOA-&gt;BSRR = 1u &lt;&lt; (LED_PIN + 16u);
+            }
+            delay(30000u);
+        }
+        was_pressed = now;
+    }
+}
+</pre></div>
+<ol class="walk" data-for="tgl">
+  <li data-lines="6-10"><b class="what">delay.</b> همان تأخیر volatile. اینجا برای «خنثی‌کردن پرش» استفاده می‌شود.</li>
+  <li data-lines="12-15"><b class="what">فشرده است؟</b> مثل قبل: بیت ۱۳ صفر است.</li>
+  <li data-lines="28-29"><b class="what">حافظهٔ برنامه.</b> <code>was_pressed</code> = وضعیت دور قبل؛ <code>led_on</code> = LED الان روشن است؟ دو متغیر محلی که در <code>main</code> می‌مانند (main هرگز تمام نمی‌شود).</li>
+  <li data-lines="31,43"><b class="what">حلقه.</b> پولینگ.</li>
+  <li data-lines="32"><b class="what">وضعیت کنونی.</b> یک بار می‌خوانیم و در متغیر می‌گذاریم تا در این دور یک مقدار ثابت داشته باشیم.</li>
+  <li data-lines="33"><b class="what">لبهٔ فشردن.</b> «الان فشرده و قبلا رها»: فقط همین لحظه درست است.</li>
+  <li data-lines="34-39"><b class="what">عوض‌کردن LED.</b> <code>led_on</code> برعکس می‌شود و با یک نوشتن BSRR روی پایه اعمال.</li>
+  <li data-lines="40-41"><b class="what">تأخیر ضد پرش.</b> حدود ۱۵ میلی‌ثانیه (۳۰ هزار دور، هر دور تقریبا ۸ چرخه، روی ۱۶ مگاهرتز)، تا پرش‌های تماس فلزی (شکل بعد) گذشته باشد.
+    <span class="why">این روش ساده است و همین‌جا کار می‌کند؛ ولی در این مدت CPU هیچ کار دیگری نمی‌کند. ماشین حالت و SysTick (درس‌های <a href="4-6.html">۴.۶</a> و <a href="5-4.html">۵.۴</a>) راه حرفه‌ای‌اند.</span></li>
+  <li data-lines="42"><b class="what">به‌خاطر سپردن.</b> وضعیت این دور می‌شود «وضعیت قبلی» برای دور بعد.</li>
+</ol>
+
+<h3 id="bounce">چرا یک فشردن، چند رویداد است؟</h3>
+<p>دکمه مکانیکی است: دو تیغهٔ فلزی که برخورد می‌کنند. لحظهٔ برخورد، تیغه چند بار به هم می‌خورد و جدا می‌شود؛ مثل توپ که روی زمین می‌جهد. این را <span class="term" data-t="bounce">پرش تماس</span> (bounce) می‌گویند. سرعت CPU میلیون‌ها بار در ثانیه است، پس هر پرش را «یک فشردن» می‌بیند.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 310" role="img" aria-label="نمودار ولتاژ پایه PC13 هنگام فشردن و رها کردن دکمه، با پرش‌های تماس و علامت هر لبه پایین‌رونده">
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">یک فشردن و یک رها کردن، از دید پایهٔ PC13</text>
+  <path d="M40 80H200V140H208V80H216V140H224V80H230V140H470V80H478V140H486V80H494V140H500V80H700" fill="none" stroke="#15120a" stroke-width="3.5"/>
+  <g class="s-tx" font-size="13" font-weight="700">
+    <text x="752" y="84" text-anchor="end">رها = ۱</text><text x="752" y="144" text-anchor="end">فشرده = ۰</text>
+  </g>
+  <text x="752" y="112" text-anchor="end" class="s-tx mono" font-size="14" font-weight="800">PC13</text>
+  <g fill="#ff86b3" stroke="#15120a" stroke-width="2.5">
+    <circle cx="200" cy="110" r="9"/><circle cx="216" cy="110" r="9"/><circle cx="230" cy="110" r="9"/><circle cx="478" cy="110" r="9"/><circle cx="494" cy="110" r="9"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-size="12.5" font-weight="800">
+    <text x="200" y="114">1</text><text x="216" y="114">2</text><text x="230" y="114">3</text><text x="478" y="114">4</text><text x="494" y="114">5</text>
+  </g>
+  <path d="M200 166H232" stroke="#15120a" stroke-width="2.5"/><path d="M200 160V172" stroke="#15120a" stroke-width="2.5"/><path d="M232 160V172" stroke="#15120a" stroke-width="2.5"/>
+  <text x="216" y="192" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="700">چند میلی‌ثانیه پرش</text>
+  <path d="M478 166H496" stroke="#15120a" stroke-width="2.5"/>
+  <text x="487" y="192" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="700">پرش هنگام رها کردن</text>
+  <path d="M232 145H468" stroke="#15120a" stroke-width="2.5" stroke-dasharray="6 5"/>
+  <text x="350" y="166" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">انگشت روی دکمه</text>
+  <g class="s-tx" font-size="13.5" font-weight="700" text-anchor="middle">
+    <text x="380" y="232">۵ لبهٔ پایین‌رونده (دایره‌های صورتی)، ولی فقط شمارهٔ ۱ فشردن واقعی است</text>
+    <text x="380" y="256">شمارهٔ ۴ و ۵ هنگام رها کردن‌اند و بدون محافظت «فشردن جعلی» می‌سازند</text>
+    <text x="380" y="284" font-size="12.5" font-weight="400">راه‌ها: تأخیر کوتاه بعد از لبه، نمونه‌برداری با تیک زمانی، یا خازن/فیلتر سخت‌افزاری (روی Nucleo هست)</text>
+  </g>
+</svg></div>
+<figcaption>هر دایره یک لبهٔ پایین‌رونده است که برنامهٔ ساده «فشردن» می‌شمارد. پرش‌ها در واقعیت چند میکرو تا چند میلی‌ثانیه‌اند؛ شکل برای دیدن بزرگ‌نمایی شده است.</figcaption></figure>
+
+<p>ببین سه راه شمارش روی یک دنبالهٔ نمونه‌های دکمه چه می‌دهند. این برنامه روی PC اجرا می‌شود (همان منطق را بدون سخت‌افزار امتحان می‌کنیم). هر عدد در آرایه یک بار پرسیدن PC13 است: ۱ = رها، ۰ = فشرده. دنباله شبیه شکل بالاست: پرش هنگام فشردن، نگه‌داشتن، رها کردن با پرش. فقط <b>یک</b> فشردن واقعی داریم.</p>
+
+<div class="code" data-file="bounce.c" data-lang="c" data-verify="host" id="bnc">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    /* هر عدد یک بار پرسیدن PC13 است: 1 = رها، 0 = فشرده (یک فشردن واقعی با پرش‌ها) */
+    const int s[] = {1,1,0,1,0,1,0,0,0,0,0,0,1,0,1,0,1,1,1};
+    const int n = (int)(sizeof s / sizeof s[0]);
+
+    int level = 0;                  /* هر نمونهٔ صفر را بشمار */
+    int edge = 0;                   /* هر رفتن از ۱ به ۰ را بشمار */
+    int stable = 0;                 /* فقط وقتی ۴ صفر پشت‌سرهم دیدی بشمار */
+    int prev = 1, run0 = 0, armed = 1;
+
+    for (int i = 0; i &lt; n; i++) {
+        if (s[i] == 0) {
+            level++;
+            run0++;
+        } else {
+            run0 = 0;
+            armed = 1;
+        }
+        if (prev == 1 &amp;&amp; s[i] == 0) {
+            edge++;
+        }
+        if (run0 == 4 &amp;&amp; armed) {
+            stable++;
+            armed = 0;
+        }
+        prev = s[i];
+    }
+    printf("level counting : %d\n", level);
+    printf("edge counting  : %d\n", edge);
+    printf("debounced (4)  : %d\n", stable);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="bnc">
+  <li data-lines="5-7"><b class="what">نمونه‌ها.</b> ۱۹ بار پرسیدن. پرش هنگام فشردن، چند نمونهٔ پایدار صفر، سپس پرش هنگام رها کردن. <code>n</code> تعداد نمونه‌هاست (طول آرایه را <code>sizeof</code> حساب می‌کند).</li>
+  <li data-lines="9-11"><b class="what">سه شمارنده.</b> هر روش یک عدد جدا: «سطح» (هر نمونهٔ ۰)، «لبه» (هر رفتن از ۱ به ۰)، «پایدار» (فقط وقتی ۴ نمونهٔ پشت هم ۰).</li>
+  <li data-lines="12"><b class="what">حالت کمکی.</b> <code>prev</code> نمونهٔ قبل، <code>run0</code> طول رشتهٔ صفرها، <code>armed</code> یعنی «اجازه داریم دوباره بشماریم».</li>
+  <li data-lines="14-21"><b class="what">به‌روزرسانی رشتهٔ صفر.</b> هر صفر: سطح و طول رشته زیاد می‌شود. هر یک: رشته قطع و دوباره مجاز می‌شویم.</li>
+  <li data-lines="22-24"><b class="what">شمارش لبه.</b> قبلا ۱ و الان ۰.</li>
+  <li data-lines="25-28"><b class="what">شمارش پایدار.</b> فقط وقتی ۴ صفر پشت‌سرهم دیدیم <b>و</b> از آخرین ۱ بعد هنوز نشمرده‌ایم. <code>armed = 0</code> جلوی شمارش دوباره در همان رشته را می‌گیرد.
+    <span class="why">این همان ایدهٔ «نمونه‌برداری پایدار» (debounce) است: تغییر را فقط وقتی قبول کن که چند نمونه پشت هم تأییدش کنند.</span></li>
+  <li data-lines="29-30"><b class="what">به‌روز کردن prev.</b> نمونهٔ این دور می‌شود «قبلی» دور بعد.</li>
+  <li data-lines="31-33"><b class="what">چاپ.</b> سه عدد.</li>
+</ol>
+<pre class="term" data-from="bounce.c">
+$ gcc -std=c11 -Wall -Wextra -o bounce bounce.c
+$ ./bounce
+level counting : 10
+edge counting  : 5
+debounced (4)  : 1
+</pre>
+<p>شمارش «سطح» عدد ۱۰ می‌دهد (هر نمونهٔ صفر). شمارش «لبه» عدد ۵: دقیقا همان پنج دایره در شکل. فقط روش «پایدار» عدد درست، یعنی ۱، را می‌دهد. یک تفاوت را ببین: پرش‌های هنگام رها کردن (شمارهٔ ۴ و ۵) بدون محافظت «دو فشردن جعلی» می‌سازند. درس تکراری ولی مهم: <b>از روی یک لبهٔ تنها نمی‌شود «فشردن واقعی» را تشخیص داد</b>؛ باید زمان یا تکرار را به کمک بگیری.</p>
+
+<h2 id="hal">همین برنامه با HAL و LL</h2>
+<p>حالا که زیر کاپوت را دیدی، ببین ST همین کار را چطور برایت بسته‌بندی کرده. سه سطح وجود دارد:</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>سطح</th><th>چه شکلی؟</th><th>هزینه و مزیت</th></tr></thead>
+<tbody>
+<tr><td>رجیستر خام (این درس)</td><td><code>GPIOA-&gt;BSRR = 1u &lt;&lt; 5;</code></td><td>کمترین کد و کاملا شفاف. باید مرجع (RM0383) را بخوانی</td></tr>
+<tr><td>CMSIS (<code>stm32f4xx.h</code>)</td><td>همان، ولی با نام‌های آماده مثل <code>RCC_AHB1ENR_GPIOAEN</code></td><td>هدر رسمی؛ همان رجیستر خام با نام استاندارد. هیچ هزینهٔ زمان اجرا ندارد</td></tr>
+<tr><td>LL (Low-Layer)</td><td>توابع <code>static inline</code> نازک، مثل <code>LL_GPIO_TogglePin</code></td><td>تقریبا هم‌سرعت رجیستر، ولی نام‌ها خواناترند</td></tr>
+<tr><td>HAL</td><td><code>HAL_GPIO_Init()</code> با struct پیکربندی</td><td>قابل‌حمل بین تراشه‌های ST؛ کد و RAM بیشتر و کندتر، اما سریع‌ترین راه شروع</td></tr>
+</tbody></table></div>
+
+<p>در سطح CMSIS، همین سه خط ما با هدر رسمی <code>stm32f4xx.h</code> (بستهٔ CMSIS device) نوشته می‌شود: <code>RCC-&gt;AHB1ENR |= RCC_AHB1ENR_GPIOAEN;</code> و بقیه دقیقا مثل ما. تنها فرق این است که ST هدر را نوشته و تست کرده. برای نام ماسک هر بیت، فایل <code>stm32f411xe.h</code> همان بسته را ببین؛ نام‌ها در نسخه‌های مختلف بسته ممکن است کمی فرق کنند.</p>
+
+<p>و در سطح HAL، برنامهٔ کامل چشمک (بدون تنظیم ساعت سیستم که CubeMX می‌سازد) این شکلی است. این کد در این محیط کامپایل نمی‌شود چون به بستهٔ HAL نیاز دارد؛ ولی نام‌ها از مستندات رسمی <span class="en">STM32CubeF4 HAL</span> هستند:</p>
+<div class="code" data-file="blink_hal.c" data-lang="c" data-verify="frag" id="hal1">
+<pre>
+#include "main.h"                       // هدر ساخته‌شده با STM32CubeMX
+
+int main(void)
+{
+    HAL_Init();                         // آماده‌سازی HAL و SysTick
+    /* ساعت سیستم: SystemClock_Config() که CubeMX می‌سازد */
+
+    __HAL_RCC_GPIOA_CLK_ENABLE();       // قدم ۱: ساعت
+
+    GPIO_InitTypeDef gpio = {0};
+    gpio.Pin   = GPIO_PIN_5;            // قدم ۲: حالت
+    gpio.Mode  = GPIO_MODE_OUTPUT_PP;
+    gpio.Pull  = GPIO_NOPULL;
+    gpio.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOA, &amp;gpio);
+
+    while (1) {
+        HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);   // قدم ۳: کار
+        HAL_Delay(500);                 // نیم ثانیه
+    }
+}
+</pre></div>
+<ol class="walk" data-for="hal1">
+  <li data-lines="1"><b class="what">main.h.</b> CubeMX این فایل را برای پروژه می‌سازد؛ HAL و اسم‌هایی مثل <code>LD2_Pin</code> را وارد می‌کند.</li>
+  <li data-lines="5"><b class="what">HAL_Init.</b> تنظیمات پایه و راه‌اندازی SysTick (برای <code>HAL_Delay</code>). ما در درس <a href="5-4.html">۵.۴</a> خودمان همین را می‌سازیم.</li>
+  <li data-lines="8"><b class="what">قدم ۱.</b> ماکرویی که همان <code>RCC-&gt;AHB1ENR |= …</code> را می‌نویسد.</li>
+  <li data-lines="10-15"><b class="what">قدم ۲.</b> یک struct پر می‌کنی و به تابع می‌دهی. تابع همان کار <code>MODER</code>، <code>OTYPER</code>، <code>PUPDR</code> و <code>OSPEEDR</code> را انجام می‌دهد.
+    <span class="why">این چند رجیستر را با یک تابع تنظیم می‌کند؛ ولی هزینه‌اش این است که کارش را با بررسی‌ها و شاخه‌های زیاد انجام می‌دهد (کدش صدها بایت است، نه ده‌ها).</span></li>
+  <li data-lines="17-20"><b class="what">قدم ۳.</b> <code>HAL_GPIO_TogglePin</code> وضعیت پایه را برعکس می‌کند و <code>HAL_Delay</code> بر پایهٔ SysTick صبر می‌کند (بدون شمارش خام).</li>
+</ol>
+
+<div class="callout tip"><div class="ct">پس کدام را انتخاب کنم؟</div>
+<p>برای پروژهٔ حرفه‌ای معمولا ترکیب: HAL برای بخش‌های پیچیده و کم‌زمان‌حساس (USB، فایل‌سیستم)، رجیستر/LL برای مسیرهای سریع و ساده. مهم‌تر: چون رجیستر را فهمیده‌ای، وقتی HAL درست کار نکرد یا مستنداتش کم بود، می‌توانی خودت درون آن را ببینی. اصل آموزش امروز همین است.</p></div>
+
+<h2 id="debug">اگر LED چشمک نمی‌زند: فهرست وارسی</h2>
+<p>در عمل بیشتر خرابی‌ها از فهرست کوتاه زیر می‌آیند. از بالا به پایین وارسی کن:</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>نشانه</th><th>علت رایج</th><th>راه دیدن / اصلاح</th></tr></thead>
+<tbody>
+<tr><td>هیچ اتفاقی نمی‌افتد</td><td>ساعت GPIOA روشن نشده</td><td>بیت ۰ <code>RCC_AHB1ENR</code> را یک کن. در دیباگر رجیستر را ببین</td></tr>
+<tr><td>LED همیشه خاموش/روشن</td><td>MODER پایه ۵ خروجی نشده، یا دیگران را هم پاک کردی</td><td>با الگوی «پاک کن، بگذار»؛ مقدار MODER را بعد از اجرا بخوان</td></tr>
+<tr><td>LED فقط روشن می‌شود</td><td>برای خاموش کردن هم بیت ۵ نوشته‌ای</td><td>خاموش‌کردن = بیت <code>5 + 16 = 21</code></td></tr>
+<tr><td>LED «نیمه‌روشن» دائمی</td><td>حلقهٔ تأخیر حذف شده (بدون volatile)؛ LED با فرکانس بالا می‌پرد</td><td>شمارنده را <code>volatile</code> کن (تمرین ۲)</td></tr>
+<tr><td>پس از ریختن، دیباگر وصل نمی‌شود</td><td>MODER را کامل بازنویسی کردی و پایه‌های SWD (PA13/PA14) را ورودی کردی</td><td>ریست سخت (دکمهٔ RESET را نگه دار و دوباره وصل کن)، سپس کد را اصلاح کن</td></tr>
+<tr><td>برنامه اجرا نمی‌شود، LED دست‌نخورده</td><td>startup یا link.ld اشتباه: جدول برداری در آدرس نادرست</td><td>با <code>objdump -s -j .isr_vector</code> ببین اولین کلمه <code>0x20020000</code> باشد</td></tr>
+<tr><td>فایل کامپایل شد ولی نمی‌ریزد</td><td>فایل اشتباه (مثلا <code>.o</code>) یا آدرس Flash غلط</td><td><code>.bin</code> را در <code>0x08000000</code> بریز؛ ELF آدرس‌ها را خودش دارد</td></tr>
+</tbody></table></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">برای اینکه نوشتن روی <code>GPIOA-&gt;MODER</code> واقعا اثر کند، اول باید چه کاری انجام شود؟</p>
+  <ol>
+    <li data-why="BSRR رجیستر همان GPIOA است؛ اگر ساعتش خاموش باشد، نوشتن روی آن هم بی‌اثر است. اول باید ساعت روشن شود.">نوشتن در <code>BSRR</code></li>
+    <li>روشن‌کردن ساعت GPIOA با <code>RCC-&gt;AHB1ENR |= RCC_AHB1ENR_GPIOAEN</code></li>
+    <li data-why="ODR هم بخشی از GPIOA است و بدون ساعت پاسخ نمی‌دهد. ساعت مقدم بر همه است.">نوشتن در <code>ODR</code></li>
+    <li data-why="وقفه‌ها برای GPIO ساده لازم نیستند (درس ۵.۳)؛ و مهم‌تر، بدون ساعت هیچ رجیستری کار نمی‌کند.">فعال‌کردن وقفه در NVIC</li>
+  </ol>
+  <div class="fb">هر پریفرال STM32 به‌طور پیش‌فرض بی‌ساعت است. بدون آن نوشتن بی‌خطا ولی بی‌اثر است. قدم اول همیشه ساعت است.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">دستور <code>GPIOA-&gt;BSRR = 1u &lt;&lt; 21;</code> چه می‌کند؟</p>
+  <ol>
+    <li data-why="پایهٔ ۲۱ وجود ندارد؛ هر پورت فقط ۱۶ پایه دارد (PA0 تا PA15). بیت‌های ۱۶ تا ۳۱ BSRR کار «خاموش‌کردن» پایه‌های ۰ تا ۱۵ را می‌کنند.">پایهٔ PA21 را روشن می‌کند</li>
+    <li data-why="بیت‌های ۰ تا ۱۵ BSRR روشن می‌کنند؛ بیت ۲۱ در نیمهٔ بالایی است که خاموش می‌کند.">PA5 را روشن می‌کند</li>
+    <li data-why="فقط بیتی که ۱ نوشته‌ایم اثر می‌کند؛ بیت‌های صفر در BSRR هیچ کاری نمی‌کنند. همین BSRR را مفید کرده.">همهٔ پایه‌های پورت A را خاموش می‌کند</li>
+    <li>فقط PA5 را خاموش می‌کند و بقیه پایه‌ها را دست‌نخورده می‌گذارد</li>
+  </ol>
+  <div class="fb">بیت ۵+۱۶ = ۲۱ در نیمهٔ «Reset» است. نوشتن صفر در بیت‌های دیگر هیچ اثری ندارد، پس بقیهٔ پایه‌ها دست‌نخورده می‌مانند.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">این شرط برای «آیا دکمه فشرده است؟» نوشته شده ولی هیچ‌وقت درست نمی‌شود. چرا؟<br><code>if (GPIOC-&gt;IDR &amp; (1u &lt;&lt; 13) == 0u)</code></p>
+  <ol>
+    <li>چون <code>==</code> تقدم بالاتری از <code>&amp;</code> دارد؛ اول <code>(1u &lt;&lt; 13) == 0u</code> حساب می‌شود که ۰ است و بعد <code>IDR &amp; 0</code> همیشه صفر (نادرست) است</li>
+    <li data-why="IDR رجیستر فقط‌خواندنی است و همین کار خواندن را می‌کند؛ مشکل جای دیگری است.">چون IDR را نمی‌شود خواند</li>
+    <li data-why="پرانتز دور شیفت اضافه نیست و کمکی هم نمی‌کند؛ مشکل تقدم عملگرها است.">چون پرانتز دور <code>1u &lt;&lt; 13</code> اضافه است</li>
+    <li data-why="۱۳ درست است (بیت ۱۳ = PC13). اگر عدد عوض شود، همان باگ تقدم می‌ماند.">چون باید ۱۴ می‌نوشتیم نه ۱۳</li>
+  </ol>
+  <div class="fb">راه درست: <code>if ((GPIOC-&gt;IDR &amp; (1u &lt;&lt; 13)) == 0u)</code>. قانون: همیشه ماسک‌گذاری را در پرانتز جدا کن (درس ۳.۱).</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">روی Nucleo-F411RE دکمهٔ آبی رها است. بیت ۱۳ از <code>GPIOC-&gt;IDR</code> چند می‌خواند؟</p>
+  <ol>
+    <li data-why="صفر یعنی فشرده. روی این برد، دکمه پایه را در حالت فشردن به زمین وصل می‌کند و بالاکش در حالت رها پایه را بالا نگه می‌دارد.">۰، چون پایه ورودی است و ورودی همیشه صفر می‌خواند</li>
+    <li data-why="ورودی‌ها مقدار واقعی ولتاژ را می‌خوانند و صفر نیستند. صفر در حالت فشردن دیده می‌شود.">۰، چون هیچ‌کس پایه را بالا نبرده</li>
+    <li>۱، چون بالاکش پایه را بالا نگه می‌دارد (فعال-پایین)</li>
+    <li data-why="مقدار قطعی است؛ بالاکش مانع شناوری (تصادفی‌شدن) است.">مقدار تصادفی، چون پایه شناور است</li>
+  </ol>
+  <div class="fb">رها = ۱، فشرده = ۰. این «فعال-پایین» است و به‌خاطر مقاومت بالاکش.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">حلقهٔ <code>for (uint32_t i = 0; i &lt; 400000u; i++) {}</code> با <code>-O2</code> چه می‌شود؟</p>
+  <ol>
+    <li data-why="کامپایلر «زمان» را تضمین نمی‌کند؛ فقط رفتار قابل‌مشاهده را حفظ می‌کند. حلقه‌ای که نتیجه‌اش استفاده نمی‌شود، رفتاری ندارد.">دقیقا ۴۰۰ هزار دور اجرا می‌شود و حدود ۰٫۲ ثانیه طول می‌کشد</li>
+    <li>کامپایلر آن را حذف می‌کند، چون بدنه‌ای ندارد و <code>i</code> جای دیگری استفاده نمی‌شود (مگر <code>i</code> را <code>volatile</code> کنی)</li>
+    <li data-why="بهینه‌سازی حلقه را کندتر نمی‌کند؛ اگر بماند، همان سرعت یا سریع‌تر است.">حلقه کندتر می‌شود چون -O2 کد را بزرگ‌تر می‌کند</li>
+    <li data-why="این حلقه از نظر C کاملا درست است و خطایی نمی‌دهد.">خطای کامپایل می‌دهد</li>
+  </ol>
+  <div class="fb">خروجی واقعی اسمبلی در تمرین ۲ همین را نشان می‌دهد: از حلقه اثری نمانده. برای تأخیر خام همیشه شمارنده را <code>volatile</code> کن.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">آدرس <code>GPIOC_IDR</code> در STM32F411 کدام است؟</p>
+  <ol>
+    <li data-why="این آدرس GPIOA_IDR است (0x40020000 + 0x10). GPIOC ۰x800 بالاتر است.">0x40020010</li>
+    <li data-why="این آدرس GPIOC_ODR است (0x40020800 + 0x14)، نه IDR که آفستش 0x10 است.">0x40020814</li>
+    <li data-why="این ناحیه مال RCC است، نه GPIO.">0x40023810</li>
+    <li>0x40020810</li>
+  </ol>
+  <div class="fb">GPIOC در <code>0x40020800</code> شروع می‌شود و IDR آفست <code>0x10</code> دارد: <code>0x40020810</code>.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: الگوی «دو چشمک و مکث»</div>
+<p>می‌خواهیم LED دو چشمک کوتاه بزند، بعد مکث طولانی داشته باشد و همین را تکرار کند (مثل ضربان قلب).</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> در یک دورهٔ کامل، چند بار در BSRR می‌نویسی؟ (روشن و خاموش را جدا بشمار.)</li>
+  <li><b>حل:</b> یک تابع <code>flash_once()</code> بنویس که یک چشمک بزند و آن را دوبار صدا بزن، بعد مکث بلند.</li>
+  <li><b>تغییر:</b> تعداد چشمک‌ها را به سه تغییر بده. برای این باید چه چیزی را در کد عوض کنی؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>همان قدم‌های blink.c؛ فقط بدنهٔ روشن-صبر-خاموش-صبر را در یک تابع <code>static void</code> بگذار و آن را از داخل حلقه صدا بزن. مکث بلند = یک <code>delay</code> با عدد بزرگ‌تر.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary><p>روی برد: LD2 دو بار می‌زند (هرکدام حدود ۰٫۰۷ ثانیه روشن و ۰٫۰۷ خاموش) و بعد حدود ۰٫۶ ثانیه خاموش می‌ماند؛ دوباره از اول. (زمان‌ها تخمینی‌اند؛ مثل بخش تأخیر.) پاسخ الف: چهار بار در هر دوره.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="ex1.c" data-lang="c" data-verify="arm" id="ex1">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define RCC_AHB1ENR (*(volatile uint32_t *)0x40023830u)
+#define GPIOA_MODER (*(volatile uint32_t *)0x40020000u)
+#define GPIOA_BSRR  (*(volatile uint32_t *)0x40020018u)
+
+static void delay(volatile uint32_t n)
+{
+    while (n--) {
+    }
+}
+
+static void flash_once(void)
+{
+    GPIOA_BSRR = 1u &lt;&lt; 5;
+    delay(150000u);
+    GPIOA_BSRR = 1u &lt;&lt; 21;
+    delay(150000u);
+}
+
+int main(void)
+{
+    RCC_AHB1ENR |= 1u &lt;&lt; 0;
+    (void)RCC_AHB1ENR;
+    GPIOA_MODER = (GPIOA_MODER &amp; ~(3u &lt;&lt; 10)) | (1u &lt;&lt; 10);
+
+    for (;;) {
+        flash_once();
+        flash_once();
+        delay(1200000u);
+    }
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="3-5"><b class="what">سه رجیستر.</b> این بار با <code>#define</code> ساده (بدون هدر)، مثل درس ۳.۶؛ آدرس‌ها همان جدول امروز.</li>
+  <li data-lines="7-11"><b class="what">تأخیر.</b> پارامتر <code>volatile</code> برای جلوگیری از حذف.</li>
+  <li data-lines="13-19"><b class="what">یک چشمک.</b> روشن، صبر، خاموش، صبر: ۲ نوشتن. صدا زدن دوبار = ۴ نوشتن.
+    <span class="why">جدا کردن این چهار خط در یک تابع، تکرار را کم می‌کند و «سه چشمک» را یک خط می‌کند.</span></li>
+  <li data-lines="21-22,32"><b class="what">main.</b></li>
+  <li data-lines="23-25"><b class="what">راه‌اندازی.</b> ساعت و حالت (همان blink.c).</li>
+  <li data-lines="27-31"><b class="what">حلقه.</b> دو چشمک و بعد مکث بلند: <code>delay(1200000u)</code>. برای سه چشمک فقط یک <code>flash_once();</code> اضافه کن.</li>
+</ol></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: چهار باگ در یک برنامه</div>
+<p>این برنامه کامپایل می‌شود، ولی LED چشمک نمی‌زند. <b>چهار</b> مشکل در آن هست. آن‌ها را پیدا کن.</p>
+<div class="code" data-file="ex2_bug.c" data-lang="c" data-verify="arm" data-cflags="-O2" id="ex2bug">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define GPIOA_MODER (*(volatile uint32_t *)0x40020000u)
+#define GPIOA_BSRR  (*(volatile uint32_t *)0x40020018u)
+
+static void delay(void)
+{
+    for (uint32_t i = 0; i &lt; 400000u; i++) {
+    }
+}
+
+int main(void)
+{
+    GPIOA_MODER = 1u &lt;&lt; 10;
+    for (;;) {
+        GPIOA_BSRR = 1u &lt;&lt; 5;
+        delay();
+        GPIOA_BSRR = 1u &lt;&lt; 5;
+        delay();
+    }
+}
+</pre></div>
+<ol class="parts">
+  <li><b>پیدا کردن:</b> چهار باگ را با شمارهٔ خط بنویس. (راهنمایی: هر باگ در یکی از سه قدم امروز است، یا در تأخیر.)</li>
+  <li><b>تحلیل:</b> با <code>-O2</code>، اسمبلی <code>main</code> فقط دو دستور <code>str</code> پشت هم دارد. کدام باگ‌ها این را توضیح می‌دهند؟</li>
+  <li><b>اصلاح:</b> برنامهٔ درست را بنویس.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>ساعت GPIOA کجا روشن شد؟ MODER با <code>=</code> نوشته شده؛ بقیهٔ فیلدها چه می‌شوند؟ برای خاموش‌کردن چه بیتی را باید بنویسی؟ و شمارندهٔ حلقه <code>volatile</code> است؟</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -O2 -ffreestanding -c ex2_bug.c
+$ arm-none-eabi-objdump -d ex2_bug.o
+00000000 &lt;main&gt;:
+   0:	4b03      	ldr	r3, [pc, #12]
+   2:	f44f 6280 	mov.w	r2, #1024	@ 0x400
+   6:	601a      	str	r2, [r3, #0]
+   8:	2220      	movs	r2, #32
+   a:	619a      	str	r2, [r3, #24]
+   c:	619a      	str	r2, [r3, #24]
+   e:	e7fc      	b.n	a &lt;main+0xa&gt;
+</pre>
+<p>هر دو حلقهٔ تأخیر حذف شده‌اند و بین دو نوشتن BSRR هیچ صبری نیست؛ هر دو نوشتن هم یک مقدار (۳۲ = ۱&lt;&lt;۵) دارند.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="table-wrap"><table><thead><tr><th>خط</th><th>باگ</th><th>اثر</th></tr></thead><tbody>
+<tr><td>۱۲ تا ۱۴ (نبودن)</td><td>ساعت GPIOA روشن نشده</td><td>نوشتن‌های GPIOA روی برد واقعی اثر ندارد</td></tr>
+<tr><td>۱۴</td><td><code>GPIOA_MODER = 1u &lt;&lt; 10</code></td><td>همهٔ فیلدهای دیگر (از جمله SWD روی PA13/PA14) صفر می‌شوند</td></tr>
+<tr><td>۱۸</td><td>خاموش‌کردن با <code>1u &lt;&lt; 5</code> (باید <code>1u &lt;&lt; 21</code> باشد)</td><td>LED هرگز خاموش نمی‌شود</td></tr>
+<tr><td>۸ تا ۹</td><td><code>i</code> غیر <code>volatile</code></td><td>با <code>-O2</code> حلقه حذف می‌شود</td></tr>
+</tbody></table></div>
+<div class="code" data-file="ex2_fix.c" data-lang="c" data-verify="arm" data-cflags="-O2" id="ex2">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define RCC_AHB1ENR (*(volatile uint32_t *)0x40023830u)
+#define GPIOA_MODER (*(volatile uint32_t *)0x40020000u)
+#define GPIOA_BSRR  (*(volatile uint32_t *)0x40020018u)
+
+static void delay(void)
+{
+    for (volatile uint32_t i = 0; i &lt; 400000u; i++) {
+    }
+}
+
+int main(void)
+{
+    RCC_AHB1ENR |= 1u &lt;&lt; 0;
+    (void)RCC_AHB1ENR;
+    GPIOA_MODER = (GPIOA_MODER &amp; ~(3u &lt;&lt; 10)) | (1u &lt;&lt; 10);
+
+    for (;;) {
+        GPIOA_BSRR = 1u &lt;&lt; 5;
+        delay();
+        GPIOA_BSRR = 1u &lt;&lt; 21;
+        delay();
+    }
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="9"><b class="what">شمارندهٔ volatile.</b> <code>for (volatile uint32_t i…</code>: حلقه باید واقعا اجرا شود.</li>
+  <li data-lines="15-16"><b class="what">قدم ۱ اضافه شد.</b> ساعت را روشن و یک بار می‌خوانیم.</li>
+  <li data-lines="17"><b class="what">MODER درست.</b> «پاک کن، بگذار»: فقط بیت‌های ۱۱ و ۱۰ عوض می‌شوند.</li>
+  <li data-lines="22"><b class="what">خاموش‌کردن.</b> بیت ۲۱ (۵+۱۶).</li>
+</ol>
+<p>نکتهٔ مهم: چهار باگ با یک کامپایل ساده پیدا نمی‌شوند؛ کامپایلر هیچ‌کدام را خطا نمی‌داند. هیچ هشداری هم نمی‌دهد. اینجا فقط شناخت سخت‌افزار جواب می‌دهد.</p></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: چشمک تند وقتی دکمه فشرده است (چالش سخت‌افزاری)</div>
+<p>LED مدام چشمک بزند: آرام (هر نیم‌دوره حدود ۰٫۲ ثانیه) وقتی دکمهٔ آبی رها است، و تند (حدود یک‌هشتم آن) وقتی فشرده است.</p>
+<ol class="parts">
+  <li><b>طرح:</b> کدام رجیسترها و چه ساعتی لازم است؟ (پورت‌ها و بیت‌ها را فهرست کن.)</li>
+  <li><b>حل:</b> برنامه را بنویس. تأخیر را از روی وضعیت دکمه انتخاب کن.</li>
+  <li><b>فکر کن:</b> اگر دکمه را وسط یک تأخیر بلند بزنی، LED کِی تند می‌شود؟ چرا؟ راه‌حلش کجای دورهٔ ماست؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>هر دور حلقه، اول دکمه را بخوان و طول تأخیر را بر اساس آن بگذار: <code>pressed ? کوتاه : بلند</code>. سپس همان چشمک قبلی را با این طول تأخیر بزن.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary><p>روی برد: LD2 آرام می‌زند. با فشردن و نگه‌داشتن B1، در چشمک بعدی سریع می‌زند و با رها کردن دوباره آرام. پاسخ ج: تا پایان تأخیر جاری صبر باید کرد؛ چون CPU سرگرم شمارش است و دکمه را نمی‌بیند.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="ex3.c" data-lang="c" data-verify="arm" id="ex3">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define RCC_AHB1ENR (*(volatile uint32_t *)0x40023830u)
+#define GPIOA_MODER (*(volatile uint32_t *)0x40020000u)
+#define GPIOA_BSRR  (*(volatile uint32_t *)0x40020018u)
+#define GPIOC_PUPDR (*(volatile uint32_t *)0x4002080Cu)
+#define GPIOC_IDR   (*(volatile uint32_t *)0x40020810u)
+
+static void delay(volatile uint32_t n)
+{
+    while (n--) {
+    }
+}
+
+int main(void)
+{
+    RCC_AHB1ENR |= (1u &lt;&lt; 0) | (1u &lt;&lt; 2);
+    (void)RCC_AHB1ENR;
+    GPIOA_MODER = (GPIOA_MODER &amp; ~(3u &lt;&lt; 10)) | (1u &lt;&lt; 10);
+    GPIOC_PUPDR = (GPIOC_PUPDR &amp; ~(3u &lt;&lt; 26)) | (1u &lt;&lt; 26);
+
+    for (;;) {
+        uint32_t pressed = (GPIOC_IDR &amp; (1u &lt;&lt; 13)) == 0u;
+        uint32_t wait = pressed ? 50000u : 400000u;
+
+        GPIOA_BSRR = 1u &lt;&lt; 5;
+        delay(wait);
+        GPIOA_BSRR = 1u &lt;&lt; 21;
+        delay(wait);
+    }
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="3-7"><b class="what">پنج رجیستر.</b> ساعت، MODER پورت A (LED)، PUPDR پورت C (بالاکش دکمه) و IDR پورت C.</li>
+  <li data-lines="9-13"><b class="what">تأخیر.</b> volatile.</li>
+  <li data-lines="15-16,31"><b class="what">main.</b></li>
+  <li data-lines="17-18"><b class="what">ساعت دو پورت.</b> بیت ۰ (A) و بیت ۲ (C) با هم؛ سپس یک خواندن بی‌مصرف.</li>
+  <li data-lines="19"><b class="what">PA5 خروجی.</b></li>
+  <li data-lines="20"><b class="what">بالاکش برای PC13.</b> بیت‌های ۲۷..۲۶ = <code>01</code>. (حالت MODER پس از ریست ورودی است.)</li>
+  <li data-lines="22,30"><b class="what">حلقه.</b></li>
+  <li data-lines="23"><b class="what">دکمه.</b> ۱ اگر فشرده (بیت ۱۳ صفر).</li>
+  <li data-lines="24"><b class="what">انتخاب تأخیر.</b> ۵۰ هزار دور (تند) یا ۴۰۰ هزار (آرام). نسبت ۸ به ۱.</li>
+  <li data-lines="26-29"><b class="what">چشمک با تأخیر انتخاب‌شده.</b></li>
+</ol>
+<p>نکتهٔ پاسخ ج: دکمه فقط در لحظهٔ شروع هر چشمک خوانده می‌شود. این ضعف <b>پولینگ</b> است: تو فقط وقتی می‌فهمی که «خودت نگاه کنی». راه‌حل: <b>وقفه</b> (درس <a href="5-3.html">۵.۳</a>). آنجا سخت‌افزار خودش تو را صدا می‌زند.</p></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>تقریبا هرکسی روی STM32 bare-metal دو بار گیر می‌کند: «چرا هیچ اتفاقی نمی‌افتد؟» (ساعت پریفرال را فراموش کرده‌ای) و «چرا بعد از فلش، دیباگر وصل نمی‌شود؟» (MODER را بازنویسی و SWD را ورودی کرده‌ای). هر دو با فهرست وارسی همین درس در یک دقیقه حل می‌شوند. عادت امروز: <b>قبل از فرض «سخت‌افزار خراب است»، ساعت، حالت و بیت را بشمار.</b> LED خودش اولین ابزار دیباگ توست.</p></div>
+<p>تقریبا هر کسی که برای اولین بار روی STM32 bare-metal کار می‌کند، دو بار گیر می‌کند: یکی «چرا هیچ اتفاقی نمی‌افتد؟» که ۹۰٪ وقت ساعت پریفرال را فراموش کرده‌ای، و دیگری «چرا بعد از یک بار فلش، دیباگر وصل نمی‌شود؟» که MODER را بازنویسی کرده‌ای و SWD را کشته‌ای. خبر خوب: هر دو با فهرست وارسی همین درس در یک دقیقه حل می‌شوند. عادتی که از امروز با خودت ببر: <b>قبل از فرض «سخت‌افزار خراب است»، ساعت، حالت و بیت را بشمار</b>. و اگر کمکی از دیباگر نداری، LED خودش بهترین ابزار دیباگ اول توست.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li>bare-metal یعنی مستقیم با رجیستر؛ HAL و LL فقط بسته‌بندی همان‌اند.</li>
+  <li>هر پریفرال: <b>ساعت (RCC)، حالت (مثلا MODER)، کار (مثلا BSRR/IDR)</b>. ساعت خاموش = نوشتن بی‌اثر.</li>
+  <li>چشمک LD2: <code>RCC_AHB1ENR</code> بیت ۰؛ <code>MODER</code> بیت‌های ۱۱..۱۰ = ۰۱؛ <code>BSRR</code> بیت ۵ (روشن) و ۲۱ (خاموش).</li>
+  <li>دکمهٔ آبی PC13 فعال-پایین است (رها = ۱، فشرده = ۰). برای «یک بار» باید لبه را بگیری و پرش تماس را مهار کنی.</li>
+  <li>MODER را همیشه با «پاک کن، بگذار» بنویس؛ با <code>=</code> ساده SWD خودت را می‌کُشی.</li>
+  <li>پروژه: <code>stm32f4.h</code> + startup + linker script + Makefile؛ ساختش با <code>arm-none-eabi-gcc</code>، ریختنش با drag-and-drop یا OpenOCD.</li>
+  <li>تأخیر با شمارش، بد است و پولینگ ضعف دارد. درس‌های بعد: <a href="5-3.html">وقفه</a> و <a href="5-4.html">تایمر</a>.</li>
+</ul></div>
+
+
+</article>
+</body>
+</html>
