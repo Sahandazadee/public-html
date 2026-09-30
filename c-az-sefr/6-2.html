@@ -1,0 +1,1182 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>رفتار تعریف‌نشده و تله‌های C · C برای میکروکنترلر</title>
+<meta name="description" content="رفتار تعریف‌نشده (UB) در C چیست؟ چرا کامپایلر با -O2 برنامه‌ات را طور دیگری اجرا می‌کند؟ با نمونه‌های واقعی gcc و clang، خروجی sanitizer و تله‌های ارتقای صحیح، char، sizeof و ماکرو.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="6-2">
+
+<p class="lede">تا حالا برنامه‌ای نوشته‌ای که با <code>-O0</code> درست کار کند و با <code>-O2</code> عجیب رفتار کند؟ یا روی کامپیوتر خودت جواب بدهد و روی STM32 نه؟ معمولا مقصر «باگ کامپایلر» نیست؛ مقصر یک قرارداد است که خبر نداشتی امضایش کرده‌ای. در این درس آن قرارداد را می‌خوانی: چه کارهایی در C «رفتار تعریف‌نشده» است، چرا کامپایلر از آن‌ها برای سریع‌کردن برنامه استفاده می‌کند، و چطور با هشدار و ابزار پیدایشان کنی.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>فرق «تعریف‌نشده»، «مشخص‌نشده» و «تعریف‌شده توسط پیاده‌ساز» را بگویی</li>
+    <li>توضیح بدهی چرا <code>-O2</code> می‌تواند نتیجهٔ برنامه را عوض کند</li>
+    <li>رایج‌ترین رفتارهای تعریف‌نشده را بشناسی و اصلاحشان کنی</li>
+    <li>تله‌های <code>uint8_t</code>، <code>char</code>، <code>sizeof</code> و ماکرو را ببینی و دور بزنی</li>
+    <li>با <code>-fsanitize=undefined,address</code> باگ پنهان را روی PC شکار کنی</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="2-2.html">۲.۲</a> (انواع داده و سرریز) و <a href="3-2.html">۳.۲</a> (اشاره‌گر)</li>
+    <li>درس <a href="3-3.html">۳.۳</a> (آرایه و اشاره‌گر) و <a href="3-6.html">۳.۶</a> (volatile)</li>
+    <li>درس <a href="6-1.html">۶.۱</a> (دیباگ) خوب است ولی لازم نیست</li>
+    <li><code>gcc</code> یا <code>clang</code> روی PC (نسخه‌های اخیر sanitizer را دارند)؛ سخت‌افزار لازم نیست</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایده اصلی: قراردادی با بندهای ریز</h2>
+<p>فرض کن با یک پیمانکار قرارداد بسته‌ای: «من نقشهٔ ساختمان را می‌دهم، تو بساز». در قرارداد نوشته شده: «مشتری قول می‌دهد نقشه هرگز دیوار باربر را حذف نکند». پیمانکار هم بر همین اساس، بدون هیچ بازبینی اضافه‌ای، ستون‌ها را کم می‌کند تا ساختمان ارزان‌تر شود. اگر نقشهٔ تو واقعا دیوار باربر را حذف کرده باشد، پیمانکار مقصر نیست؛ تو قولت را شکسته‌ای. ساختمان ممکن است فرو بریزد، یا سال‌ها سالم بماند و روز اول زلزله بریزد.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>C همین پیمانکار است. استاندارد زبان فهرستی از کارها دارد که برنامه‌نویس «قول می‌دهد» انجام ندهد: مثلا دو عدد <code>int</code> را جمع نکند جوری که نتیجه از محدوده بیرون بزند. کامپایلر <b>فرض می‌کند قولت را نگه داشته‌ای</b> و کد ماشین را بر پایهٔ این فرض کوتاه و سریع می‌سازد. اگر قول را بشکنی، استاندارد چیزی برایت تضمین نمی‌کند: نه خطا، نه هشدار، نه نتیجهٔ ثابت.</p></div>
+
+<p>به آن کارها می‌گویند <span class="term" data-t="ub">رفتار تعریف‌نشده</span> (<span class="en">Undefined Behavior</span>، به‌اختصار <span class="en">UB</span>). دو رفتار دیگر هم هستند که با UB اشتباه گرفته می‌شوند ولی خطرشان خیلی کمتر است:</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="چهار نوع رفتار در C: تعریف‌شده، تعریف‌شده توسط پیاده‌ساز، مشخص‌نشده و تعریف‌نشده، هرکدام با یک مثال">
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">چهار نوع رفتار: از مطمئن تا خطرناک</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="30" y="44" width="340" height="112" rx="14" fill="#3ddc97"/>
+    <rect x="390" y="44" width="340" height="112" rx="14" fill="#7ea3ff"/>
+    <rect x="30" y="172" width="340" height="112" rx="14" fill="#ffd60a"/>
+    <rect x="390" y="172" width="340" height="112" rx="14" fill="#ff86b3"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle">
+    <text x="200" y="72" font-size="16" font-weight="800">تعریف‌شده</text>
+    <text x="200" y="98" class="mono" font-size="14" font-weight="700">uint8_t x = 255; x++;</text>
+    <text x="200" y="122" font-size="13.5">نتیجه همیشه ۰ است، روی هر کامپایلری</text>
+    <text x="200" y="142" font-size="13.5">(چرخش بی‌علامت قانونی است)</text>
+
+    <text x="560" y="72" font-size="16" font-weight="800">تعریف‌شده توسط پیاده‌ساز</text>
+    <text x="560" y="98" class="mono" font-size="14" font-weight="700">char c = 200;</text>
+    <text x="560" y="122" font-size="13.5">کامپایلر باید در مستنداتش بگوید چه می‌کند:</text>
+    <text x="560" y="142" font-size="13.5">ARM بی‌علامت، x86 علامت‌دار</text>
+
+    <text x="200" y="200" font-size="16" font-weight="800">مشخص‌نشده</text>
+    <text x="200" y="226" class="mono" font-size="14" font-weight="700">f(next(), next());</text>
+    <text x="200" y="250" font-size="13.5">یکی از چند حالت مجاز اتفاق می‌افتد،</text>
+    <text x="200" y="270" font-size="13.5">ولی هیچ‌کدام برنامه را خراب نمی‌کند</text>
+
+    <text x="560" y="200" font-size="16" font-weight="800">تعریف‌نشده (UB)</text>
+    <text x="560" y="226" class="mono" font-size="14" font-weight="700">int b = INT_MAX + 1;</text>
+    <text x="560" y="250" font-size="13.5">هیچ تضمینی نیست؛ هر اتفاقی ممکن است:</text>
+    <text x="560" y="270" font-size="13.5">از «درست کار می‌کند» تا فاجعه</text>
+  </g>
+</svg></div>
+<figcaption>سه خانهٔ اول رفتارهایی‌اند که «یکی از چند جواب معین» می‌دهند. فقط خانهٔ صورتی قول کامپایلر را برمی‌دارد.</figcaption></figure>
+
+<div class="table-wrap"><table>
+<thead><tr><th>نوع</th><th>معنی ساده</th><th>مثال</th><th>خطر</th></tr></thead>
+<tbody>
+<tr><td>تعریف‌شده</td><td>استاندارد یک جواب دقیق می‌دهد</td><td>سرریز بی‌علامت، <code>5 / 2 == 2</code></td><td>ندارد</td></tr>
+<tr><td><span class="term" data-t="impldef_beh">تعریف‌شده توسط پیاده‌ساز</span></td><td>هر کامپایلر یک جواب انتخاب می‌کند و باید بنویسد کدام</td><td>علامت <code>char</code>، اندازهٔ <code>int</code>، شیفت راست عدد منفی</td><td>کم؛ فقط کد قابل‌حمل نیست</td></tr>
+<tr><td><span class="term" data-t="unspecified_beh">مشخص‌نشده</span></td><td>یکی از چند جواب مجاز؛ لازم نیست همیشه همان باشد</td><td>ترتیب ارزیابی آرگومان‌های تابع</td><td>متوسط؛ خروجی بین کامپایلرها فرق می‌کند</td></tr>
+<tr><td>تعریف‌نشده</td><td>استاندارد هیچ‌چیز نمی‌گوید</td><td>سرریز <code>int</code>، دسترسی خارج از آرایه، <code>NULL</code> را خواندن</td><td><b>زیاد؛ کامپایلر از آن استفاده می‌کند</b></td></tr>
+</tbody></table></div>
+
+<h2 id="optimizer">چرا کامپایلر از UB استفاده می‌کند؟</h2>
+<p>کامپایلر فقط ترجمه نمی‌کند؛ بهینه هم می‌کند. یکی از مهم‌ترین ابزارهایش همین فرض است: «برنامه‌نویس هرگز UB نمی‌سازد». بیا با یک مثال ببینیمش. روی رایانهٔ خودم با gcc و clang هر دو را اجرا کردم و نتیجه را همین‌جا می‌بینی. <code>volatile</code> را (از درس <a href="3-6.html">۳.۶</a>) فقط برای این آوردم که کامپایلر در زمان کامپایل نتواند حدس بزند <code>v</code> چند است.</p>
+
+<div class="code" data-file="ovf.c" data-lang="c" data-verify="host" data-cflags="-O2" id="code1">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;limits.h&gt;
+
+int main(void)
+{
+    volatile int v = INT_MAX;   // volatile: مقدار در زمان کامپایل معلوم نشود
+    int a = v;
+    int b = a + 1;              // سرریز علامت‌دار: رفتار تعریف‌نشده
+    if (b &gt; a)
+        printf("b &gt; a : the world is normal\n");
+    else
+        printf("b &lt;= a : wrapped around\n");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code1">
+  <li data-lines="1-2"><b class="what">هدرها.</b> <code>stdio.h</code> برای <code>printf</code> و <code>limits.h</code> برای <code>INT_MAX</code> (بزرگ‌ترین <code>int</code>؛ روی STM32 و ESP32 برابر ۲۱۴۷۴۸۳۶۴۷).</li>
+  <li data-lines="4-5,14"><b class="what">تابع main.</b> نقطهٔ شروع برنامه.</li>
+  <li data-lines="6"><b class="what">مقدار بزرگ.</b> <code>v</code> را برابر بزرگ‌ترین <code>int</code> می‌گذاریم.
+    <span class="why">volatile یعنی «هر بار واقعا از حافظه بخوان». کامپایلر دیگر نمی‌تواند بگوید «v همان INT_MAX است» و کل محاسبه را از قبل انجام بدهد.</span></li>
+  <li data-lines="7"><b class="what">کپی در a.</b> <code>a</code> یک متغیر معمولی است و مقدارش INT_MAX.</li>
+  <li data-lines="8"><b class="what">جمع خطرناک.</b> <code>a + 1</code> در <code>int</code> جا نمی‌شود. برای عددهای <b>علامت‌دار</b> این UB است.
+    <span class="why">برای عددهای بی‌علامت چرخش کاملا قانونی است (درس ۲.۲). ولی برای علامت‌دار استاندارد گفته: «چنین چیزی نمی‌شود».</span></li>
+  <li data-lines="9-12"><b class="what">مقایسه.</b> اگر عدد نچرخیده باشد، <code>b</code> از <code>a</code> بزرگ‌تر است. اگر چرخیده باشد، نه.
+    <span class="why">این مقایسه راهی است که ببینیم کامپایلر واقعا جمع را انجام داده یا فرض کرده «سرریز نمی‌شود».</span></li>
+  <li data-lines="13"><b class="what">پایان موفق.</b> <code>return 0</code> یعنی برنامه سالم تمام شد.</li>
+</ol>
+
+<pre class="term" data-from="ovf.c">
+$ gcc -std=c11 -Wall -Wextra -O2 -o ovf ovf.c
+$ ./ovf
+b > a : the world is normal
+</pre>
+<p>حالا همین فایل را با <span class="term" data-t="optlevel">سطح بهینه‌سازی</span> صفر (<code>-O0</code>، یعنی بدون بهینه‌سازی) بساز:</p>
+<pre class="term" data-from="ovf.c" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -O0 -o ovf ovf.c
+$ ./ovf
+b <= a : wrapped around
+</pre>
+
+<p>یک برنامه، دو کامپایل، دو جواب متضاد و <b>هیچ هشداری</b> در هیچ‌کدام. gcc و clang هر دو همین رفتار را دارند. چرا؟</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 240" role="img" aria-label="زنجیرهٔ استدلال کامپایلر: کد، قرارداد، نتیجه‌گیری منطقی، حذف شرط">
+  <defs><marker id="ar62a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">کامپایلر با -O2 این‌طور فکر می‌کند</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="574" y="48" width="160" height="128" rx="12" fill="#ffd60a"/>
+    <rect x="388" y="48" width="160" height="128" rx="12" fill="#7ea3ff"/>
+    <rect x="202" y="48" width="160" height="128" rx="12" fill="#ff86b3"/>
+    <rect x="16" y="48" width="160" height="128" rx="12" fill="#3ddc97"/>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M572 112H554" marker-end="url(#ar62a)"/><path d="M386 112H368" marker-end="url(#ar62a)"/><path d="M200 112H182" marker-end="url(#ar62a)"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle">
+    <text x="654" y="76" font-size="14.5" font-weight="800">۱) کد تو</text>
+    <text x="654" y="112" class="mono" font-size="14" font-weight="700">b = a + 1;</text>
+    <text x="654" y="138" class="mono" font-size="14" font-weight="700">if (b &gt; a)</text>
+
+    <text x="468" y="76" font-size="14.5" font-weight="800">۲) قرارداد C</text>
+    <text x="468" y="106" font-size="13.5">سرریز علامت‌دار</text>
+    <text x="468" y="128" font-size="13.5">هرگز اتفاق نمی‌افتد</text>
+    <text x="468" y="150" font-size="13.5">(تو قول داده‌ای)</text>
+
+    <text x="282" y="76" font-size="14.5" font-weight="800">۳) نتیجه</text>
+    <text x="282" y="106" font-size="13.5">پس a + 1 همیشه</text>
+    <text x="282" y="128" font-size="13.5">از a بزرگ‌تر است</text>
+    <text x="282" y="150" font-size="13.5">شرط همیشه درست</text>
+
+    <text x="96" y="76" font-size="14.5" font-weight="800">۴) کد ماشین</text>
+    <text x="96" y="106" font-size="13.5">شرط و شاخهٔ else</text>
+    <text x="96" y="128" font-size="13.5">حذف می‌شوند؛ فقط</text>
+    <text x="96" y="150" font-size="13.5">چاپ اولی می‌ماند</text>
+  </g>
+  <text x="380" y="208" text-anchor="middle" class="s-tx" font-size="13.5">با -O0 کامپایلر این استدلال را نمی‌کند و جمع واقعی را روی پردازنده اجرا می‌کند.</text>
+  <text x="380" y="228" text-anchor="middle" class="s-tx" font-size="13.5">هر دو «درست‌اند»: وقتی UB باشد، هر جواب مجاز است.</text>
+</svg></div>
+<figcaption>کامپایلر باگ ندارد؛ برنامهٔ ما قرارداد را شکسته است.</figcaption></figure>
+
+<p>می‌خواهی ببینی؟ نمونهٔ اسمبلی <code>main</code> با <code>-O2</code> (که با <code>gcc -O2 -S</code> روی همین فایل گرفتم؛ خط‌های راهنمای <code>.cfi</code> را برای کوتاه‌شدن نیاوردم):</p>
+<div class="code" data-lang="asm" id="asm1">
+<pre>
+main:
+    subq    $24, %rsp
+    leaq    .LC0(%rip), %rsi
+    movl    $2, %edi
+    movl    $2147483647, 12(%rsp)
+    movl    12(%rsp), %eax
+    xorl    %eax, %eax
+    call    __printf_chk@PLT
+    xorl    %eax, %eax
+    addq    $24, %rsp
+    ret
+</pre></div>
+<ol class="walk" data-for="asm1">
+  <li data-lines="5-6"><b class="what">نوشتن و خواندن v.</b> <code>volatile</code> را کامپایلر رعایت کرد: ۲۱۴۷۴۸۳۶۴۷ را در حافظه می‌نویسد و دوباره می‌خواند.</li>
+  <li data-lines="7-8"><b class="what">فقط یک printf.</b> هیچ <code>add</code>ی نیست، هیچ <code>cmp</code> و پرشی هم نیست. رشتهٔ اول (<code>.LC0</code>) مستقیم چاپ می‌شود.
+    <span class="why">شاخهٔ «wrapped around» اصلا در فایل خروجی وجود ندارد؛ کامپایلر آن را «کد مرده» فرض کرد.</span></li>
+</ol>
+
+<div class="callout warn"><div class="ct">«ولی روی سخت‌افزار که جمع می‌چرخد!»</div>
+<p>درست است: پردازندهٔ ARM و x86 هر دو جمع را با مکمل ۲ انجام می‌دهند و می‌چرخند. اما <b>کامپایلر</b> با پردازنده کار ندارد؛ با استاندارد C کار دارد. تا وقتی کدت UB دارد، رفتار نهایی حاصل ضرب «کامپایلر × نسخه × پرچم بهینه‌سازی × کد اطراف» است. با تغییر یکی از این‌ها، نتیجه عوض می‌شود.</p></div>
+
+<h2 id="nullcheck">وقتی کامپایلر وارسی‌ات را دور می‌ریزد</h2>
+<p>این یکی از خطرناک‌ترین الگوهاست چون کد «محتاطانه» به‌نظر می‌رسد: اول از اشاره‌گر می‌خوانی، بعد وارسی می‌کنی که <code>NULL</code> نباشد.</p>
+
+<div class="code" data-file="nullchk.c" data-lang="c" data-verify="host" data-cflags="-O2" id="code2">
+<pre>
+#include &lt;stdio.h&gt;
+
+int read_first(int *p)
+{
+    int value = *p;         // اول از p می‌خوانیم...
+    if (p == NULL)          // ...بعد وارسی می‌کنیم؟!
+        return -1;
+    return value;
+}
+
+int main(void)
+{
+    int x = 42;
+    printf("%d\n", read_first(&amp;x));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code2">
+  <li data-lines="3-4,9"><b class="what">تابع read_first.</b> یک اشاره‌گر به <code>int</code> می‌گیرد و مقدارش را برمی‌گرداند.</li>
+  <li data-lines="5"><b class="what">خواندن *p.</b> اگر <code>p</code> برابر <code>NULL</code> باشد، این خط UB است.
+    <span class="why">پس کامپایلر از این خط نتیجه می‌گیرد: «حتما p صفر نیست، وگرنه برنامه قرارداد را شکسته».</span></li>
+  <li data-lines="6-7"><b class="what">وارسی دیرهنگام.</b> کامپایلر با همان نتیجه‌گیری این <code>if</code> را «همیشه نادرست» می‌بیند و حذفش می‌کند.
+    <span class="why">این وارسی هیچ کاری نمی‌کرد؛ وقتی به آن می‌رسیم که خواندن انجام شده. جای درست وارسی <b>قبل</b> از استفاده است.</span></li>
+  <li data-lines="8"><b class="what">برگرداندن مقدار.</b> نتیجهٔ خواندن برگردانده می‌شود.</li>
+  <li data-lines="11-16"><b class="what">main.</b> فقط یک فراخوانی سالم با آدرس یک متغیر معتبر.</li>
+</ol>
+<pre class="term" data-from="nullchk.c">
+$ gcc -std=c11 -Wall -Wextra -O2 -o nullchk nullchk.c
+$ ./nullchk
+42
+</pre>
+
+<p>خروجی سالم است، ولی داخل تابع چه خبر است؟ همین تابع را با کامپایلر ARM (بدون <code>printf</code>) به اسمبلی ترجمه کردم؛ سمت چپ <code>-O0</code>، سمت راست <code>-O2</code>:</p>
+<div class="code" data-lang="asm" id="asm2">
+<pre>
+@ -O2 : کل تابع
+read_first:
+    ldr     r0, [r0]
+    bx      lr
+
+@ -O0 : وارسی هنوز هست
+read_first:
+    ...
+    ldr     r3, [r3]        @ خواندن *p
+    str     r3, [r7, #12]
+    ldr     r3, [r7, #4]
+    cmp     r3, #0          @ وارسی p == 0
+    bne     .L2
+    mov     r3, #-1
+    b       .L3
+</pre></div>
+<ol class="walk" data-for="asm2">
+  <li data-lines="2-4"><b class="what">با -O2.</b> فقط دو دستور: مقدار را از آدرس <code>r0</code> بخوان و برگرد. نه <code>cmp</code> هست نه <code>-1</code>.
+    <span class="why">این همان تابع است که وارسی <code>NULL</code> دارد؛ کامپایلر آن را حذف کرده.</span></li>
+  <li data-lines="6-14"><b class="what">با -O0.</b> کامپایلر کد را همان‌طور که نوشتی ترجمه کرده: بعد از خواندن، <code>cmp r3, #0</code> و پرش.
+    <span class="why">پس تست‌کردن با -O0 (مثلا داخل IDE در حالت Debug) این باگ را پنهان می‌کند.</span></li>
+</ol>
+
+<div class="callout info"><div class="ct">در STM32 و ESP32 چه می‌شود؟</div>
+<p>خواندن <code>*NULL</code> روی PC معمولا برنامه را می‌کشد (خطای <span class="en">segmentation fault</span>). روی میکروکنترلر این‌طور نیست. در STM32F411 آدرس صفر معمولا آینه‌ای از Flash (شروع جدول وقفه) است، پس خواندن <code>*NULL</code> <b>بی‌صدا یک عدد می‌دهد</b> و باگ سال‌ها پنهان می‌ماند. در ESP32 آدرس صفر نگاشت‌نشده است و معمولا خطای <span class="en">LoadProhibited</span> می‌گیری؛ در درس <a href="6-1.html">۶.۱</a> با decode آن آشنا شدی. نتیجه: روی MCU نمی‌توانی به «کرش‌کردن» تکیه کنی؛ باید خودت وارسی را <b>قبل از استفاده</b> بگذاری.</p></div>
+
+<h2 id="oob">خارج از آرایه: باگ همسایه</h2>
+<p>در درس <a href="2-7.html">۲.۷</a> دیدی که ایندکس معتبر برای آرایهٔ ۴تایی ۰ تا ۳ است. اگر ایندکس ۴ بزنی چه می‌شود؟ کامپایلر بررسی نمی‌کند؛ به همان آدرس می‌رود، که «خانهٔ بعد از آرایه» است. آن خانه مال چه کسی است؟ معمولا متغیر دیگری.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 250" role="img" aria-label="آرایه‌ای چهارخانه‌ای و کنار آن متغیر limit؛ ایندکس ۴ آرایه به limit اشاره می‌کند">
+  <defs><marker id="ar62b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">آرایه ۴خانه‌ای و همسایه‌اش در RAM (چیدمان نمونه)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="70" y="80" width="110" height="60" fill="#ffd60a"/><rect x="180" y="80" width="110" height="60" fill="#ffd60a"/><rect x="290" y="80" width="110" height="60" fill="#ffd60a"/><rect x="400" y="80" width="110" height="60" fill="#ffd60a"/>
+    <rect x="510" y="80" width="140" height="60" fill="#ff86b3"/>
+  </g>
+  <g class="mono" fill="#15120a" text-anchor="middle" font-size="22" font-weight="800">
+    <text x="125" y="119">10</text><text x="235" y="119">20</text><text x="345" y="119">30</text><text x="455" y="119">40</text><text x="580" y="119">100</text>
+  </g>
+  <g class="mono s-tx" text-anchor="middle" font-size="14" font-weight="700">
+    <text x="125" y="70">table[0]</text><text x="235" y="70">table[1]</text><text x="345" y="70">table[2]</text><text x="455" y="70">table[3]</text><text x="580" y="70">limit</text>
+  </g>
+  <path d="M70 158H510" stroke="#15120a" stroke-width="3" fill="none" marker-start="url(#ar62b)" marker-end="url(#ar62b)"/>
+  <text x="290" y="182" text-anchor="middle" class="s-tx" font-size="14" font-weight="700">آرایه؛ ایندکس معتبر ۰ تا ۳</text>
+  <path d="M580 214V146" stroke="#ff9a4d" stroke-width="4" fill="none" marker-end="url(#ar62b)"/>
+  <text x="580" y="234" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">table[4] همان limit است!</text>
+  <text x="130" y="234" text-anchor="middle" class="s-tx" font-size="13.5">کامپایلر چیدمان را مشخص نمی‌کند</text>
+</svg></div>
+<figcaption>خواندن یا نوشتن <code>table[4]</code> به متغیر همسایه می‌رسد. اگر بنویسی، همسایه را خراب کرده‌ای بدون هیچ پیامی.</figcaption></figure>
+
+<p>ببین وقتی حلقه به‌جای <code>&lt;</code> از <code>&lt;=</code> استفاده می‌کند چه می‌شود. با «بعدی» قدم‌به‌قدم برو:</p>
+<div class="widget" data-w="mem" data-config='{"title":"نوشتن خارج از آرایه: table[4] = 0","code":["int table[4] = {10, 20, 30, 40};","int limit = 100;","for (int i = 0; i &lt;= 4; i++)","    table[i] = 0;   // i = 3","    table[i] = 0;   // i = 4 !"],"intro":"فرض کن چیدمان RAM این‌طور شده که limit بلافاصله بعد از آرایه است. روی بعدی بزن.","cells":[{"addr":"0x20000000","name":"table[0]","val":null,"kind":"var"},{"addr":"0x20000004","name":"table[1]","val":null,"kind":"var"},{"addr":"0x20000008","name":"table[2]","val":null,"kind":"var"},{"addr":"0x2000000C","name":"table[3]","val":null,"kind":"var"},{"addr":"0x20000010","name":"limit","val":null,"kind":"var"}],"steps":[{"line":0,"set":{"0":10,"1":20,"2":30,"3":40},"hot":[0,1,2,3],"say":"آرایه با چهار مقدار ساخته شد."},{"line":1,"set":{"4":100},"hot":[4],"say":"limit در همسایگی آرایه است (چیدمان فرضی؛ کامپایلر تضمین نمی‌کند)."},{"line":3,"set":{"0":0,"1":0,"2":0,"3":0},"hot":[0,1,2,3],"say":"تا i = ۳ همه‌چیز درست است: چهار خانهٔ آرایه صفر شدند."},{"line":4,"set":{"4":0},"hot":[4],"say":"<b>i = ۴:</b> آدرس table + ۴ × ۴ = 0x20000010 یعنی همان limit. حالا limit صفر شده و هیچ پیامی نیامد!"}]}'></div>
+
+<div class="code" data-file="oob.c" data-lang="c" data-verify="host" id="code3">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int table[4] = {10, 20, 30, 40};
+    int sum = 0;
+
+    for (int i = 0; i &lt;= 4; i++)     // خطا: i تا ۴ می‌رود، ولی آخرین ایندکس ۳ است
+        sum += table[i];
+
+    printf("sum = %d\n", sum);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code3">
+  <li data-lines="5"><b class="what">آرایهٔ ۴تایی.</b> ایندکس‌های معتبر: ۰، ۱، ۲، ۳.</li>
+  <li data-lines="6"><b class="what">جمع‌کننده.</b> صفر شروع می‌شود.</li>
+  <li data-lines="8-9"><b class="what">حلقهٔ خراب.</b> شرط <code>&lt;=</code> باعث می‌شود <code>i</code> برابر ۴ هم بشود؛ در دور آخر <code>table[4]</code> خوانده می‌شود، که بیرون آرایه است.
+    <span class="why">این باگ «یکی-بیشتر» (off-by-one) پرتکرارترین خطای حلقه است. با <code>&lt;</code> و طول آرایه (<code>sizeof</code>) امنش کن.</span></li>
+  <li data-lines="11"><b class="what">چاپ.</b> عددی که چاپ می‌شود شامل یک «آشغال» از حافظهٔ بیرون آرایه است.</li>
+</ol>
+<pre class="term" data-from="oob.c" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -O0 -o oob oob.c
+$ ./oob
+sum = 2040923060
+$ ./oob
+sum = -303649820
+</pre>
+<p>هر بار اجرا عدد دیگری: بدترین نوع باگ! کامپایلر در <code>-O0</code> حتی یک هشدار هم نداد. حالا همان برنامه را با <span class="term" data-t="sanitizer">sanitizer</span> بساز؛ این ابزار کنار هر دسترسی به حافظه یک وارسی پنهان می‌گذارد. چند خط اول را می‌بینی (مسیرها و ادرس‌ها را کوتاه کرده‌ام؛ اجرای خودت کمی فرق می‌کند):</p>
+<pre class="term" data-from="oob.c" data-nocheck>
+$ gcc -std=c11 -g -fsanitize=address,undefined -o oob_s oob.c
+$ ./oob_s
+oob.c:9:21: runtime error: index 4 out of bounds for type 'int [4]'
+=================================================================
+==1885==ERROR: AddressSanitizer: stack-buffer-overflow on address 0x7faa95f00030 ...
+READ of size 4 at 0x7faa95f00030 thread T0
+    #0 0x56037fbda556 in main oob.c:9
+    ...
+    [32, 48) 'table' (line 5) &lt;== Memory access at offset 48 overflows this variable
+SUMMARY: AddressSanitizer: stack-buffer-overflow oob.c:9 in main
+</pre>
+<p>اکنون معلوم است: «index 4 out of bounds for type 'int [4]'»، دقیقا فایل و خط ۹، و اینکه آرایهٔ <code>table</code> (خط ۵) سرریز شده. دو ابزار همزمان کار کردند: <span class="term" data-t="ubsan">UBSan</span> (<code>undefined</code>) اشکال ایندکس را دید و <span class="term" data-t="asan">ASan</span> (<code>address</code>) نشان داد به کجا خورده. ابزارها در بخش <a href="#tools">ابزارها</a> جمع‌بندی شده‌اند.</p>
+
+<h2 id="promotion">تله ارتقای صحیح: <span class="en">uint8_t</span> همیشه ۸ بیتی حساب نمی‌شود</h2>
+<p>در درس <a href="2-2.html">۲.۲</a> با <span class="term" data-t="promotion">ارتقای صحیح</span> آشنا شدی: در C هر عبارتی که نوعش کوچک‌تر از <code>int</code> باشد، پیش از محاسبه به <code>int</code> تبدیل می‌شود. تله‌های زیر همه از همین‌جا می‌آیند و در کد رجیستر و پروتکل‌ها بسیار زیادند.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 290" role="img" aria-label="مقایسهٔ ~a با 0xF0 وقتی a از نوع uint8_t است: a به چهار بایت ارتقا می‌یابد و ~a برابر 0xFFFFFFF0 می‌شود">
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">چرا ~a == 0xF0 نادرست است؟ (a = 0x0F از نوع uint8_t)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="200" y="46" width="80" height="44" fill="#fff" stroke-dasharray="6 5"/><rect x="280" y="46" width="80" height="44" fill="#fff" stroke-dasharray="6 5"/><rect x="360" y="46" width="80" height="44" fill="#fff" stroke-dasharray="6 5"/><rect x="440" y="46" width="80" height="44" fill="#ffd60a"/>
+    <rect x="200" y="106" width="80" height="44" fill="#7ea3ff"/><rect x="280" y="106" width="80" height="44" fill="#7ea3ff"/><rect x="360" y="106" width="80" height="44" fill="#7ea3ff"/><rect x="440" y="106" width="80" height="44" fill="#7ea3ff"/>
+    <rect x="200" y="166" width="80" height="44" fill="#ff86b3"/><rect x="280" y="166" width="80" height="44" fill="#ff86b3"/><rect x="360" y="166" width="80" height="44" fill="#ff86b3"/><rect x="440" y="166" width="80" height="44" fill="#ff86b3"/>
+    <rect x="200" y="226" width="80" height="44" fill="#3ddc97"/><rect x="280" y="226" width="80" height="44" fill="#3ddc97"/><rect x="360" y="226" width="80" height="44" fill="#3ddc97"/><rect x="440" y="226" width="80" height="44" fill="#3ddc97"/>
+  </g>
+  <g class="mono" fill="#15120a" text-anchor="middle" font-size="22" font-weight="800">
+    <text x="480" y="77">0F</text>
+    <text x="240" y="137">00</text><text x="320" y="137">00</text><text x="400" y="137">00</text><text x="480" y="137">0F</text>
+    <text x="240" y="197">FF</text><text x="320" y="197">FF</text><text x="400" y="197">FF</text><text x="480" y="197">F0</text>
+    <text x="240" y="257">00</text><text x="320" y="257">00</text><text x="400" y="257">00</text><text x="480" y="257">F0</text>
+  </g>
+  <g class="s-tx" font-size="14" font-weight="700">
+    <text x="740" y="74" text-anchor="end">۱) متغیر a: فقط یک بایت</text>
+    <text x="740" y="134" text-anchor="end">۲) ارتقا به int: چهار بایت</text>
+    <text x="740" y="194" text-anchor="end">۳) نتیجهٔ ~ در چهار بایت</text>
+    <text x="740" y="254" text-anchor="end">۴) ثابت 0xF0 (نوع int)</text>
+  </g>
+  <text x="120" y="188" text-anchor="middle" class="s-tx" font-size="26" font-weight="800">≠</text>
+  <text x="120" y="222" text-anchor="middle" class="s-tx" font-size="13">نابرابرند</text>
+</svg></div>
+<figcaption>عملگر <code>~</code> بعد از ارتقا کار می‌کند، پس سه بایت بالا هم وارونه می‌شوند و یک می‌شوند.</figcaption></figure>
+
+<div class="code" data-file="promo.c" data-lang="c" data-verify="host" data-warn-ok id="code4">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+int main(void)
+{
+    uint8_t a = 0x0F;
+    if (~a == 0xF0)                       // فکر می‌کنی درست است؟
+        printf("~a == 0xF0\n");
+    else
+        printf("~a != 0xF0\n");
+    printf("~a = 0x%X\n", (unsigned)~a);
+
+    uint8_t hi = 0xAB;
+    uint32_t word = (uint32_t)hi &lt;&lt; 24;   // اول به 32 بیت بی‌علامت برسان، بعد شیفت بده
+    printf("word = 0x%08X\n", (unsigned)word);
+
+    uint8_t b = 200, c = 100;
+    uint8_t sum = b + c;                  // محاسبه با int انجام می‌شود، ذخیره در 8 بیت
+    printf("sum = %u\n", sum);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code4">
+  <li data-lines="6-7"><b class="what">وارونه کردن و مقایسه.</b> <code>a</code> ابتدا به <code>int</code> می‌رود (0x0000000F)، بعد <code>~</code> اعمال می‌شود (0xFFFFFFF0) و با 0xF0 مقایسه می‌شود.
+    <span class="why">در ذهن ما «~a یک بایت است». ولی زبان C هیچ محاسبهٔ ۸ بیتی ندارد؛ کوچک‌ترین محاسبه <code>int</code> است.</span></li>
+  <li data-lines="8-10"><b class="what">نتیجه.</b> مقایسه نادرست است، پس شاخهٔ <code>else</code> چاپ می‌شود.</li>
+  <li data-lines="11"><b class="what">چاپ خود ~a.</b> 0xFFFFFFF0 را می‌بینی، نه 0xF0.
+    <span class="why">راه درست: <code>(uint8_t)~a</code> یا <code>~a &amp; 0xFF</code> یا مقایسه را در <code>uint8_t</code> انجام بده.</span></li>
+  <li data-lines="13-15"><b class="what">شیفت امن.</b> <code>hi</code> اول به <code>uint32_t</code> تبدیل می‌شود و بعد به چپ می‌رود؛ همه‌چیز در نوع بی‌علامت و تعریف‌شده می‌ماند.
+    <span class="why">بدون cast، <code>hi &lt;&lt; 24</code> در نوع <code>int</code> (علامت‌دار) انجام می‌شد؛ در ادامه می‌بینیم چرا خطرناک است.</span></li>
+  <li data-lines="17-19"><b class="what">جمع ۸ بیتی.</b> ۲۰۰ + ۱۰۰ = ۳۰۰ در <code>int</code> حساب می‌شود؛ هنگام ذخیره در <code>uint8_t</code> باقی‌مانده بر ۲۵۶ می‌ماند: ۴۴.
+    <span class="why">این برش قانونی است (تعریف‌شده)، فقط باید بدانی. اگر ۴۴ نمی‌خواهی، نتیجه را در نوع بزرگ‌تر نگه دار.</span></li>
+</ol>
+<pre class="term" data-kind="cmd">
+$ gcc -std=c11 -Wall -Wextra -o promo promo.c
+promo.c:7:12: warning: comparison of promoted bitwise complement of an unsigned value with constant [-Wsign-compare]
+</pre>
+<pre class="term" data-from="promo.c">
+$ ./promo
+~a != 0xF0
+~a = 0xFFFFFFF0
+word = 0xAB000000
+sum = 44
+</pre>
+<p>خوشبختانه gcc این مقایسه را هشدار می‌دهد (خط دوم). حالا نسخهٔ <b>خراب</b> همین کد را ببین. این بار <code>x * x</code> و <code>hi &lt;&lt; 24</code> را بدون cast نوشته‌ایم:</p>
+
+<div class="code" data-file="promo_bad.c" data-lang="c" data-verify="host" id="code5">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+int main(void)
+{
+    volatile uint16_t x = 0xFFFF;
+    volatile uint8_t hi = 0xAB;
+    uint32_t sq = x * x;             // uint16_t به int تبدیل می‌شود: 65535*65535 در int جا نمی‌شود
+    uint32_t word = hi &lt;&lt; 24;        // 0xAB به int می‌رود؛ شیفت به بیت 31 علامت را خراب می‌کند
+    printf("sq = %u, word = 0x%08X\n", (unsigned)sq, (unsigned)word);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code5">
+  <li data-lines="6-7"><b class="what">دو متغیر کوچک.</b> بیشینهٔ <code>uint16_t</code> و مقداری با بیت ۷ روشن. <code>volatile</code> فقط برای این است که کامپایلر ثابت‌بودن را حدس نزند.</li>
+  <li data-lines="8"><b class="what">ضرب.</b> هر دو عامل به <code>int</code> (علامت‌دار، ۳۲ بیتی) ارتقا می‌یابند. حاصل ۴۲۹۴۸۳۶۲۲۵ از بیشینهٔ <code>int</code> بزرگ‌تر است: سرریز علامت‌دار، یعنی UB.
+    <span class="why">حاصل در <code>uint32_t</code> جا می‌شد؛ ولی ضرب قبل از انتساب و در <code>int</code> انجام می‌شود، نه در نوع سمت چپ <code>=</code>.</span></li>
+  <li data-lines="9"><b class="what">شیفت.</b> عدد ۱۷۱ در <code>int</code> به چپ ۲۴ بیت می‌رود و به بیت علامت می‌رسد؛ طبق C11 این هم UB است.
+    <span class="why">در MCU رایج است: <code>(buf[0] &lt;&lt; 24) | buf[1] &lt;&lt; 16 ...</code> برای ساختن کلمهٔ ۳۲ بیتی. تا وقتی بایت اول کمتر از 0x80 است کار می‌کند و ناگهان بایت اول 0x80 به بالا می‌شود.</span></li>
+  <li data-lines="10"><b class="what">چاپ.</b> روی gcc با <code>-O0</code> جواب «درست» می‌دهد؛ ولی UB است و ضمانتی نیست.</li>
+</ol>
+<pre class="term" data-from="promo_bad.c">
+$ gcc -std=c11 -Wall -Wextra -o promo_bad promo_bad.c
+$ ./promo_bad
+sq = 4294836225, word = 0xAB000000
+</pre>
+<p>برنامه «درست» چاپ کرد و اگر فقط به خروجی نگاه کنی، خیالت راحت است. ولی UBSan حقیقت را نشان می‌دهد:</p>
+<pre class="term" data-from="promo_bad.c" data-nocheck>
+$ gcc -std=c11 -g -fsanitize=undefined -o promo_bad_u promo_bad.c
+$ ./promo_bad_u
+promo_bad.c:8:21: runtime error: signed integer overflow: 65535 * 65535 cannot be represented in type 'int'
+promo_bad.c:9:24: runtime error: left shift of 171 by 24 places cannot be represented in type 'int'
+sq = 4294836225, word = 0xAB000000
+</pre>
+<p>راه اصلاح ساده است: قبل از عمل، یکی از عامل‌ها را به نوع بی‌علامت بزرگ بکن. <code>(uint32_t)x * x</code> و <code>(uint32_t)hi &lt;&lt; 24</code>. قاعده: <b>هر جا شیفت یا ضرب روی نوع کوچک می‌زنی، اول cast به <code>uint32_t</code>.</b></p>
+
+<h2 id="char">علامت <span class="en">char</span> در ARM و x86 فرق دارد</h2>
+<p>استاندارد C نگفته <code>char</code> علامت‌دار است یا بی‌علامت (<span class="term" data-t="char_sign">علامت char</span>). هر پردازنده و کامپایلر خودش انتخاب می‌کند (رفتار تعریف‌شده توسط پیاده‌ساز). در gcc روی x86 پیش‌فرض <b>علامت‌دار</b> است ولی در <code>arm-none-eabi-gcc</code> پیش‌فرض <b>بی‌علامت</b> است؛ ESP32 (Xtensa) هم بی‌علامت است. یعنی کدی که روی PC تست کردی، روی MCU متفاوت رفتار می‌کند.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 250" role="img" aria-label="بایت 0xC8 به‌صورت علامت‌دار برابر منفی ۵۶ و به‌صورت بی‌علامت برابر ۲۰۰ است">
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">یک بایت، دو تفسیر: char c = 200 (0xC8)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="130" y="70" width="62" height="46" fill="#ff9a4d"/>
+    <rect x="192" y="70" width="62" height="46" fill="#ffd60a"/><rect x="254" y="70" width="62" height="46" fill="#ffd60a"/><rect x="316" y="70" width="62" height="46" fill="#ffd60a"/><rect x="378" y="70" width="62" height="46" fill="#ffd60a"/><rect x="440" y="70" width="62" height="46" fill="#ffd60a"/><rect x="502" y="70" width="62" height="46" fill="#ffd60a"/><rect x="564" y="70" width="62" height="46" fill="#ffd60a"/>
+  </g>
+  <g class="mono" fill="#15120a" text-anchor="middle" font-size="24" font-weight="800">
+    <text x="161" y="102">1</text><text x="223" y="102">1</text><text x="285" y="102">0</text><text x="347" y="102">0</text><text x="409" y="102">1</text><text x="471" y="102">0</text><text x="533" y="102">0</text><text x="595" y="102">0</text>
+  </g>
+  <g class="mono s-tx" text-anchor="middle" font-size="12.5" font-weight="700">
+    <text x="161" y="62">128</text><text x="223" y="62">64</text><text x="285" y="62">32</text><text x="347" y="62">16</text><text x="409" y="62">8</text><text x="471" y="62">4</text><text x="533" y="62">2</text><text x="595" y="62">1</text>
+  </g>
+  <text x="161" y="136" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="700">بیت علامت</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="60" y="158" width="300" height="70" rx="12" fill="#3ddc97"/>
+    <rect x="400" y="158" width="300" height="70" rx="12" fill="#ff86b3"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle">
+    <text x="210" y="184" font-size="14.5" font-weight="800">بی‌علامت (ARM، ESP32)</text>
+    <text x="210" y="212" class="mono" font-size="15" font-weight="800">128+64+8 = 200</text>
+    <text x="550" y="184" font-size="14.5" font-weight="800">علامت‌دار (x86 با gcc)</text>
+    <text x="550" y="212" class="mono" font-size="15" font-weight="800">-128+64+8 = -56</text>
+  </g>
+</svg></div>
+<figcaption>بایت یکی است؛ فقط معنای بیت هفتم (بیت علامت) فرق می‌کند.</figcaption></figure>
+
+<div class="code" data-file="chr.c" data-lang="c" data-verify="host" id="code6">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    char c = (char)200;               // بایت 0xC8
+    printf("(int)c = %d\n", (int)c);
+    if (c &gt; 100)
+        printf("c &gt; 100\n");
+    else
+        printf("c &lt;= 100\n");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code6">
+  <li data-lines="5"><b class="what">ساخت بایت.</b> عدد ۲۰۰ (باینری <code>11001000</code>) را در یک <code>char</code> می‌گذاریم. cast صریح است تا هشدار ندهد.</li>
+  <li data-lines="6"><b class="what">چاپ عددی.</b> اگر <code>char</code> علامت‌دار باشد ۵۶- و اگر بی‌علامت باشد ۲۰۰ می‌شود.</li>
+  <li data-lines="7-10"><b class="what">مقایسه.</b> نتیجه به همان علامت‌داری وابسته است.
+    <span class="why">در کد واقعی این خط مثل «بایت دریافتی UART از ۱۰۰ بزرگ‌تر است؟» است؛ نتیجه روی PC و روی MCU فرق می‌کند.</span></li>
+</ol>
+<pre class="term" data-from="chr.c">
+$ gcc -std=c11 -Wall -Wextra -o chr chr.c
+$ ./chr
+(int)c = -56
+c <= 100
+</pre>
+<p>برای شبیه‌سازی رفتار ARM روی PC، پرچم <code>-funsigned-char</code> را بگذار:</p>
+<pre class="term" data-from="chr.c" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -funsigned-char -o chr chr.c
+$ ./chr
+(int)c = 200
+c > 100
+</pre>
+<p>راه‌حل حرفه‌ای: برای «بایت خام» همیشه <code>uint8_t</code> بنویس و از <code>char</code> فقط برای متن استفاده کن. اگر مجبوری عدد داخل <code>char</code> بگذاری، <code>signed char</code> یا <code>unsigned char</code> را صریح بنویس.</p>
+
+<h2 id="alias">اشاره‌گر به نوع دیگر: aliasing و ناهم‌ترازی</h2>
+<p>در درس <a href="3-3.html">۳.۳</a> شنیدی که <span class="term" data-t="strict_aliasing">strict aliasing</span> وجود دارد: کامپایلر فرض می‌کند دو اشاره‌گر از <b>نوع‌های بی‌ارتباط</b> (مثلا <code>int*</code> و <code>float*</code>) هرگز به یک حافظه اشاره نمی‌کنند. اگر بکنند UB است. ببین این فرض چه می‌کند. هر دو اشاره‌گر را عمدا به یک جا می‌فرستیم:</p>
+
+<div class="code" data-file="alias2.c" data-lang="c" data-verify="host" data-cflags="-O2" id="code7">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+static int poke(int *i, float *f)
+{
+    *i = 1;
+    *f = 2.0f;          // کامپایلر فرض می‌کند f و i یک جا نیستند
+    return *i;          // پس شاید همان 1 را برگرداند
+}
+
+int main(void)
+{
+    int box = 0;
+    int r = poke(&amp;box, (float *)&amp;box);      // عمدا هر دو به یک جا اشاره می‌کنند
+    printf("returned %d\n", r);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code7">
+  <li data-lines="4-5,9"><b class="what">تابع poke.</b> دو اشاره‌گر با دو نوع متفاوت می‌گیرد.</li>
+  <li data-lines="6"><b class="what">نوشتن ۱ در i.</b> عدد صحیح ۱ در حافظه.</li>
+  <li data-lines="7"><b class="what">نوشتن ۲٫۰ در f.</b> اگر <code>f</code> و <code>i</code> واقعا یکی باشند، الگوی بیت‌های ۲٫۰ جای ۱ را می‌گیرد.
+    <span class="why">قانون aliasing به کامپایلر اجازه می‌دهد بگوید: نوشتن در float نمی‌تواند int را عوض کند.</span></li>
+  <li data-lines="8"><b class="what">خواندن i.</b> کامپایلر با <code>-O2</code> خواندن را جا می‌اندازد و مستقیم ۱ را برمی‌گرداند.</li>
+  <li data-lines="14-17"><b class="what">فراخوانی با آدرس یکسان.</b> عمدا قانون را می‌شکنیم. cast <code>(float *)</code> پنهانش می‌کند و gcc هشداری نمی‌دهد.</li>
+</ol>
+<pre class="term" data-from="alias2.c">
+$ gcc -std=c11 -Wall -Wextra -O2 -o alias2 alias2.c
+$ ./alias2
+returned 1
+</pre>
+<pre class="term" data-from="alias2.c" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -O0 -o alias2 alias2.c
+$ ./alias2
+returned 1073741824
+</pre>
+<p>در <code>-O0</code> نتیجه ۱۰۷۳۷۴۱۸۲۴ (همان 0x40000000، الگوی بیتی ۲٫۰ به‌صورت float) است و با <code>-O2</code> عدد ۱. اگر بخواهی بیت‌های float را بخوانی، راه امن این است که با <code>memcpy</code> کپی کنی؛ کامپایلرهای خوب <code>memcpy</code> کوچک را به یک دستور تبدیل می‌کنند و هزینه‌ای نمی‌دهی:</p>
+<div class="code" data-lang="c" id="alias3">
+<pre>
+uint32_t bits;
+memcpy(&amp;bits, &amp;value_f, sizeof bits);   // درست، بدون UB
+</pre></div>
+<ol class="walk" data-for="alias3">
+  <li data-lines="1-2"><b class="what">کپی بایتی.</b> <code>memcpy</code> بایت‌ها را از یک شیء به شیء دیگر کپی می‌کند و نوع‌ها را قاطی نمی‌کند.
+    <span class="why">استاندارد اجازه‌ی دسترسی به هر شیء را از راه <code>char*</code> و <code>memcpy</code> می‌دهد. <code>union</code> هم در C11 معمولا مجاز است.</span></li>
+</ol>
+
+<h3 id="misalign">ناهم‌ترازی</h3>
+<p>مشکل هم‌خانواده، <span class="term" data-t="misaligned">دسترسی ناهم‌تراز</span>: تبدیل اشاره‌گر <code>uint8_t*</code> به <code>uint32_t*</code> وقتی آدرس مضرب ۴ نیست. بسته‌های شبکه و UART پر از این حالت‌اند (سرآیند یک بایت و بعد یک عدد ۳۲ بیتی). روی x86 «کار می‌کند»؛ در ARM Cortex-M0 خطای HardFault می‌دهد؛ در Cortex-M3/M4 بیشتر دستورهای خواندن مجازند ولی همه نه، و کامپایلر ممکن است از دستور چندکلمه‌ای استفاده کند. استاندارد هم در هر حالت آن را UB می‌داند.</p>
+
+<div class="code" data-file="misal.c" data-lang="c" data-verify="host" id="code8">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;string.h&gt;
+
+int main(void)
+{
+    uint8_t packet[8] = {0x01, 0x78, 0x56, 0x34, 0x12, 0, 0, 0};
+
+    uint32_t *p = (uint32_t *)&amp;packet[1];     // آدرس فرد: ناهم‌تراز برای 32 بیتی
+    printf("cast   : 0x%08X\n", (unsigned)*p);
+
+    uint32_t v;
+    memcpy(&amp;v, &amp;packet[1], sizeof v);         // روش امن
+    printf("memcpy : 0x%08X\n", (unsigned)v);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code8">
+  <li data-lines="7"><b class="what">بستهٔ نمونه.</b> بایت اول سرآیند است و چهار بایت بعد یک عدد ۳۲ بیتی little-endian: 0x12345678.</li>
+  <li data-lines="9-10"><b class="what">cast خطرناک.</b> آدرس <code>&amp;packet[1]</code> فرد است ولی <code>uint32_t</code> انتظار مضرب ۴ دارد. روی PC جواب می‌دهد و UB است.
+    <span class="why">کامپایلر ممکن است بر اساس فرض «هم‌ترازی» کد سریع‌تری بسازد (مثلا خواندن ۱۶ بایت با یک دستور)، و آن کد روی آدرس فرد خراب می‌شود.</span></li>
+  <li data-lines="12-14"><b class="what">memcpy امن.</b> چهار بایت را به متغیر ۳۲ بیتی کپی می‌کند؛ هم‌ترازی مهم نیست.</li>
+</ol>
+<pre class="term" data-from="misal.c">
+$ ./misal
+cast   : 0x12345678
+memcpy : 0x12345678
+</pre>
+<pre class="term" data-from="misal.c" data-nocheck>
+$ gcc -std=c11 -g -fsanitize=undefined -o misal_u misal.c
+$ ./misal_u
+misal.c:10:5: runtime error: load of misaligned address 0x7ffc1d482141 for type 'uint32_t', which requires 4 byte alignment
+</pre>
+
+<h2 id="others">باقی UB های مهم، یک‌جا</h2>
+<p>این‌ها را هم باید بشناسی. برای هرکدام پیام واقعی کامپایلر یا ابزار را می‌بینی.</p>
+
+<h3 id="uninit">متغیر بدون مقدار</h3>
+<div class="code" data-file="uninit.c" data-lang="c" data-verify="host" id="code9">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int count;
+    for (int i = 0; i &lt; 3; i++)
+        count += i;
+    printf("count = %d\n", count);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code9">
+  <li data-lines="5"><b class="what">count بدون مقدار.</b> قفسه‌ای پر از آشغال (درس ۲.۱).</li>
+  <li data-lines="6-7"><b class="what">جمع‌کردن روی آشغال.</b> <code>count += i</code> یعنی <code>count = count + i</code>؛ اولین خواندن <code>count</code> UB است.
+    <span class="why">در C نوشته‌ایم «متغیر با مقدار نامعین» و استفاده‌اش رفتار غیرقابل‌پیش‌بینی است، نه فقط «عدد تصادفی».</span></li>
+  <li data-lines="8"><b class="what">چاپ.</b> خروجی هر بار فرق می‌کند.</li>
+</ol>
+<pre class="term" data-from="uninit.c" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -O0 -o uninit uninit.c
+$ ./uninit
+count = 1675686891
+$ ./uninit
+count = 1842385979
+</pre>
+<pre class="term" data-kind="cmd">
+$ gcc -std=c11 -Wall -Wextra -O2 -o uninit uninit.c
+uninit.c:7:15: warning: 'count' is used uninitialized [-Wuninitialized]
+$ ./uninit
+count = 3
+</pre>
+<p>دقت کن: با <code>-O0</code> هشدار نمی‌آید (تحلیل جریان داده فقط با بهینه‌سازی روشن انجام می‌شود) و عدد اجرای اول و دوم فرق دارد. با <code>-O2</code> هشدار می‌آید و کامپایلر اتفاقا جوابی «قشنگ» (۳) می‌دهد که تصادفی است. یک تنظیم دائمی برای کار حرفه‌ای: <b>هم <code>-O0</code> هم <code>-O2</code> را با <code>-Wall -Wextra</code> امتحان کن</b>؛ هشدارهای مختلف در سطح‌های مختلف فعال می‌شوند.</p>
+
+<h3 id="noret">تابعی که return ندارد</h3>
+<div class="code" data-file="noret.c" data-lang="c" data-verify="host-fail" data-cflags="-Werror=return-type" id="code10">
+<pre>
+#include &lt;stdio.h&gt;
+
+static int sign_of(int x)
+{
+    if (x &gt; 0)
+        return 1;
+    if (x &lt; 0)
+        return -1;
+}                               // اگر x == 0 باشد، چیزی برنمی‌گردد!
+
+int main(void)
+{
+    printf("%d\n", sign_of(5));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code10">
+  <li data-lines="4-9"><b class="what">مسیر بدون return.</b> برای <code>x == 0</code> هیچ شاخه‌ای <code>return</code> نمی‌کند و اجرا به آکولاد پایانی می‌رسد. استفاده از مقدار این فراخوانی UB است.
+    <span class="why">کامپایلر می‌تواند فرض کند «x صفر نمی‌شود» و کد ماشین بعد از تابع را روی هم بریزد.</span></li>
+  <li data-lines="13-15"><b class="what">main.</b> فقط با ۵ صدا می‌زند؛ ولی خطا در خود تابع است.</li>
+</ol>
+<pre class="term" data-kind="err" data-from="noret.c">
+noret.c: In function 'sign_of':
+noret.c:9:1: error: control reaches end of non-void function [-Werror=return-type]
+</pre>
+<p>به‌طور پیش‌فرض این فقط هشدار (با <code>-Wall</code>) است؛ اینجا با <code>-Werror=return-type</code> به خطا تبدیل شد. در پروژه‌های جدی <code>-Werror</code> را روشن نگه می‌دارند تا هشدار جدید نتواند وارد کد شود (درس <a href="6-3.html">۶.۳</a>).</p>
+
+<h3 id="dangle">آدرس متغیر محلی و رشتهٔ ثابت</h3>
+<p>در درس <a href="3-5.html">۳.۵</a> دیدی که متغیر محلی بعد از خروج از تابع می‌میرد. آدرسش را برگرداندن، اشاره‌گر آویزان می‌سازد. gcc این را هشدار می‌دهد:</p>
+<div class="code" data-file="dangle.c" data-lang="c" data-verify="host-fail" data-cflags="-Werror=return-local-addr" id="code11">
+<pre>
+#include &lt;stdio.h&gt;
+
+static int *make_counter(void)
+{
+    int counter = 5;
+    return &amp;counter;            // آدرس متغیر محلی: بعد از return دیگر معتبر نیست
+}
+
+int main(void)
+{
+    int *p = make_counter();
+    printf("%d\n", *p);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code11">
+  <li data-lines="4-7"><b class="what">تابع بد.</b> <code>counter</code> روی پشته است و با پایان تابع آزاد می‌شود؛ ولی آدرسش را بیرون می‌دهیم.</li>
+  <li data-lines="12-13"><b class="what">استفاده.</b> <code>*p</code> به حافظه‌ای می‌رود که دیگر مال ما نیست.
+    <span class="why">این خط ممکن است ۵ چاپ کند، عدد دیگری بدهد یا برنامه را بکشد. فرقی هم بین اجرا و اجرا دارد.</span></li>
+</ol>
+<pre class="term" data-kind="err" data-from="dangle.c">
+dangle.c: In function 'make_counter':
+dangle.c:6:12: error: function returns address of local variable [-Werror=return-local-addr]
+</pre>
+
+<p>یک اشتباه هم‌خانواده، تغییر <b>رشتهٔ ثابت</b> است. <code>"hello"</code> در بخش فقط‌خواندنی (روی MCU: Flash) نگه‌داری می‌شود:</p>
+<div class="code" data-file="lit.c" data-lang="c" data-verify="host" data-exit="-11" id="code12">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    char *msg = "hello";        // رشتهٔ ثابت: در بخش فقط‌خواندنی (Flash)
+    printf("before: %s\n", msg);
+    msg[0] = 'H';               // نوشتن در حافظهٔ فقط‌خواندنی
+    printf("after : %s\n", msg);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code12">
+  <li data-lines="5"><b class="what">اشاره‌گر به رشتهٔ ثابت.</b> <code>msg</code> به بایت‌های <code>"hello"</code> که در <code>.rodata</code> هستند اشاره می‌کند.
+    <span class="why">در C نوع رشتهٔ ثابت <code>char[]</code> است ولی نوشتن در آن UB است. بهتر است <code>const char *msg</code> بنویسی تا کامپایلر جلوی خط ۷ را بگیرد.</span></li>
+  <li data-lines="7"><b class="what">نوشتن در آن.</b> روی PC حافظهٔ فقط‌خواندنی است و سیستم‌عامل برنامه را می‌کشد؛ روی MCU ممکن است HardFault شود یا بی‌صدا هیچ نشود (Flash نوشتنی نیست).</li>
+</ol>
+<pre class="term" data-from="lit.c" data-nocheck>
+$ ./lit
+before: hello
+Segmentation fault (core dumped)
+</pre>
+<p>راه درست: اگر باید تغییرش بدهی، آرایه بساز: <code>char msg[] = "hello";</code>. اگر نباید تغییرش بدهی، <code>const char *msg</code> بنویس.</p>
+
+<h3 id="shift">تقسیم بر صفر و شیفت</h3>
+<p>روی PC تقسیم <code>int</code> بر صفر معمولا برنامه را می‌کشد و روی Cortex-M4 به‌طور پیش‌فرض صفر برمی‌گرداند (مگر بیت <code>DIV_0_TRP</code> روشن شود). شیفت به اندازهٔ عرض نوع یا بیشتر، و شیفت چپ عدد منفی، هم UB است. UBSan همه را با پیام روشن اعلام می‌کند:</p>
+<pre class="term" data-kind="cmd">
+$ ./div_u
+div.c:7:23: runtime error: division by zero
+$ ./sh_u
+sh.c:7:22: runtime error: shift exponent 32 is too large for 32-bit type 'int'
+sh.c:8:24: runtime error: left shift of negative value -8
+</pre>
+<p>راه اصلاح: قبل از تقسیم مقسوم‌علیه را با <code>if</code> وارسی کن؛ مقدار شیفت را با <code>&lt; 32</code> محدود کن؛ برای شیفت از نوع بی‌علامت (<code>1u &lt;&lt; n</code>) استفاده کن (درس <a href="3-1.html">۳.۱</a>).</p>
+
+<h3 id="order">ترتیب ارزیابی: «مشخص‌نشده»</h3>
+<p>در <code>f(next(), next())</code> استاندارد نگفته کدام آرگومان اول حساب شود. اجرای واقعی روی gcc و clang:</p>
+<div class="code" data-file="order.c" data-lang="c" data-verify="host" id="code13">
+<pre>
+#include &lt;stdio.h&gt;
+
+static int next(void)
+{
+    static int n = 0;
+    return ++n;
+}
+
+int main(void)
+{
+    // ترتیب ارزیابی آرگومان‌ها مشخص‌نشده (unspecified) است
+    printf("%d %d\n", next(), next());
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code13">
+  <li data-lines="3-7"><b class="what">تابع next.</b> هر بار یکی بیشتر برمی‌گرداند: ۱ و بعد ۲ و ...
+    <span class="why"><code>static</code> داخل تابع یعنی <code>n</code> بین فراخوانی‌ها می‌ماند (درس ۳.۵).</span></li>
+  <li data-lines="12"><b class="what">دو فراخوانی در یک عبارت.</b> کدام اول اجرا شود؟ استاندارد نمی‌گوید.
+    <span class="why">این UB نیست ولی برنامه را «وابسته به کامپایلر» می‌کند. تابع‌های دارای اثر جانبی را در خط‌های جدا صدا بزن.</span></li>
+</ol>
+<pre class="term" data-from="order.c">
+$ gcc -std=c11 -Wall -Wextra -o order order.c
+$ ./order
+2 1
+</pre>
+<pre class="term" data-from="order.c" data-nocheck>
+$ clang -std=c11 -Wall -Wextra -o order order.c
+$ ./order
+1 2
+</pre>
+<p>حالا <code>i = i++ + i</code> و شبیه‌هایش: در یک عبارت دوبار به یک متغیر می‌نویسی یا هم می‌نویسی هم می‌خوانی، بدون نقطهٔ ترتیب (<span class="en">sequence point</span>)؛ این UB است. gcc با <code>-Wall</code> می‌گوید: <code>warning: operation on 'i' may be undefined [-Wsequence-point]</code>. جوابی هم که بر اساس آن حدس بزنی، معتبر نیست.</p>
+
+<h2 id="param">sizeof روی پارامتر آرایه</h2>
+<p>یادت هست در درس <a href="2-7.html">۲.۷</a> گفتیم آرایه را به تابع که بدهی، فقط <b>آدرس شروع</b> می‌رود؟ پس داخل تابع <code>sizeof</code> اندازهٔ اشاره‌گر را می‌دهد، نه آرایه:</p>
+
+<div class="code" data-file="szarr.c" data-lang="c" data-verify="host" data-warn-ok id="code14">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stddef.h&gt;
+
+static size_t count_bad(int values[4])
+{
+    return sizeof(values) / sizeof(values[0]);   // اینجا values اشاره‌گر است، نه آرایه
+}
+
+int main(void)
+{
+    int data[4] = {1, 2, 3, 4};
+    printf("in main : %zu elements\n", sizeof(data) / sizeof(data[0]));
+    printf("in func : %zu elements\n", count_bad(data));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code14">
+  <li data-lines="4-7"><b class="what">تابع فریبنده.</b> با اینکه نوشته‌ایم <code>int values[4]</code>، کامپایلر آن را به <code>int *values</code> تبدیل می‌کند و ۴ فقط یک توضیح است.
+    <span class="why">در C آرایه هرگز کپی نمی‌شود؛ فقط آدرسش می‌رود («decay»، درس ۳.۳).</span></li>
+  <li data-lines="13"><b class="what">در main.</b> <code>data</code> واقعا آرایه است: ۱۶ بایت ÷ ۴ = ۴.</li>
+  <li data-lines="14"><b class="what">در تابع.</b> <code>sizeof(values)</code> = اندازهٔ اشاره‌گر (۸ بایت روی PC ۶۴ بیتی)، پس ۸ ÷ ۴ = ۲.
+    <span class="why">روی STM32 و ESP32 اشاره‌گر ۴ بایت است و نتیجه ۱ می‌شود. به این هم اعتماد نکن؛ طول را جدا به تابع بفرست.</span></li>
+</ol>
+<pre class="term" data-kind="cmd">
+$ gcc -std=c11 -Wall -Wextra -o szarr szarr.c
+szarr.c:6:18: warning: 'sizeof' on array function parameter 'values' will return size of 'int *' [-Wsizeof-array-argument]
+</pre>
+<pre class="term" data-from="szarr.c">
+$ ./szarr
+in main : 4 elements
+in func : 2 elements
+</pre>
+
+<h2 id="macros">ماکرو و دستورهای خوش‌ظاهر</h2>
+<p>این‌ها UB نیستند ولی همان سطح خطرناکند: کد «درست به‌نظر می‌رسد» و کار دیگری می‌کند. چهار تله را یک‌جا داخل یک برنامه گذاشتم و هشدارهای واقعی gcc را زیرش می‌بینی.</p>
+
+<div class="code" data-file="traps.c" data-lang="c" data-verify="host" data-warn-ok id="code15">
+<pre>
+#include &lt;stdio.h&gt;
+
+#define SQUARE(x) x * x
+#define SQUARE_OK(x) ((x) * (x))
+
+static void state_name(int s)
+{
+    switch (s) {
+    case 0:
+        printf("[IDLE]");
+    case 1:
+        printf("[RUN]");
+        break;
+    default:
+        printf("[?]");
+    }
+    printf("\n");
+}
+
+int main(void)
+{
+    int n = 3;
+    printf("SQUARE(n + 1)    = %d\n", SQUARE(n + 1));
+    printf("SQUARE_OK(n + 1) = %d\n", SQUARE_OK(n + 1));
+
+    if (n &gt; 5);                 // نقطه‌ویرگول اضافه: بدنهٔ if خالی است
+        printf("n is big\n");
+
+    state_name(0);              // break فراموش شده: از case 0 به case 1 می‌ریزد
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code15">
+  <li data-lines="3"><b class="what">ماکروی بدون پرانتز.</b> ماکرو فقط جایگزینی متن است: <code>SQUARE(n + 1)</code> می‌شود <code>n + 1 * n + 1</code>، یعنی ۳ + ۳ + ۱ = ۷.
+    <span class="why">ضرب قبل از جمع است. جزئیات ماکرو در درس <a href="4-1.html">۴.۱</a>.</span></li>
+  <li data-lines="4"><b class="what">نسخهٔ درست.</b> هر پارامتر و کل عبارت پرانتز دارد: <code>((n + 1) * (n + 1))</code> = ۱۶.</li>
+  <li data-lines="8-18"><b class="what">تابع با switch.</b> در <code>case 0</code> بعد از چاپ <code>[IDLE]</code> <code>break</code> نیست، پس اجرا به <code>case 1</code> می‌ریزد.
+    <span class="why">به این می‌گویند fallthrough (درس ۲.۴). گاهی عمدی است ولی باید با کامنت یا <code>__attribute__((fallthrough))</code> اعلام شود.</span></li>
+  <li data-lines="22-25"><b class="what">مقایسهٔ دو ماکرو.</b> نتیجهٔ این دو خط ۷ و ۱۶ است.</li>
+  <li data-lines="27-28"><b class="what">نقطه‌ویرگول اضافه.</b> <code>if (n &gt; 5);</code> یعنی «اگر n بزرگ است، هیچ کاری نکن». خط بعدی فارغ از شرط اجرا می‌شود و تورفتگی فریب می‌دهد.
+    <span class="why">همین یک <code>;</code> در پروژه‌های واقعی باعث خاموش‌شدن حفاظت‌ها شده است. برای همین همیشه آکولاد بگذار.</span></li>
+  <li data-lines="30"><b class="what">فراخوانی.</b> با ۰ صدا می‌زنیم و دو برچسب پشت هم چاپ می‌شود.</li>
+</ol>
+<pre class="term" data-kind="cmd">
+$ gcc -std=c11 -Wall -Wextra -o traps traps.c
+traps.c:26:15: warning: suggest braces around empty body in an 'if' statement [-Wempty-body]
+traps.c:10:9: warning: this statement may fall through [-Wimplicit-fallthrough=]
+</pre>
+<pre class="term" data-from="traps.c">
+$ ./traps
+SQUARE(n + 1)    = 7
+SQUARE_OK(n + 1) = 16
+n is big
+[IDLE][RUN]
+</pre>
+
+<p>و آخری، <span class="en">dangling else</span> («else آویزان»): <code>else</code> همیشه به نزدیک‌ترین <code>if</code> بدون <code>else</code> می‌چسبد، فارغ از تورفتگی.</p>
+<div class="code" data-file="dangling.c" data-lang="c" data-verify="host" data-warn-ok id="code16">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    int a = 1, b = 0;
+    if (a)
+        if (b)
+            printf("both\n");
+    else
+        printf("a is false\n");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code16">
+  <li data-lines="5"><b class="what">ورودی.</b> <code>a</code> درست و <code>b</code> نادرست.</li>
+  <li data-lines="6-8"><b class="what">دو if تو در تو.</b> بدون آکولاد.</li>
+  <li data-lines="9-10"><b class="what">else.</b> ظاهرا مال <code>if (a)</code> است، ولی به <code>if (b)</code> می‌چسبد. پس چون <code>a</code> درست است و <code>b</code> نادرست، همین شاخه اجرا می‌شود و «a is false» چاپ می‌شود؛ حرف دروغ!
+    <span class="why">راه‌حل ساده: همیشه آکولاد.</span></li>
+</ol>
+<pre class="term" data-kind="cmd">
+$ gcc -std=c11 -Wall -Wextra -o dangling dangling.c
+dangling.c:6:8: warning: suggest explicit braces to avoid ambiguous 'else' [-Wdangling-else]
+</pre>
+<pre class="term" data-from="dangling.c">
+$ ./dangling
+a is false
+</pre>
+
+<div class="callout warn"><div class="ct">و رقابت داده (data race)؟</div>
+<p>اگر متغیری هم در <span class="en">ISR</span> و هم در <code>main</code> تغییر کند و <code>volatile</code>/محافظت نداشته باشد، برای کامپایلر این «دسترسی هم‌زمان» نیست، چون در C خالص وقفه‌ای وجود ندارد. نتیجه: خواندن ناقص، شمارندهٔ خراب یا حلقه‌ای که هرگز تمام نمی‌شود. مثال کامل و راه‌حل (<code>volatile</code>، بخش حساس، نوشتن یک‌بایتی) را در درس <a href="5-3.html">۵.۳</a> و <a href="3-6.html">۳.۶</a> دیدی. اینجا فقط به‌خاطر بسپار که این هم یک UB است و sanitizer معمولی روی MCU آن را نمی‌بیند.</p></div>
+
+<h2 id="tools">ابزارها: چطور UB را شکار کنیم</h2>
+<p>تنها راه مطمئن «نداشتن UB» نوشتن با احتیاط و آزمودن با ابزار است. جدول زیر ابزارهای اصلی و کاری است که هرکدام می‌کنند:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>ابزار / پرچم</th><th>چه می‌کند</th><th>نکته</th></tr></thead>
+<tbody>
+<tr><td><code>-Wall -Wextra</code></td><td>هشدارهای رایج</td><td>هم با <code>-O0</code> و هم با <code>-O2</code> بساز؛ بعضی هشدارها فقط با بهینه‌سازی می‌آیند</td></tr>
+<tr><td><code>-fsanitize=undefined</code></td><td>UBSan: سرریز علامت‌دار، شیفت، ناهم‌ترازی، تقسیم بر صفر، ایندکس آرایهٔ ثابت‌اندازه، ...</td><td>هنگام اجرا پیام «runtime error» با فایل و خط می‌دهد</td></tr>
+<tr><td><code>-fsanitize=address</code></td><td>ASan: خارج از محدودهٔ heap/stack/global، use-after-free، double free</td><td>مصرف حافظهٔ چندبرابر؛ فقط برای PC</td></tr>
+<tr><td><code>-fwrapv</code></td><td>سرریز علامت‌دار را «چرخش» تعریف می‌کند</td><td>باگ را نمی‌کشد، فقط UB را کم می‌کند؛ جایگزین کد درست نیست</td></tr>
+<tr><td><code>-fno-strict-aliasing</code></td><td>فرض aliasing را خاموش می‌کند</td><td>بعضی پروژه‌ها (مثل هستهٔ لینوکس) استفاده می‌کنند؛ کد درست بهتر است</td></tr>
+<tr><td>تست با دو کامپایلر</td><td>gcc و clang هر دو</td><td>اختلاف خروجی یعنی مشخص‌نشده یا UB</td></tr>
+<tr><td><code>cppcheck</code>، <code>clang-tidy</code></td><td>تحلیل ایستا (بدون اجرا)</td><td>در درس <a href="6-3.html">۶.۳</a></td></tr>
+</tbody></table></div>
+
+<p>تعادل مهم: sanitizer ها معمولا روی <b>PC</b> اجرا می‌شوند؛ روی MCU رایج نیستند. راهکار حرفه‌ای این است که منطق کد (پارسر، بافر حلقوی، ماشین حالت) را طوری جدا بنویسی که روی PC تست شود، آن‌جا با sanitizer بسازی و بعد به سخت‌افزار ببری؛ درس <a href="6-4.html">۶.۴</a> همین را نشان می‌دهد. برای مواردی که فقط روی MCU می‌شود، gcc و clang گزینهٔ «trap on error» هم دارند که به‌جای پیام، برنامه را متوقف می‌کند و در دیباگر می‌بینی (نام دقیق پرچم را در مستندات <a href="https://gcc.gnu.org/onlinedocs/" target="_blank" rel="noopener">GCC</a> ببین).</p>
+
+<p>یک ابزارک دیگر: سرریز <b>علامت‌دار</b> در دنیای «عدد چرخان». به بیشینه برس و «+۱» بزن؛ ببین عدد به کجا می‌پرد. (در C با نوع بی‌علامت این چرخش قانونی است؛ با علامت‌دار همان چرخش سخت‌افزار است که استاندارد اجازه‌اش را نداده.)</p>
+<div class="widget" data-w="overflow" data-type="int8_t"></div>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: چرا اصلا UB وجود دارد؟</div>
+<p>اگر استاندارد می‌گفت «سرریز = چرخش» یا «ایندکس بد = خطا»، کامپایلر باید برای هر جمع و هر آرایه کد بازرسی می‌گذاشت و C روی پردازنده‌های مختلف کند می‌شد. C ۱۹۷۰ برای این ساخته شد که «سریع و نزدیک سخت‌افزار» باشد و بار مسئولیت را به برنامه‌نویس داد. UB یعنی «مسئولیت با توست». بعدها کامپایلرها هوشمند شدند و از همین آزادی برای بهینه‌سازی سنگین استفاده کردند. برای همین کد قدیمی که «همیشه کار می‌کرد» با کامپایلر جدید ناگهان خراب می‌شود.</p></div>
+
+<div class="callout tip"><div class="ct">قاعدهٔ طلایی برای کد embedded</div>
+<ul>
+<li>عددها را <code>uint32_t</code> و شیفت را روی نوع بی‌علامت بزن؛ قبل از ضرب یا شیفت نوع کوچک را cast کن.</li>
+<li>هر اشاره‌گر را قبل از استفاده وارسی کن، نه بعد.</li>
+<li>بایت خام = <code>uint8_t</code>؛ خواندن عدد چندبایتی از بافر = شیفت یا <code>memcpy</code>.</li>
+<li>هر بار <code>-Wall -Wextra</code> را با <code>-O0</code> و <code>-O2</code> اجرا کن؛ هشدار جدید را همان روز رفع کن.</li>
+<li>منطق را روی PC با <code>-fsanitize=undefined,address</code> آزمون کن.</li>
+</ul></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="3">
+  <p class="q">کدام جمله دربارهٔ «رفتار تعریف‌نشده» درست است؟</p>
+  <ol>
+    <li data-why="نه، UB الزاما کرش نمی‌کند. معمولا بی‌صدا نتیجهٔ غلط یا وابسته به کامپایلر می‌دهد.">همیشه برنامه را متوقف می‌کند و پیام خطا می‌دهد</li>
+    <li data-why="اشتباه: کامپایلر اجباری به هشدار ندارد. خیلی از UB ها فقط هنگام اجرا و به‌صورت خاموش رخ می‌دهند.">کامپایلر حتما هنگام کامپایل آن را هشدار می‌دهد</li>
+    <li>کامپایلر می‌تواند فرض کند هرگز اتفاق نمی‌افتد و بر آن اساس کد را بهینه کند</li>
+    <li data-why="اشتباه: «هر کامپایلر یک انتخاب» که پیاده‌ساز-تعریف است. در UB حتی این تضمین هم نیست.">هر کامپایلر باید همیشه یک نتیجهٔ ثابت بدهد</li>
+  </ol>
+  <div class="fb">UB یعنی استاندارد هیچ تضمینی نمی‌دهد. کامپایلر فرض می‌کند رخ نمی‌دهد و بر همین اساس کد را ساده می‌کند؛ نتیجه‌اش گاهی خطای پنهان است.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">با <code>uint8_t a = 0x0F;</code>، شرط <code>if (~a == 0xF0)</code> چه می‌شود؟</p>
+  <ol>
+    <li>نادرست است، چون <code>~a</code> بعد از ارتقا به <code>int</code> برابر 0xFFFFFFF0 می‌شود</li>
+    <li data-why="این‌طور نیست: در C محاسبهٔ ۸ بیتی نداریم؛ <code>a</code> اول به int (۳۲ بیتی) ارتقا می‌یابد.">درست است، چون ~ فقط هشت بیت را وارونه می‌کند</li>
+    <li data-why="این خطای کامپایل نیست؛ کد قانونی است و فقط منطقش غافلگیر می‌کند (gcc هشدار می‌دهد).">برنامه کامپایل نمی‌شود</li>
+    <li data-why="رفتار تعریف‌شده و قطعی است؛ UB نیست. فقط باید ارتقای صحیح را بدانی.">رفتار تعریف‌نشده است و هر چیزی ممکن است</li>
+  </ol>
+  <div class="fb">ارتقای صحیح: <code>a</code> ابتدا به <code>int</code> می‌رود و بعد <code>~</code> اعمال می‌شود. راه درست: <code>(uint8_t)~a == 0xF0</code>.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">در کدام مورد رفتار برنامه تعریف‌نشده است (فرض کن <code>int</code> ۳۲ بیتی است)؟</p>
+  <ol>
+    <li data-why="سرریز بی‌علامت کاملا تعریف‌شده است: عدد مدول ۲۵۶ چرخش می‌کند."><code>uint8_t x = 255; x++;</code></li>
+    <li data-why="تقسیم صحیح ۷ بر ۲ برابر ۳ است و کاملا تعریف‌شده.">۷ / ۲ که جواب ۳ می‌دهد</li>
+    <li data-why="این بیشتر مشخص‌نشده است، ولی UB نیست؛ هر دو ترتیب مجازند.">صدا زدن <code>f(g(), h())</code> که ترتیب ارزیابی <code>g</code> و <code>h</code> نامعلوم است</li>
+    <li><code>int m = INT_MAX; m = m + 1;</code></li>
+  </ol>
+  <div class="fb">فقط سرریز علامت‌دار UB است. چرخش بی‌علامت تعریف‌شده و ترتیب ارزیابی آرگومان‌ها «مشخص‌نشده» (بی‌ضررتر) است.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">روی STM32 (<code>arm-none-eabi-gcc</code>) این کد چه می‌کند؟<br><code>char c = (char)200; if (c &gt; 100) ...</code></p>
+  <ol>
+    <li data-why="این حالت x86 با gcc است؛ روی ARM پیش‌فرض char بی‌علامت است.">شرط نادرست است، چون <code>c</code> برابر ۵۶- می‌شود</li>
+    <li>شرط درست است، چون <code>char</code> روی ARM پیش‌فرض بی‌علامت است و <code>c</code> برابر ۲۰۰ می‌شود</li>
+    <li data-why="این UB نیست؛ تبدیل به char رفتار پیاده‌ساز-تعریف دارد و کامپایل هم می‌شود.">برنامه کامپایل نمی‌شود چون ۲۰۰ در char جا نمی‌شود</li>
+    <li data-why="نتیجه قطعی است، فقط بسته به کامپایلر و معماری.">نتیجه تصادفی است و هر بار فرق می‌کند</li>
+  </ol>
+  <div class="fb">علامت <code>char</code> تعریف‌شده توسط پیاده‌ساز است. برای بایت خام <code>uint8_t</code> بنویس تا روی همه‌جا یکسان باشد.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">تابعی روی STM32 با پارامتر <code>int v[4]</code> می‌نویسد <code>sizeof(v) / sizeof(v[0])</code>. چه عددی می‌گیرد؟</p>
+  <ol>
+    <li data-why="فقط اگر v واقعا آرایه بود. در پارامتر تابع، v اشاره‌گر است.">۴</li>
+    <li data-why="۸ بایت برای اشاره‌گر روی PC ۶۴ بیتی است؛ روی STM32 اشاره‌گر ۴ بایت است.">۲</li>
+    <li>۱، چون <code>v</code> اشاره‌گر ۴ بایتی است و ۴ ÷ ۴ = ۱</li>
+    <li data-why="نتیجه معتبر و قطعی است؛ خطا یا UB نیست، ولی مقدارش نادرست است.">برنامه کامپایل نمی‌شود</li>
+  </ol>
+  <div class="fb">پارامتر آرایه در C همان اشاره‌گر است. طول را همیشه جداگانه به تابع بده.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">چرا این تابع خطرناک است؟<br><code>int f(int *p) { int v = *p; if (p == NULL) return -1; return v; }</code></p>
+  <ol>
+    <li>خواندن <code>*p</code> قبل از وارسی است؛ کامپایلر با <code>-O2</code> وارسی را حذف می‌کند</li>
+    <li data-why="نام و نوع درست‌اند؛ مشکل در ترتیب دو دستور است.">چون <code>int *p</code> نمی‌تواند پارامتر باشد</li>
+    <li data-why="مقایسه با NULL کاملا مجاز است؛ مشکل ترتیب است.">چون اشاره‌گر را نمی‌شود با <code>NULL</code> مقایسه کرد</li>
+    <li data-why="ارتباطی با volatile ندارد؛ حذف شدن به‌خاطر UB است.">چون <code>volatile</code> ندارد</li>
+  </ol>
+  <div class="fb">اول وارسی کن، بعد بخوان. کد باید <code>if (p == NULL) return -1;</code> را قبل از <code>*p</code> بگذارد.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: کوچک‌ها چرخ می‌کنند، بزرگ‌ها پنهان می‌شوند</div>
+<p>می‌خواهیم رفتار سرریز با نوع‌های ۸ بیتی را بشناسیم. <code>a = 250</code> و <code>b = 10</code> از نوع <code>uint8_t</code> هستند.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> مقدار <code>(uint8_t)(a + b)</code> چند است؟ مقدار <code>a + b</code> بدون cast چند است؟</li>
+  <li><b>حل:</b> برنامه‌ای بنویس که هر دو را چاپ کند. سپس با <code>int8_t</code> و مقدارهای ۱۲۰ و ۱۰ همین را تکرار کن.</li>
+  <li><b>فکر کن:</b> چرا حالت <code>int8_t</code> UB نیست، ولی <code>INT_MAX + 1</code> هست؟ (راهنمایی: ارتقا به <code>int</code> و بعد <b>تبدیل</b> به نوع کوچک‌تر.)</li>
+</ol>
+<details><summary>راهنمایی</summary><p>جمع همیشه در <code>int</code> انجام می‌شود (۲۶۰ و ۱۳۰ در <code>int</code> جا می‌شوند، پس سرریزی نیست). فقط وقتی نتیجه را <b>ذخیره</b> می‌کنی، به ۸ بیت بریده می‌شود. برای بی‌علامت باقی‌مانده بر ۲۵۶ است؛ برای علامت‌دار نتیجه به پیاده‌ساز-تعریف است (در gcc مثل چرخش).</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="wrap.c">
+$ ./wrap
+sum8 = 4
+sum_int = 260
+t = -126
+</pre>
+<p>۲۶۰ منهای ۲۵۶ برابر ۴ است. و ۱۳۰ منهای ۲۵۶ برابر ۱۲۶- است.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="wrap.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+int main(void)
+{
+    uint8_t a = 250;
+    uint8_t b = 10;
+    uint8_t sum8 = (uint8_t)(a + b);   // برش به 8 بیت: قانونی و تعریف‌شده
+    int sum_int = a + b;               // محاسبه در int: 260
+    printf("sum8 = %u\n", sum8);
+    printf("sum_int = %d\n", sum_int);
+
+    int8_t s = 120;
+    int8_t t = (int8_t)(s + 10);       // 130 در int8_t جا نمی‌شود
+    printf("t = %d\n", t);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="6-8"><b class="what">دو مقدار ۸ بیتی.</b> هر دو <code>uint8_t</code>.</li>
+  <li data-lines="9"><b class="what">برش قانونی.</b> جمع در <code>int</code> = ۲۶۰؛ cast آن را به ۸ بیت می‌برد: ۲۶۰ mod ۲۵۶ = ۴.
+    <span class="why">تبدیل به نوع بی‌علامت همیشه مدول است. استاندارد صریحا می‌گوید.</span></li>
+  <li data-lines="10"><b class="what">بدون برش.</b> ۲۶۰ سالم می‌ماند، چون <code>int</code> است.</li>
+  <li data-lines="14-15"><b class="what">علامت‌دار ۸ بیتی.</b> جمع در <code>int</code> = ۱۳۰ (سرریز ندارد). cast به <code>int8_t</code> مقدار خارج از محدوده است؛ نتیجه پیاده‌ساز-تعریف است و gcc ۱۲۶- می‌دهد.
+    <span class="why">این با <code>INT_MAX + 1</code> فرق دارد: آن‌جا خود عمل جمع روی نوع علامت‌دار سرریز می‌کند (UB)؛ این‌جا فقط نتیجه در نوع کوچک‌تر جا نمی‌شود.</span></li>
+</ol>
+<pre class="term" data-from="wrap.c">
+$ ./wrap
+sum8 = 4
+sum_int = 260
+t = -126
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: سه باگ را پیدا کن</div>
+<p>تابع میانگین زیر سه خطای جدی دارد. همه‌شان را در این درس دیده‌ای.</p>
+<div class="code" data-lang="c" id="ex2bad"><pre>
+static int average(const int *v, int n)
+{
+    int sum;
+    for (int i = 0; i &lt;= n; i++)
+        sum += v[i];
+    return sum / n;
+}
+
+int main(void)
+{
+    int readings[4] = {20, 22, 21, 23};
+    printf("%d\n", average(readings, sizeof(readings)));
+}
+</pre></div>
+<ol class="parts">
+  <li><b>پیدا کن:</b> خط مربوط به متغیر مقداردهی‌نشده را نشان بده.</li>
+  <li><b>پیدا کن:</b> خطای حلقه (یکی-بیشتر) را نشان بده و بگو چرا خارج آرایه می‌خواند.</li>
+  <li><b>پیدا کن و اصلاح کن:</b> آرگومان دوم <code>average</code> چه اشتباهی دارد؟ برنامه را درست کن و اجرا کن.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>الف: <code>int sum;</code> بدون مقدار. ب: <code>&lt;=</code> در حلقه. پ: <code>sizeof(readings)</code> تعداد <b>بایت‌ها</b> است، نه تعداد عنصرها. باید بر <code>sizeof(readings[0])</code> تقسیم شود.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="avg.c">
+$ ./avg
+21
+</pre>
+<p>مجموع ۲۰+۲۲+۲۱+۲۳ = ۸۶ و ۸۶ ÷ ۴ = ۲۱٫۵ که با تقسیم صحیح ۲۱ می‌شود.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="avg.c" data-lang="c" data-verify="host" id="ex2">
+<pre>
+#include &lt;stdio.h&gt;
+
+static int average(const int *v, int n)
+{
+    int sum = 0;                        // 1: مقدار اولیه
+    for (int i = 0; i &lt; n; i++)         // 2: &lt; نه &lt;=
+        sum += v[i];
+    return sum / n;
+}
+
+int main(void)
+{
+    int readings[4] = {20, 22, 21, 23};
+    int count = (int)(sizeof(readings) / sizeof(readings[0]));   // 3: تعداد عنصر
+    printf("%d\n", average(readings, count));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="5"><b class="what">صفر کردن جمع.</b> جمع از صفر شروع می‌شود.
+    <span class="why">بدون آن اولین <code>+=</code> از آشغال می‌خواند (UB) و نتیجه هر بار فرق می‌کند.</span></li>
+  <li data-lines="6"><b class="what">شرط درست.</b> <code>i &lt; n</code> یعنی ایندکس ۰ تا <code>n-1</code>. با <code>&lt;=</code> عنصر <code>v[n]</code> هم خوانده می‌شد که مال آرایه نیست.</li>
+  <li data-lines="7-8"><b class="what">جمع و میانگین.</b> تقسیم صحیح. اگر <code>n</code> صفر شود، تقسیم بر صفر است، پس بهتر است در برنامهٔ واقعی <code>n &gt; 0</code> را وارسی کنی.</li>
+  <li data-lines="14"><b class="what">تعداد عنصر.</b> اندازهٔ کل آرایه (۱۶ بایت) تقسیم بر اندازهٔ یک عنصر (۴ بایت) = ۴.
+    <span class="why">این کار باید در همان جایی انجام شود که آرایه تعریف شده است، نه داخل تابع دیگر.</span></li>
+</ol>
+<pre class="term" data-from="avg.c">
+$ gcc -std=c11 -Wall -Wextra -o avg avg.c
+$ ./avg
+21
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: خواندن عدد ۳۲ بیتی از بستهٔ سنسور</div>
+<p>یک سنسور، دمای خود را به‌صورت عدد ۳۲ بیتی <b>big-endian</b> (بایت مهم اول) در یک بستهٔ ۶ بایتی می‌فرستد. عدد از ایندکس ۱ شروع می‌شود. می‌خواهی روی STM32 آن را بخوانی.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> چرا <code>*(uint32_t *)&amp;frame[1]</code> بد است؟ (دو دلیل: ناهم‌ترازی و ترتیب بایت‌ها.)</li>
+  <li><b>حل:</b> تابع <code>read_be32(const uint8_t *p)</code> را با شیفت بنویس که روی هر پردازنده‌ای درست کار کند.</li>
+  <li><b>چالش:</b> بایت اول بسته را <code>0x80</code> بگذار. با نسخهٔ بدون <code>(uint32_t)</code> cast و <code>-fsanitize=undefined</code> چه پیامی می‌گیری؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>هر بایت را ابتدا به <code>uint32_t</code> تبدیل کن و بعد شیفت بده: <code>((uint32_t)p[0] &lt;&lt; 24) | ...</code>. شیفت و OR بایت‌ها را در ترتیب درست کنار هم می‌گذارد، صرف‌نظر از little-endian بودن CPU.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="be32.c">
+$ ./be32
+value = 0x80000102
+</pre>
+<p>و با نسخهٔ بدون cast و بایت اول 0x80، UBSan می‌گوید: <code>left shift of 128 by 24 places cannot be represented in type 'int'</code>.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="be32.c" data-lang="c" data-verify="host" id="ex3">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+static uint32_t read_be32(const uint8_t *p)
+{
+    return ((uint32_t)p[0] &lt;&lt; 24) | ((uint32_t)p[1] &lt;&lt; 16)
+         | ((uint32_t)p[2] &lt;&lt; 8)  |  (uint32_t)p[3];
+}
+
+int main(void)
+{
+    const uint8_t frame[6] = {0xFF, 0x80, 0x00, 0x01, 0x02, 0xFF};
+    printf("value = 0x%08X\n", (unsigned)read_be32(&amp;frame[1]));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="4-5,8"><b class="what">تابع.</b> یک اشاره‌گر به بایت‌ها می‌گیرد. هیچ فرضی درباره‌ی هم‌ترازی آدرس ندارد.</li>
+  <li data-lines="6-7"><b class="what">ساختن کلمه.</b> هر بایت اول به <code>uint32_t</code> می‌رود (cast) و بعد به جای درست شیفت می‌خورد؛ <code>p[0]</code> بالاترین بایت.
+    <span class="why">اگر cast نبود، <code>p[0] &lt;&lt; 24</code> در <code>int</code> علامت‌دار انجام می‌شد و برای <code>0x80</code> به بعد UB بود. همین خطا باعث می‌شود کد روزها درست کار کند و یک روز خراب شود.</span></li>
+  <li data-lines="12-13"><b class="what">استفاده.</b> بسته را با آدرس <code>&amp;frame[1]</code> می‌دهیم که بایت‌هایش 0x80 0x00 0x01 0x02 است.</li>
+</ol>
+<pre class="term" data-from="be32.c">
+$ gcc -std=c11 -Wall -Wextra -o be32 be32.c
+$ ./be32
+value = 0x80000102
+</pre></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>تقریبا همه در این درس دو جا گیر می‌کنند. اول: «اما روی سیستم من که کار می‌کند!». UB یعنی «کار می‌کند تا روزی که نکند»: کامپایلر جدید، پرچم جدید یا کدِ کنارش عوض شود. دوم: «هشدار را بی‌خیال، چون کد اجرا می‌شود». هشدارهای <code>-Wall -Wextra</code> اغلب نشانهٔ UB هستند؛ بی‌توجهی به آن‌ها گران تمام می‌شود. روی MCU وضع بدتر است چون «کرش» اغلب اتفاق نمی‌افتد و باگ بی‌صدا می‌ماند. پس سه عادت: هشدار را جدی بگیر، با <code>-O0</code> و <code>-O2</code> هر دو بساز، و منطقت را روی PC با sanitizer آزمون کن.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li><b>UB</b>: استاندارد هیچ نتیجه‌ای تضمین نمی‌کند. کامپایلر فرض می‌کند رخ نمی‌دهد و کد را بر آن اساس بهینه می‌کند؛ پس <code>-O0</code> و <code>-O2</code> ممکن است جواب متفاوت بدهند.</li>
+  <li>مثال‌ها: سرریز علامت‌دار، خارج از آرایه، <code>*NULL</code>، متغیر مقداردهی‌نشده، شیفت زیاد، ناهم‌ترازی، aliasing، نوشتن در رشتهٔ ثابت، اشاره‌گر آویزان.</li>
+  <li>«مشخص‌نشده» (ترتیب ارزیابی) و «پیاده‌ساز-تعریف» (علامت <code>char</code>) کم‌خطرترند ولی کد را غیرقابل‌حمل می‌کنند.</li>
+  <li>تله‌های ARM/MCU: ارتقای صحیح (<code>~a</code>، <code>x * x</code>، <code>hi &lt;&lt; 24</code>)، <code>char</code> بی‌علامت، <code>sizeof</code> پارامتر آرایه.</li>
+  <li>ماکرو بدون پرانتز، <code>;</code> اضافه، <code>break</code> فراموش‌شده، dangling else: با آکولاد و پرانتز و هشدار.</li>
+  <li>ابزار: <code>-Wall -Wextra</code> در دو سطح بهینه‌سازی، <code>-fsanitize=undefined,address</code> روی PC، تست با gcc و clang.</li>
+</ul>
+<p>درس بعد: <a href="6-3.html">۶.۳ کد امن و آنالیز ایستا</a>. درس قبل: <a href="6-1.html">۶.۱ دیباگ</a>.</p></div>
+
+</article>
+</body>
+</html>
