@@ -1,0 +1,1385 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>بهینه‌سازی، اندازه کد و فایل map · C برای میکروکنترلر</title>
+<meta name="description" content="بهینه‌سازی کد C برای میکروکنترلر با عدد واقعی: اندازه‌گیری با arm-none-eabi-size، مقایسهٔ -O0 تا -Os، خواندن اسمبلی و فایل map، هزینهٔ float و شمارندهٔ چرخه DWT.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="6-5">
+
+<p class="lede">برنامه‌ات درست کار می‌کند، ولی Flash دارد پر می‌شود یا حلقه‌ای آن‌قدر کند است که وقفه‌ها را از دست می‌دهی. اولین غریزهٔ بیشتر ما این است که «کد را دستی ریز‌ریز کنم». استادها اول <b>اندازه می‌گیرند</b>، بعد یک چیز را عوض می‌کنند و دوباره اندازه می‌گیرند. در این درس با ابزارهای واقعی (<code>arm-none-eabi-size</code>، <code>nm</code>، فایل map، <code>-S</code> و شمارندهٔ چرخهٔ DWT) و عددهای واقعی یاد می‌گیری کامپایلر چه کارهایی برایت می‌کند و کجا باید خودت دخالت کنی.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>با <code>arm-none-eabi-size</code> بگویی برنامه چقدر Flash و چقدر RAM می‌گیرد</li>
+    <li>فرق <code>-O0</code>، <code>-Og</code>، <code>-O1</code>، <code>-O2</code>، <code>-O3</code> و <code>-Os</code> را با عدد بگویی</li>
+    <li>اسمبلی تولیدشده را با <code>-S</code> ببینی و سه کار اصلی کامپایلر (ثابت‌گذاری، حذف کد مرده، inline) را تشخیص بدهی</li>
+    <li>با <code>--gc-sections</code> و فایل map پیدا کنی چه چیزی جا خورده و چه چیزی دور ریخته شده</li>
+    <li>هزینهٔ <code>float</code>، <code>double</code> و تقسیم را روی Cortex-M4 و Cortex-M0 بشناسی</li>
+    <li>زمان اجرا را با شمارندهٔ چرخهٔ DWT اندازه بگیری و بدانی چرا «زودرس بهینه نکن»</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="5-1.html">۵.۱</a> (بخش‌های <code>.text</code>، <code>.data</code>، <code>.bss</code> و اسکریپت لینکر)</li>
+    <li>درس <a href="3-6.html">۳.۶</a> (<code>volatile</code>) و <a href="4-7.html">۴.۷</a> (سرریز و عدد ثابت)</li>
+    <li>ابزار <code>arm-none-eabi-gcc</code> و <code>binutils</code> (درس <a href="1-3.html">۱.۳</a>)</li>
+    <li>برد لازم نیست؛ همهٔ اندازه‌ها از کامپایل واقعی روی PC آمده. فقط بخش زمان‌سنجی روی برد معنا دارد</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: بستن چمدان</h2>
+<p>فرض کن قرار است به سفر بروی و چمدانت فقط ۲۰ کیلو جا دارد. چند راه داری: لباس‌ها را تا کنی، چیزهای غیرضروری را نبری، یا یک چمدان بزرگ‌تر بخری. ولی اگر ندانی <b>چمدان الان چند کیلو است</b>، هیچ‌کدام از این‌ها را نمی‌توانی درست انجام دهی. بعضی‌ها ساعت‌ها لباس تا می‌کنند و بعد می‌بینند آنچه سنگین بود کفش‌ها بودند.</p>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>کامپایلر مثل یک چمدان‌بند حرفه‌ای است. اگر بگویی «فقط سریع ببند» (<code>-O0</code>)، همه‌چیز را همان‌طور که هست می‌ریزد داخل، بدون فکر. اگر بگویی «کوچک‌ترین حجم» (<code>-Os</code>)، همه‌چیز را تا می‌کند و بعضی چیزهای اضافه را دور می‌گذارد. ولی <b>ترازو</b> را باید خودت بیاوری: <code>size</code>، فایل map و شمارندهٔ چرخه. بدون ترازو، بهینه‌سازی فقط حدس است.</p></div>
+
+<p>در میکروکنترلر «بهینه» یعنی چه؟ سه چیز داریم و معمولا نمی‌شود هر سه را با هم کامل داشت:</p>
+<ul>
+  <li><b>اندازه:</b> چقدر Flash (برای کد و ثابت‌ها) و چقدر RAM (برای متغیرها و پشته) می‌گیریم؟</li>
+  <li><b>سرعت:</b> یک کار چند چرخهٔ ساعت طول می‌کشد؟ (چرخه = یک تیک کلاک CPU. با کلاک ۱۶ مگاهرتز، هر چرخه ۶۲٫۵ نانوثانیه است.)</li>
+  <li><b>خوانایی و دیباگ‌پذیری:</b> آیا می‌توانی با GDB خط به خط جلو بروی و مقدار متغیرها را ببینی؟</li>
+</ul>
+<p>هر بار که یکی را بهتر می‌کنی، معمولا یکی از دو تای دیگر بدتر می‌شود. به همین دلیل اول باید بدانی <b>کدام محدودیت را داری</b>: Flash تنگ است؟ CPU دیر می‌رسد؟ یا فقط دلت می‌خواهد «سریع‌تر» باشد؟ اگر هیچ محدودیتی نداری، بهترین بهینه‌سازی این است که کاری نکنی.</p>
+
+<h2 id="size">اول ترازو: کد ما چقدر جا می‌گیرد؟</h2>
+<p>برای اندازه‌گیری یک برنامهٔ کوچک ولی واقعی روی STM32F411 می‌سازیم: یک حلقهٔ بی‌پایان که هر بار یک نمونه از «سنسور» می‌خواند، میانگین ۸ نمونهٔ آخر را حساب می‌کند، به میلی‌ولت تبدیل می‌کند، از یک جدول ثابت مقدار خروجی برمی‌دارد و یک CRC از پنجره در تاریخچه می‌ریزد. (در این درس <code>GPIOA_IDR</code> نقش سنسور و <code>GPIOA_ODR</code> نقش خروجی را دارد؛ فقط برای اینکه دسترسی‌ها <code>volatile</code> و واقعی باشند.)</p>
+<p>پروژه سه فایل دارد. دو تای اول را در درس <a href="5-1.html">۵.۱</a> دیده‌ای؛ اینجا فقط برای کامل‌بودن می‌آیند.</p>
+
+<div class="code" data-file="startup.c" data-lang="c" data-verify="arm-link" data-project="fw65" id="code1">
+<pre>
+#include &lt;stdint.h&gt;
+
+extern uint32_t _estack, _sidata, _sdata, _edata, _sbss, _ebss;
+int main(void);
+void Reset_Handler(void);
+
+__attribute__((section(".isr_vector"), used))
+void (*const vector_table[])(void) = {
+    (void (*)(void))&amp;_estack,   // مقدار اولیهٔ SP
+    Reset_Handler,              // نقطهٔ شروع
+};
+
+void Reset_Handler(void)
+{
+    uint32_t *src = &amp;_sidata;
+    for (uint32_t *dst = &amp;_sdata; dst &lt; &amp;_edata; ) {
+        *dst++ = *src++;        // کپی .data از Flash به RAM
+    }
+    for (uint32_t *dst = &amp;_sbss; dst &lt; &amp;_ebss; ) {
+        *dst++ = 0u;            // صفر کردن .bss
+    }
+    main();
+    for (;;) {
+    }
+}
+</pre></div>
+<ol class="walk" data-for="code1">
+  <li data-lines="7-11"><b class="what">جدول وقفه.</b> کلمهٔ اول مقدار اولیهٔ پشته و کلمهٔ دوم آدرس <code>Reset_Handler</code> است. <span class="why">دلیل: CPU بعد از ریست همین دو کلمهٔ ابتدای Flash را می‌خواند (درس ۵.۱).</span></li>
+  <li data-lines="15-18"><b class="what">کپی <code>.data</code>.</b> مقدار اولیهٔ متغیرهای غیرصفر در Flash خوابیده و باید به RAM بیاید. <span class="why">دلیل: <code>calls = 5</code> فقط وقتی در RAM هم ۵ است که این حلقه اجرا شده باشد.</span></li>
+  <li data-lines="19-21"><b class="what">صفر کردن <code>.bss</code>.</b> همهٔ متغیرهای سراسری بدون مقدار اولیه صفر می‌شوند.</li>
+  <li data-lines="22-25"><b class="what">صدا زدن main.</b> اگر برگشت، در یک حلقهٔ بی‌پایان می‌مانیم.</li>
+</ol>
+
+<div class="code" data-file="link.ld" data-lang="ld" data-verify="arm-link" data-project="fw65" id="code2">
+<pre>
+ENTRY(Reset_Handler)
+_estack = ORIGIN(RAM) + LENGTH(RAM);
+
+MEMORY
+{
+    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 512K
+    RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
+}
+
+SECTIONS
+{
+    .isr_vector : { . = ALIGN(4); KEEP(*(.isr_vector)) . = ALIGN(4); } &gt; FLASH
+    .text       : { . = ALIGN(4); *(.text*) . = ALIGN(4); } &gt; FLASH
+    .rodata     : { . = ALIGN(4); *(.rodata*) . = ALIGN(4); } &gt; FLASH
+    _sidata = LOADADDR(.data);
+    .data : { . = ALIGN(4); _sdata = .; *(.data*) . = ALIGN(4); _edata = .; } &gt; RAM AT &gt; FLASH
+    .bss  : { . = ALIGN(4); _sbss = .; *(.bss*) *(COMMON) . = ALIGN(4); _ebss = .; } &gt; RAM
+    /DISCARD/ : { *(.ARM.exidx*) *(.comment) }
+}
+</pre></div>
+<ol class="walk" data-for="code2">
+  <li data-lines="1-2"><b class="what">ورود و بالای پشته.</b> <code>_estack</code> انتهای RAM است؛ پشته از آنجا به سمت پایین رشد می‌کند.</li>
+  <li data-lines="4-8"><b class="what">دو ناحیهٔ حافظه.</b> Flash نیم مگابایت از <code>0x08000000</code> و RAM ۱۲۸ کیلوبایت از <code>0x20000000</code>. <span class="why">دلیل: بعدا <code>--print-memory-usage</code> درصد پر بودن همین دو ناحیه را نشان می‌دهد.</span></li>
+  <li data-lines="12-14"><b class="what">کد و ثابت‌ها در Flash.</b> جدول وقفه اول می‌آید (<code>KEEP</code> یعنی حتی اگر کسی صدایش نزد نگهش دار)، بعد <code>.text</code> و <code>.rodata</code>.</li>
+  <li data-lines="15-17"><b class="what">داده‌ها در RAM.</b> <code>.data</code> در RAM زندگی می‌کند ولی تصویر اولیه‌اش در Flash است (<code>AT &gt; FLASH</code>). <code>.bss</code> فقط RAM می‌گیرد.</li>
+  <li data-lines="18"><b class="what">دور ریختنی‌ها.</b> اطلاعات اضافی که در حافظه لازم نیستند.</li>
+</ol>
+
+<div class="code" data-file="app.c" data-lang="c" data-verify="arm-link" data-project="fw65" id="code3">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stddef.h&gt;
+
+#define SENSOR_REG (*(volatile uint32_t *)0x40020010u)  /* GPIOA_IDR؛ اینجا نقش سنسور */
+#define OUT_REG    (*(volatile uint32_t *)0x40020014u)  /* GPIOA_ODR؛ اینجا نقش خروجی */
+
+static const uint16_t curve[16] = {         /* جدول ثابت: می‌رود Flash */
+    0, 12, 40, 90, 160, 250, 360, 490, 640, 810, 1000, 1210, 1440, 1690, 1960, 2250
+};
+uint8_t history[64];                        /* بافر تاریخچه: می‌رود .bss */
+static uint16_t win[8];                     /* پنجرهٔ میانگین: آن هم .bss */
+uint32_t calls = 5;                         /* مقدار اولیهٔ غیرصفر: می‌رود .data */
+
+static uint32_t scale_mv(uint32_t raw)      /* عدد ۱۲ بیتی به میلی‌ولت */
+{
+    return raw * 3300u / 4095u;
+}
+
+static uint32_t average(const uint16_t *a, size_t n)
+{
+    uint32_t sum = 0;
+    for (size_t i = 0; i &lt; n; i++) {
+        sum += a[i];
+    }
+    return sum / n;
+}
+
+static uint8_t crc8(const uint8_t *d, size_t n)
+{
+    uint8_t crc = 0;
+    for (size_t i = 0; i &lt; n; i++) {
+        crc ^= d[i];
+        for (int b = 0; b &lt; 8; b++) {
+            crc = (crc &amp; 0x80u) ? (uint8_t)((crc &lt;&lt; 1) ^ 0x07u) : (uint8_t)(crc &lt;&lt; 1);
+        }
+    }
+    return crc;
+}
+
+uint32_t diag_dump(void)                    /* هیچ‌کس صدایش نمی‌زند */
+{
+    uint32_t s = 0;
+    for (size_t i = 0; i &lt; 16; i++) {
+        s += curve[i] * (uint32_t)(i + 1u);
+    }
+    return s;
+}
+
+int main(void)
+{
+    uint32_t k = 0;
+
+    for (;;) {
+        win[k &amp; 7u] = (uint16_t)SENSOR_REG;
+        k++;
+        uint32_t mv = scale_mv(average(win, 8));
+        OUT_REG = curve[(mv &gt;&gt; 8) &amp; 15u];
+        history[k &amp; 63u] = crc8((const uint8_t *)win, sizeof win);
+        calls++;
+    }
+}
+</pre></div>
+<ol class="walk" data-for="code3">
+  <li data-lines="4-5"><b class="what">دو «رجیستر» ساختگی.</b> آدرس‌های <code>GPIOA_IDR</code> و <code>GPIOA_ODR</code> با <code>volatile</code>. <span class="why">دلیل: بدون <code>volatile</code> کامپایلر خواندن سنسور را حذف یا ادغام می‌کرد و مقایسهٔ ما بی‌معنی می‌شد.</span></li>
+  <li data-lines="7-9"><b class="what">جدول ثابت.</b> <code>static const</code> یعنی فقط‌خواندنی؛ کامپایلر آن را در <code>.rodata</code> یعنی Flash می‌گذارد.</li>
+  <li data-lines="10-11"><b class="what">داده‌های صفر.</b> <code>history</code> و <code>win</code> مقدار اولیه ندارند و در <code>.bss</code> می‌روند: ۶۴ + ۱۶ = ۸۰ بایت RAM.</li>
+  <li data-lines="12"><b class="what">داده با مقدار اولیه.</b> <code>calls = 5</code> در <code>.data</code> می‌رود: ۴ بایت RAM و ۴ بایت تصویر در Flash.</li>
+  <li data-lines="14-17"><b class="what">تبدیل به میلی‌ولت.</b> ضرب و تقسیم صحیح. <span class="why">دلیل: تقسیم بر ۴۰۹۵ (نه توان ۲) روی Cortex-M0 گران است؛ در بخش تقسیم می‌بینی.</span></li>
+  <li data-lines="19-26"><b class="what">میانگین.</b> جمع همهٔ خانه‌ها و تقسیم بر <code>n</code>. در <code>main</code> همیشه با <code>n = 8</code> صدا زده می‌شود.</li>
+  <li data-lines="28-38"><b class="what">CRC-8.</b> یک حلقهٔ تودرتو (بایت‌ها و ۸ بیت هر بایت) که در درس‌های قبل دیده‌ای.</li>
+  <li data-lines="40-47"><b class="what">تابع بی‌مشتری.</b> <code>diag_dump</code> خارجی (بدون <code>static</code>) است ولی در <code>main</code> صدایش نمی‌زنیم؛ مهمان بخش <code>gc-sections</code> است.</li>
+  <li data-lines="49-61"><b class="what">حلقهٔ اصلی.</b> نمونه را در پنجره می‌ریزد (اندیس <code>k &amp; 7</code> دور می‌زند)، میانگین و mv را حساب می‌کند، خروجی را می‌نویسد و CRC را ذخیره می‌کند.</li>
+</ol>
+
+<p>حالا با شش سطح بهینه‌سازی می‌سازیم و با <code>arm-none-eabi-size</code> اندازه می‌گیریم. <code>-nostdlib</code> یعنی هیچ کتابخانه‌ای اضافه نکن؛ <code>-T link.ld</code> یعنی از اسکریپت خودمان استفاده کن:</p>
+
+<pre class="term" data-nocheck>
+$ B="-mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -nostdlib -T link.ld"
+$ for o in O0 Og O1 O2 O3 Os; do arm-none-eabi-gcc $B -$o -o fw_$o.elf startup.c app.c; done
+$ arm-none-eabi-size fw_O0.elf fw_Og.elf fw_O1.elf fw_O2.elf fw_O3.elf fw_Os.elf
+   text	   data	    bss	    dec	    hex	filename
+    560	      4	     80	    644	    284	fw_O0.elf
+    324	      4	     80	    408	    198	fw_Og.elf
+    336	      4	     80	    420	    1a4	fw_O1.elf
+    328	      4	     80	    412	    19c	fw_O2.elf
+    476	      4	     80	    560	    230	fw_O3.elf
+    296	      4	     80	    380	    17c	fw_Os.elf
+</pre>
+
+<p>ستون‌ها را بخوان، چون همین یک جدول نصف بحث این درس است:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>ستون</th><th>چیست؟</th><th>کجا می‌نشیند؟</th></tr></thead>
+<tbody>
+<tr><td><code>text</code></td><td>کد ماشین + <code>.rodata</code> (ثابت‌ها) + جدول وقفه</td><td>Flash</td></tr>
+<tr><td><code>data</code></td><td>متغیرهای با مقدار اولیهٔ غیرصفر</td><td>RAM، و یک کپی تصویر در Flash</td></tr>
+<tr><td><code>bss</code></td><td>متغیرهای سراسری/ایستا با مقدار صفر</td><td>فقط RAM (در Flash جا نمی‌گیرد)</td></tr>
+<tr><td><code>dec</code>، <code>hex</code></td><td>جمع سه ستون بالا، ده‌دهی و هگز</td><td>عدد کلی بی‌معنی‌تر از تفکیک است</td></tr>
+</tbody></table></div>
+<p><b>Flash مصرفی = text + data</b> (چون تصویر <code>.data</code> هم در Flash است) و <b>RAM مصرفی = data + bss</b> (پشته را جداگانه حساب کن؛ بعدا می‌بینی). برای <code>-Os</code>: Flash = ۲۹۶ + ۴ = ۳۰۰ بایت و RAM = ۴ + ۸۰ = ۸۴ بایت. لینکر خودش هم همین را می‌گوید، اگر <code>-Wl,--print-memory-usage</code> بدهی:</p>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-gcc $B -Os -Wl,--print-memory-usage -o fw_Os.elf startup.c app.c
+Memory region         Used Size  Region Size  %age Used
+           FLASH:         300 B       512 KB      0.06%
+             RAM:          84 B       128 KB      0.06%
+</pre>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 330" role="img" aria-label="نقشهٔ Flash و RAM برای برنامهٔ نمونه با -Os: بخش‌های isr_vector، text، rodata و تصویر data در Flash و data، bss و پشته در RAM">
+  <defs><marker id="ar65a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">اندازهٔ بخش‌ها بعد از ساخت با سطح Os (بایت)</text>
+  <text x="190" y="54" text-anchor="middle" class="s-tx mono" direction="ltr" font-size="14" font-weight="800">Flash @ 0x08000000</text>
+  <text x="590" y="54" text-anchor="middle" class="s-tx mono" direction="ltr" font-size="14" font-weight="800">RAM @ 0x20000000</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="50" y="66" width="280" height="30" fill="#b394ff"/>
+    <rect x="50" y="96" width="280" height="116" fill="#ffd60a"/>
+    <rect x="50" y="212" width="280" height="30" fill="#3fd3e6"/>
+    <rect x="50" y="242" width="280" height="30" fill="#ff9a4d"/>
+    <rect x="450" y="66" width="280" height="30" fill="#ff9a4d"/>
+    <rect x="450" y="96" width="280" height="60" fill="#ff86b3"/>
+    <rect x="450" y="156" width="280" height="116" fill="#fff" stroke-dasharray="7 5"/>
+  </g>
+  <g fill="#15120a" font-size="14" font-weight="800" text-anchor="middle" class="mono" direction="ltr">
+    <text x="190" y="86">.isr_vector : 8</text>
+    <text x="190" y="158">.text : 256</text>
+    <text x="190" y="232">.rodata : 32 (curve)</text>
+    <text x="190" y="262">.data image : 4</text>
+    <text x="590" y="86">.data : 4</text>
+    <text x="590" y="132">.bss : 80</text>
+  </g>
+  <text x="590" y="208" text-anchor="middle" class="s-tx" font-size="14" font-weight="700">بقیهٔ ۱۲۸ کیلوبایت: خالی</text>
+  <text x="590" y="230" text-anchor="middle" class="s-tx" font-size="14" font-weight="700">و در انتها، پشته (رو به پایین)</text>
+  <path d="M332 257C390 257 390 81 446 81" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar65a)"/>
+  <text x="392" y="176" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">هنگام بوت</text>
+  <text x="392" y="194" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">کپی می‌شود</text>
+  <text x="190" y="306" text-anchor="middle" class="s-tx mono" direction="ltr" font-size="14" font-weight="800">Flash = text + data = 300</text>
+  <text x="590" y="306" text-anchor="middle" class="s-tx mono" direction="ltr" font-size="14" font-weight="800">RAM = data + bss = 84 (+ stack)</text>
+</svg></div>
+<figcaption>هر بایت از برنامه جایی می‌نشیند. ستون <code>text</code> در <code>size</code> برابر جمع سه ناحیهٔ اول Flash است: ۸ + ۲۵۶ + ۳۲ = ۲۹۶. تصویر <code>.data</code> جدا (۴ بایت) شمرده می‌شود.</figcaption></figure>
+
+<h2 id="levels">شش سطح بهینه‌سازی، با عدد</h2>
+<p>گزینهٔ <code>-O</code> (حرف بزرگ O، نه صفر) که به آن <span class="term" data-t="opt_level">سطح بهینه‌سازی</span> می‌گویند، به کامپایلر می‌گوید چقدر برای بهتر کردن کد تلاش کند. تعریف رسمی هر سطح در مستندات GCC هست؛ خلاصهٔ کاربردی:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>سطح</th><th>هدف</th><th>Flash (<code>text</code>) در برنامهٔ ما</th><th>کجا به کار می‌آید</th></tr></thead>
+<tbody>
+<tr><td><code>-O0</code></td><td>بدون بهینه‌سازی؛ هر متغیر یک خانهٔ RAM، هر خط یک تکه کد</td><td>۵۶۰ بایت</td><td>پیش‌فرض GCC؛ دیباگ خط به خط</td></tr>
+<tr><td><code>-Og</code></td><td>بهینه‌سازی‌هایی که دیباگ را خراب نمی‌کنند</td><td>۳۲۴ بایت</td><td>توسعهٔ روزمره با دیباگر</td></tr>
+<tr><td><code>-O1</code></td><td>بهینه‌سازی‌های پایه</td><td>۳۳۶ بایت</td><td>کم‌کاربرد؛ حد وسط</td></tr>
+<tr><td><code>-O2</code></td><td>بیشتر بهینه‌سازی‌ها، بدون عوض‌کردن سرعت با حجم زیاد</td><td>۳۲۸ بایت</td><td>انتخاب رایج برای سرعت</td></tr>
+<tr><td><code>-O3</code></td><td>تهاجمی‌تر: باز کردن حلقه، inline بیشتر</td><td>۴۷۶ بایت</td><td>فقط وقتی اندازه گرفتی که می‌ارزد</td></tr>
+<tr><td><code>-Os</code></td><td>مثل <code>-O2</code> ولی کارهایی که کد را بزرگ می‌کنند ممنوع</td><td>۲۹۶ بایت</td><td>انتخاب رایج در MCU با Flash کم</td></tr>
+</tbody></table></div>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="نمودار میله‌ای اندازهٔ text برای شش سطح بهینه‌سازی: O0 برابر ۵۶۰، Og برابر ۳۲۴، O1 برابر ۳۳۶، O2 برابر ۳۲۸، O3 برابر ۴۷۶، Os برابر ۲۹۶ بایت">
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">اندازهٔ text (بایت) با شش سطح بهینه‌سازی</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="90" y="44" width="560" height="30" fill="#ff86b3"/>
+    <rect x="90" y="84" width="324" height="30" fill="#7ea3ff"/>
+    <rect x="90" y="124" width="336" height="30" fill="#7ea3ff"/>
+    <rect x="90" y="164" width="328" height="30" fill="#7ea3ff"/>
+    <rect x="90" y="204" width="476" height="30" fill="#ff9a4d"/>
+    <rect x="90" y="244" width="296" height="30" fill="#3ddc97"/>
+  </g>
+  <g class="mono s-tx" font-size="15" font-weight="800" text-anchor="start" direction="ltr">
+    <text x="30" y="65">-O0</text><text x="30" y="105">-Og</text><text x="30" y="145">-O1</text><text x="30" y="185">-O2</text><text x="30" y="225">-O3</text><text x="30" y="265">-Os</text>
+  </g>
+  <g class="mono" font-size="15" font-weight="800" fill="#15120a" direction="ltr">
+    <text x="102" y="65">560</text><text x="102" y="105">324</text><text x="102" y="145">336</text><text x="102" y="185">328</text><text x="102" y="225">476</text><text x="102" y="265">296</text>
+  </g>
+  <text x="380" y="292" text-anchor="middle" class="s-tx" font-size="13.5">مقیاس: هر ۱۰۰ بایت = ۱۰۰ واحد طول. هیچ سطحی «همیشه بهتر» نیست؛ -O3 از -O2 بزرگ‌تر شد.</text>
+</svg></div>
+<figcaption>همان کد C با شش سطح ساخته شد. بیشترین کاهش از <code>-O0</code> به بالاتر است؛ <code>-O3</code> حتی بزرگ‌تر از <code>-O2</code> درآمد.</figcaption></figure>
+
+<div class="callout warn"><div class="ct">این جدول قانون کلی نیست</div>
+<p>این اعداد فقط برای همین برنامهٔ ۶۰ خطی و این نسخهٔ کامپایلر (<code>arm-none-eabi-gcc</code> نسخهٔ ۱۳٫۲) است. در برنامهٔ تو ممکن است <code>-O2</code> از <code>-Os</code> کوچک‌تر شود یا <code>-O3</code> واقعا سریع‌تر باشد. تنها راه فهمیدن: سطح‌ها را روی <b>برنامهٔ خودت</b> بساز و اندازه بگیر. برای سرعت هم باید زمان‌سنجی کنی (بخش «زمان» را ببین).</p></div>
+
+<div class="callout tip"><div class="ct">توصیهٔ عملی</div>
+<ul>
+<li>توسعه و دیباگ: <code>-Og</code> یا <code>-O0</code> (با GDB متغیرها «بهینه‌شده و ناپدید» نمی‌شوند).</li>
+<li>محصول نهایی: معمولا <code>-Os</code> یا <code>-O2</code>؛ <b>همان سطحی را که می‌فرستی تست کن</b>. رفتار برنامه با <code>-O0</code> و <code>-O2</code> باید یکی باشد؛ اگر نیست، احتمالا رفتار تعریف‌نشده یا یک <code>volatile</code> فراموش‌شده داری (درس‌های <a href="6-2.html">۶.۲</a> و <a href="3-6.html">۳.۶</a>).</li>
+</ul></div>
+
+<h2 id="see">کامپایلر واقعا چه کار می‌کند؟ اسمبلی را ببین</h2>
+<p>گزینهٔ <code>-S</code> کامپایلر را بعد از تولید <span class="term" data-t="assembly_lang">اسمبلی</span> متوقف می‌کند و متن دستورهای CPU را می‌دهد. لازم نیست اسمبلی بنویسی؛ فقط باید بتوانی <b>بخوانی</b> که کامپایلر با کدت چه کرده. (در درس <a href="1-4.html">۱.۴</a> فایل <code>.s</code> را دیده بودی.) سه کار اصلی کامپایلر را با سه مثال کوچک می‌بینیم.</p>
+
+<h3 id="fold">کار ۱: ثابت‌گذاری (محاسبه در زمان کامپایل)</h3>
+<p>اگر همهٔ عددهای یک عبارت معلوم باشند، لازم نیست CPU هر بار آن را حساب کند؛ کامپایلر خودش یک‌بار حساب می‌کند و فقط جواب را می‌گذارد. به این کار می‌گویند <span class="term" data-t="constfold">ثابت‌گذاری</span> (constant folding).</p>
+
+<div class="code" data-file="fold.c" data-lang="c" data-verify="arm" id="code4">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define VREF_MV 3300u
+#define ADC_MAX 4095u
+
+uint32_t full_scale_uv(void)
+{
+    uint32_t mv = VREF_MV * 1000u / ADC_MAX * 2u;
+    return mv + 0u * 12345u;
+}
+</pre></div>
+<ol class="walk" data-for="code4">
+  <li data-lines="3-4"><b class="what">ثابت‌های نام‌دار.</b> ولتاژ مرجع و بیشینهٔ ADC با <code>#define</code>. <span class="why">دلیل: نام‌دار بودن خوانایی می‌دهد و هزینه‌ای ندارد؛ کامپایلر همه را با عدد جایگزین می‌کند.</span></li>
+  <li data-lines="8"><b class="what">عبارتی که همه‌اش عدد است.</b> ۳۳۰۰ × ۱۰۰۰ ÷ ۴۰۹۵ × ۲ = ۱۶۱۰ (تقسیم صحیح: ۸۰۵ و بعد ضرب در ۲).</li>
+  <li data-lines="9"><b class="what">جمع با صفر.</b> <code>0 * 12345</code> صفر است و اضافه‌کردنش اثری ندارد.</li>
+</ol>
+
+<pre class="term" data-nocheck>
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -ffreestanding -O0 -S -o - fold.c
+full_scale_uv:
+    push    {r7}
+    sub     sp, sp, #12
+    add     r7, sp, #0
+    movw    r3, #1610
+    str     r3, [r7, #4]
+    ldr     r3, [r7, #4]
+    mov     r0, r3
+    adds    r7, r7, #12
+    mov     sp, r7
+    pop     {r7}
+    bx      lr
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -ffreestanding -O2 -S -o - fold.c
+full_scale_uv:
+    movw    r0, #1610
+    bx      lr
+</pre>
+<p>حتی در <code>-O0</code> کامپایلر عدد <code>1610</code> را حساب کرده و هیچ تقسیمی در برنامه نیست (ثابت‌گذاری تقریبا همیشه فعال است). فرق <code>-O0</code> با <code>-O2</code> اینجاست که <code>-O0</code> جواب را اول در پشته (<code>str r3, [r7, #4]</code>) می‌نویسد و دوباره می‌خواند، یعنی ۱۱ دستور؛ <code>-O2</code> فقط ۲ دستور: مقدار را در <code>r0</code> بگذار و برگرد.</p>
+
+<div class="callout tip"><div class="ct">نتیجهٔ عملی برای تو</div>
+<p>لازم نیست <code>3300u * 1000u / 4095u</code> را خودت با ماشین‌حساب بزنی و عدد <code>805</code> را «جادویی» در کد بگذاری. عبارت خوانا را بنویس و به کامپایلر اعتماد کن. فقط مطمئن شو <b>همهٔ اجزا ثابت زمان کامپایل</b> هستند (<code>#define</code>، <code>enum</code>، <code>const</code> عددی در بیشتر موارد).</p></div>
+
+<h3 id="dead">کار ۲: حذف کد مرده و inline</h3>
+<p>کدی که هیچ‌وقت اجرا نمی‌شود یا نتیجه‌اش هیچ‌جا استفاده نمی‌شود، <span class="term" data-t="deadcode">کد مرده</span> (dead code) است. کامپایلر آن را دور می‌ریزد. کار دیگر کامپایلر <span class="term" data-t="inline">inline</span> است: به‌جای صدا زدن تابع کوچک، بدنهٔ آن را مستقیم در جای صدا می‌گذارد.</p>
+
+<div class="code" data-file="dead.c" data-lang="c" data-verify="arm" id="code5">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define DEBUG 0
+
+static uint32_t helper(uint32_t x)
+{
+    return x * 3u + 1u;
+}
+
+uint32_t run(uint32_t x)
+{
+    uint32_t y = helper(x);
+    if (DEBUG) {
+        y = y * 7u;
+    }
+    return y;
+}
+</pre></div>
+<ol class="walk" data-for="code5">
+  <li data-lines="3"><b class="what">کلید خاموش.</b> <code>DEBUG</code> صفر است، پس شرط <code>if (DEBUG)</code> هیچ‌وقت درست نمی‌شود.</li>
+  <li data-lines="5-8"><b class="what">تابع کوچک و ایستا.</b> <code>static</code> یعنی فقط همین فایل می‌بیندش؛ کامپایلر می‌داند همهٔ صدازننده‌ها را دیده است.</li>
+  <li data-lines="10-17"><b class="what">تابع اصلی.</b> <code>helper</code> را صدا می‌زند و شاخهٔ مرده را دارد.</li>
+</ol>
+
+<pre class="term" data-nocheck>
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -ffreestanding -O2 -S -o - dead.c
+run:
+    add     r0, r0, r0, lsl #1
+    adds    r0, r0, #1
+    bx      lr
+</pre>
+<p>با <code>-O2</code> کل تابع سه دستور است: <code>x + (x &lt;&lt; 1)</code> یعنی <code>3x</code>، بعد <code>+1</code>. سه اتفاق افتاد: (۱) شاخهٔ <code>if (DEBUG)</code> حذف شد، (۲) <code>helper</code> در جای صدا گذاشته شد (inline) و بدون فراخوانی <code>bl</code> جمع شد، (۳) خود تابع <code>helper</code> هم از خروجی رفت چون <code>static</code> بود و دیگر کسی نیاز نداشت. ضرب در ۳ هم با یک جمع و شیفت انجام شد.</p>
+<p>همین است که در <code>-O0</code> برنامه دو تابع جدا دارد (<code>helper</code> و <code>run</code>) با ذخیره و بازیابی <code>r7</code> و <code>sp</code>، ولی در <code>-O2</code> فقط یک تابع سه‌خطی می‌ماند.</p>
+
+<h3 id="loop">کار ۳: نگه داشتن متغیرها در رجیستر</h3>
+<p>بزرگ‌ترین فرق <code>-O0</code> با بقیه اینجاست. کد C ساده را ببین: جمع یک آرایه.</p>
+
+<div class="code" data-file="sum.c" data-lang="c" data-verify="arm" id="code6">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stddef.h&gt;
+
+uint32_t sum(const uint16_t *a, size_t n)
+{
+    uint32_t s = 0;
+    for (size_t i = 0; i &lt; n; i++) {
+        s += a[i];
+    }
+    return s;
+}
+</pre></div>
+<ol class="walk" data-for="code6">
+  <li data-lines="4"><b class="what">ورودی‌ها.</b> آدرس آرایه و تعداد عناصر. CPU آن‌ها را در <code>r0</code> و <code>r1</code> می‌گیرد (قرارداد فراخوانی ARM).</li>
+  <li data-lines="7-9"><b class="what">حلقه.</b> <code>s</code> و <code>i</code> دو متغیر محلی هستند. در <code>-O0</code> هر کدام یک خانهٔ پشته می‌شوند؛ در <code>-O2</code> فقط رجیستر.</li>
+  <li data-lines="10"><b class="what">برگرداندن نتیجه.</b> جواب باید در <code>r0</code> باشد.</li>
+</ol>
+
+<div class="code" data-lang="asm" id="asm1">
+<pre>
+sum:                            @ خروجی -O0
+    push    {r7}
+    sub     sp, sp, #20
+    add     r7, sp, #0
+    str     r0, [r7, #4]        @ a را در پشته ذخیره کن
+    str     r1, [r7]            @ n را در پشته ذخیره کن
+    movs    r3, #0
+    str     r3, [r7, #12]       @ s = 0 (در پشته)
+    movs    r3, #0
+    str     r3, [r7, #8]        @ i = 0 (در پشته)
+    b       .L2
+.L3:
+    ldr     r3, [r7, #8]        @ i را بخوان
+    lsls    r3, r3, #1          @ i * 2 (اندازهٔ هر عنصر)
+    ldr     r2, [r7, #4]        @ a را بخوان
+    add     r3, r3, r2          @ آدرس a[i]
+    ldrh    r3, [r3]            @ a[i] را بخوان
+    mov     r2, r3
+    ldr     r3, [r7, #12]       @ s را بخوان
+    add     r3, r3, r2          @ s += a[i]
+    str     r3, [r7, #12]       @ s را برگردان به پشته
+    ldr     r3, [r7, #8]
+    adds    r3, r3, #1          @ i++
+    str     r3, [r7, #8]
+.L2:
+    ldr     r2, [r7, #8]
+    ldr     r3, [r7]
+    cmp     r2, r3              @ i &lt; n ؟
+    bcc     .L3
+    ldr     r3, [r7, #12]
+    mov     r0, r3
+    adds    r7, r7, #20
+    mov     sp, r7
+    pop     {r7}
+    bx      lr
+</pre></div>
+<ol class="walk" data-for="asm1">
+  <li data-lines="5-6"><b class="what">ذخیرهٔ پارامترها.</b> حتی ورودی‌ها اول در پشته می‌روند.
+    <span class="why">دلیل: در <code>-O0</code> قانون این است که «هر متغیر یک خانهٔ RAM دارد». دیباگر می‌تواند هر متغیر را بخواند، چون همیشه در حافظه است.</span></li>
+  <li data-lines="7-10"><b class="what">مقدار اولیه.</b> <code>s</code> و <code>i</code> در پشته صفر می‌شوند.</li>
+  <li data-lines="12-24"><b class="what">بدنهٔ حلقه.</b> برای هر دور: خواندن <code>i</code>، خواندن <code>a</code>، خواندن <code>s</code>، نوشتن <code>s</code>، خواندن <code>i</code>، نوشتن <code>i</code>.
+    <span class="why">دلیل: هر عملیات از حافظه بخواند و در حافظه بنویسد؛ هر <code>ldr</code>/<code>str</code> به RAM حداقل یک چرخه و معمولا بیشتر می‌برد.</span></li>
+  <li data-lines="25-29"><b class="what">شرط حلقه.</b> دوباره <code>i</code> و <code>n</code> از پشته خوانده و مقایسه می‌شوند.</li>
+</ol>
+
+<div class="code" data-lang="asm" id="asm2">
+<pre>
+sum:                            @ خروجی -O2
+    cbz     r1, .L4             @ اگر n == 0 برو به .L4
+    subs    r3, r0, #2          @ r3 = آدرس عنصر قبل از اولی
+    add     r1, r3, r1, lsl #1  @ r1 = آدرس پایان حلقه
+    movs    r0, #0              @ s = 0 (مستقیم در r0)
+.L3:
+    ldrh    r2, [r3, #2]!       @ عنصر بعدی را بخوان و اشاره‌گر را جلو ببر
+    cmp     r3, r1              @ به پایان رسیدیم؟
+    add     r0, r0, r2          @ s += a[i]
+    bne     .L3
+    bx      lr
+.L4:
+    mov     r0, r1              @ جواب صفر
+    bx      lr
+</pre></div>
+<ol class="walk" data-for="asm2">
+  <li data-lines="2"><b class="what">مراقبت از حالت n = 0.</b> اگر آرایه خالی باشد، حلقه اصلا اجرا نمی‌شود.</li>
+  <li data-lines="3-5"><b class="what">آماده‌سازی.</b> کامپایلر <code>i</code> را حذف کرد و به‌جایش با <b>اشاره‌گر</b> جلو می‌رود؛ <code>r1</code> نشان‌دهندهٔ پایان است. <code>s</code> مستقیم در <code>r0</code> می‌ماند، همان‌جایی که جواب باید باشد.</li>
+  <li data-lines="6-10"><b class="what">حلقهٔ چهاردستوری.</b> یک خواندن از حافظه (خود آرایه)، یک مقایسه، یک جمع و یک پرش. هیچ متغیری به پشته نمی‌رود.
+    <span class="why">دلیل: رجیسترها داخل CPU هستند و دسترسی به آن‌ها رایگان است؛ RAM دورتر است.</span></li>
+</ol>
+
+<p>مقایسهٔ یک دور حلقه: <b>در <code>-O0</code> ۱۶ دستور و ۹ دسترسی به RAM؛ در <code>-O2</code> فقط ۴ دستور و ۱ دسترسی</b> (خواندن خود عنصر). شمارش را از فهرست‌ها خودت هم می‌توانی انجام بدهی: در <code>.L3</code> و <code>.L2</code> بالا هر <code>ldr</code>/<code>str</code>/<code>ldrh</code> که به <code>[r7, ...]</code> یا <code>[r3]</code> اشاره دارد را بشمار.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 280" role="img" aria-label="مقایسهٔ یک دور حلقهٔ جمع در O0 و O2: در O0 هر متغیر در پشته RAM است و نه دسترسی در هر دور، در O2 متغیرها در رجیستر و فقط یک دسترسی به آرایه">
+  <defs><marker id="ar65b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="190" y="26" text-anchor="middle" class="s-tx mono" direction="ltr" font-size="17" font-weight="800">-O0</text>
+  <text x="570" y="26" text-anchor="middle" class="s-tx mono" direction="ltr" font-size="17" font-weight="800">-O2</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="30" y="46" width="130" height="150" rx="10" fill="#ffd60a"/>
+    <rect x="230" y="46" width="130" height="150" rx="10" fill="#ff86b3"/>
+    <rect x="410" y="46" width="130" height="150" rx="10" fill="#ffd60a"/>
+    <rect x="610" y="46" width="120" height="150" rx="10" fill="#7ea3ff"/>
+  </g>
+  <g fill="#15120a" font-size="14" font-weight="800" text-anchor="middle">
+    <text x="95" y="72">CPU</text>
+    <text x="95" y="98" class="mono" font-size="12.5">r2 r3 (موقت)</text>
+    <text x="295" y="72">پشته (RAM)</text>
+    <text x="295" y="102" class="mono">a</text><text x="295" y="130" class="mono">n</text><text x="295" y="158" class="mono">s</text><text x="295" y="186" class="mono">i</text>
+    <text x="475" y="72">CPU</text>
+    <text x="475" y="102" class="mono" font-size="12.5">r0 = s</text>
+    <text x="475" y="128" class="mono" font-size="12.5">r3 = اشاره‌گر</text>
+    <text x="475" y="154" class="mono" font-size="12.5">r1 = پایان</text>
+    <text x="475" y="180" class="mono" font-size="12.5">r2 = عنصر</text>
+    <text x="670" y="72">آرایه</text>
+    <text x="670" y="108" class="mono">a[0..n-1]</text>
+  </g>
+  <g stroke="#15120a" stroke-width="2.5" fill="none">
+    <path d="M162 96H226" marker-end="url(#ar65b)"/><path d="M226 112H162" marker-end="url(#ar65b)"/>
+    <path d="M162 130H226" marker-end="url(#ar65b)"/><path d="M226 146H162" marker-end="url(#ar65b)"/>
+    <path d="M162 164H226" marker-end="url(#ar65b)"/><path d="M226 180H162" marker-end="url(#ar65b)"/>
+    <path d="M542 108H606" marker-end="url(#ar65b)"/>
+  </g>
+  <text x="190" y="228" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="800">۱۶ دستور، ۹ دسترسی به RAM</text>
+  <text x="190" y="252" text-anchor="middle" class="s-tx" font-size="13">هر متغیر دائما رفت‌وبرگشت می‌کند</text>
+  <text x="570" y="228" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="800">۴ دستور، ۱ دسترسی</text>
+  <text x="570" y="252" text-anchor="middle" class="s-tx" font-size="13">فقط خود عنصر خوانده می‌شود</text>
+</svg></div>
+<figcaption>فرق اصلی <code>-O0</code> و <code>-O2</code>: متغیرهای محلی در RAM می‌مانند یا در رجیستر. برای همین اجرای <code>-O0</code> کندتر و کدش بزرگ‌تر است، ولی دیباگر همه‌چیز را می‌بیند.</figcaption></figure>
+
+<h2 id="volatile">بهینه‌سازی و <span class="en">volatile</span>: دوستی که فراموشش می‌کنی</h2>
+<p>کامپایلر فرض می‌کند «اگر من متغیری را ننوشتم، مقدارش عوض نمی‌شود». برای حافظهٔ معمولی درست است، برای رجیستر سخت‌افزار یا متغیری که ISR عوضش می‌کند، غلط. درس <a href="3-6.html">۳.۶</a> را یادت هست؟ حالا ببین <code>-O2</code> با یک انتظار ساده چه می‌کند:</p>
+
+<div class="code" data-file="vol.c" data-lang="c" data-verify="arm" id="code7">
+<pre>
+#include &lt;stdint.h&gt;
+
+static uint32_t ready;                 /* بدون volatile */
+
+void wait_ready(void)
+{
+    while (ready == 0u) {
+    }
+}
+</pre></div>
+<ol class="walk" data-for="code7">
+  <li data-lines="3"><b class="what">پرچم.</b> فرض کن یک وقفه یا DMA بعدا آن را ۱ می‌کند. ما <code>volatile</code> نگذاشتیم.</li>
+  <li data-lines="5-9"><b class="what">انتظار.</b> تا وقتی پرچم صفر است می‌چرخد.
+    <span class="why">دلیل: در این فایل هیچ کدی <code>ready</code> را عوض نمی‌کند، پس کامپایلر نتیجه می‌گیرد که مقدارش هیچ‌وقت عوض نخواهد شد.</span></li>
+</ol>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -ffreestanding -O2 -S -o - vol.c
+wait_ready:
+.L2:
+    b       .L2
+</pre>
+<p>نتیجه یک پرش بی‌پایان به خودش است: کامپایلر دید <code>ready</code> صفر است و هرگز در این فایل نوشته نمی‌شود، پس خواندنش را کلا حذف کرد. در <code>-O0</code> همین کد درست کار می‌کند (هر بار <code>ldr</code> از RAM). یعنی برنامه‌ای که با <code>-O0</code> «کار می‌کرد» با <code>-O2</code> خراب می‌شود. راه‌حل: <code>static volatile uint32_t ready;</code></p>
+
+<div class="callout warn"><div class="ct">هشدار: «بهینه‌سازی باگ نمی‌سازد، باگ پنهان را رو می‌کند»</div>
+<p>اگر برنامه‌ات با <code>-O0</code> درست و با <code>-O2</code> غلط بود، کامپایلر را مقصر ندان. تقریبا همیشه مشکل از یکی از این‌هاست: <code>volatile</code> فراموش‌شده، رفتار تعریف‌نشده (درس <a href="6-2.html">۶.۲</a>)، متغیر بدون مقدار اولیه یا ترتیب دسترسی به حافظه بین ISR و برنامه (درس <a href="5-3.html">۵.۳</a>).</p></div>
+
+<h2 id="restrict"><span class="en">inline</span> و <span class="en">restrict</span>: دو قول به کامپایلر</h2>
+<p><b>static inline:</b> برای تابع‌های خیلی کوچک (مثل خواندن یک رجیستر) <code>static inline</code> در هدر می‌گذاری. <code>inline</code> فقط پیشنهاد است و کامپایلر تصمیم نهایی را می‌گیرد؛ <code>static</code> جلوی خطای «تعریف تکراری» در چند فایل را می‌گیرد. برخلاف ماکرو، نوع دارد و آرگومان را دوبار ارزیابی نمی‌کند (درس <a href="4-1.html">۴.۱</a>).</p>
+<p><b><span class="term" data-t="restrict_kw">restrict</span>:</b> اگر دو اشاره‌گر ممکن است به یک جا اشاره کنند، کامپایلر مجبور است بعد از هر نوشتن، مقدار خوانده‌شده را دوباره بخواند. با <code>restrict</code> قول می‌دهی «این دو اشاره‌گر هیچ‌وقت همپوشانی ندارند» و کامپایلر می‌تواند خواندن‌ها را کم کند:</p>
+
+<div class="code" data-file="restr.c" data-lang="c" data-verify="arm" id="code8">
+<pre>
+#include &lt;stdint.h&gt;
+
+void twice(uint32_t *a, const uint32_t *b)
+{
+    *a += *b;
+    *a += *b;
+}
+
+void twice_r(uint32_t *restrict a, const uint32_t *restrict b)
+{
+    *a += *b;
+    *a += *b;
+}
+</pre></div>
+<ol class="walk" data-for="code8">
+  <li data-lines="3-7"><b class="what">نسخهٔ معمولی.</b> اگر <code>a</code> و <code>b</code> یکی باشند، خط اول <code>*b</code> را هم عوض می‌کند. پس کامپایلر باید <code>*b</code> را برای خط دوم دوباره بخواند.</li>
+  <li data-lines="9-13"><b class="what">نسخهٔ restrict.</b> با قول عدم همپوشانی، <code>*b</code> فقط یک‌بار خوانده می‌شود.
+    <span class="why">دلیل: اگر قولت را بشکنی (اشاره‌گرها همپوشانی داشته باشند)، رفتار برنامه تعریف‌نشده است؛ کامپایلر هیچ هشداری نمی‌دهد.</span></li>
+</ol>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -ffreestanding -O2 -S -o - restr.c
+twice:
+    ldr     r2, [r1]
+    ldr     r3, [r0]
+    add     r3, r3, r2
+    str     r3, [r0]
+    ldr     r2, [r1]            @ دوباره *b را می‌خواند!
+    add     r3, r3, r2
+    str     r3, [r0]
+    bx      lr
+twice_r:
+    ldr     r3, [r0]
+    ldr     r2, [r1]
+    add     r3, r3, r2, lsl #1  @ یک‌جا دو بار اضافه کرد
+    str     r3, [r0]
+    bx      lr
+</pre>
+<p>نسخهٔ معمولی سه خواندن و دو نوشتن دارد؛ نسخهٔ <code>restrict</code> دو خواندن و یک نوشتن. <code>restrict</code> ابزار حرفه‌ای است و اشتباهش سخت پیدا می‌شود؛ فقط وقتی اندازه‌گیری نشان داد لازم است و ۱۰۰٪ مطمئنی همپوشانی ندارند، از آن استفاده کن.</p>
+
+<h2 id="gc">فایل map و دور ریختن کد بی‌مصرف</h2>
+<p>برنامه‌ات یک تابع خارجی دارد که هیچ‌کس صدایش نمی‌زند (<code>diag_dump</code>). چون <code>static</code> نیست، کامپایلر نمی‌تواند مطمئن باشد فایل دیگری از آن استفاده نمی‌کند. پس می‌ماند و ۷۰ بایت Flash می‌گیرد:</p>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-nm --size-sort -S fw_O0.elf
+20000000 00000004 D calls
+08000000 00000008 R vector_table
+20000044 00000010 b win
+08000210 00000020 r curve
+08000064 00000030 t scale_mv
+20000004 00000040 B history
+08000094 00000046 t average
+08000146 00000046 T diag_dump
+08000008 0000005c T Reset_Handler
+080000da 0000006c t crc8
+0800018c 00000084 T main
+</pre>
+<p>ستون‌ها: آدرس، اندازه (هگز)، نوع و نام. حرف بزرگ یعنی نماد <b>سراسری</b> و حرف کوچک یعنی <b>محلی (static)</b>: <code>T/t</code> کد، <code>R/r</code> فقط‌خواندنی، <code>D/d</code> دادهٔ با مقدار اولیه، <code>B/b</code> دادهٔ بدون مقدار اولیه. <code>--size-sort</code> از کوچک به بزرگ مرتب می‌کند؛ پس آخرین سطرها بزرگ‌ترین‌ها هستند و اگر می‌خواهی Flash کم کنی، از همان‌جا شروع کن. (اینجا <code>diag_dump</code> با <code>0x46</code> یعنی ۷۰ بایت در <code>-O0</code> آمده است.)</p>
+
+<p>برای دور ریختن تابع‌ها و متغیرهایی که هیچ‌کس استفاده نمی‌کند، دو گام لازم است:</p>
+<ol class="steps">
+  <li><b>هنگام کامپایل:</b> <code>-ffunction-sections -fdata-sections</code> هر تابع و متغیر را در «بخش» مخصوص خودش می‌گذارد (به‌جای یک <code>.text</code> بزرگ، <code>.text.main</code> و <code>.text.diag_dump</code> و …).</li>
+  <li><b>هنگام لینک:</b> <code>-Wl,--gc-sections</code> (<span class="term" data-t="gcsections">garbage collect sections</span>) هر بخشی را که از نقطهٔ ورود قابل دسترسی نیست دور می‌ریزد. جدول وقفه با <code>KEEP</code> در اسکریپت لینکر محافظت می‌شود.</li>
+</ol>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-gcc $B -Os -ffunction-sections -fdata-sections -Wl,--gc-sections \
+      -Wl,-Map=fw.map -o fw_gc.elf startup.c app.c
+$ arm-none-eabi-size fw_Os.elf fw_gc.elf
+   text	   data	    bss	    dec	    hex	filename
+    296	      4	     80	    380	    17c	fw_Os.elf
+    272	      4	     80	    356	    164	fw_gc.elf
+</pre>
+<p>۲۴ بایت کمتر: تابع ۲۸ بایتی <code>diag_dump</code> رفت (و چند بایت هم در چیدمان و ترازبندی جابه‌جا شد). در برنامهٔ واقعی که کتابخانه‌های بزرگ (درایور، فرمت‌کننده، پروتکل) دارد و تو فقط بخشی را صدا می‌زنی، این گزینه صدها یا هزاران بایت صرفه‌جویی می‌کند. ESP-IDF و پروژه‌هایی که STM32CubeIDE می‌سازد معمولا از قبل این دو گزینه را دارند؛ ولی در پروژهٔ خودت باید با فایل map مطمئن شوی.</p>
+
+<p><b><span class="term" data-t="mapfile">فایل map</span></b> (با <code>-Wl,-Map=fw.map</code>) گزارش کامل لینکر است: هر بخش از کدام فایل آمد، در چه آدرسی نشست، و چه چیزهایی حذف شد. تکه‌های مهمش برای برنامهٔ ما (نام فایل‌های موقت کوتاه شده‌اند):</p>
+<pre class="term" data-nocheck>
+Discarded input sections
+ ...
+ .text.diag_dump
+                0x00000000       0x1c app.o        &lt;-- دور ریخته شد
+
+.text           0x08000008       0xe8
+ .text.Reset_Handler
+                0x08000008       0x40 startup.o
+                0x08000008                Reset_Handler
+ .text.startup.main
+                0x08000048       0xa8 app.o
+                0x08000048                main
+
+.rodata         0x080000f0       0x20
+ .rodata.curve  0x080000f0       0x20 app.o
+
+.data           0x20000000        0x4 load address 0x08000110
+ .data.calls    0x20000000        0x4 app.o
+
+.bss            0x20000004       0x50 load address 0x08000114
+ .bss.win       0x20000004       0x10 app.o
+ .bss.history   0x20000014       0x40 app.o
+</pre>
+<p>چطور بخوانی: هر بخش سه ستون دارد؛ <b>آدرس</b>، <b>اندازه</b> (هگز) و <b>فایل مبدأ</b>. <code>load address</code> کنار <code>.data</code> همان آدرس تصویر اولیه در Flash است. <code>.text.startup.main</code> یعنی GCC <code>main</code> را در بخش مخصوص راه‌اندازی گذاشته است. وقتی می‌پرسی «چرا Flash پر شد؟» ابتدا فایل map را باز کن و بزرگ‌ترین سطرها را پیدا کن؛ معمولا یک کتابخانهٔ فراموش‌شده مقصر است.</p>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: چرا اسم بخش‌ها شبیه <code>.text.main</code> است؟</div>
+<p>لینکر با الگوی <code>*(.text*)</code> در اسکریپت لینکر، همهٔ بخش‌هایی را که با <code>.text</code> شروع می‌شوند جمع می‌کند. وقتی هر تابع در بخش خودش باشد، لینکر می‌تواند تک‌تک را نگه دارد یا دور بریزد. بدون <code>-ffunction-sections</code>، همهٔ توابع یک فایل در یک بخش‌اند و یا همه می‌مانند یا همه می‌روند.</p></div>
+
+<h2 id="const">ثابت‌ها را در Flash نگه دار</h2>
+<p>یک جدول (مثل جدول <code>curve</code> بالا) اگر <code>const</code> نباشد، باید در RAM زندگی کند: مقدار اولیه‌اش در Flash است و هنگام بوت به RAM کپی می‌شود (همان حلقهٔ <code>Reset_Handler</code>). یعنی <b>دو برابر جا</b>: یک کپی در Flash و یک کپی در RAM.</p>
+
+<div class="code" data-file="tab.c" data-lang="c" data-verify="arm" id="code9">
+<pre>
+#include &lt;stdint.h&gt;
+
+#ifdef TABLE_CONST
+const
+#endif
+uint16_t curve[16] = {
+    0, 12, 40, 90, 160, 250, 360, 490, 640, 810, 1000, 1210, 1440, 1690, 1960, 2250
+};
+
+uint16_t lookup(uint32_t i)
+{
+    return curve[i &amp; 15u];
+}
+</pre></div>
+<ol class="walk" data-for="code9">
+  <li data-lines="3-5"><b class="what">const اختیاری.</b> با <code>-DTABLE_CONST</code> کلمهٔ <code>const</code> اضافه می‌شود.</li>
+  <li data-lines="6-8"><b class="what">جدول سراسری.</b> ۱۶ عدد ۱۶ بیتی = ۳۲ بایت.</li>
+  <li data-lines="10-13"><b class="what">استفاده.</b> با <code>&amp; 15</code> اندیس را در محدوده نگه می‌دارد.</li>
+</ol>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -ffreestanding -Os -c tab.c -o tab_ram.o
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -ffreestanding -Os -DTABLE_CONST -c tab.c -o tab_flash.o
+$ arm-none-eabi-size tab_ram.o tab_flash.o
+   text	   data	    bss	    dec	    hex	filename
+     16	     32	      0	     48	     30	tab_ram.o
+     48	      0	      0	     48	     30	tab_flash.o
+</pre>
+<p>بدون <code>const</code>: ۳۲ بایت <code>data</code> (یعنی ۳۲ بایت RAM و ۳۲ بایت تصویر در Flash). با <code>const</code>: ۳۲ بایت <b>فقط در Flash</b> و RAM صفر. برای جدول‌های بزرگ (فونت، سینوس، پیام‌ها) این تفاوت هزاران بایت RAM است. (توجه: اگر جدول <code>static</code> باشد و هیچ‌جا نوشته نشود، خود GCC هم آن را در <code>.rodata</code> می‌گذارد، ولی روی آن حساب نکن؛ <code>const</code> را صریح بنویس و ثابت‌بودن را به کامپایلر و خواننده نشان بده. درس <a href="3-5.html">۳.۵</a> را ببین.)</p>
+<div class="callout info"><div class="ct">ESP32 فرق دارد</div>
+<p>در ESP32 حافظهٔ Flash بیرون از تراشه است و از راه یک <b>کش</b> خوانده می‌شود. ثابت‌ها در Flash می‌مانند ولی اولین دسترسی به یک ثابت (وقتی در کش نیست) کندتر است. جزئیات را در بخش «ESP32 و IRAM» پایین‌تر می‌بینی.</p></div>
+
+
+<h2 id="float">هزینهٔ <span class="en">float</span>، <span class="en">double</span> و تقسیم</h2>
+<p>در PC نوشتن <code>double</code> و تقسیم بی‌دردسر است. در میکروکنترلر این‌ها قیمت دارند و قیمتشان به <b>ساختار CPU</b> بستگی دارد. سه واقعیت را ببین:</p>
+<ol class="steps">
+  <li><b>STM32F411 (Cortex-M4F):</b> یک واحد ممیز شناور (<span class="term" data-t="fpu">FPU</span>) <b>تک‌دقتی</b> دارد. یعنی <code>float</code> (۳۲ بیتی) با یک دستور سخت‌افزاری انجام می‌شود، ولی <code>double</code> (۶۴ بیتی) نه.</li>
+  <li><b>Cortex-M0 و M0+:</b> نه FPU دارند و نه دستور تقسیم سخت‌افزاری.</li>
+  <li><b>هرچه سخت‌افزار ندارد، نرم‌افزار جبران می‌کند:</b> کتابخانهٔ کامپایلر (<code>libgcc</code>) تابع‌هایی مثل <code>__aeabi_dmul</code> و <code>__aeabi_uidiv</code> دارد که با ده‌ها یا صدها دستور همان کار را می‌کنند (به این می‌گویند <span class="term" data-t="softfloat">ممیز شناور نرم‌افزاری</span>).</li>
+</ol>
+
+<div class="code" data-file="fl_main.c" data-lang="c" data-verify="arm" id="code10">
+<pre>
+#include &lt;stdint.h&gt;
+
+volatile uint32_t in_raw;
+volatile uint32_t out_val;
+
+int main(void)
+{
+    for (;;) {
+#if defined(USE_DOUBLE)
+        double t = (double)in_raw * 3.3 / 4095.0;
+        out_val = (uint32_t)(t * 1000.0);
+#elif defined(USE_FLOAT)
+        float t = (float)in_raw * 3.3f / 4095.0f;
+        out_val = (uint32_t)(t * 1000.0f);
+#else
+        out_val = in_raw * 3300u / 4095u;
+#endif
+    }
+}
+</pre></div>
+<ol class="walk" data-for="code10">
+  <li data-lines="3-4"><b class="what">ورودی و خروجی <code>volatile</code>.</b> تا کامپایلر محاسبه را حذف نکند.</li>
+  <li data-lines="9-11"><b class="what">نسخهٔ double.</b> ثابت <code>3.3</code> بدون <code>f</code> از نوع <code>double</code> است.
+    <span class="why">دلیل: در C، عدد اعشاری بدون پسوند <code>double</code> حساب می‌شود؛ یک <code>3.3</code> فراموش‌شده کل عبارت را <code>double</code> می‌کند.</span></li>
+  <li data-lines="12-14"><b class="what">نسخهٔ float.</b> با پسوند <code>f</code> همه‌چیز تک‌دقتی می‌ماند.</li>
+  <li data-lines="15-17"><b class="what">نسخهٔ صحیح.</b> همان تبدیل با عدد صحیح و بدون اعشار (ضرب، بعد تقسیم).</li>
+</ol>
+
+<p>همان برنامه را چهار جور می‌سازیم: صحیح، <code>float</code> با FPU سخت‌افزاری، <code>float</code> بدون FPU (نرم‌افزاری) و <code>double</code>. همه با <code>-Os</code> و کتابخانهٔ <code>libgcc</code>:</p>
+<pre class="term" data-nocheck>
+$ B="-mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -nostdlib -Os -T link.ld"
+$ arm-none-eabi-gcc $B -o f_int.elf startup.c fl_main.c -lgcc
+$ arm-none-eabi-gcc $B -DUSE_FLOAT -mfloat-abi=hard -mfpu=fpv4-sp-d16 -o f_hw.elf startup.c fl_main.c -lgcc
+$ arm-none-eabi-gcc $B -DUSE_FLOAT -o f_soft.elf startup.c fl_main.c -lgcc
+$ arm-none-eabi-gcc $B -DUSE_DOUBLE -o f_dbl.elf startup.c fl_main.c -lgcc
+$ arm-none-eabi-size f_int.elf f_hw.elf f_soft.elf f_dbl.elf
+   text	   data	    bss	    dec	    hex	filename
+    100	      0	      8	    108	     6c	f_int.elf
+    132	      0	      8	    140	     8c	f_hw.elf
+   1768	      0	      8	   1776	    6f0	f_soft.elf
+   2776	      0	      8	   2784	    ae0	f_dbl.elf
+</pre>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 270" role="img" aria-label="نمودار اندازهٔ text برای چهار نسخهٔ برنامه: صحیح ۱۰۰ بایت، float با FPU ۱۳۲، float نرم‌افزاری ۱۷۶۸، double ۲۷۷۶ بایت">
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">همان محاسبه، چهار روش (اندازهٔ text، بایت)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="210" y="44" width="18" height="34" fill="#3ddc97"/>
+    <rect x="210" y="94" width="24" height="34" fill="#3ddc97"/>
+    <rect x="210" y="144" width="318" height="34" fill="#ff9a4d"/>
+    <rect x="210" y="194" width="500" height="34" fill="#ff86b3"/>
+  </g>
+  <g class="s-tx" font-size="14.5" font-weight="800" text-anchor="start">
+    <text x="196" y="66">عدد صحیح</text><text x="196" y="116">float با FPU</text><text x="196" y="166">float نرم‌افزاری</text><text x="196" y="216">double</text>
+  </g>
+  <g class="mono s-tx" font-size="15" font-weight="800" direction="ltr">
+    <text x="246" y="66">100</text><text x="252" y="116">132</text><text x="536" y="166">1768</text>
+  </g>
+  <text x="218" y="216" class="mono" direction="ltr" font-size="15" font-weight="800" fill="#15120a">2776</text>
+  <text x="380" y="256" text-anchor="middle" class="s-tx" font-size="13.5">حدود ۷۰ بایت از هر عدد، کد راه‌انداز مشترک است. هزینهٔ اضافه فقط در سه ردیف پایین دیده می‌شود.</text>
+</svg></div>
+<figcaption><code>double</code> روی Cortex-M4F با FPU تک‌دقتی نرم‌افزاری است: تقریبا ۲۸ برابر نسخهٔ صحیح.</figcaption></figure>
+
+<p>حواست باشد این‌ها فقط <b>اندازهٔ کد</b> است؛ نرم‌افزاری بودن، کند هم هست (ده‌ها تا صدها چرخه برای یک ضرب <code>double</code>، به‌جای یک چرخه). و برای استفاده از FPU باید <b>دو کار</b> بکنی: پرچم‌های <code>-mfloat-abi=hard -mfpu=fpv4-sp-d16</code> را بدهی و در کد راه‌اندازی، دسترسی به FPU را روشن کنی (در مستندات Cortex-M4 به «CPACR» نگاه کن؛ اگر روشن نکنی، اولین دستور FPU باعث HardFault می‌شود).</p>
+
+<h3 id="div">تقسیم: M4 یک دستور، M0 یک تابع</h3>
+<div class="code" data-file="divs.c" data-lang="c" data-verify="arm" id="code11">
+<pre>
+#include &lt;stdint.h&gt;
+
+uint32_t div10(uint32_t x)
+{
+    return x / 10u;
+}
+
+uint32_t divn(uint32_t x, uint32_t n)
+{
+    return x / n;
+}
+</pre></div>
+<ol class="walk" data-for="code11">
+  <li data-lines="3-6"><b class="what">تقسیم بر ثابت.</b> مقسوم‌علیه از زمان کامپایل معلوم است.</li>
+  <li data-lines="8-11"><b class="what">تقسیم بر متغیر.</b> مقسوم‌علیه فقط در زمان اجرا معلوم می‌شود.</li>
+</ol>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -ffreestanding -O2 -S -o - divs.c
+div10:
+    ldr     r3, .L3
+    umull   r3, r0, r3, r0      @ ضرب ۶۴ بیتی به‌جای تقسیم
+    lsrs    r0, r0, #3
+    bx      lr
+divn:
+    udiv    r0, r0, r1          @ تقسیم سخت‌افزاری، یک دستور
+    bx      lr
+$ arm-none-eabi-gcc -mcpu=cortex-m0 -mthumb -std=gnu11 -ffreestanding -O2 -S -o - divs.c
+div10:
+    push    {r4, lr}
+    movs    r1, #10
+    bl      __aeabi_uidiv       @ تابع نرم‌افزاری
+    pop     {r4, pc}
+divn:
+    push    {r4, lr}
+    bl      __aeabi_uidiv
+    pop     {r4, pc}
+</pre>
+<p>روی M4 حتی <code>x / 10</code> با ضرب در یک عدد جادویی (معکوس تقریبی ۱۰) و شیفت انجام می‌شود، و <code>x / n</code> با یک <code>udiv</code>. روی M0 هر دو تقسیم به تابع <code>__aeabi_uidiv</code> می‌روند که در <code>libgcc</code> است و ده‌ها چرخه طول می‌کشد. نتیجهٔ عملی: <b>اگر می‌توانی مقسوم‌علیه را توان ۲ کن</b> (<code>x &gt;&gt; 3</code> به‌جای <code>x / 8</code>)، و روی M0 تقسیم را از حلقه‌های داغ بیرون ببر.</p>
+
+<div class="callout info"><div class="ct">و printf با <code>%f</code>؟</div>
+<p>در <code>newlib</code> (کتابخانهٔ C پیش‌فرض <code>arm-none-eabi-gcc</code>) گزینهٔ <code>--specs=nano.specs</code> نسخهٔ کوچک‌شدهٔ کتابخانه (<span class="term" data-t="nano_libc">newlib-nano</span>) را انتخاب می‌کند که <code>printf</code> و <code>malloc</code> بسیار سبک‌تر دارد. در همین نسخه، چاپ <code>float</code> با <code>%f</code> به‌طور پیش‌فرض کار <b>نمی‌کند</b>؛ باید صریحا <code>-u _printf_float</code> به لینکر بدهی و این کار هزینهٔ زیادی در Flash دارد. در محیط ساخت این درس کتابخانهٔ newlib نصب نبود، پس عدد قابل‌تکرار برایش نمی‌نویسم؛ در پروژهٔ خودت با <code>size</code> اندازه بگیر. راه ارزان‌تر: عدد را صحیح نگه دار (مثلا دما به‌صورت صدم درجه، درس <a href="4-7.html">۴.۷</a>) و نقطهٔ اعشار را خودت در متن بگذار.</p></div>
+
+<h2 id="stack">پشته را هم بشمار: <span class="en">-fstack-usage</span></h2>
+<p>فقط Flash نیست؛ RAM هم محدود است و <b>پشته</b> (جای متغیرهای محلی و آدرس بازگشت) آرام آرام بزرگ می‌شود. اگر پشته به <code>.bss</code> و <code>.data</code> برسد، بدون هیچ هشداری داده‌هایت خراب می‌شود. GCC با <code>-fstack-usage</code> برای هر تابع یک فایل <code>.su</code> می‌سازد که می‌گوید هر تابع (بدون احتساب توابعی که صدا می‌زند) چند بایت پشته لازم دارد:</p>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -ffreestanding -O0 -fstack-usage -c app.c -o app_O0.o
+$ cat app_O0.su
+app.c:14:17:scale_mv	16	static
+app.c:19:17:average	24	static
+app.c:28:16:crc8	32	static
+app.c:40:10:diag_dump	16	static
+app.c:49:5:main	24	static
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -ffreestanding -Os -fstack-usage -c app.c -o app_Os.o
+$ cat app_Os.su
+app.c:40:10:diag_dump	0	static
+app.c:49:5:main	32	static
+</pre>
+<p>ستون‌ها: خط:ستون:تابع، بایت پشته، و <code>static</code> یعنی اندازه در زمان کامپایل ثابت است (اگر <code>dynamic</code> بود، مثلا آرایهٔ با طول متغیر). چند نکته: (۱) در <code>-Os</code> سه تابع inline شدند و فقط <code>main</code> ماند (۳۲ بایت به‌جای ۲۴)؛ پشتهٔ هر تابع ممکن است بزرگ‌تر شود ولی <b>کل</b> ممکن است کمتر شود. (۲) این عدد فقط یک تابع است؛ بدترین حالت پشته جمع همهٔ زنجیرهٔ فراخوانی است (به‌اضافهٔ پشتهٔ ISR). (۳) <code>-Wstack-usage=256</code> اگر تابعی از ۲۵۶ بایت بیشتر بخواهد هشدار می‌دهد.</p>
+
+<h2 id="time">زمان: اندازه بگیر، حدس نزن</h2>
+<p>اندازهٔ کد را با <code>size</code> دیدیم؛ برای <b>سرعت</b> باید زمان واقعی را اندازه بگیری. سه راه رایج:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>راه</th><th>دقت</th><th>نیاز</th><th>عیب</th></tr></thead>
+<tbody>
+<tr><td>شمارندهٔ چرخهٔ DWT</td><td>یک چرخهٔ CPU</td><td>Cortex-M3/M4/M7 (روی M0 نیست)</td><td>شمارنده ۳۲ بیتی است و سرریز می‌کند</td></tr>
+<tr><td>روشن/خاموش کردن یک پایه + اسیلوسکوپ یا تحلیلگر منطقی</td><td>وابسته به دستگاه (معمولا میکروثانیه)</td><td>ابزار خارجی</td><td>باید یک پایهٔ آزاد داشته باشی</td></tr>
+<tr><td>تایمر سخت‌افزاری یا SysTick</td><td>به کلاک تایمر بستگی دارد</td><td>یک تایمر آزاد</td><td>قابل‌اعتماد برای زمان‌های بلند، نه برای چند چرخه</td></tr>
+</tbody></table></div>
+
+<h3 id="dwt">شمارندهٔ چرخه (DWT)</h3>
+<p>در Cortex-M3/M4/M7 بلوکی به نام DWT هست که یک <span class="term" data-t="cyclecount">شمارندهٔ چرخه</span> ۳۲ بیتی دارد که در هر چرخهٔ ساعت CPU یکی زیاد می‌شود. سه رجیستر (آدرس‌ها از مستندات ARM برای معماری ARMv7-M): <code>DEMCR</code> در <code>0xE000EDFC</code> که بیت ۲۴ آن (<code>TRCENA</code>) کل بلوک‌های DWT و ITM را روشن می‌کند؛ <code>DWT_CTRL</code> در <code>0xE0001000</code> که بیت ۰ آن (<code>CYCCNTENA</code>) شمارنده را روشن می‌کند؛ و <code>DWT_CYCCNT</code> در <code>0xE0001004</code> که خود شمارنده است. با ابزارک این دو بیت را روشن کن (مثل درس <a href="5-2.html">۵.۲</a>):</p>
+<div class="widget" data-w="bits" data-width="32" data-reg="DEMCR" data-value="0" data-title="DEMCR (0xE000EDFC): بیت ۲۴ = TRCENA" data-fields='[{"name":"TRCENA","hi":24,"lo":24,"map":["DWT خاموش","DWT روشن"]}]'></div>
+<div class="widget" data-w="bits" data-width="8" data-reg="DWT_CTRL" data-value="0" data-title="DWT_CTRL (0xE0001000): بیت ۰ = CYCCNTENA (هشت بیت پایین)" data-fields='[{"name":"CYCCNTENA","hi":0,"lo":0,"map":["شمارنده خاموش","شمارنده روشن"]}]'></div>
+
+<div class="code" data-file="cyc.c" data-lang="c" data-verify="arm" id="code12">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define DEMCR       (*(volatile uint32_t *)0xE000EDFCu)
+#define DWT_CTRL    (*(volatile uint32_t *)0xE0001000u)
+#define DWT_CYCCNT  (*(volatile uint32_t *)0xE0001004u)
+
+#define DEMCR_TRCENA        (1u &lt;&lt; 24)
+#define DWT_CTRL_CYCCNTENA  (1u &lt;&lt; 0)
+
+void cyc_init(void)
+{
+    DEMCR |= DEMCR_TRCENA;              /* روشن کردن DWT */
+    DWT_CYCCNT = 0u;                    /* شمارنده از صفر */
+    DWT_CTRL |= DWT_CTRL_CYCCNTENA;     /* شروع شمردن */
+}
+
+static inline uint32_t cyc_now(void)
+{
+    return DWT_CYCCNT;
+}
+
+volatile uint32_t n_in = 1000u;         /* ورودی: کامپایلر نباید مقدارش را بداند */
+volatile uint32_t sink;                 /* نتیجه: کامپایلر نباید بتواند حذفش کند */
+
+static uint32_t work(uint32_t n)
+{
+    uint32_t x = 0;
+    for (uint32_t i = 0; i &lt; n; i++) {
+        x += i * i;
+    }
+    return x;
+}
+
+uint32_t measure(void)
+{
+    uint32_t t0 = cyc_now();
+    sink = work(n_in);
+    uint32_t t1 = cyc_now();
+    return t1 - t0;                     /* بدون علامت: سرریز شمارنده هم درست حساب می‌شود */
+}
+
+uint32_t measure_overhead(void)
+{
+    uint32_t t0 = cyc_now();
+    uint32_t t1 = cyc_now();
+    return t1 - t0;                     /* هزینهٔ خود اندازه‌گیری */
+}
+</pre></div>
+<ol class="walk" data-for="code12">
+  <li data-lines="3-5"><b class="what">سه رجیستر.</b> همان الگوی <code>volatile</code> + آدرس ثابت که از درس ۳.۶ می‌شناسی.</li>
+  <li data-lines="7-8"><b class="what">ماسک بیت‌ها.</b> <code>TRCENA</code> بیت ۲۴ و <code>CYCCNTENA</code> بیت ۰. <span class="why">دلیل: با <code>|=</code> فقط همان بیت را روشن می‌کنیم و بقیهٔ بیت‌های رجیستر دست‌نخورده می‌مانند.</span></li>
+  <li data-lines="10-15"><b class="what">راه‌اندازی.</b> اول بلوک DWT را روشن می‌کنیم، بعد شمارنده را صفر و بعد فعالش می‌کنیم. <span class="why">دلیل: اگر <code>TRCENA</code> خاموش باشد، نوشتن در رجیسترهای DWT اثری ندارد.</span></li>
+  <li data-lines="17-20"><b class="what">خواندن شمارنده.</b> یک تابع <code>static inline</code> کوچک؛ کامپایلر آن را به یک <code>ldr</code> تبدیل می‌کند.</li>
+  <li data-lines="22-23"><b class="what">دو <code>volatile</code> برای صداقت اندازه‌گیری.</b> اگر ورودی ثابت باشد، کامپایلر کل حلقه را در زمان کامپایل حساب می‌کند (در تمرین ۲ می‌بینی). اگر نتیجه استفاده نشود، حذفش می‌کند.</li>
+  <li data-lines="25-32"><b class="what">کاری که می‌خواهیم زمانش را بدانیم.</b> جمع مربع‌ها.</li>
+  <li data-lines="34-40"><b class="what">اندازه‌گیری.</b> شمارنده قبل و بعد خوانده می‌شود و <code>t1 - t0</code> تعداد چرخه‌هاست.
+    <span class="why">دلیل: تفریق بدون علامت ۳۲ بیتی حتی اگر شمارنده بین دو خواندن از <code>0xFFFFFFFF</code> به صفر سرریز کند، جواب درست می‌دهد (درس ۴.۷).</span></li>
+  <li data-lines="42-47"><b class="what">هزینهٔ اندازه‌گیری.</b> دو خواندن پشت سر هم چند چرخه طول می‌کشد. این عدد را از نتیجهٔ بالا کم کن.</li>
+</ol>
+
+<div class="callout warn"><div class="ct">دو تله در زمان‌سنجی</div>
+<ul>
+<li><b>سرریز:</b> شمارنده ۳۲ بیتی است. با ۱۶ مگاهرتز (HSI) هر ۲۶۸٫۴ ثانیه و با ۱۰۰ مگاهرتز (بیشینهٔ STM32F411) هر ۴۲٫۹ ثانیه به صفر برمی‌گردد. برای اندازه‌گیری‌های بلندتر از این، از تایمر استفاده کن.</li>
+<li><b>ISR:</b> اگر وسط اندازه‌گیری وقفه بیاید، زمان ISR هم شمرده می‌شود. برای اندازهٔ خالص، وقفه‌ها را (موقتا) غیرفعال کن یا چند بار اندازه بگیر و کمینه را بردار.</li>
+</ul></div>
+
+<h3 id="pin">راه دوم: یک پایه و اسیلوسکوپ</h3>
+<p>وقتی DWT نداری (Cortex-M0) یا می‌خواهی با چشم ببینی، یک پایه را قبل از کار روشن و بعد از آن خاموش کن. پهنای پالس روی اسیلوسکوپ یا تحلیلگر منطقی (درس <a href="6-1.html">۶.۱</a>) همان زمان اجراست. اینجا PA5 (LED روی Nucleo) با رجیستر <code>BSRR</code> (بیت‌های ۰ تا ۱۵ = ۱ کن، بیت‌های ۱۶ تا ۳۱ = صفر کن؛ درس ۵.۲):</p>
+<div class="code" data-file="pin_bench.c" data-lang="c" data-verify="arm" id="code13">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define GPIOA_BSRR (*(volatile uint32_t *)0x40020018u)
+#define PIN_SET    (1u &lt;&lt; 5)            /* PA5 = 1 */
+#define PIN_CLR    (1u &lt;&lt; (5 + 16))     /* PA5 = 0 */
+
+extern void work_under_test(void);
+
+void bench_pin(void)
+{
+    GPIOA_BSRR = PIN_SET;
+    work_under_test();
+    GPIOA_BSRR = PIN_CLR;
+}
+</pre></div>
+<ol class="walk" data-for="code13">
+  <li data-lines="3-5"><b class="what">تنظیم و پاک‌کردن با یک نوشتن.</b> <code>BSRR</code> فقط بیت‌های ۱ را اثر می‌دهد، پس بدون خواندن-تغییر-نوشتن پایه عوض می‌شود.
+    <span class="why">دلیل: سریع است (یک نوشتن) و اگر وسط کار وقفه بیاید، بقیهٔ پایه‌های پورت خراب نمی‌شوند.</span></li>
+  <li data-lines="7"><b class="what">کار مورد آزمایش.</b> در فایل دیگری تعریف می‌شود؛ <code>extern</code> یعنی «جای دیگر است».</li>
+  <li data-lines="9-14"><b class="what">قاب پالس.</b> پایه بالا ← کار ← پایه پایین.</li>
+</ol>
+
+<h3 id="algo">انتخاب الگوریتم از پرچم مهم‌تر است</h3>
+<p>از یک چیز در بهینه‌سازی نباید غافل شد: سطح <code>-O</code> ضریب ثابتی به سرعت می‌دهد (مثلا ۲ تا ۴ برابر)، ولی <b>عوض کردن روش</b> گاهی ۱۰ برابر می‌کند. مثال: شمردن بیت‌های ۱ در یک عدد ۱۶ بیتی (بیت‌شماری، <span class="term" data-t="popcount">popcount</span> که در درس ۳.۱ دیده‌ای) با سه روش، برای همهٔ ۶۵۵۳۶ مقدار ممکن. شمارنده‌ای می‌گذاریم که «تعداد قدم‌های انجام‌شده» را بشمارد. این عدد از کامپایلر و سطح <code>-O</code> مستقل و همیشه یکسان است:</p>
+
+<div class="code" data-file="popcount.c" data-lang="c" data-verify="host" id="code14">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+static unsigned steps;                      /* شمارندهٔ «کار» انجام‌شده */
+static uint8_t table[256];                  /* جدول تعداد بیت‌های هر بایت */
+
+static uint8_t pop_loop(uint16_t x)         /* راه ۱: هر ۱۶ بیت را بررسی کن */
+{
+    uint8_t n = 0;
+    for (int i = 0; i &lt; 16; i++) {
+        steps++;
+        n += (uint8_t)((x &gt;&gt; i) &amp; 1u);
+    }
+    return n;
+}
+
+static uint8_t pop_kern(uint16_t x)         /* راه ۲: فقط به تعداد بیت‌های ۱ دور بزن */
+{
+    uint8_t n = 0;
+    while (x != 0u) {
+        steps++;
+        x = (uint16_t)(x &amp; (x - 1u));       /* پایین‌ترین بیت ۱ را پاک می‌کند */
+        n++;
+    }
+    return n;
+}
+
+static uint8_t pop_table(uint16_t x)        /* راه ۳: دو بار در جدول نگاه کن */
+{
+    steps += 2u;
+    return (uint8_t)(table[x &amp; 0xFFu] + table[x &gt;&gt; 8]);
+}
+
+int main(void)
+{
+    for (unsigned v = 0; v &lt; 256u; v++) {   /* پر کردن جدول (یک‌بار، مثلا در بوت) */
+        table[v] = (uint8_t)((v &amp; 1u) + table[v &gt;&gt; 1]);
+    }
+
+    unsigned total1 = 0, total2 = 0, total3 = 0;
+    unsigned s1, s2, s3;
+
+    steps = 0;
+    for (unsigned v = 0; v &lt; 65536u; v++) total1 += pop_loop((uint16_t)v);
+    s1 = steps;
+    steps = 0;
+    for (unsigned v = 0; v &lt; 65536u; v++) total2 += pop_kern((uint16_t)v);
+    s2 = steps;
+    steps = 0;
+    for (unsigned v = 0; v &lt; 65536u; v++) total3 += pop_table((uint16_t)v);
+    s3 = steps;
+
+    printf("results equal: %s\n", (total1 == total2 &amp;&amp; total2 == total3) ? "yes" : "NO");
+    printf("loop : %u steps\n", s1);
+    printf("kern : %u steps\n", s2);
+    printf("table: %u steps\n", s3);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code14">
+  <li data-lines="4-5"><b class="what">شمارنده و جدول.</b> <code>steps</code> تعداد قدم‌ها را جمع می‌زند؛ <code>table</code> برای راه سوم.</li>
+  <li data-lines="7-15"><b class="what">راه ۱: همهٔ بیت‌ها.</b> همیشه ۱۶ دور، مهم نیست چند بیت ۱ باشد.</li>
+  <li data-lines="17-26"><b class="what">راه ۲: ترفند Kernighan.</b> <code>x &amp; (x - 1)</code> پایین‌ترین بیت ۱ را پاک می‌کند؛ پس فقط به تعداد بیت‌های ۱ دور می‌زند.
+    <span class="why">دلیل: از ۰b10110000 کم‌کردن ۱ می‌شود ۰b10101111؛ AND این دو ۰b10100000 است، یعنی همان یک بیت پاک شد.</span></li>
+  <li data-lines="28-32"><b class="what">راه ۳: جدول.</b> تعداد بیت‌های ۱ هر بایت از پیش حساب شده؛ دو نگاه (بایت پایین و بالا) کافی است.</li>
+  <li data-lines="36-38"><b class="what">ساختن جدول.</b> <code>table[v] = (v &amp; 1) + table[v &gt;&gt; 1]</code>: تعداد بیت‌های ۱ برابر است با بیت آخر + تعداد بیت‌های ۱ بقیه.</li>
+  <li data-lines="43-51"><b class="what">اجرا برای همهٔ ۶۵۵۳۶ مقدار.</b> هر راه یک بار.</li>
+  <li data-lines="53-56"><b class="what">چاپ.</b> اول اطمینان از برابری نتیجه‌ها (بدون این، سرعت بی‌معناست) و بعد شمار قدم‌ها.</li>
+</ol>
+<pre class="term" data-from="popcount.c">
+$ gcc -std=c11 -Wall -Wextra -o popcount popcount.c
+$ ./popcount
+results equal: yes
+loop : 1048576 steps
+kern : 524288 steps
+table: 131072 steps
+</pre>
+<p>راه سوم هشت برابر کمتر از راه اول قدم دارد، بدون هیچ پرچمی. ولی هزینه هم دارد: ۲۵۶ بایت جدول (در Flash، با <code>const</code>، کافی است). هر بهینه‌سازی یک «مبادله» است: اینجا Flash را با سرعت معاوضه کردیم. بعد از همهٔ این‌ها بازهم باید برنامهٔ خودت را روی سخت‌افزار اندازه بگیری؛ روی یک M4 با <code>__builtin_popcount</code> شاید فقط چند دستور بشود، و روی چیپ دیگر ممکن است جدول بهتر باشد.</p>
+
+<div class="widget" data-w="mem" data-config='{"title":"ترفند Kernighan روی 0xB0 = 10110000","code":["x = 0xB0; n = 0;","x &= x - 1; n++;   // دور ۱","x &= x - 1; n++;   // دور ۲","x &= x - 1; n++;   // دور ۳","// x == 0 : حلقه تمام"],"intro":"سه بیت ۱ داریم. روی بعدی بزن و ببین فقط سه دور لازم است، نه ۸ دور.","cells":[{"addr":"RAM","name":"x (باینری)","val":"-","kind":"var"},{"addr":"RAM","name":"n (تعداد بیت ۱)","val":0,"kind":"var"},{"addr":"دور","name":"steps","val":0,"kind":"var"}],"steps":[{"line":0,"set":{"0":"10110000","1":0,"2":0},"hot":[0],"say":"شروع: <code>x = 10110000</code>. سه بیت ۱ دارد."},{"line":1,"set":{"0":"10100000","1":1,"2":1},"hot":[0,1],"say":"<code>x - 1 = 10101111</code> و AND با x می‌شود <code>10100000</code>: پایین‌ترین بیت ۱ پاک شد. n = ۱."},{"line":2,"set":{"0":"10000000","1":2,"2":2},"hot":[0,1],"say":"<code>x - 1 = 10011111</code> و AND می‌شود <code>10000000</code>. n = ۲."},{"line":3,"set":{"0":"00000000","1":3,"2":3},"hot":[0,1],"say":"<code>x - 1 = 01111111</code> و AND می‌شود <code>00000000</code>. n = ۳."},{"line":4,"set":{},"hot":[0],"say":"x صفر است و حلقه تمام می‌شود. با فقط ۳ قدم به‌جای ۸ قدم به جواب رسیدیم."}]}'></div>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: «زودرس بهینه نکن»</div>
+<p>دونالد کنوث (Donald Knuth) جمله‌ای معروف دارد که می‌گوید بهینه‌سازی زودرس «ریشهٔ بسیاری از بدی‌هاست». معنی‌اش این نیست که کد کند بنویسی. معنی‌اش این است که <b>قبل از اندازه‌گیری</b> کد را تیره و پیچیده نکنی. معمولا بخش کوچکی از برنامه (اغلب چند حلقه) بیشتر زمان را می‌خورد و فقط همان‌جا ارزش تلاش دارد. اول درست بنویس، بعد اندازه بگیر، بعد فقط نقطهٔ داغ را عوض کن، و دوباره اندازه بگیر.</p></div>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 250" role="img" aria-label="چرخهٔ بهینه‌سازی: اندازه بگیر، نقطهٔ داغ را پیدا کن، فقط یک چیز را عوض کن، دوباره اندازه بگیر و اگر بهتر نشد برگردان">
+  <defs><marker id="ar65c" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">چرخهٔ سالم بهینه‌سازی</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="30" y="60" width="150" height="70" rx="12" fill="#ffd60a"/>
+    <rect x="215" y="60" width="150" height="70" rx="12" fill="#7ea3ff"/>
+    <rect x="400" y="60" width="150" height="70" rx="12" fill="#3ddc97"/>
+    <rect x="585" y="60" width="150" height="70" rx="12" fill="#ff9a4d"/>
+  </g>
+  <g fill="#15120a" font-size="15" font-weight="800" text-anchor="middle">
+    <text x="105" y="90">۱. اندازه بگیر</text><text x="105" y="112" font-size="12.5" font-weight="600">size، map، DWT</text>
+    <text x="290" y="90">۲. نقطهٔ داغ</text><text x="290" y="112" font-size="12.5" font-weight="600">بزرگ‌ترین سطر</text>
+    <text x="475" y="90">۳. یک تغییر</text><text x="475" y="112" font-size="12.5" font-weight="600">فقط یکی!</text>
+    <text x="660" y="90">۴. دوباره اندازه</text><text x="660" y="112" font-size="12.5" font-weight="600">بهتر شد؟</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M182 95H211" marker-end="url(#ar65c)"/><path d="M367 95H396" marker-end="url(#ar65c)"/><path d="M552 95H581" marker-end="url(#ar65c)"/>
+    <path d="M660 132V190H105V134" marker-end="url(#ar65c)"/>
+  </g>
+  <text x="380" y="182" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">اگر بهتر نشد: تغییر را برگردان. اگر شد: نگه دار و تکرار کن.</text>
+  <text x="380" y="222" text-anchor="middle" class="s-tx" font-size="14" font-weight="800">بدون عدد قبل و بعد، «بهینه‌سازی» فقط حدس است.</text>
+</svg></div>
+<figcaption>هر بار فقط یک چیز را عوض کن؛ اگر دو چیز را با هم عوض کنی، نمی‌فهمی کدام کمک کرد.</figcaption></figure>
+
+<h2 id="esp32">در ESP32 چه فرق می‌کند؟</h2>
+<p>ابزارها فرق دارند، ولی اصل همان است: اندازه بگیر.</p>
+<ul>
+  <li><b>سطح بهینه‌سازی:</b> در ESP-IDF از <code>idf.py menuconfig</code>، بخش تنظیمات کامپایلر (Compiler options)، سطح را انتخاب می‌کنی. چند گزینه هست (مثل «Debug» با <code>-Og</code>، «Optimize for size» با <code>-Os</code> و «Optimize for performance» با <code>-O2</code>)؛ نام دقیق و پیش‌فرض را در نسخهٔ خودت ببین («در مستندات رسمی ESP-IDF بخش Build System»).</li>
+  <li><b>اندازه:</b> <code>idf.py size</code> خلاصهٔ مصرف Flash و RAM را می‌دهد؛ <code>idf.py size-components</code> و <code>idf.py size-files</code> آن را به تفکیک کامپوننت و فایل نشان می‌دهند (هم‌ارز <code>nm --size-sort</code> و map). فایل map هم در پوشهٔ <code>build</code> ساخته می‌شود.</li>
+  <li><b>Flash بیرونی و کش:</b> کد و ثابت‌های ESP32 در Flash بیرونی هستند و از راه یک کش خوانده می‌شوند. هنگام نوشتن روی Flash (مثلا ذخیرهٔ تنظیمات) کش برای مدت کوتاهی غیرفعال است و کدی که در Flash است نمی‌تواند اجرا شود.</li>
+  <li><b><code>IRAM_ATTR</code>:</b> تابعی را که باید همیشه (حتی وقتی کش خاموش است) و با کمترین تأخیر اجرا شود، مثل بعضی ISR ها، با این ویژگی علامت می‌زنی تا در حافظهٔ داخلی (IRAM) بماند. داده‌ای که آن ISR می‌خواند باید در RAM داخلی باشد (<code>DRAM_ATTR</code> اگر لازم شد). جزئیات را در «مستندات رسمی ESP-IDF، بخش Memory types و Interrupt allocation» ببین.</li>
+  <li><b>زمان:</b> <code>esp_timer_get_time()</code> زمان را با دقت میکروثانیه برمی‌گرداند و برای اندازه‌گیری‌های معمولی کافی است.</li>
+</ul>
+
+<div class="code" data-file="esp_attr_demo.c" data-lang="c" data-verify="frag" id="code15">
+<pre>
+#include "esp_attr.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "driver/gpio.h"
+
+static const char *TAG = "opt";
+static volatile uint32_t edge_count;
+
+static void IRAM_ATTR button_isr(void *arg)   /* در IRAM می‌ماند */
+{
+    (void)arg;
+    edge_count++;                             /* کوتاه و بدون منتظر ماندن */
+}
+
+void app_main(void)
+{
+    gpio_config_t io = {
+        .pin_bit_mask = 1ULL &lt;&lt; GPIO_NUM_0,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .intr_type = GPIO_INTR_NEGEDGE,
+    };
+    gpio_config(&amp;io);
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(GPIO_NUM_0, button_isr, NULL);
+
+    int64_t t0 = esp_timer_get_time();        /* میکروثانیه */
+    /* ... کار مورد آزمایش ... */
+    int64_t dt = esp_timer_get_time() - t0;
+    ESP_LOGI(TAG, "work took %lld us", (long long)dt);
+}
+</pre></div>
+<ol class="walk" data-for="code15">
+  <li data-lines="1-4"><b class="what">هدرها.</b> <code>esp_attr.h</code> ماکروی <code>IRAM_ATTR</code> را می‌دهد؛ <code>esp_timer.h</code> زمان؛ <code>driver/gpio.h</code> پایه‌ها.</li>
+  <li data-lines="9-13"><b class="what">ISR در IRAM.</b> ویژگی <code>IRAM_ATTR</code> جلوی تابع؛ بدنه فقط یک شمارنده را زیاد می‌کند. <span class="why">دلیل: ISR باید کوتاه باشد و نباید به چیزی در Flash وابسته باشد که ممکن است در آن لحظه در دسترس نباشد.</span></li>
+  <li data-lines="17-23"><b class="what">پیکربندی پایه.</b> ورودی با pull-up و وقفه روی لبهٔ پایین‌رونده (دکمهٔ BOOT معمولا روی <code>GPIO0</code>).</li>
+  <li data-lines="24-25"><b class="what">ثبت ISR.</b> اول سرویس وقفه نصب می‌شود، بعد تابع به پایه وصل می‌شود.</li>
+  <li data-lines="27-30"><b class="what">زمان‌سنجی.</b> اختلاف دو خواندن <code>esp_timer_get_time()</code>. لاگ با <code>%lld</code> و تبدیل صریح به <code>long long</code> که روی هر معماری درست باشد.</li>
+</ol>
+
+<div class="callout info"><div class="ct">دربارهٔ این قطعه</div>
+<p>این کد در محیط ساخت ما اجرا نشد (ESP-IDF نصب نیست)؛ نام‌ها از API پایدار ESP-IDF نسخهٔ ۵ گرفته شده. پیش از استفاده، آن را در پروژهٔ خودت بساز و با مستندات نسخهٔ خودت مقایسه کن.</p></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">خروجی <code>arm-none-eabi-size</code> برای برنامه‌ای این است: <code>text = 296، data = 4، bss = 80</code>. چقدر RAM (بدون پشته) می‌گیرد؟</p>
+  <ol>
+    <li data-why="۳۸۰ جمع هر سه ستون است (ستون dec)، ولی text در Flash می‌ماند و RAM نمی‌گیرد.">۳۸۰ بایت</li>
+    <li>۸۴ بایت</li>
+    <li data-why="text شامل کد و ثابت‌هاست و در Flash می‌ماند؛ RAM فقط data و bss دارد.">۳۰۰ بایت</li>
+    <li data-why="bss در RAM جا می‌گیرد؛ فقط تصویر اولیه‌اش (که صفر است) لازم نیست در Flash بماند.">۴ بایت</li>
+  </ol>
+  <div class="fb">RAM = data + bss = ۴ + ۸۰ = ۸۴. Flash = text + data = ۳۰۰ (چون تصویر اولیهٔ <code>.data</code> هم در Flash می‌ماند).</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">تابع <code>wait_ready()</code> با <code>while (ready == 0u) {}</code> و متغیر معمولی <code>ready</code> در <code>-O0</code> درست کار می‌کند و در <code>-O2</code> برای همیشه گیر می‌کند. علت چیست؟</p>
+  <ol>
+    <li data-why="کامپایلر باگ ندارد؛ او طبق قواعد زبان C رفتار کرده و ما به او نگفتیم متغیر ممکن است بیرون از کد عوض شود.">باگ کامپایلر <code>-O2</code> است</li>
+    <li data-why="نوع <code>uint32_t</code> خواندن را نمی‌بندد؛ مشکل تعداد بیت‌ها نیست.">نوع <code>uint32_t</code> برای پرچم کوچک است</li>
+    <li data-why="حلقهٔ خالی خودش مجاز است؛ مشکل از حذف خواندن متغیر است، نه از خالی‌بودن بدنه.">حلقهٔ خالی در C ممنوع است</li>
+    <li>کامپایلر دید <code>ready</code> در این فایل هیچ‌وقت نوشته نمی‌شود و خواندنش را حذف کرد؛ باید <code>volatile</code> باشد</li>
+  </ol>
+  <div class="fb">بدون <code>volatile</code> کامپایلر فرض می‌کند متغیر تغییر نمی‌کند و شرط را یک بار می‌سنجد. نتیجه <code>b .L2</code> است؛ پرش بی‌پایان به خودش.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">در آزمایش ما با <code>-O3</code> اندازهٔ <code>text</code> ۴۷۶ و با <code>-O2</code> ۳۲۸ بایت شد. کدام نتیجه درست است؟</p>
+  <ol>
+    <li>سطح بالاتر همیشه کد کوچک‌تر نمی‌دهد؛ <code>-O3</code> ممکن است کد را بزرگ کند و باید هر سطح را اندازه بگیری</li>
+    <li data-why="عکس آن دیده شد: عدد بزرگ‌تر یعنی Flash بیشتر. ولی درس این است که فرمول ساده‌ای نیست.">سطح بالاتر یعنی همیشه Flash کمتر</li>
+    <li data-why="این عدد از کامپایل واقعی آمده و درست است؛ خطا نیست. باز کردن حلقه و inline بیشتر کد را بزرگ می‌کنند.">اندازه‌گیری اشتباه بوده است</li>
+    <li data-why="-Os نه خطا می‌دهد و نه ممنوع است؛ در همین آزمایش کوچک‌ترین نتیجه را داد.">استفاده از <code>-Os</code> برای Cortex-M ممنوع است</li>
+  </ol>
+  <div class="fb">هر سطح مجموعه‌ای از مبادله‌هاست. <code>-O3</code> با باز کردن حلقه و inline بیشتر، کد را بزرگ‌تر کرد. حکم کلی وجود ندارد؛ روی برنامهٔ خودت اندازه بگیر.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">برنامه‌ای روی Cortex-M0 دارد در هر دور یک حلقهٔ داغ <code>y = x / n;</code> (متغیر <code>n</code>) اجرا می‌کند و کند است. کدام اقدام <b>اول</b> منطقی‌تر است؟</p>
+  <ol>
+    <li data-why="M0 اصلا FPU ندارد و float نرم‌افزاری از تقسیم صحیح هم سنگین‌تر است.">تبدیل همه‌چیز به <code>float</code></li>
+    <li data-why="بدون اندازه‌گیری، ما نمی‌دانیم تقسیم گلوگاه است یا نه؛ و <code>volatile</code> بهینه‌سازی را کم می‌کند، نه زیاد.">همهٔ متغیرها را <code>volatile</code> کردن</li>
+    <li>اندازه بگیری تقسیم واقعا گلوگاه است؛ اگر بود، مقسوم‌علیه را توان ۲ کنی (شیفت) یا تقسیم را از حلقه بیرون ببری</li>
+    <li data-why="بازنویسی اسمبلی زودرس و پرهزینه است؛ اول باید اندازه بگیری و راه‌های ساده‌تر را امتحان کنی.">کل حلقه را به اسمبلی بنویسی</li>
+  </ol>
+  <div class="fb">M0 دستور تقسیم ندارد و <code>__aeabi_uidiv</code> را صدا می‌زند. ولی اول باید اندازه بگیری؛ بعد ساده‌ترین راه (توان ۲ یا بیرون بردن از حلقه) را امتحان کنی.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">کدام خط در برنامه‌ای برای STM32F411 <b>بی‌سروصدا</b> بخش بزرگی از Flash و سرعت را می‌خورد؟</p>
+  <ol>
+    <li data-why="این خط عدد صحیح است و ارزان.">‏<code>uint32_t mv = raw * 3300u / 4095u;</code></li>
+    <li>‏<code>double v = raw * 3.3 / 4095.0;</code></li>
+    <li data-why="ثابت با پسوند f تک‌دقتی است و روی M4F با FPU ارزان انجام می‌شود.">‏<code>float v = raw * 3.3f / 4095.0f;</code></li>
+    <li data-why="این هم صحیح است؛ توان ۲ حتی ارزان‌تر هم هست.">‏<code>uint32_t half = raw &gt;&gt; 1;</code></li>
+  </ol>
+  <div class="fb">STM32F411 فقط FPU تک‌دقتی دارد. <code>double</code> نرم‌افزاری است و در آزمایش ما اندازهٔ برنامه را از ۱۰۰ به ۲۷۷۶ بایت رساند. <code>3.3</code> بدون <code>f</code> از نوع <code>double</code> است.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">برای اندازه‌گیری زمان یک تابع با شمارندهٔ DWT نوشته‌ای <code>t1 - t0</code> با نوع <code>uint32_t</code>. شمارنده بین دو خواندن از <code>0xFFFFFFFE</code> به <code>0x00000003</code> رسید. نتیجه چیست؟</p>
+  <ol>
+    <li>۵ چرخه؛ چون تفریق بدون علامت ۳۲ بیتی مدولار است و سرریز را درست جبران می‌کند</li>
+    <li data-why="تفریق بدون علامت در C هرگز عدد منفی نمی‌دهد؛ به‌جایش مدولار ۲^۳۲ حساب می‌شود.">عدد منفی؛ باید <code>int32_t</code> بگیری</li>
+    <li data-why="۴۲۹۴۹۶۷۲۹۶ - ۱ نتیجهٔ یک خطای منطقی است؛ اگر t1 و t0 درست خوانده شوند، جواب ۵ است.">حدود ۴ میلیارد چرخه</li>
+    <li data-why="رفتار تعریف‌نشده مخصوص سرریز عدد <b>علامت‌دار</b> است؛ سرریز بدون علامت در C کاملا تعریف‌شده و مدولار است.">رفتار تعریف‌نشده</li>
+  </ol>
+  <div class="fb"><code>3 − 0xFFFFFFFE</code> در حساب مدولار ۲³² برابر ۵ است (دو چرخه تا صفر و سه چرخهٔ دیگر تا <code>3</code>). همین ویژگی است که اندازه‌گیری‌های کوتاه با شمارندهٔ سرریزشونده را امن می‌کند.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: هر متغیر کجا می‌نشیند؟</div>
+<p>شش تعریف سراسری زیر را ببین. هر کدام در کدام بخش (<code>.text</code>/<code>.rodata</code>، <code>.data</code> یا <code>.bss</code>) قرار می‌گیرد؟</p>
+<div class="code" data-file="ex1.c" data-lang="c" data-verify="arm" id="ex1code">
+<pre>
+#include &lt;stdint.h&gt;
+
+int32_t  a = 0;                 /* ۱ */
+int32_t  b = 7;                 /* ۲ */
+const int32_t c = 9;            /* ۳ */
+char     msg[] = "hello";       /* ۴ */
+const char *p = "hello";        /* ۵ */
+uint8_t  buf[100];              /* ۶ */
+</pre></div>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> برای هر شش متغیر بخش را حدس بزن. (نکته: <code>p</code> یک اشاره‌گر است و رشتهٔ <code>"hello"</code> جداگانه جایی می‌رود.)</li>
+  <li><b>اندازه:</b> بدون اجرای هیچ چیز، مقدار <code>text</code>، <code>data</code> و <code>bss</code> کل فایل را حدس بزن. (هر <code>int32_t</code> چهار بایت، <code>msg</code> شش بایت با <code>\0</code>.)</li>
+  <li><b>وارسی:</b> فایل را با <code>-Os -c</code> بساز و با <code>arm-none-eabi-size</code> مقایسه کن. تفاوت را توضیح بده.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>هرچه مقدار اولیهٔ غیرصفر دارد و قابل تغییر است، <code>.data</code> می‌شود. صفر یا بدون مقدار: <code>.bss</code>. <code>const</code> و رشتهٔ ثابت: فقط‌خواندنی در Flash. اندازه‌ها با ترازبندی گرد می‌شوند.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -Os -c ex1.c -o ex1.o
+$ arm-none-eabi-size ex1.o
+   text	   data	    bss	    dec	    hex	filename
+     10	     16	    104	    130	     82	ex1.o
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="table-wrap"><table><thead><tr><th>متغیر</th><th>بخش</th><th>چرا</th></tr></thead><tbody>
+<tr><td><code>a</code></td><td><code>.bss</code> (۴ بایت)</td><td>صفر است؛ فقط RAM می‌گیرد و هنگام بوت صفر می‌شود</td></tr>
+<tr><td><code>b</code></td><td><code>.data</code> (۴ بایت)</td><td>مقدار ۷ باید در RAM باشد؛ تصویرش در Flash است</td></tr>
+<tr><td><code>c</code></td><td><code>.rodata</code> (۴ بایت، Flash)</td><td><code>const</code> است؛ فقط‌خواندنی</td></tr>
+<tr><td><code>msg</code></td><td><code>.data</code> (۶ بایت)</td><td>آرایه است و قابل‌تغییر؛ پس رشته کپی می‌شود در RAM</td></tr>
+<tr><td><code>p</code></td><td><code>.data</code> (۴ بایت) + رشته در <code>.rodata</code> (۶ بایت)</td><td>خود اشاره‌گر متغیر است ولی رشته‌ای که به آن اشاره می‌کند ثابت است و در Flash می‌ماند</td></tr>
+<tr><td><code>buf</code></td><td><code>.bss</code> (۱۰۰ بایت)</td><td>بدون مقدار اولیه</td></tr>
+</tbody></table></div>
+<p>جمع: <code>text</code> = ۴ (<code>c</code>) + ۶ (رشتهٔ <code>"hello"</code>) = ۱۰؛ <code>data</code> = ۴ + ۶ + ۴ = ۱۴ که با ترازبندی ۱۶ شد؛ <code>bss</code> = ۴ + ۱۰۰ = ۱۰۴. اگر جدول‌های بزرگ را به‌جای <code>char msg[]</code> با <code>const char *</code> یا <code>const char msg[]</code> بنویسی، RAM را نجات می‌دهی.</p>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-nm -S --size-sort ex1.o
+00000064 00000004 B a
+0000000c 00000004 D b
+00000000 00000004 R c
+00000000 00000004 D p
+00000004 00000006 D msg
+00000000 00000064 B buf
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: بنچمارکی که هیچ‌چیز را اندازه نمی‌گرفت (پیدا کردن باگ)</div>
+<p>دوستت برای اندازه‌گیری زمان <code>work(1000)</code> این تابع را نوشته و می‌گوید «با <code>-O2</code> صفر چرخه شد، عجب سرعتی!».</p>
+<div class="code" data-file="bench_bug.c" data-lang="c" data-verify="arm" data-cflags="-O2" id="ex2bug">
+<pre>
+#include &lt;stdint.h&gt;
+
+uint32_t work(uint32_t n)
+{
+    uint32_t x = 0;
+    for (uint32_t i = 0; i &lt; n; i++) {
+        x += i * i;
+    }
+    return x;
+}
+
+void bench_bug(void)
+{
+    work(1000u);                /* نتیجه را هیچ‌جا نمی‌گذاریم */
+}
+</pre></div>
+<ol class="parts">
+  <li><b>تشخیص:</b> با <code>-O2 -S</code> اسمبلی <code>bench_bug</code> را نگاه کن. چند دستور است؟ چرا؟</li>
+  <li><b>تلاش اول:</b> نتیجه را در یک متغیر <code>volatile uint32_t sink</code> بریز (<code>sink = work(1000u);</code>). آیا حلقه در اسمبلی برگشت؟ چرا؟</li>
+  <li><b>حل واقعی:</b> ورودی را هم <code>volatile</code> کن و دوباره نگاه کن. توضیح بده هر دو <code>volatile</code> برای چیست.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>کامپایلر می‌تواند تابعی را که فقط عدد حساب می‌کند و نتیجه‌اش استفاده نمی‌شود کلا حذف کند. و اگر ورودی‌ها همه ثابت باشند، خود حلقه را در زمان کامپایل حل می‌کند (مثل <code>fold.c</code>).</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -ffreestanding -O2 -S -o - bench_bug.c
+bench_bug:
+    bx      lr
+</pre>
+<p>در اسمبلی <code>bench_bug</code> فقط یک دستور است: برگرد. کل کار حذف شده.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<p>الف) <code>bench_bug</code> فقط <code>bx lr</code> است، چون <code>work</code> هیچ اثر جانبی ندارد و نتیجه‌اش دور ریخته می‌شود؛ کامپایلر کل فراخوانی را حذف کرد. ب) با <code>sink = work(1000u)</code> فراخوانی می‌ماند، ولی چون <code>1000</code> ثابت است، خود حلقه هم در زمان کامپایل حل می‌شود و فقط یک عدد در <code>sink</code> نوشته می‌شود (یک <code>str</code> با ثابت). پ) با ورودی <code>volatile</code> کامپایلر مقدار را نمی‌داند و باید حلقه را واقعا اجرا کند. حالا زمان اندازه‌گیری‌شده واقعی است.</p>
+<div class="code" data-file="bench_fix.c" data-lang="c" data-verify="arm" data-cflags="-O2" id="ex2fix">
+<pre>
+#include &lt;stdint.h&gt;
+
+volatile uint32_t n_in = 1000u;         /* ورودی «مرموز» برای کامپایلر */
+volatile uint32_t sink;                 /* مقصد «واقعی» نتیجه */
+
+uint32_t work(uint32_t n)
+{
+    uint32_t x = 0;
+    for (uint32_t i = 0; i &lt; n; i++) {
+        x += i * i;
+    }
+    return x;
+}
+
+void bench_fix(void)
+{
+    sink = work(n_in);                  /* ورودی را نمی‌داند و نتیجه را باید بنویسد */
+}
+</pre></div>
+<ol class="walk" data-for="ex2fix">
+  <li data-lines="3"><b class="what">ورودی volatile.</b> هر بار از حافظه خوانده می‌شود و کامپایلر مقدارش را نمی‌داند.</li>
+  <li data-lines="4"><b class="what">خروجی volatile.</b> نوشتن در آن یک اثر جانبی قابل‌مشاهده است و نباید حذف شود.</li>
+  <li data-lines="15-18"><b class="what">تابع بنچمارک.</b> ورودی از <code>n_in</code> می‌آید و نتیجه در <code>sink</code> می‌رود.</li>
+</ol>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -ffreestanding -O2 -S -o - bench_fix.c
+bench_fix:
+    ldr     r3, .L12
+    ldr     r1, [r3]
+    cbz     r1, .L10
+    movs    r2, #0
+    mov     r3, r2
+.L9:
+    mla     r2, r3, r3, r2      @ حلقهٔ واقعی: چهار دستور
+    adds    r3, r3, #1
+    cmp     r1, r3
+    bne     .L9
+    ldr     r3, .L12+4
+    str     r2, [r3]
+    bx      lr
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: چرخه به میکروثانیه</div>
+<p>با DWT تعداد چرخهٔ یک کار را گرفته‌ای؛ حالا باید به زمان تبدیل کنی. کلاک پیش‌فرض STM32F411 (HSI) ۱۶ مگاهرتز است و بیشینه‌اش ۱۰۰ مگاهرتز.</p>
+<ol class="parts">
+  <li><b>حساب دستی:</b> ۱۶۰۰ چرخه با ۱۶ مگاهرتز چند میکروثانیه است؟ ۳۲۰۰ چرخه با ۱۰۰ مگاهرتز؟</li>
+  <li><b>تابع:</b> <code>uint32_t cycles_to_us(uint32_t cycles, uint32_t hz)</code> بنویس. مراقب باش <code>cycles * 1000000</code> در ۳۲ بیت سرریز نکند.</li>
+  <li><b>چالش سخت‌افزاری:</b> شمارندهٔ ۳۲ بیتی DWT با ۱۶ و با ۱۰۰ مگاهرتز بعد از چند ثانیه سرریز می‌کند؟ این چه محدودیتی برای اندازه‌گیری می‌گذارد؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>زمان = چرخه ÷ فرکانس. برای اینکه ضرب سرریز نکند، قبل از ضرب به <code>uint64_t</code> تبدیل کن (درس <a href="4-7.html">۴.۷</a>).</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="cyc_to_us.c">
+$ ./cyc_to_us
+1600 cycles @ 16 MHz  : good 100 us, bad 100 us
+5000 cycles @ 16 MHz  : good 312 us, bad 44 us
+3200 cycles @ 100 MHz : good 32 us
+counter wraps after 268.4 s @ 16 MHz
+counter wraps after 42.9 s @ 100 MHz
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="cyc_to_us.c" data-lang="c" data-verify="host" id="ex3">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+static uint32_t cycles_to_us_bad(uint32_t cycles, uint32_t hz)
+{
+    return cycles * 1000000u / hz;          /* ضرب ۳۲ بیتی: ممکن است سرریز کند */
+}
+
+static uint32_t cycles_to_us(uint32_t cycles, uint32_t hz)
+{
+    return (uint32_t)((uint64_t)cycles * 1000000u / hz);   /* ضرب ۶۴ بیتی: امن */
+}
+
+int main(void)
+{
+    printf("1600 cycles @ 16 MHz  : good %u us, bad %u us\n",
+           (unsigned)cycles_to_us(1600u, 16000000u), (unsigned)cycles_to_us_bad(1600u, 16000000u));
+    printf("5000 cycles @ 16 MHz  : good %u us, bad %u us\n",
+           (unsigned)cycles_to_us(5000u, 16000000u), (unsigned)cycles_to_us_bad(5000u, 16000000u));
+    printf("3200 cycles @ 100 MHz : good %u us\n", (unsigned)cycles_to_us(3200u, 100000000u));
+    printf("counter wraps after %.1f s @ 16 MHz\n", 4294967296.0 / 16000000.0);
+    printf("counter wraps after %.1f s @ 100 MHz\n", 4294967296.0 / 100000000.0);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="4-7"><b class="what">نسخهٔ خراب.</b> <code>cycles * 1000000u</code> با ۳۲ بیت حساب می‌شود.
+    <span class="why">دلیل: ۵۰۰۰ × ۱۰۰۰۰۰۰ = ۵ میلیارد و بزرگ‌تر از ۴٫۲۹ میلیارد (حد <code>uint32_t</code>) است؛ نتیجه مدولار می‌شود و جواب بی‌معنی (۴۴ به‌جای ۳۱۲) برمی‌گردد.</span></li>
+  <li data-lines="9-12"><b class="what">نسخهٔ درست.</b> اول به <code>uint64_t</code> تبدیل می‌کنیم و بعد ضرب و تقسیم؛ جای <code>(uint64_t)</code> مهم است.
+    <span class="why">دلیل: اگر بنویسی <code>(uint64_t)(cycles * 1000000u)</code>، ضرب همچنان ۳۲ بیتی است و بعد از سرریز تبدیل می‌شود.</span></li>
+  <li data-lines="16-20"><b class="what">مقایسه.</b> برای ۱۶۰۰ چرخه هر دو درست‌اند، ولی برای ۵۰۰۰ چرخه نسخهٔ خراب اشتباه می‌کند.</li>
+  <li data-lines="21-22"><b class="what">زمان سرریز.</b> ۲³² چرخه تقسیم بر فرکانس: ۲۶۸٫۴ ثانیه با ۱۶ مگاهرتز و ۴۲٫۹ ثانیه با ۱۰۰ مگاهرتز. برای اندازه‌گیری طولانی‌تر باید سرریز را بشماری یا از تایمر ۳۲ بیتی/۶۴ بیتی استفاده کنی.</li>
+</ol>
+<pre class="term" data-from="cyc_to_us.c">
+$ gcc -std=c11 -Wall -Wextra -o cyc_to_us cyc_to_us.c
+$ ./cyc_to_us
+1600 cycles @ 16 MHz  : good 100 us, bad 100 us
+5000 cycles @ 16 MHz  : good 312 us, bad 44 us
+3200 cycles @ 100 MHz : good 32 us
+counter wraps after 268.4 s @ 16 MHz
+counter wraps after 42.9 s @ 100 MHz
+</pre></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>تقریبا همه در این درس سه جا گیر می‌کنند. اول: <b>بهینه‌سازی را با «ریز‌ریز کردن کد» اشتباه می‌گیرند</b>. اول <code>size</code> و map را نگاه کن؛ معمولا یک کتابخانهٔ بزرگ یا یک جدول <code>const</code> نشده مقصر است، نه کدی که ساعت‌ها صرفش کرده‌ای. دوم: برنامه‌ای که فقط با <code>-O0</code> کار می‌کند «برنامه‌ای که کار می‌کند» نیست؛ آن را با همان سطحی که می‌فرستی تست کن. سوم: <b>بنچمارک (benchmark) بد</b> (نتیجه‌ای که کامپایلر حذفش می‌کند) عدد دروغ می‌دهد و از هیچ عددی بدتر است. هر بار که عدد عجیب خوب دیدی (صفر چرخه!)، اسمبلی را نگاه کن.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li>اول اندازه بگیر: <code>arm-none-eabi-size</code> (Flash = text + data؛ RAM = data + bss)، <code>nm --size-sort</code>، فایل map و <code>--print-memory-usage</code>.</li>
+  <li><code>-O0</code> برای دیباگ، <code>-Og</code> برای توسعه، <code>-Os</code>/<code>-O2</code> برای محصول؛ <code>-O3</code> لزوما بهتر نیست. در برنامهٔ ما: ۵۶۰ (<code>-O0</code>) ← ۲۹۶ (<code>-Os</code>) بایت.</li>
+  <li>کامپایلر ثابت‌ها را حساب می‌کند، کد مرده را دور می‌ریزد، توابع کوچک را inline می‌کند و متغیرها را در رجیستر نگه می‌دارد (۱۶ دستور ← ۴ دستور برای یک دور حلقه).</li>
+  <li><code>volatile</code> را فراموش کنی، <code>-O2</code> حلقهٔ انتظارت را به <code>b .L2</code> تبدیل می‌کند.</li>
+  <li><code>-ffunction-sections -fdata-sections -Wl,--gc-sections</code> تابع‌های بی‌مصرف را دور می‌ریزد؛ جدول‌ها را <code>const</code> کن تا در Flash بمانند.</li>
+  <li><code>double</code> روی M4F نرم‌افزاری است (۱۰۰ ← ۲۷۷۶ بایت)؛ M0 تقسیم سخت‌افزاری ندارد.</li>
+  <li>زمان را با DWT (<code>DEMCR</code> بیت ۲۴، <code>DWT_CTRL</code> بیت ۰، <code>DWT_CYCCNT</code>) یا پایه و اسیلوسکوپ اندازه بگیر؛ بنچمارک را از حذف‌شدن توسط کامپایلر نجات بده.</li>
+  <li>الگوریتم بهتر (۱۰۴۸۵۷۶ ← ۱۳۱۰۷۲ قدم) از هر پرچمی مهم‌تر است؛ ولی همیشه «اندازه بگیر، یک تغییر بده، دوباره اندازه بگیر».</li>
+</ul>
+<p>درس بعد: <a href="7-1.html">پروژهٔ پایانی: ثبت‌کنندهٔ دما</a>. پیش از آن: <a href="6-4.html">تست واحد روی PC</a>.</p></div>
+
+</article>
+</body>
+</html>
