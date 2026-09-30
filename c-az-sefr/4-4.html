@@ -297,7 +297,32 @@ freed by thread T0 here:
     #0 0x7fe511afc4d8 in free ...
     #1 0x5603183ba2c0 in main uaf.c:11
 </pre>
-<p>ببین چقدر دقیق است: «۴ بایت را در خط ۱۲ خواندی؛ همان بلوک را در خط ۱۱ <code>free</code> کرده بودی». برای double free هم همین‌طور: پیام <code>attempting double-free</code> و خط هر دو <code>free</code> را نشان می‌دهد.</p>
+<p>ببین چقدر دقیق است: «۴ بایت را در خط ۱۲ خواندی؛ همان بلوک را در خط ۱۱ <code>free</code> کرده بودی». برای double free هم همین‌طور. نمونهٔ کوچکش:</p>
+<div class="code" data-file="double_free.c" data-lang="c" data-verify="host" data-cflags="-g -fsanitize=address" data-exit="1" data-warn-ok id="code4b">
+<pre>
+#include &lt;stdlib.h&gt;
+
+int main(void)
+{
+    int *p = malloc(sizeof *p);
+    if (p == NULL) {
+        return 1;
+    }
+    free(p);
+    free(p);                        // باگ: دوبار free
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code4b">
+  <li data-lines="9-10"><b class="what">دو بار پس دادن.</b> بار اول بلوک به heap برمی‌گردد؛ بار دوم heap را گیج می‌کند (ممکن است همان بلوک بعدا به دو نفر داده شود).
+    <span class="why">راه دفاعی: بعد از <code>free</code> فورا <code>p = NULL</code>؛ چون <code>free(NULL)</code> هیچ کاری نمی‌کند و مجاز است.</span></li>
+</ol>
+<pre class="term" data-nocheck data-kind="err">
+==22481==ERROR: AddressSanitizer: attempting double-free on 0x502000000010 in thread T0:
+    #0 0x7fdd886fc4d8 in free ...
+    #1 0x560407a6a1e8 in main double_free.c:10
+</pre>
+<p>پیام <code>attempting double-free</code> و خط هر دو <code>free</code> را نشان می‌دهد. یک خطای هم‌خانواده: <code>free</code> روی آدرسی که از <code>malloc</code> نیامده (مثلا <code>free(p + 1)</code> وسط بلوک، یا آدرس یک آرایهٔ محلی) رفتار تعریف‌نشده است؛ ASan پیام <code>attempting free on address which was not malloc()-ed</code> می‌دهد. <code>free</code> فقط همان اشاره‌گری را می‌خورد که <code>malloc</code> داده بود.</p>
 
 <h3 id="overflow">۳. نوشتن بیرون از بلوک</h3>
 <p>بلوکت ۴ عضو دارد ولی حلقه تا ایندکس ۴ (پنجمین) می‌رود؛ همان off-by-one آشنای درس <a href="2-5.html">۲.۵</a> و <a href="2-7.html">۲.۷</a>. اینجا هیچ چیز «آرایه» نیست که کامپایلر بشناسد؛ فقط یک آدرس است.</p>
@@ -347,6 +372,50 @@ allocated by thread T0 here:
 <tr><td><code>malloc(10 * sizeof(p))</code> که <code>p</code> از نوع <code>int *</code> است</td><td><code>sizeof(p)</code> اندازهٔ <b>اشاره‌گر</b> (۴ بایت روی MCU) است، نه <code>int</code>. اگر نوع بزرگ‌تر بود، کم می‌آید. بنویس <code>sizeof *p</code></td></tr>
 <tr><td><code>malloc(strlen(s))</code> برای کپی رشته</td><td>جای <code>'\0'</code> (درس <a href="2-8.html">۲.۸</a>) را فراموش کرده‌ای. بنویس <code>strlen(s) + 1</code></td></tr>
 </tbody></table></div>
+
+<h3 id="ownership">مالکیت: چه کسی <code>free</code> می‌کند؟</h3>
+<p>در پایتون و JS زباله‌روب (garbage collector) خودش بلوک‌های بی‌صاحب را جمع می‌کند؛ در C <b>خودِ تو زباله‌روبی</b>. سؤال اول هر بلوک: «مالکش کیست؟» قاعدهٔ ساده: <b>هر بلوک دقیقا یک مالک دارد و همان مالک یک بار <code>free</code> می‌کند.</b> اگر تابعی بلوک می‌سازد و برمی‌گرداند، مالکیت به صدازننده منتقل می‌شود، و این را باید در نام یا توضیح تابع نوشت (مثلا پسوند <code>_alloc</code>، مثل <code>strdup</code> که خودش <code>malloc</code> می‌کند و تو <code>free</code> می‌کنی).</p>
+<div class="code" data-file="owner.c" data-lang="c" data-verify="host" data-cflags="-g -fsanitize=address,undefined" id="code_owner">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+
+// مالکیت: تابع می‌سازد، صدازننده آزاد می‌کند (نام _alloc این را یادآوری می‌کند)
+static char *name_alloc(const char *base, int id)
+{
+    size_t n = strlen(base) + 1U + 11U;
+    char *s = malloc(n);
+    if (s == NULL) {
+        return NULL;
+    }
+    snprintf(s, n, "%s%d", base, id);
+    return s;
+}
+
+int main(void)
+{
+    char *s = name_alloc("sensor", 3);
+    if (s == NULL) {
+        return 1;
+    }
+    printf("%s\n", s);
+    free(s);
+    s = NULL;
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code_owner">
+  <li data-lines="6-15"><b class="what">تابع می‌سازد.</b> بلوک را با <code>malloc</code> می‌گیرد، پر می‌کند و <code>s</code> را برمی‌گرداند. از این لحظه تابع دیگر مالک نیست.
+    <span class="why">اگر تابع خودش <code>free(s)</code> می‌کرد، صدازننده اشاره‌گر آویزان می‌گرفت.</span></li>
+  <li data-lines="19-21"><b class="what">مالک جدید.</b> <code>main</code> حالا مالک است و شکست <code>malloc</code> (<code>NULL</code>) را هم بررسی می‌کند.</li>
+  <li data-lines="24-25"><b class="what">یک بار free.</b> مالک بلوک را پس می‌دهد و اشاره‌گر را <code>NULL</code> می‌کند تا دوباره استفاده یا free نشود.</li>
+</ol>
+<pre class="term" data-from="owner.c">
+$ ./owner
+sensor3
+</pre>
+<p>نکتهٔ کوچک: <code>malloc</code> همیشه بلوکی برمی‌گرداند که برای هر نوع استاندارد هم‌تراز است (درس <a href="3-4.html">۳.۴</a>)، پس نیازی به محاسبهٔ تراز ندارد. <code>malloc(0)</code> و <code>realloc(p, 0)</code> در استاندارد به پیاده‌سازی بستگی دارند (ممکن است <code>NULL</code> یا اشاره‌گر یکتا بدهند)؛ اندازهٔ صفر نخواه. در <code>malloc(count * sizeof *v)</code> اگر <code>count</code> از نوع <code>int</code> و منفی باشد، به <code>size_t</code> بی‌علامت تبدیل می‌شود و عددی عظیم می‌سازد؛ پیش از ضرب بررسی کن که <code>count &gt; 0</code> باشد.</p>
 
 <h2 id="frag">شکل نامرئی: <span class="en">fragmentation</span></h2>
 <p>فرض کن پارکینگی با ۱۶ جا داری. پنج ماشین سه‌جایی (اتوبوس کوچک) پشت‌سرهم پارک کرده‌اند. سپس ماشین دوم و چهارم می‌روند. الان ۷ جای خالی داری، ولی یک ماشین <b>پنج‌جایی</b> که بیاید، جا ندارد: جاهای خالی پراکنده‌اند و هیچ کدام به‌تنهایی ۵ تایی نیست. در heap هم دقیقا همین است و اسمش <span class="term" data-t="fragmentation">fragmentation</span> (تکه‌تکه‌شدگی) است.</p>

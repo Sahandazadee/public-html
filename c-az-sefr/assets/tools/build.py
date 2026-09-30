@@ -125,7 +125,9 @@ def verify(only):
                     fn = c["attrs"].get("data-file")
                     if not fn: print(f"[{lid}] ✗ بلاک بدون data-file"); bad += 1; continue
                     (work / fn).write_text(clean(c["text"]) + "\n", encoding="utf-8")
-                    (outdir / fn).write_text(clean(c["text"]) + "\n", encoding="utf-8")
+                    dst = (outdir / c["attrs"]["data-project"]) if c["attrs"].get("data-project") else outdir
+                    dst.mkdir(parents=True, exist_ok=True)
+                    (dst / fn).write_text(clean(c["text"]) + "\n", encoding="utf-8")
                     if fn.endswith(".c"): srcs.append(fn)
                 if mode == "make":
                     r = run(["make"], work, timeout=60)
