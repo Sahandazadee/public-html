@@ -1,0 +1,1159 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>دیباگ: از printf تا HardFault · C برای میکروکنترلر</title>
+<meta name="description" content="روش علمی پیدا کردن باگ: لاگ و assert، دیباگر GDB روی PC، sanitizer، دیباگ سخت‌افزاری با SWD و OpenOCD، تحلیلگر منطقی، خواندن HardFault در Cortex-M و backtrace در ESP32.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="6-1">
+
+<p class="lede">هر برنامه‌نویسی باگ می‌نویسد؛ فرق حرفه‌ای‌ها با مبتدی‌ها در این است که حرفه‌ای‌ها <b>حدس نمی‌زنند، اندازه می‌گیرند</b>. روی PC می‌توانی هر لحظه برنامه را متوقف کنی و درونش را ببینی. روی میکروکنترلر همین کار ممکن است، ولی باید راهش را بدانی: چطور با یک سیم SWD داخل تراشه را ببینی، وقتی برنامه به HardFault می‌افتد چه چیزی را بخوانی، و چطور خودت به تراشه «حس» بدهی. این درس جعبه‌ابزار کارآگاه توست.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>باگ را با روش «تکرار، کوچک‌کردن، نصف‌کردن» پیدا کنی</li>
+    <li>لاگ با سطح‌بندی و <code>assert</code> بنویسی و بدانی کجا خطرناک است</li>
+    <li>با GDB روی PC نقطهٔ توقف، ناظر و پشتهٔ فراخوانی را ببینی</li>
+    <li>مسیر ST-LINK، OpenOCD و <code>arm-none-eabi-gdb</code> را توضیح بدهی</li>
+    <li>HardFault را بخوانی: PC ذخیره‌شده، ثبات CFSR و خط منبع</li>
+    <li>با یک پایهٔ دیباگ و تحلیلگر منطقی زمان اجرا را اندازه بگیری</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="3-6.html">۳.۶</a> (ثبات و volatile) و <a href="5-3.html">۵.۳</a> (وقفه)</li>
+    <li>درس <a href="6-2.html">۶.۲</a> (رفتار تعریف‌نشده) مکمل این درس است</li>
+    <li>PC با <code>gcc</code> و <code>gdb</code>؛ بخش‌های سخت‌افزاری برد Nucleo-F411RE می‌خواهند ولی اجرای کدها بدون برد هم ممکن است</li>
+    <li>تحلیلگر منطقی ارزان (اختیاری؛ در <a href="1-3.html">۱.۳</a> معرفی شد)</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایده اصلی: کارآگاه، نه فالگیر</h2>
+<p>فرض کن ماشینت روشن نمی‌شود. فالگیر می‌گوید «حتما باتری است» و باتری نو می‌خرد. کارآگاه اول امتحان می‌کند: چراغ‌ها روشن می‌شوند؟ استارت صدا می‌دهد؟ بنزین هست؟ با هر امتحان یک احتمال حذف می‌شود تا علت بماند. باگ‌یابی هم همین است: هر تغییر بی‌دلیل در کد، «فال» است؛ هر اندازه‌گیری، «مدرک».</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>لوله‌کش را ببین: نشتی در دیوار است، ولی او دیوار را نمی‌شکند. شیر اصلی را می‌بندد، نیمی از لوله‌ها را جدا می‌کند و فشار می‌سنجد؛ اگر نشتی ماند، نیمهٔ دیگر را بررسی می‌کند. با چهار پنج اندازه‌گیری به یک متر لوله می‌رسد. کد هم همین است. هزاران خط، ولی با «نصف کردن» در حدود ده قدم به خط مقصر می‌رسی.</p></div>
+
+<h2 id="method">روش: پنج قدم و نصف‌کردن</h2>
+<ol class="steps">
+  <li><b>تکرار کن.</b> باگی که هر بار نیست، قابل‌ رفع نیست. اول یک راه مطمئن برای ساختنش پیدا کن (ورودی ثابت، تعداد دور مشخص).</li>
+  <li><b>کوچکش کن.</b> هرچه را که به باگ ربطی ندارد بردار: ماژول‌ها، سنسورها، وقفه‌های غیرضروری. کد کمینه‌ای بساز که هنوز خراب باشد. اغلب خودِ همین کار علت را نشان می‌دهد.</li>
+  <li><b>حدس بزن و بنویس.</b> «فکر می‌کنم <code>sum</code> بعد از دور سوم بزرگ می‌شود.» حدس باید <b>قابل‌آزمایش</b> باشد.</li>
+  <li><b>اندازه بگیر.</b> با لاگ، <code>assert</code>، دیباگر یا پایهٔ دیباگ حدس را بیازما. اگر غلط بود، حدس بعدی.</li>
+  <li><b>رفع کن و تست بنویس.</b> باگ را که رفع کردی، یک آزمون بگذار که اگر برگشت، فوری بفهمی (درس <a href="6-4.html">۶.۴</a>).</li>
+</ol>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 270" role="img" aria-label="نصف‌کردن: هشت بلوک کد؛ سه بازرسی پشت سر هم نشان می‌دهد باگ در بلوک ششم است">
+  <defs><marker id="ar61a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">نصف‌کردن: با سه بازرسی، باگ در بین هشت بلوک پیدا می‌شود</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="30" y="92" width="80" height="50" fill="#3ddc97"/><rect x="110" y="92" width="80" height="50" fill="#3ddc97"/><rect x="190" y="92" width="80" height="50" fill="#3ddc97"/><rect x="270" y="92" width="80" height="50" fill="#3ddc97"/><rect x="350" y="92" width="80" height="50" fill="#3ddc97"/><rect x="430" y="92" width="80" height="50" fill="#ff86b3"/><rect x="510" y="92" width="80" height="50" fill="#ffd60a"/><rect x="590" y="92" width="80" height="50" fill="#ffd60a"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-size="15" font-weight="800">
+    <text x="70" y="123">۱</text><text x="150" y="123">۲</text><text x="230" y="123">۳</text><text x="310" y="123">۴</text><text x="390" y="123">۵</text><text x="470" y="123">۶</text><text x="550" y="123">۷</text><text x="630" y="123">۸</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M270 92V64"/><path d="M430 92V64"/><path d="M350 92V64" stroke-dasharray="5 4"/>
+  </g>
+  <g stroke="#15120a" stroke-width="2.5">
+    <circle cx="270" cy="52" r="14" fill="#fff"/><circle cx="430" cy="52" r="14" fill="#fff"/><circle cx="350" cy="52" r="14" fill="#fff"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle" font-size="15" font-weight="800">
+    <text x="270" y="58">۱</text><text x="430" y="58">۲</text><text x="350" y="58">۳</text>
+  </g>
+  <g class="s-tx" font-size="13.5">
+    <text x="740" y="176" text-anchor="start">بازرسی ۱ (بعد از بلوک ۳): مقدار درست است ← باگ بعد از آن است.</text>
+    <text x="740" y="200" text-anchor="start">بازرسی ۲ (بعد از بلوک ۶ ... خانهٔ دوم): مقدار غلط ← باگ در ۴ تا ۶ است.</text>
+    <text x="740" y="224" text-anchor="start">بازرسی ۳ (بعد از بلوک ۵): مقدار درست ← باگ دقیقا در بلوک ۶ است.</text>
+    <text x="740" y="252" text-anchor="start" font-weight="800">هر بازرسی نیمی از جای مشکوک را حذف می‌کند.</text>
+  </g>
+  <text x="470" y="160" text-anchor="middle" class="s-tx" font-size="13" font-weight="800">باگ</text>
+</svg></div>
+<figcaption>سبز = سالم، صورتی = باگ، زرد = هنوز مشکوک. بازرسی یعنی «چاپ یا مشاهدهٔ یک مقدار در آن نقطه».</figcaption></figure>
+
+<h2 id="log">لاگ (printf) با سطح‌بندی</h2>
+<p>ساده‌ترین بازرسی: چاپ یک مقدار. اما اگر همه‌جا <code>printf</code> بگذاری، بعد از رفع باگ باید همه را پاک کنی و شش ماه بعد برای باگ بعدی دوباره بنویسی. راه حرفه‌ای‌ها: <b>لاگ با سطح</b>. هر پیام یک سطح دارد (خطا، اطلاع، ردیابی) و با یک پرچم کامپایل، پیام‌های غیرضروری حذف می‌شوند. ESP-IDF هم همین را با <code>ESP_LOGE</code>، <code>ESP_LOGI</code> و <code>ESP_LOGD</code> می‌دهد؛ اینجا نسخهٔ خودمان را با ماکرو (درس <a href="4-1.html">۴.۱</a>) می‌سازیم:</p>
+
+<div class="code" data-file="log.c" data-lang="c" data-verify="host" id="code1">
+<pre>
+#include &lt;stdio.h&gt;
+
+#define LOG_ERROR 1
+#define LOG_INFO  2
+#define LOG_DEBUG 3
+
+#ifndef LOG_LEVEL
+#define LOG_LEVEL LOG_INFO      // سطح پیش‌فرض
+#endif
+
+#define LOG_AT(lvl, tag, ...)                                   \
+    do {                                                        \
+        if ((lvl) &lt;= LOG_LEVEL) {                               \
+            printf("[%s] %s:%d: ", (tag), __FILE__, __LINE__);  \
+            printf(__VA_ARGS__);                                \
+            printf("\n");                                       \
+        }                                                       \
+    } while (0)
+
+#define LOGE(...) LOG_AT(LOG_ERROR, "E", __VA_ARGS__)
+#define LOGI(...) LOG_AT(LOG_INFO,  "I", __VA_ARGS__)
+#define LOGD(...) LOG_AT(LOG_DEBUG, "D", __VA_ARGS__)
+
+int main(void)
+{
+    int temp = 42;
+    LOGE("sensor timeout after %d ms", 500);
+    LOGI("temp = %d", temp);
+    LOGD("raw adc = %d", 1234);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code1">
+  <li data-lines="3-5"><b class="what">سه سطح.</b> عدد کمتر = مهم‌تر: خطا ۱، اطلاع ۲، ردیابی ۳.</li>
+  <li data-lines="7-9"><b class="what">سطح پیش‌فرض.</b> اگر موقع کامپایل <code>-DLOG_LEVEL=3</code> ندهی، سطح «اطلاع» است. <code>#ifndef</code> یعنی «اگر قبلا تعریف نشده».
+    <span class="why">با یک پرچم کامپایل، همهٔ لاگ‌های ردیابی را بدون دست‌زدن به کد روشن یا خاموش می‌کنی.</span></li>
+  <li data-lines="11-18"><b class="what">ماکروی اصلی.</b> فقط اگر سطح پیام از سطح مجاز کمتر یا برابر باشد چاپ می‌کند. <code>__FILE__</code> و <code>__LINE__</code> نام فایل و شمارهٔ خط همین جا را می‌دهند و <code>__VA_ARGS__</code> بقیهٔ آرگومان‌ها را عبور می‌دهد.
+    <span class="why">فایل و خط را خودکار می‌گیری و لازم نیست دستی بنویسی؛ اشتباه هم نمی‌شود. <code>do { ... } while (0)</code> ماکرو را مثل یک دستور رفتار می‌دهد (درس ۴.۱).</span></li>
+  <li data-lines="20-22"><b class="what">میان‌بُرها.</b> سه ماکروی کوتاه برای هر سطح.</li>
+  <li data-lines="24-31"><b class="what">استفاده.</b> سه پیام با سه سطح. با سطح پیش‌فرض فقط دو پیام اول چاپ می‌شود.</li>
+</ol>
+<pre class="term" data-from="log.c">
+$ gcc -std=c11 -Wall -Wextra -o log log.c
+$ ./log
+[E] log.c:27: sensor timeout after 500 ms
+[I] log.c:28: temp = 42
+</pre>
+<p>و با <code>-DLOG_LEVEL=3</code> پیام ردیابی هم می‌آید:</p>
+<pre class="term" data-from="log.c" data-nocheck>
+$ gcc -std=c11 -Wall -Wextra -DLOG_LEVEL=3 -o log log.c
+$ ./log
+[E] log.c:27: sensor timeout after 500 ms
+[I] log.c:28: temp = 42
+[D] log.c:29: raw adc = 1234
+</pre>
+
+<div class="callout warn"><div class="ct">printf روی میکروکنترلر گران است</div>
+<ul>
+<li><b>زمان:</b> ارسال یک خط ۳۰ کاراکتری با UART در ۱۱۵۲۰۰ باود حدود ۲٫۶ میلی‌ثانیه طول می‌کشد (۱۰ بیت برای هر کاراکتر). اگر در ISR یا حلقهٔ سریع باشد، زمان‌بندی را عوض می‌کنی و باگ زمانی گم می‌شود یا ظاهر می‌شود («اثر هایزنبرگ» دیباگ).</li>
+<li><b>حافظه:</b> <code>printf</code> با اعشار در کتابخانهٔ <span class="en">newlib</span> ده‌ها کیلوبایت Flash می‌گیرد (درس <a href="2-8.html">۲.۸</a>).</li>
+<li><b>داخل ISR هرگز:</b> <code>printf</code> ممکن است قفل بگیرد یا طولانی باشد (درس <a href="5-3.html">۵.۳</a>). به‌جایش یک پرچم بگذار و در <code>main</code> چاپ کن.</li>
+<li>در ESP-IDF لاگ از طریق تابع‌های صف‌دار کار می‌کند و این مشکلات کمتر است، ولی هنوز هزینه دارد.</li>
+</ul></div>
+
+<h2 id="assert"><span class="en">assert</span>: قرارداد را در خود کد بنویس</h2>
+<p>لاگ برای «ببینم چه شد» است؛ <span class="term" data-t="assertion">assert</span> برای «این نباید هرگز اتفاق بیفتد» است. هر جا فرضی داری (ایندکس معتبر است، اشاره‌گر <code>NULL</code> نیست)، آن را با <code>assert</code> بنویس. اگر فرض شکست، برنامه <b>همان لحظه</b> و با نام فایل و خط می‌ایستد، نه ده تابع بعد که علامتش گم شده.</p>
+
+<div class="code" data-file="assert.c" data-lang="c" data-verify="host" data-exit="134" id="code2">
+<pre>
+#include &lt;assert.h&gt;
+#include &lt;stdio.h&gt;
+
+#define N 4
+static int table[N] = {1, 2, 3, 4};
+
+static int get(int idx)
+{
+    assert(idx &gt;= 0 &amp;&amp; idx &lt; N);    // قرارداد: ایندکس باید معتبر باشد
+    return table[idx];
+}
+
+int main(void)
+{
+    printf("get(2) = %d\n", get(2));
+    fflush(stdout);
+    printf("get(7) = %d\n", get(7));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code2">
+  <li data-lines="1"><b class="what">هدر assert.</b> ماکروی <code>assert</code> از اینجا می‌آید.</li>
+  <li data-lines="7-11"><b class="what">تابع get.</b> قبل از خواندن جدول، درست‌بودن ایندکس را «ادعا» می‌کند.
+    <span class="why">اگر شرط نادرست باشد، <code>assert</code> پیام خطا با فایل، خط و متن شرط چاپ می‌کند و برنامه را با <code>abort()</code> می‌کشد.</span></li>
+  <li data-lines="15-17"><b class="what">فراخوانی درست.</b> ایندکس ۲ معتبر است. <code>fflush</code> خروجی را فوری می‌فرستد.
+    <span class="why">چون بعدش برنامه با abort کشته می‌شود و بافر <code>stdout</code> خالی نمی‌شود؛ بدون fflush این خط را نمی‌دیدی.</span></li>
+  <li data-lines="18"><b class="what">فراخوانی غلط.</b> ایندکس ۷ نامعتبر است و assert جلوی خواندن خارج از آرایه (UB) را می‌گیرد.</li>
+</ol>
+<pre class="term" data-from="assert.c">
+$ gcc -std=c11 -Wall -Wextra -o assert assert.c
+$ ./assert
+get(2) = 3
+</pre>
+<pre class="term" data-kind="cmd">
+$ ./assert     # پیام assert روی stderr می‌آید (نمونه؛ نام برنامه فرق می‌کند)
+assert: assert.c:9: get: Assertion `idx >= 0 && idx < N' failed.
+Aborted (core dumped)
+$ echo $?
+134
+</pre>
+<p>کد خروج ۱۳۴ یعنی ۱۲۸ + ۶ (سیگنال <code>SIGABRT</code>). حالا دو نکتهٔ بسیار مهم:</p>
+
+<div class="callout warn"><div class="ct">دو تله</div>
+<ul>
+<li><b>با <code>-DNDEBUG</code> همهٔ assert ها حذف می‌شوند.</b> پس داخل assert هرگز کاری با اثر جانبی نگذار: <code>assert(i++ &lt; 5)</code> در نسخهٔ نهایی <code>i</code> را زیاد نمی‌کند و رفتار برنامه عوض می‌شود.</li>
+<li><b>assert برای ورودی کاربر نیست.</b> ورودی نامعتبر باید با <code>if</code> و کد خطا مدیریت شود. assert فقط برای «اشتباه برنامه‌نویس» است (نباید هرگز رخ بدهد).</li>
+</ul></div>
+
+<p>روی میکروکنترلر <code>abort()</code> استاندارد به کار نمی‌آید: کسی پیام را نمی‌بیند. پس assert خودت را می‌نویسی که فایل و خط را در یک متغیر ذخیره کند، LED خطا را روشن کند و بایستد یا ریست کند. نسخهٔ PC آن را ببین (همان الگو با <code>exit</code>):</p>
+
+<div class="code" data-file="my_assert.c" data-lang="c" data-verify="host" data-exit="3" id="code3">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+
+/* روی MCU: اینجا LED خطا را روشن می‌کنند، فایل و خط را ذخیره می‌کنند و می‌ایستند */
+static void assert_failed(const char *file, int line)
+{
+    printf("ASSERT FAILED at %s:%d\n", file, line);
+    exit(3);
+}
+
+#define ASSERT(cond) \
+    do { if (!(cond)) assert_failed(__FILE__, __LINE__); } while (0)
+
+static void set_duty(int percent)
+{
+    ASSERT(percent &gt;= 0 &amp;&amp; percent &lt;= 100);
+    printf("duty = %d%%\n", percent);
+}
+
+int main(void)
+{
+    set_duty(40);
+    set_duty(140);      // اشتباه در جای دیگر برنامه
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code3">
+  <li data-lines="4-9"><b class="what">تابع شکست.</b> در نسخهٔ MCU به‌جای <code>printf</code> و <code>exit</code>: ذخیرهٔ <code>file</code> و <code>line</code> در متغیر <code>volatile</code>، روشن‌کردن LED و <code>for (;;)</code>.
+    <span class="why">در این حالت می‌توانی دیباگر را وصل کنی و همان متغیرها را بخوانی؛ اینجا نقطهٔ توقف طبیعی توست.</span></li>
+  <li data-lines="11-12"><b class="what">ماکروی ASSERT.</b> نام فایل و خط را خودکار می‌فرستد.</li>
+  <li data-lines="14-18"><b class="what">تابع با قرارداد.</b> درصد باید بین ۰ و ۱۰۰ باشد. شکست یعنی فراخواننده اشتباه کرده.</li>
+  <li data-lines="22-23"><b class="what">استفاده.</b> فراخوانی اول درست و دوم غلط است.</li>
+</ol>
+<pre class="term" data-from="my_assert.c">
+$ ./my_assert
+duty = 40%
+ASSERT FAILED at my_assert.c:16
+</pre>
+
+<h2 id="gdb">دیباگر GDB روی PC</h2>
+<p>لاگ یعنی «چند سؤال را از قبل بپرس». <span class="term" data-t="debugger">دیباگر</span> یعنی «برنامه را نگه دار، هر سؤالی خواستی بپرس». GDB دیباگر استاندارد خانوادهٔ GNU است و همین ابزار (با نام <code>arm-none-eabi-gdb</code>) روی STM32 هم کار می‌کند؛ پس تمرین امروزت روی PC مستقیم به MCU منتقل می‌شود.</p>
+
+<p>برنامهٔ زیر باید میانگین پنج خوانش سنسور را بدهد. یکی از خوانش‌ها پارازیت (۹۹۹۹) است. میانگین «معقول» باید حدود ۲۱۱ باشد. ببین چه چاپ می‌کند:</p>
+
+<div class="code" data-file="avg_dbg.c" data-lang="c" data-verify="host" id="code4">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+#define N 5
+
+static int32_t readings[N] = {210, 215, 9999, 212, 208};   // 9999 = پارازیت سنسور
+
+static int32_t average(const int32_t *v, int n)
+{
+    int32_t sum = 0;
+    for (int i = 0; i &lt; n; i++)
+        sum += v[i];
+    return sum / n;
+}
+
+int main(void)
+{
+    int32_t avg = average(readings, N);
+    printf("average = %d\n", (int)avg);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code4">
+  <li data-lines="6"><b class="what">داده.</b> پنج خوانش؛ سومی غیرعادی است.</li>
+  <li data-lines="8-9,14"><b class="what">تابع average.</b> اشاره‌گر به داده و تعداد را می‌گیرد.</li>
+  <li data-lines="10"><b class="what">جمع‌کننده.</b> از صفر شروع می‌شود.</li>
+  <li data-lines="11-12"><b class="what">حلقه.</b> همهٔ عنصرها را جمع می‌کند، حتی پارازیت را.</li>
+  <li data-lines="13"><b class="what">میانگین.</b> تقسیم صحیح بر تعداد.</li>
+  <li data-lines="16-21"><b class="what">main.</b> میانگین را می‌گیرد و چاپ می‌کند.</li>
+</ol>
+<pre class="term" data-from="avg_dbg.c">
+$ gcc -std=c11 -Wall -Wextra -o avg_dbg avg_dbg.c
+$ ./avg_dbg
+average = 2168
+</pre>
+<p>۲۱۶۸ به‌جای ۲۱۱! کدام خوانش این‌قدر خراب کرد؟ کد را دوباره <b>با <code>-g</code></b> بساز (اطلاعات دیباگ: نام متغیرها و خط‌ها را در فایل می‌گذارد) و با <code>-O0</code> (بدون بهینه‌سازی؛ با بهینه‌سازی بسیاری از متغیرها <code>&lt;optimized out&gt;</code> می‌شوند):</p>
+<pre class="term" data-kind="cmd">
+$ gcc -std=c11 -Wall -Wextra -g -O0 -o avg_dbg avg_dbg.c
+$ gdb ./avg_dbg
+</pre>
+
+<p>خلاصهٔ فرمان‌های GDB که ۹۰٪ کار را انجام می‌دهند:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>فرمان</th><th>کوتاه</th><th>کار</th></tr></thead>
+<tbody>
+<tr><td><code>break average</code></td><td><code>b</code></td><td>نقطهٔ توقف (<span class="term" data-t="breakpoint">breakpoint</span>) روی یک تابع؛ <code>break 12</code> روی یک خط؛ <code>break 12 if v[i] &gt; 1000</code> فقط وقتی شرط برقرار است</td></tr>
+<tr><td><code>run</code></td><td><code>r</code></td><td>برنامه را شروع کن</td></tr>
+<tr><td><code>continue</code></td><td><code>c</code></td><td>ادامه بده تا نقطهٔ توقف بعدی</td></tr>
+<tr><td><code>next</code> / <code>step</code></td><td><code>n</code> / <code>s</code></td><td>یک خط جلو برو؛ <code>step</code> داخل تابع هم می‌رود</td></tr>
+<tr><td><code>finish</code></td><td></td><td>تا برگشت از تابع فعلی برو و مقدار برگشتی را نشان بده</td></tr>
+<tr><td><code>print v[i]</code></td><td><code>p</code></td><td>مقدار عبارت را چاپ کن؛ <code>print *v@n</code> یعنی n عنصر از v</td></tr>
+<tr><td><code>x/5dw v</code></td><td></td><td>حافظه را بخوان: ۵ کلمه (w)، به‌صورت ده‌دهی (d)؛ <code>x/8xb</code> هشت بایت هگز</td></tr>
+<tr><td><code>watch sum</code></td><td></td><td>ناظر (<span class="term" data-t="watchpoint">watchpoint</span>): هر بار <code>sum</code> عوض شد بایست</td></tr>
+<tr><td><code>bt</code></td><td></td><td>پشتهٔ فراخوانی (<span class="term" data-t="backtrace">backtrace</span>): چه کسی چه کسی را صدا زده</td></tr>
+<tr><td><code>frame 1</code> / <code>up</code></td><td><code>f</code></td><td>به قاب دیگر برو تا متغیرهای آن تابع را ببینی</td></tr>
+<tr><td><code>info locals</code></td><td></td><td>همهٔ متغیرهای محلی را نشان بده</td></tr>
+<tr><td><code>display sum</code></td><td></td><td>بعد از هر توقف خودکار <code>sum</code> را چاپ کن</td></tr>
+</tbody></table></div>
+
+<p>این بار به‌جای تایپ تک‌تک فرمان‌ها، آن‌ها را در یک فایل می‌نویسیم و با <code>gdb -batch -x</code> اجرا می‌کنیم؛ نتیجه همان است که تعاملی می‌گیری:</p>
+<div class="code" data-file="a.gdb" data-lang="gdb" id="gdb1">
+<pre>
+break 12 if v[i] &gt; 1000
+run
+print i
+print v[i]
+print sum
+bt
+x/5dw v
+frame 1
+print readings
+</pre></div>
+<ol class="walk" data-for="gdb1">
+  <li data-lines="1"><b class="what">توقف شرطی.</b> روی خط ۱۲ (<code>sum += v[i]</code>) فقط وقتی توقف کن که عنصر فعلی بزرگ‌تر از ۱۰۰۰ باشد.
+    <span class="why">به‌جای پنج بار <code>continue</code>، مستقیم به «لحظهٔ مشکوک» می‌رسی. در آرایهٔ ۱۰۰۰۰تایی اصلا راه دیگری نداری.</span></li>
+  <li data-lines="2"><b class="what">اجرا.</b> برنامه تا اولین توقف می‌رود.</li>
+  <li data-lines="3-5"><b class="what">سه مقدار.</b> ایندکس، خود عنصر و جمع تا اینجا.</li>
+  <li data-lines="6"><b class="what">پشتهٔ فراخوانی.</b> نشان می‌دهد در <code>average</code> هستیم و از <code>main</code> خط ۱۸ صدا شده.</li>
+  <li data-lines="7"><b class="what">حافظهٔ خام.</b> پنج کلمهٔ ۳۲ بیتی از آدرس <code>v</code> به‌صورت ده‌دهی.</li>
+  <li data-lines="8-9"><b class="what">رفتن به قاب main.</b> آرایهٔ اصلی را از دید <code>main</code> چاپ می‌کند.</li>
+</ol>
+<pre class="term" data-kind="cmd">
+$ gdb -q -batch -x a.gdb ./avg_dbg
+Breakpoint 1 at 0x1168: file avg_dbg.c, line 12.
+
+Breakpoint 1, average (v=0x555555558010 &lt;readings&gt;, n=5) at avg_dbg.c:12
+12	        sum += v[i];
+$1 = 2
+$2 = 9999
+$3 = 425
+#0  average (v=0x555555558010 &lt;readings&gt;, n=5) at avg_dbg.c:12
+#1  0x00005555555551b6 in main () at avg_dbg.c:18
+0x555555558010 &lt;readings&gt;:	210	215	9999	212
+0x555555558020 &lt;readings+16&gt;:	208
+#1  0x00005555555551b6 in main () at avg_dbg.c:18
+18	    int32_t avg = average(readings, N);
+$4 = {210, 215, 9999, 212, 208}
+</pre>
+<p>مدرک روشن است: در دور ایندکس ۲، خوانش ۹۹۹۹ وارد جمع می‌شود (جمع تا آن‌جا ۴۲۵ بوده). آدرس‌ها روی رایانهٔ تو فرق می‌کند. حالا <b>ناظر</b> را امتحان کن. به‌جای پرسیدن از یک نقطه، از GDB می‌خواهیم هر بار <code>sum</code> عوض شد بایستد:</p>
+<pre class="term" data-kind="cmd">
+$ gdb -q -batch -x b.gdb ./avg_dbg          # break average, run, watch sum, continue ×3 ...
+Hardware watchpoint 2: sum
+
+Old value = 0
+New value = 210
+average (v=0x555555558010 &lt;readings&gt;, n=5) at avg_dbg.c:11
+11	    for (int i = 0; i &lt; n; i++)
+
+Hardware watchpoint 2: sum
+
+Old value = 210
+New value = 425
+...
+Old value = 425
+New value = 10424
+...
+Value returned is $1 = 2168
+</pre>
+<p>«۴۲۵ ← ۱۰۴۲۴» یعنی یک جمع ۹۹۹۹ تایی. حالا دیگر نیازی به حدس نیست. بیا با ابزارک ببینیم همین رخداد چطور در حافظه می‌گذرد:</p>
+
+<div class="widget" data-w="mem" data-config='{"title":"ناظر sum: جمع در هر دور حلقه","code":["sum = 0;","sum += v[0];   // 210","sum += v[1];   // 215","sum += v[2];   // 9999 (پارازیت)","sum += v[3];   // 212","sum += v[4];   // 208","return sum / n;"],"intro":"روی بعدی بزن؛ هر بار که sum عوض شود، ناظر GDB می‌ایستاد.","cells":[{"addr":"stack","name":"sum","val":null,"kind":"var"},{"addr":"stack","name":"n","val":5,"kind":"var"}],"steps":[{"line":0,"set":{"0":0},"hot":[0],"say":"sum ساخته شد و صفر است."},{"line":1,"set":{"0":210},"hot":[0],"say":"ناظر: ۰ به ۲۱۰."},{"line":2,"set":{"0":425},"hot":[0],"say":"ناظر: ۲۱۰ به ۴۲۵."},{"line":3,"set":{"0":10424},"hot":[0],"say":"<b>ناظر: ۴۲۵ به ۱۰۴۲۴.</b> جهش عجیب! همین‌جا مقصر پیدا شد."},{"line":4,"set":{"0":10636},"hot":[0],"say":"۱۰۶۳۶."},{"line":5,"set":{"0":10844},"hot":[0],"say":"۱۰۸۴۴."},{"line":6,"set":{"0":10844},"hot":[0],"say":"۱۰۸۴۴ تقسیم بر ۵ برابر ۲۱۶۸ (تقسیم صحیح): همان عدد چاپ‌شده."}]}'></div>
+
+<div class="callout tip"><div class="ct">نکته: -Og و -g</div>
+<p>همیشه با <code>-g</code> بساز. برای دیباگ <code>-O0</code> یا <code>-Og</code> (بهینه‌سازی سبک، مخصوص دیباگ) بهتر از <code>-O2</code> است چون کد ترتیب‌شده و متغیرها سر جایشان می‌مانند. ولی یادت باشد که رفتار برنامه با <code>-O2</code> ممکن است فرق کند (درس <a href="6-2.html">۶.۲</a>): بعد از رفع باگ در حالت <code>-O0</code>، برنامه را با تنظیمات نهایی هم بیازما.</p></div>
+
+<h2 id="sanitizer">Sanitizer: کامپایلر خودش باگ‌یاب می‌شود</h2>
+<p>گاهی باگ آن‌قدر پنهان است که نمی‌دانی کجا را نگاه کنی. <span class="term" data-t="sanitizer">sanitizer</span> ها (با <code>-fsanitize=address,undefined</code>) کنار هر دسترسی به حافظه یک بازرسی پنهان می‌گذارند و هنگام اجرا فوری گزارش می‌دهند. در درس <a href="6-2.html">۶.۲</a> بیشتر می‌بینی؛ اینجا یک باگ کلاسیک: <code>strcpy</code> در بافر کوچک.</p>
+
+<div class="code" data-file="name_bug.c" data-lang="c" data-verify="host" data-warn-ok data-exit="134" id="code5">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+int main(void)
+{
+    char name[8];
+    strcpy(name, "temperature");     // 11 حرف + '\0' در 8 بایت جا نمی‌شود
+    printf("%s\n", name);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code5">
+  <li data-lines="6"><b class="what">بافر ۸ بایتی.</b> جای ۷ حرف و پایان رشته.</li>
+  <li data-lines="7"><b class="what">کپی طولانی.</b> ۱۲ بایت (۱۱ حرف و <code>'\0'</code>) روی ۸ بایت نوشته می‌شود؛ ۴ بایت روی چیزی بعد از بافر می‌افتد.
+    <span class="why">بایت‌های اضافی روی داده‌های همسایه (و حتی آدرس برگشت) می‌نویسند. اسمش «سرریز بافر» است (درس ۲.۸).</span></li>
+  <li data-lines="8"><b class="what">چاپ.</b> اگر برنامه تا اینجا برسد.</li>
+</ol>
+<p>gcc اینجا هشدار هم می‌دهد: <code>writing 12 bytes into a region of size 8 overflows the destination</code>. اگر هشدار را نبینی و برنامه را بسازی، در Ubuntu (که محافظ پشته روشن است) اجرا با یک «canary» (نگهبان) گیر می‌افتد:</p>
+<pre class="term" data-kind="cmd">
+$ gcc -std=c11 -Wall -Wextra -O0 -o name_bug name_bug.c
+$ ./name_bug
+*** stack smashing detected ***: terminated
+Aborted (core dumped)
+</pre>
+<p>و با sanitizer دقیقا می‌گوید کجا و چند بایت (چند خط اول، کوتاه‌شده):</p>
+<pre class="term" data-kind="cmd">
+$ gcc -std=c11 -g -fsanitize=address -o name_bug_s name_bug.c
+$ ./name_bug_s
+==5441==ERROR: AddressSanitizer: stack-buffer-overflow on address 0x7f4757d00028 ...
+WRITE of size 12 at 0x7f4757d00028 thread T0
+    #0 0x7f475a2fb302 in memcpy ...
+    #1 0x5571b121a2ca in main name_bug.c:7
+    ...
+    [32, 40) 'name' (line 6) &lt;== Memory access at offset 40 overflows this variable
+SUMMARY: AddressSanitizer: stack-buffer-overflow ... in memcpy
+</pre>
+<p>«WRITE of size 12» و «'name' ... overflows this variable»: بافر <code>name</code> بود و ۱۲ بایت نوشته شد. روی MCU sanitizer معمولی در دسترس نیست (حافظه و کتابخانه‌اش سنگین است)، پس منطق را روی PC تست کن (درس <a href="6-4.html">۶.۴</a>). ولی خود ایدهٔ canary روی MCU هم کاربرد دارد؛ در بخش <a href="#stack">پشته</a> می‌بینی.</p>
+
+<h2 id="swd">دیباگ سخت‌افزاری: SWD و OpenOCD</h2>
+<p>روی PC، GDB خود برنامه را اجرا می‌کند. روی میکروکنترلر برنامه روی تراشه است و GDB روی رایانه؛ باید <b>پلی</b> بینشان باشد. این پل چند تکه دارد:</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 250" role="img" aria-label="زنجیرهٔ دیباگ: arm-none-eabi-gdb روی رایانه، OpenOCD، ST-LINK روی برد، تراشهٔ STM32 با خط‌های SWD">
+  <defs><marker id="ar61b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">مسیر دیباگ: از دیباگر تا هستهٔ Cortex-M</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="590" y="56" width="150" height="104" rx="12" fill="#7ea3ff"/>
+    <rect x="400" y="56" width="150" height="104" rx="12" fill="#ffd60a"/>
+    <rect x="210" y="56" width="150" height="104" rx="12" fill="#3ddc97"/>
+    <rect x="20" y="56" width="150" height="104" rx="12" fill="#ff86b3"/>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M588 108H552" marker-start="url(#ar61b)" marker-end="url(#ar61b)"/><path d="M398 108H362" marker-start="url(#ar61b)" marker-end="url(#ar61b)"/><path d="M208 108H172" marker-start="url(#ar61b)" marker-end="url(#ar61b)"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle">
+    <text x="665" y="88" font-size="14.5" font-weight="800">دیباگر GDB</text>
+    <text x="665" y="114" class="mono" font-size="12" font-weight="700">arm-none-</text>
+    <text x="665" y="130" class="mono" font-size="12" font-weight="700">eabi-gdb</text>
+    <text x="665" y="150" font-size="12.5">روی رایانه</text>
+
+    <text x="475" y="88" font-size="14.5" font-weight="800">پل OpenOCD</text>
+    <text x="475" y="114" class="mono" font-size="13" font-weight="700">openocd</text>
+    <text x="475" y="138" font-size="12.5">فرمان‌ها را ترجمه می‌کند</text>
+
+    <text x="285" y="88" font-size="14.5" font-weight="800">پروب ST-LINK</text>
+    <text x="285" y="114" class="mono" font-size="13" font-weight="700">ST-LINK/V2-1</text>
+    <text x="285" y="138" font-size="12.5">روی خود برد Nucleo</text>
+
+    <text x="95" y="88" font-size="14.5" font-weight="800">تراشه</text>
+    <text x="95" y="114" class="mono" font-size="13" font-weight="700">STM32F411</text>
+    <text x="95" y="138" font-size="12.5">هستهٔ Cortex-M4</text>
+  </g>
+  <g stroke="#15120a" stroke-width="2" stroke-dasharray="5 4" fill="none">
+    <path d="M570 168V196"/><path d="M380 168V196"/><path d="M190 168V196"/>
+  </g>
+  <g class="s-tx" text-anchor="middle">
+    <text x="570" y="214" class="mono" font-size="12.5" font-weight="700">localhost:3333</text>
+    <text x="570" y="234" font-size="12.5">پروتکل GDB روی TCP</text>
+    <text x="380" y="214" class="mono" font-size="12.5" font-weight="700">USB</text>
+    <text x="380" y="234" font-size="12.5">کابل مینی/میکرو USB</text>
+    <text x="190" y="214" class="mono" font-size="12.5" font-weight="700">SWCLK SWDIO GND</text>
+    <text x="190" y="234" font-size="12.5">دو سیم داده + زمین</text>
+  </g>
+</svg></div>
+<figcaption>روی Nucleo، ST-LINK و تراشه روی یک برد هستند و سیم‌های SWD از قبل وصل شده‌اند؛ روی بردهای ارزان (مثل Blue Pill) باید یک پروب ST-LINK جدا و سیم‌ها را وصل کنی.</figcaption></figure>
+
+<p><span class="term" data-t="swd">SWD</span> (<span class="en">Serial Wire Debug</span>) پروتکل دو‌سیمهٔ دیباگ ARM است. بخش دیباگ داخل هسته (<span class="en">DAP</span>) بدون دخالت CPU به حافظه و ثبات‌ها دسترسی دارد؛ پس می‌شود هسته را نگه داشت، RAM را خواند و Flash را برنامه‌ریزی کرد. پروتکل قدیمی‌تر و پرسیم‌تر <span class="term" data-t="jtag">JTAG</span> همین کار را با چهار یا پنج سیم می‌کند و در بسیاری از تراشه‌ها (از جمله ESP32 با پروب مناسب) موجود است. <span class="term" data-t="stlink">ST-LINK</span> و <span class="term" data-t="openocd">OpenOCD</span> را در درس ۵.۲ دیدی؛ اینجا روند کامل:</p>
+
+<div class="code" data-lang="sh" id="ocd1">
+<pre>
+# ترمینال ۱: OpenOCD را روشن بگذار
+openocd -f interface/stlink.cfg -f target/stm32f4x.cfg
+
+# ترمینال ۲: GDB را روی فایل ELF (با -g ساخته‌شده) باز کن
+arm-none-eabi-gdb build/firmware.elf
+</pre></div>
+<ol class="walk" data-for="ocd1">
+  <li data-lines="2"><b class="what">OpenOCD.</b> دو فایل پیکربندی می‌گیرد: یکی برای پروب (<code>stlink.cfg</code>)، یکی برای تراشه (<code>stm32f4x.cfg</code>). بعد به SWD وصل می‌شود و روی پورت ۳۳۳۳ منتظر GDB می‌ماند.
+    <span class="why">هر پروب و هر تراشه فایل خودش را دارد؛ برای تراشهٔ دیگر فقط این دو فایل عوض می‌شود.</span></li>
+  <li data-lines="5"><b class="what">GDB مخصوص ARM.</b> <code>firmware.elf</code> نقشهٔ بین آدرس‌ها و خط‌های کد را دارد؛ بدون آن فقط آدرس می‌بینی.</li>
+</ol>
+<div class="code" data-lang="gdb" id="ocd2">
+<pre>
+target extended-remote localhost:3333
+monitor reset halt
+load
+break main
+continue
+</pre></div>
+<ol class="walk" data-for="ocd2">
+  <li data-lines="1"><b class="what">وصل شدن.</b> به OpenOCD روی پورت ۳۳۳۳ وصل می‌شود.</li>
+  <li data-lines="2"><b class="what">ریست و توقف.</b> <code>monitor</code> یعنی «فرمان را مستقیم به OpenOCD بده». <code>reset halt</code> تراشه را ریست می‌کند و روی اولین دستور نگه می‌دارد.</li>
+  <li data-lines="3"><b class="what">برنامه‌ریزی.</b> <code>load</code> کد ELF را در Flash می‌نویسد.
+    <span class="why">همان کاری که «Flash» در IDE می‌کند؛ ولی حالا فرمانش دست توست.</span></li>
+  <li data-lines="4-5"><b class="what">اجرا تا main.</b> نقطهٔ توقف روی <code>main</code> می‌گذارد و می‌گذارد برنامه تا آن‌جا برود.</li>
+</ol>
+<pre class="term" data-kind="cmd" data-nocheck>
+$ openocd -f interface/stlink.cfg -f target/stm32f4x.cfg
+Open On-Chip Debugger ...
+Info : Listening on port 3333 for gdb connections
+</pre>
+<p>خروجی بالا فقط سرنخ است؛ متن دقیق روی هر نسخه و برد فرق می‌کند (ما اینجا برد واقعی نداریم و بخش‌های سخت‌افزاری نمونه هستند). ولی همین حالا می‌توانی همهٔ فرمان‌های جدول GDB را روی تراشه بزنی: <code>break</code>، <code>watch</code>، <code>x/8xw 0x40020000</code> (خواندن ثبات‌های GPIOA!)، <code>print/x</code> روی هر متغیر.</p>
+
+<div class="callout warn"><div class="ct">با بهینه‌سازی و وقفه مراقب باش</div>
+<p>وقتی هسته را با <code>halt</code> نگه می‌داری، <b>پریفرال‌ها هنوز کار می‌کنند</b> (تایمرها می‌شمارند، UART داده می‌گیرد؛ در STM32 با تنظیم <code>DBGMCU</code> می‌توان تایمرها را هم متوقف کرد). پس بعد از ادامه، ممکن است ISR ها یک‌جا پشت هم اجرا شوند. نقطهٔ توقف در ISR های زمان‌حساس کد را نامعتبر می‌کند؛ برای آن‌ها از پایهٔ دیباگ (بخش <a href="#pins">پایه و تحلیلگر منطقی</a>) استفاده کن.</p></div>
+
+<h2 id="channels">خروجی متن از MCU: چهار راه</h2>
+<p>گاهی دیباگر کافی نیست و می‌خواهی برنامه در حال اجرا «حرف بزند». چند راه هست؛ هرکدام هزینه و مزیتی دارد:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>راه</th><th>سخت‌افزار لازم</th><th>سرعت و هزینه</th><th>نکته</th></tr></thead>
+<tbody>
+<tr><td><b>UART</b> (printf به USART2)</td><td>برد Nucleo: از راه ST-LINK به کامپیوتر می‌رسد (پایه‌های PA2 و PA3)</td><td>کند (۱۱۵۲۰۰ باود ≈ ۱۱ کیلوبایت در ثانیه)، کد UART لازم</td><td>ساده‌ترین؛ در ESP32 هم پیش‌فرض است</td></tr>
+<tr><td><b>Semihosting</b></td><td>فقط دیباگر وصل</td><td>بسیار کند: هسته می‌ایستد تا رایانه بخواند</td><td>با <code>monitor arm semihosting enable</code> فعال می‌شود؛ بدون دیباگ برنامه گیر می‌کند</td></tr>
+<tr><td><b>SWO / ITM</b></td><td>پایهٔ SWO به پروب وصل باشد</td><td>سریع؛ هسته کم معطل می‌شود</td><td>با CMSIS تابع <code>ITM_SendChar</code> هست؛ روی بعضی بردها پایهٔ SWO وصل نیست</td></tr>
+<tr><td><b>RTT</b> (SEGGER)</td><td>پروب J-Link یا ابزارهای سازگار</td><td>خیلی سریع؛ از حافظهٔ RAM می‌خواند</td><td>کتابخانهٔ ساده و بدون وقفه؛ در پروژه‌های حرفه‌ای رایج است</td></tr>
+</tbody></table></div>
+<p>در ESP32 مسیر معمول UART0 و <code>idf.py monitor</code> است که فایل ELF را می‌شناسد و آدرس‌های پنیک را خودش به نام تابع تبدیل می‌کند (در بخش <a href="#esp32">ESP32</a> می‌بینی).</p>
+
+<h2 id="pins">پایهٔ دیباگ و تحلیلگر منطقی</h2>
+<p>سریع‌ترین و کم‌مزاحمت‌ترین «چاپ»، روشن و خاموش‌کردن یک پایه است. یک <code>GPIO</code> (مثلا PA6) را اول تابع بالا ببر و آخرش پایین بیاور. یک تحلیلگر منطقی ارزان (۱۰ تا ۲۰ دلار؛ معرفی‌اش در درس <a href="1-3.html">۱.۳</a>) یا اسیلوسکوپ، عرض پالس را <b>دقیق</b> نشان می‌دهد. دو دستور <code>BSRR</code> (درس <a href="3-6.html">۳.۶</a>) حدود چند چرخهٔ ساعت طول می‌کشد، پس مزاحمت ناچیز است.</p>
+
+<div class="code" data-file="dbgpin.c" data-lang="c" data-verify="arm" id="code6">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define RCC_AHB1ENR (*(volatile uint32_t *)0x40023830u)
+#define GPIOA_MODER (*(volatile uint32_t *)0x40020000u)
+#define GPIOA_BSRR  (*(volatile uint32_t *)0x40020018u)
+
+#define DBG_HIGH() (GPIOA_BSRR = (1u &lt;&lt; 6))         // PA6 = 1
+#define DBG_LOW()  (GPIOA_BSRR = (1u &lt;&lt; (6 + 16)))  // PA6 = 0
+
+extern void process_sample(void);   // تابعی که می‌خواهیم زمانش را بسنجیم
+
+void dbg_pin_init(void)
+{
+    RCC_AHB1ENR |= 1u &lt;&lt; 0;                             // ساعت GPIOA
+    GPIOA_MODER = (GPIOA_MODER &amp; ~(3u &lt;&lt; 12)) | (1u &lt;&lt; 12); // PA6 خروجی
+}
+
+void measured_step(void)
+{
+    DBG_HIGH();
+    process_sample();
+    DBG_LOW();
+}
+</pre></div>
+<ol class="walk" data-for="code6">
+  <li data-lines="3-5"><b class="what">آدرس ثبات‌ها.</b> <code>RCC_AHB1ENR</code> (آفست ۰x۳۰ از پایهٔ RCC) و <code>GPIOA_MODER</code> و <code>GPIOA_BSRR</code> مطابق RM0383.</li>
+  <li data-lines="7-8"><b class="what">ماکروها.</b> بیت ۶ از <code>BSRR</code> پایهٔ PA6 را یک می‌کند و بیت ۲۲ (۶ + ۱۶) آن را صفر.
+    <span class="why">BSRR فقط با نوشتن ۱ اثر دارد، پس بدون خواندن-تغییر-نوشتن و بدون خطر قطع‌شدن به‌وسیلهٔ ISR کار می‌کند (درس ۳.۶).</span></li>
+  <li data-lines="10"><b class="what">تابع هدف.</b> <code>extern</code>: در فایل دیگری تعریف شده.</li>
+  <li data-lines="12-16"><b class="what">راه‌اندازی پایه.</b> ساعت GPIOA را روشن می‌کند و دو بیت ۱۳:۱۲ از <code>MODER</code> را ۰۱ (خروجی) می‌گذارد.
+    <span class="why">پایه‌ها ۲ بیت دارند: PA6 بیت‌های ۱۳ و ۱۲. همان الگوی ماسک درس ۳.۱: اول پاک، بعد نوشتن.</span></li>
+  <li data-lines="18-23"><b class="what">بازرسی.</b> پایه قبل از تابع بالا می‌رود و بعد از آن پایین. مدت بالا بودن = زمان اجرا.</li>
+</ol>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 270" role="img" aria-label="نمودار زمانی یک پایهٔ دیباگ: سه پالس؛ عرض هر پالس زمان اجرای تابع است و فاصله‌ها زمان بیکاری">
+  <defs><marker id="ar61c" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">آنچه تحلیلگر منطقی نشان می‌دهد (مثال نمونه)</text>
+  <rect x="60" y="48" width="690" height="120" rx="10" fill="#15120a"/>
+  <path d="M60 148H150V78H290V148H460V78H600V148H750" stroke="#3ddc97" stroke-width="4" fill="none"/>
+  <g stroke="#7f7f7f" stroke-width="1" stroke-dasharray="4 4"><path d="M150 52V164"/><path d="M290 52V164"/><path d="M460 52V164"/><path d="M600 52V164"/></g>
+  <text x="14" y="118" class="mono" font-size="13" font-weight="700" fill="#15120a">PA6</text>
+  <path d="M150 192H290" stroke="#15120a" stroke-width="3" fill="none" marker-start="url(#ar61c)" marker-end="url(#ar61c)"/>
+  <path d="M290 192H460" stroke="#ff9a4d" stroke-width="3" fill="none" marker-start="url(#ar61c)" marker-end="url(#ar61c)"/>
+  <path d="M150 226H460" stroke="#15120a" stroke-width="3" fill="none" marker-start="url(#ar61c)" marker-end="url(#ar61c)"/>
+  <g class="s-tx" text-anchor="middle" font-size="13" font-weight="700">
+    <text x="220" y="212">تابع</text>
+    <text x="375" y="212">بیکار</text>
+    <text x="305" y="248">دورهٔ کامل</text>
+  </g>
+  <g class="mono s-tx" text-anchor="middle" font-size="12.5" font-weight="700">
+    <text x="220" y="180">42 us</text><text x="375" y="180">58 us</text><text x="305" y="264">100 us</text>
+  </g>
+  <text x="520" y="110" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">۴۲٪ بار CPU</text>
+</svg></div>
+<figcaption>عددها نمونه‌اند. با یک نگاه فهمیدی تابع ۴۲ میکروثانیه طول می‌کشد و هر ۱۰۰ میکروثانیه تکرار می‌شود، یعنی ۴۲٪ از وقت CPU.</figcaption></figure>
+
+<p>ببین چقدر کم‌هزینه بود و بدون هیچ <code>printf</code>: عرض پالس = زمان اجرا؛ فاصله‌ها = بیکاری؛ تغییر عرض بین دورها = تغییر زمان اجرا (مثلا وقتی ISR وسط بپرد). روی ESP32 همین کار را با <code>gpio_set_level</code> می‌کنی؛ مفهوم یکی است.</p>
+
+<h2 id="hardfault">HardFault: وقتی پردازنده جیغ می‌زند</h2>
+<p>روی PC، اشتباه در حافظه به خطای <span class="en">segmentation fault</span> می‌رسد. روی Cortex-M، کار خطاست و این خطاها با یک <b>وقفهٔ ویژه</b> اعلام می‌شوند: <span class="term" data-t="hardfault">HardFault</span>. اگر برنامه‌ات «خودش ریست می‌شود» یا در یک حلقهٔ بی‌نهایت گیر می‌کند، معمولا اینجاست. تلهٔ واقعی این است که HardFault_Handler پیش‌فرض (در فایل startup، درس <a href="5-1.html">۵.۱</a>) یک حلقهٔ <code>while(1)</code> است؛ هیچ سرنخی نمی‌دهد. کار ما این است که handler را طوری بنویسیم که سرنخ بدهد.</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>علت رایج</th><th>مثال در C</th><th>ثبات وضعیت</th></tr></thead>
+<tbody>
+<tr><td>خواندن/نوشتن آدرس نامعتبر</td><td>اشاره‌گر خراب، <code>*(uint32_t*)0xA0000000</code></td><td>BusFault (PRECISERR)</td></tr>
+<tr><td>پرش به آدرس نامعتبر یا بیت۰ = ۰</td><td>اشاره‌گر تابع <code>NULL</code> یا خراب (درس ۴.۳)</td><td>UsageFault (INVSTATE)</td></tr>
+<tr><td>تقسیم بر صفر (اگر فعال شده باشد)</td><td><code>a / b</code> با <code>b == 0</code></td><td>UsageFault (DIVBYZERO)</td></tr>
+<tr><td>دستور نامعتبر</td><td>کد Flash خراب یا پرش وسط داده</td><td>UsageFault (UNDEFINSTR)</td></tr>
+<tr><td>دسترسی ناهم‌تراز به چندکلمه‌ای</td><td>cast اشاره‌گر بایتی به <code>uint32_t*</code> (درس ۶.۲)</td><td>UsageFault (UNALIGNED)</td></tr>
+<tr><td>سرریز پشته</td><td>بازگشتی عمیق، آرایهٔ محلی بزرگ (درس ۳.۵)</td><td>معمولا BusFault یا MemManage</td></tr>
+<tr><td>استفاده از FPU بدون روشن‌کردنش</td><td><code>float</code> در Cortex-M4F بدون فعال‌سازی</td><td>UsageFault (NOCP)</td></tr>
+</tbody></table></div>
+
+<p>وقتی خطا می‌آید، CPU برای اینکه بتواند بعدا برگردد، هشت ثبات را روی <b>پشته</b> می‌ریزد. ترتیبشان ثابت است و مهم‌ترین‌شان ثبات <code>PC</code> است: آدرس دستوری که خطا داد.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 340" role="img" aria-label="هشت کلمه‌ای که CPU هنگام استثنا روی پشته ذخیره می‌کند: R0 R1 R2 R3 R12 LR PC xPSR">
+  <defs><marker id="ar61d" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">قاب پشته هنگام HardFault (هر خانه ۴ بایت؛ آدرس بالاتر پایین‌تر رسم شده)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="290" y="44" width="180" height="32" fill="#7ea3ff"/><rect x="290" y="76" width="180" height="32" fill="#7ea3ff"/><rect x="290" y="108" width="180" height="32" fill="#7ea3ff"/><rect x="290" y="140" width="180" height="32" fill="#7ea3ff"/><rect x="290" y="172" width="180" height="32" fill="#7ea3ff"/>
+    <rect x="290" y="204" width="180" height="32" fill="#ffd60a"/><rect x="290" y="236" width="180" height="32" fill="#ff86b3"/><rect x="290" y="268" width="180" height="32" fill="#3ddc97"/>
+  </g>
+  <g class="mono" fill="#15120a" text-anchor="middle" font-size="16" font-weight="800">
+    <text x="380" y="66">R0</text><text x="380" y="98">R1</text><text x="380" y="130">R2</text><text x="380" y="162">R3</text><text x="380" y="194">R12</text><text x="380" y="226">LR</text><text x="380" y="258">PC</text><text x="380" y="290">xPSR</text>
+  </g>
+  <g class="mono s-tx" text-anchor="end" font-size="13" font-weight="700">
+    <text x="272" y="65">SP + 0x00</text><text x="272" y="97">SP + 0x04</text><text x="272" y="129">SP + 0x08</text><text x="272" y="161">SP + 0x0C</text><text x="272" y="193">SP + 0x10</text><text x="272" y="225">SP + 0x14</text><text x="272" y="257">SP + 0x18</text><text x="272" y="289">SP + 0x1C</text>
+  </g>
+  <g class="mono s-tx" text-anchor="middle" font-size="12.5" font-weight="700">
+    <text x="512" y="65">frame[0]</text><text x="512" y="225">frame[5]</text><text x="512" y="257">frame[6]</text><text x="512" y="289">frame[7]</text>
+  </g>
+  <path d="M100 60H150" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar61d)"/>
+  <text x="80" y="66" class="mono s-tx" text-anchor="middle" font-size="14" font-weight="800">SP</text>
+  <g class="s-tx" font-size="13" font-weight="700">
+    <text x="740" y="226" text-anchor="start">آدرس برگشت</text>
+    <text x="740" y="258" text-anchor="start">دستوری که خطا داد</text>
+    <text x="740" y="290" text-anchor="start">وضعیت پردازنده</text>
+    <text x="740" y="66" text-anchor="start">ثبات‌های پارامتر</text>
+  </g>
+</svg></div>
+<figcaption>هنگام استثنا، CPU این هشت کلمه را خودکار روی پشته می‌ریزد. اگر handler اشاره‌گر به ابتدای این قاب را بگیرد، PC ذخیره‌شده <code>frame[6]</code> است.</figcaption></figure>
+
+<p>اکنون حاضری handler بنویسی. چالش این است که handler باید بداند قاب روی کدام پشته است: پشتهٔ اصلی (<span class="en">MSP</span>) یا پشتهٔ پردازه (<span class="en">PSP</span>، اگر RTOS داری). بیت ۲ ثبات <code>LR</code> (که در این لحظه مقدار ویژه <span class="en">EXC_RETURN</span> دارد) جواب را می‌دهد:</p>
+
+<div class="code" data-file="fault.c" data-lang="c" data-verify="arm" id="code7">
+<pre>
+#include &lt;stdint.h&gt;
+
+/* ثبات‌های SCB: وضعیت خطاها */
+#define SCB_CFSR (*(volatile uint32_t *)0xE000ED28u)
+#define SCB_BFAR (*(volatile uint32_t *)0xE000ED38u)
+
+/* volatile تا دیباگر (و کامپایلر) آن‌ها را حذف نکند */
+volatile uint32_t fault_pc;
+volatile uint32_t fault_lr;
+volatile uint32_t fault_cfsr;
+volatile uint32_t fault_bfar;
+
+/* frame: هشت کلمه‌ای که CPU هنگام خطا روی پشته ریخته: R0 R1 R2 R3 R12 LR PC xPSR */
+void hardfault_c(const uint32_t *frame)
+{
+    fault_lr   = frame[5];
+    fault_pc   = frame[6];
+    fault_cfsr = SCB_CFSR;
+    fault_bfar = SCB_BFAR;
+    for (;;) {
+        /* اینجا می‌ایستیم تا دیباگر وصل شود */
+    }
+}
+
+/* naked: بدون prologue، تا SP دست‌نخورده بماند */
+__attribute__((naked)) void HardFault_Handler(void)
+{
+    __asm volatile (
+        "tst lr, #4      \n"
+        "ite eq          \n"
+        "mrseq r0, msp   \n"
+        "mrsne r0, psp   \n"
+        "b hardfault_c   \n"
+    );
+}
+
+/* برای آزمایش: خواندن از آدرسی که هیچ‌چیز آنجا نیست */
+uint32_t read_missing(void)
+{
+    return *(volatile uint32_t *)0xA0000000u;
+}
+
+int main(void)
+{
+    return (int)read_missing();
+}
+</pre></div>
+<ol class="walk" data-for="code7">
+  <li data-lines="3-5"><b class="what">ثبات‌های SCB.</b> <code>CFSR</code> (آدرس ۰xE000ED28) علت خطا را می‌گوید و <code>BFAR</code> (۰xE000ED38) آدرس بدی را که باس خطا داد.
+    <span class="why">این‌ها ثبات‌های خود هستهٔ Cortex-M هستند (در منوال ARM)، نه ثبات ST؛ پس روی هر Cortex-M4 یکسان‌اند.</span></li>
+  <li data-lines="7-11"><b class="what">متغیرهای خروجی.</b> خودِ handler چیزی چاپ نمی‌کند؛ مقدارها را در RAM می‌گذارد تا با دیباگر بخوانی.
+    <span class="why">بدون <code>volatile</code> کامپایلر می‌بیند هیچ‌کس این متغیرها را نمی‌خواند و نوشتنشان را حذف می‌کند (درس ۳.۶).</span></li>
+  <li data-lines="13-14,23"><b class="what">تابع C.</b> اشاره‌گر به قاب را می‌گیرد.</li>
+  <li data-lines="16-17"><b class="what">LR و PC ذخیره‌شده.</b> کلمهٔ ششم و هفتم قاب.
+    <span class="why">PC ذخیره‌شده آدرس دستور خطادار است. با <code>addr2line</code> به خط منبع تبدیلش می‌کنیم.</span></li>
+  <li data-lines="18-19"><b class="what">وضعیت خطا.</b> CFSR و BFAR را کپی می‌کند.</li>
+  <li data-lines="20-22"><b class="what">توقف.</b> حلقهٔ بی‌نهایت تا دیباگر وصل شود و متغیرها را بخواند.
+    <span class="why">در محصول واقعی می‌توانی به‌جایش اطلاعات را در حافظهٔ غیرفرار ذخیره کنی و ریست کنی (بعد از ثبت خطا).</span></li>
+  <li data-lines="25-26,35"><b class="what">handler برهنه.</b> <code>naked</code> یعنی کامپایلر هیچ کد مقدمه (ذخیرهٔ ثبات‌ها) نمی‌گذارد.
+    <span class="why">اگر کامپایلر خودش چیزی در پشته می‌ریخت، SP جابه‌جا می‌شد و دیگر به ابتدای قاب اشاره نمی‌کرد.</span></li>
+  <li data-lines="29"><b class="what">کدام پشته؟</b> <code>tst lr, #4</code> بیت ۲ از EXC_RETURN را می‌سنجد.</li>
+  <li data-lines="30-32"><b class="what">انتخاب SP.</b> اگر بیت ۰ است، قاب روی MSP است؛ اگر ۱ است، روی PSP. نتیجه در <code>r0</code> می‌رود که اولین آرگومان تابع C است.</li>
+  <li data-lines="33"><b class="what">پرش به تابع C.</b> با <code>b</code> (نه <code>bl</code>) تا LR خراب نشود.</li>
+  <li data-lines="37-41"><b class="what">تابع آزمایشی.</b> از آدرس ۰xA0000000 می‌خواند که در STM32F411 هیچ حافظه‌ای آنجا نیست: BusFault دقیق و بعد HardFault.</li>
+  <li data-lines="43-46"><b class="what">main.</b> فقط تابع آزمایشی را صدا می‌زند.</li>
+</ol>
+
+<p>این فایل با <code>arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -Wall -Wextra -ffreestanding -c</code> بدون هشدار کامپایل می‌شود. بعد از وصل‌شدن دیباگر و رسیدن به حلقهٔ بی‌نهایت، متغیرها را می‌خوانی. این یک نمونهٔ نمایشی است؛ مقدارها را از روی مستندات ARM برای این آزمایش محاسبه کرده‌ام و روی برد تو باید همین را ببینی:</p>
+<pre class="term" data-kind="cmd" data-nocheck>
+(gdb) print/x fault_pc
+$1 = 0x8000064
+(gdb) print/x fault_cfsr
+$2 = 0x8200
+(gdb) print/x fault_bfar
+$3 = 0xa0000000
+</pre>
+<p><code>0x8200</code> یعنی چه؟ بیت‌های <code>CFSR</code> را در ابزارک روشن کن. مقدار همین لحظه را گذاشته‌ام: دو بیت روشن است.</p>
+
+<div class="widget" data-w="bits" data-width="32" data-reg="SCB_CFSR" data-value="0x8200" data-title="SCB_CFSR: ثبات وضعیت خطا (آدرس 0xE000ED28)" data-fields='[{"name":"IBUSERR (بیت 8)","hi":8,"lo":8},{"name":"PRECISERR (بیت 9)","hi":9,"lo":9,"map":["خیر","خطای باس دقیق"]},{"name":"IMPRECISERR (بیت 10)","hi":10,"lo":10},{"name":"BFARVALID (بیت 15)","hi":15,"lo":15,"map":["BFAR معتبر نیست","BFAR آدرس بد را دارد"]},{"name":"INVSTATE (بیت 17)","hi":17,"lo":17},{"name":"UNALIGNED (بیت 24)","hi":24,"lo":24},{"name":"DIVBYZERO (بیت 25)","hi":25,"lo":25}]'></div>
+
+<p>بیت ۹ (<code>PRECISERR</code>) یعنی «خطای باس دقیق: دستور مقصر همین است که <code>PC</code> نشان می‌دهد» و بیت ۱۵ (<code>BFARVALID</code>) می‌گوید <code>BFAR</code> آدرس بد را دارد: ۰xA0000000. تشخیص کامل شد: خواندن از ۰xA0000000 در دستوری که PC نشان می‌دهد. بقیهٔ بیت‌ها را هم از جدول می‌شود خواند؛ برای اینکه دست خودت با آن‌ها راحت شود، این رمزگشا (روی PC اجرا می‌شود و همان منطق را نشان می‌دهد):</p>
+
+<div class="code" data-file="fault_decode.c" data-lang="c" data-verify="host" id="code8">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+struct bit_name {
+    uint8_t bit;
+    const char *name;
+};
+
+static const struct bit_name cfsr_bits[] = {
+    { 0, "IACCVIOL"},  { 1, "DACCVIOL"},  { 7, "MMARVALID"},
+    { 8, "IBUSERR"},   { 9, "PRECISERR"}, {10, "IMPRECISERR"}, {15, "BFARVALID"},
+    {16, "UNDEFINSTR"},{17, "INVSTATE"},  {18, "INVPC"},  {19, "NOCP"},
+    {24, "UNALIGNED"}, {25, "DIVBYZERO"},
+};
+
+static void decode_cfsr(uint32_t cfsr)
+{
+    printf("CFSR = 0x%08X:", (unsigned)cfsr);
+    for (unsigned i = 0; i &lt; sizeof cfsr_bits / sizeof cfsr_bits[0]; i++) {
+        if (cfsr &amp; (1u &lt;&lt; cfsr_bits[i].bit))
+            printf(" %s", cfsr_bits[i].name);
+    }
+    printf("\n");
+}
+
+int main(void)
+{
+    decode_cfsr(0x00008200u);   // خواندن از آدرس نامعتبر
+    decode_cfsr(0x02000000u);   // تقسیم بر صفر
+    decode_cfsr(0x00020000u);   // پرش به آدرسی با بیت0 = 0
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code8">
+  <li data-lines="4-7"><b class="what">ردیف جدول.</b> شمارهٔ بیت و نامش.</li>
+  <li data-lines="9-14"><b class="what">جدول بیت‌ها.</b> هر ردیف یک پرچم CFSR است: خطاهای MemManage (بیت‌های ۰ تا ۷)، BusFault (۸ تا ۱۵) و UsageFault (۱۶ تا ۳۱).
+    <span class="why">جدول به‌جای زنجیرهٔ <code>if</code> کد را کوتاه می‌کند و افزودن بیت جدید فقط یک ردیف است.</span></li>
+  <li data-lines="16-24"><b class="what">رمزگشا.</b> برای هر ردیف، بیت را با <code>1u &lt;&lt; bit</code> می‌سنجد و اگر روشن بود نامش را چاپ می‌کند.
+    <span class="why"><code>1u</code> بی‌علامت است تا شیفت به بیت‌های بالا (۳۱) UB نباشد (درس ۶.۲).</span></li>
+  <li data-lines="28-30"><b class="what">سه نمونهٔ واقعی.</b> ۰x۸۲۰۰ همان خطای بالا؛ ۰x۰۲۰۰۰۰۰۰ تقسیم بر صفر؛ ۰x۰۰۰۲۰۰۰۰ حالت نامعتبر (مثلا اشاره‌گر تابعی با بیت صفر).</li>
+</ol>
+<pre class="term" data-from="fault_decode.c">
+$ gcc -std=c11 -Wall -Wextra -o fault_decode fault_decode.c
+$ ./fault_decode
+CFSR = 0x00008200: PRECISERR BFARVALID
+CFSR = 0x02000000: DIVBYZERO
+CFSR = 0x00020000: INVSTATE
+</pre>
+
+<p>مرحلهٔ آخر: <b>از آدرس PC به خط کد.</b> ابزار <span class="term" data-t="addr2line">addr2line</span> از فایل ELF، که با <code>-g</code> ساخته‌ای، آدرس را به نام تابع و شمارهٔ خط تبدیل می‌کند. برای همین برنامه (که خودم لینک کردم و ELF داشتم) نتیجه واقعی است؛ مسیر پوشه را کوتاه کرده‌ام:</p>
+<pre class="term" data-kind="cmd" data-nocheck>
+$ arm-none-eabi-addr2line -e fw.elf -f -p 0x08000064
+read_missing at fault.c:40
+</pre>
+<p>خط ۴۰ همان <code>return *(volatile uint32_t *)0xA0000000u;</code> است. هم‌چنین با <code>LR</code> می‌توانی بفهمی <b>چه کسی</b> این تابع را صدا زده. برای فهمیدن «چرا به اینجا رسیدیم» از <code>bt</code> در GDB (اگر پشته سالم باشد) یا <code>LR</code> کمک بگیر. اگر پشته خودش خراب است، نتیجهٔ bt قابل‌اعتماد نیست؛ باید دستی از روی مقادیر روی پشته جست‌وجو کنی.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 240" role="img" aria-label="چهار قدم تحلیل HardFault: پیدا کردن قاب پشته، خواندن PC، تبدیل به خط با addr2line، خواندن علت از CFSR">
+  <defs><marker id="ar61e" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">از HardFault تا خط مقصر: چهار قدم</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="574" y="48" width="160" height="128" rx="12" fill="#ffd60a"/>
+    <rect x="388" y="48" width="160" height="128" rx="12" fill="#7ea3ff"/>
+    <rect x="202" y="48" width="160" height="128" rx="12" fill="#ff86b3"/>
+    <rect x="16" y="48" width="160" height="128" rx="12" fill="#3ddc97"/>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M572 112H554" marker-end="url(#ar61e)"/><path d="M386 112H368" marker-end="url(#ar61e)"/><path d="M200 112H182" marker-end="url(#ar61e)"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle">
+    <text x="654" y="76" font-size="14.5" font-weight="800">۱) قاب پشته</text>
+    <text x="654" y="106" font-size="13.5">tst lr, #4</text>
+    <text x="654" y="128" font-size="13.5">MSP یا PSP؟</text>
+    <text x="654" y="150" font-size="13.5">→ اشاره‌گر frame</text>
+
+    <text x="468" y="76" font-size="14.5" font-weight="800">۲) PC ذخیره‌شده</text>
+    <text x="468" y="106" class="mono" font-size="13.5" font-weight="700">frame[6]</text>
+    <text x="468" y="128" font-size="13.5">آدرس دستور</text>
+    <text x="468" y="150" font-size="13.5">خطادار</text>
+
+    <text x="282" y="76" font-size="14.5" font-weight="800">۳) خط منبع</text>
+    <text x="282" y="106" class="mono" font-size="12.5" font-weight="700">addr2line</text>
+    <text x="282" y="128" font-size="13.5">آدرس ← تابع و خط</text>
+    <text x="282" y="150" font-size="13.5">(با فایل ELF)</text>
+
+    <text x="96" y="76" font-size="14.5" font-weight="800">۴) علت</text>
+    <text x="96" y="106" class="mono" font-size="13.5" font-weight="700">CFSR, BFAR</text>
+    <text x="96" y="128" font-size="13.5">بیت روشن = نوع</text>
+    <text x="96" y="150" font-size="13.5">خطا و آدرس بد</text>
+  </g>
+  <text x="380" y="210" text-anchor="middle" class="s-tx" font-size="13.5">بعد از این چهار قدم، «کدام خط» و «چه نوع خطا» را می‌دانی؛ باقی کار فکر کردن است.</text>
+</svg></div>
+<figcaption>همین روال با کمی تفاوت در همهٔ Cortex-M ها اجرا می‌شود.</figcaption></figure>
+
+<div class="callout tip"><div class="ct">خطاهای دقیق‌تر: فعال‌کردن handler های جدا</div>
+<p>به‌طور پیش‌فرض فقط HardFault فعال است و همهٔ خطاها به آن ارتقا (<span class="en">escalate</span>) می‌یابند؛ بیت <code>FORCED</code> در <code>HFSR</code> این را نشان می‌دهد. با روشن‌کردن بیت‌های ۱۶ تا ۱۸ از <code>SCB_SHCSR</code>، MemManage، BusFault و UsageFault دست‌های جدا می‌گیرند. با بیت‌های ۴ (<code>DIV_0_TRP</code>) و ۳ (<code>UNALIGN_TRP</code>) از <code>SCB_CCR</code> تقسیم بر صفر و دسترسی ناهم‌تراز هم خطا می‌شوند. این را در تمرین ۳ می‌نویسی.</p></div>
+
+<h2 id="esp32">در ESP32 چه خبر است؟</h2>
+<p>ESP32 (Xtensa) HardFault ندارد ولی ایده یکی است. وقتی برنامه به خطای جدی می‌خورد (مثلا خواندن از <code>NULL</code>)، ESP-IDF متنی به‌نام «Guru Meditation Error» چاپ می‌کند: نوع استثنا، مقدار ثبات‌ها (از جمله <code>PC</code>) و یک <b>backtrace</b>: فهرست آدرس‌های برگشت. نمونهٔ زیر برای نشان‌دادن قالب است؛ آدرس‌ها را من ساخته‌ام (نه خروجی برد واقعی):</p>
+<pre class="term" data-kind="cmd" data-nocheck>
+Guru Meditation Error: Core  0 panic'ed (LoadProhibited). Exception was unhandled.
+
+Core  0 register dump:
+PC      : 0x400d2a3e  PS      : 0x00060b30  A0      : 0x800d2a5c  A1      : 0x3ffb4e60
+...
+EXCVADDR: 0x00000000
+
+Backtrace: 0x400d2a3e:0x3ffb4e60 0x400d2a59:0x3ffb4e80 0x400d1c11:0x3ffb4ea0
+</pre>
+<ul>
+  <li><code>LoadProhibited</code>: خواندن از آدرس ممنوع؛ <code>EXCVADDR</code> آدرس بد را می‌دهد و اینجا صفر است، یعنی خواندن از <code>NULL</code>. همان چیزی که در STM32 با BFAR می‌دیدی.</li>
+  <li><code>PC</code>: آدرس دستور خطادار. هر جفت در backtrace به شکل <code>PC:SP</code> است.</li>
+</ul>
+<p>با <code>idf.py monitor</code> این آدرس‌ها خودکار به نام تابع و خط ترجمه می‌شوند چون ELF پروژه را می‌شناسد. دستی هم می‌شود، با ابزار مخصوص Xtensa (در مستندات <a href="https://docs.espressif.com/projects/esp-idf/" target="_blank" rel="noopener">ESP-IDF</a> بخش «Fatal Errors» را ببین):</p>
+<pre class="term" data-kind="cmd" data-nocheck>
+$ xtensa-esp32-elf-addr2line -pfiaC -e build/app.elf 0x400d2a3e
+</pre>
+
+<h2 id="stack">مصرف پشته: رنگ‌آمیزی و نگهبان</h2>
+<p>سرریز پشته بی‌صدا حافظهٔ دیگر را خراب می‌کند و اغلب به HardFault ختم می‌شود (درس <a href="3-5.html">۳.۵</a>). راهی ساده برای دیدن آن: <b>رنگ‌آمیزی</b>. قبل از شروع، کل ناحیهٔ پشته را با یک الگوی شناخته‌شده (مثلا ۰xA5A5A5A5) پر می‌کنی. بعد از مدتی اجرا، از ته پشته می‌شماری چند کلمه هنوز دست‌نخورده است. تعداد کلمه‌های دست‌نخورده = «حاشیهٔ امن»؛ و پایین‌ترین جایی که به آن رسیده‌ای = <span class="term" data-t="stack_watermark">علامت آب</span> (<span class="en">high-water mark</span>). آخرین کلمهٔ ناحیه را هم یک <span class="term" data-t="stack_canary">canary</span> (قناری معدن؛ نگهبانی که اول می‌میرد) می‌گذاری: اگر عوض شد یعنی پشته تا ته رسیده است.</p>
+
+<div class="code" data-file="stackpaint.c" data-lang="c" data-verify="host" id="code9">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+#define STACK_WORDS 64
+#define PAINT       0xA5A5A5A5u
+#define CANARY      0xDEADBEEFu
+
+static uint32_t stack_area[STACK_WORDS];    // شبیه‌سازی یک پشته (رشد از بالا به پایین)
+
+static void stack_init(void)
+{
+    for (int i = 0; i &lt; STACK_WORDS; i++)
+        stack_area[i] = PAINT;
+    stack_area[0] = CANARY;                 // نگهبان در انتهای پشته
+}
+
+static void fake_calls(int depth)           // مصرف پشته را شبیه‌سازی می‌کند
+{
+    for (int k = 0; k &lt; depth; k++)
+        stack_area[STACK_WORDS - 1 - k] = 0x1000u + (uint32_t)k;
+}
+
+static int stack_free_words(void)
+{
+    int n = 1;                              // خانهٔ 0 نگهبان است
+    while (n &lt; STACK_WORDS &amp;&amp; stack_area[n] == PAINT)
+        n++;
+    return n - 1;
+}
+
+int main(void)
+{
+    stack_init();
+    fake_calls(20);
+    int free_w = stack_free_words();
+    printf("used = %d words, free = %d words\n", STACK_WORDS - 1 - free_w, free_w);
+    printf("canary %s\n", stack_area[0] == CANARY ? "intact" : "SMASHED");
+    fake_calls(64);
+    printf("canary %s\n", stack_area[0] == CANARY ? "intact" : "SMASHED");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code9">
+  <li data-lines="4-6"><b class="what">الگوها.</b> رنگ (<code>PAINT</code>) و نگهبان (<code>CANARY</code>) دو عدد شناخته‌شده و نامحتمل‌اند.</li>
+  <li data-lines="8"><b class="what">ناحیهٔ پشته.</b> در پروژهٔ واقعی این همان ناحیهٔ stack در linker script (درس ۵.۱) است.</li>
+  <li data-lines="10-15"><b class="what">رنگ‌آمیزی.</b> همهٔ خانه‌ها را با <code>PAINT</code> پر می‌کند و نگهبان را در خانهٔ ۰ می‌گذارد. روی MCU این کار را اول از همه، در startup انجام می‌دهی.
+    <span class="why">پشتهٔ Cortex-M از آدرس بالا به پایین رشد می‌کند؛ پس خانهٔ ۰ (آدرس کم) آخرین خانه‌ای است که مصرف می‌شود.</span></li>
+  <li data-lines="17-21"><b class="what">مصرف شبیه‌سازی‌شده.</b> از بالا به پایین <code>depth</code> کلمه را با مقدار غیر از رنگ می‌نویسد.</li>
+  <li data-lines="23-29"><b class="what">شمردن کلمه‌های دست‌نخورده.</b> از پایین شروع می‌کند و تا اولین کلمه‌ای که رنگ نیست می‌شمارد.
+    <span class="why">این روش «علامت آب» را بدون هیچ کد اضافه در برنامه می‌دهد؛ فقط باید هر از گاهی تابع را صدا بزنی.</span></li>
+  <li data-lines="31-39"><b class="what">آزمایش.</b> اول ۲۰ کلمه مصرف می‌شود و نگهبان سالم است. بعد ۶۴ کلمه (کل ناحیه) که نگهبان را خراب می‌کند.</li>
+</ol>
+<pre class="term" data-from="stackpaint.c">
+$ gcc -std=c11 -Wall -Wextra -o stackpaint stackpaint.c
+$ ./stackpaint
+used = 20 words, free = 43 words
+canary intact
+canary SMASHED
+</pre>
+<p>روی MCU می‌توانی نگهبان را در تایمر ۱ میلی‌ثانیه‌ای یا در حلقهٔ اصلی وارسی کنی و در صورت خراب‌شدن، اطلاعات را ثبت و ریست کنی. اگر با <code>arm-none-eabi-gcc</code> و <code>-fstack-protector</code> کار کنی، خود کامپایلر canary می‌گذارد ولی باید نمادهای پشتیبان (<code>__stack_chk_guard</code> و <code>__stack_chk_fail</code>) را خودت تعریف کنی؛ جزئیات را در مستندات <a href="https://gcc.gnu.org/onlinedocs/" target="_blank" rel="noopener">GCC</a> ببین. در FreeRTOS هم ویژگی مشابهی برای پشتهٔ تسک‌ها هست (درس ۵.۶).</p>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: چرا bt گاهی دروغ می‌گوید؟</div>
+<p>GDB پشتهٔ فراخوانی را با خواندن آدرس‌های برگشت و اطلاعات <span class="en">unwind</span> درون ELF می‌سازد. اگر پشته خراب شده باشد (سرریز، اشاره‌گر خراب)، آدرس‌های برگشت هم خراب‌اند و <code>bt</code> چیز بی‌معنی نشان می‌دهد. به همین دلیل «PC ذخیره‌شده» که CPU خودش ذخیره کرده معتبرتر از bt است. ولی دقت کن که PC ذخیره‌شده آدرس <b>دستور خطادار</b> است، نه لزوما علت اصلی: اگر اشاره‌گر را چند خط قبل خراب کرده‌ای، فقط اینجا انفجار دیده می‌شود. برای پیدا‌کردن علت واقعی، حدس بزن چه چیزی مقدار بد را ساخت و <code>watch</code> بگذار.</p></div>
+
+<h2 id="strategy">استراتژی در عمل: چه ابزاری کی؟</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>نشانه</th><th>اولین ابزار</th><th>چرا</th></tr></thead>
+<tbody>
+<tr><td>نتیجهٔ منطق غلط (روی PC هم تکرار می‌شود)</td><td>GDB روی PC، <code>assert</code>، sanitizer</td><td>کامل‌ترین دید و سریع‌ترین چرخه</td></tr>
+<tr><td>«فقط روی برد خراب است»</td><td>منطق را جدا کن و روی PC تست کن؛ بعد GDB/SWD</td><td>اگر روی PC سالم است، مشکل سخت‌افزار، زمان‌بندی یا ثبات است</td></tr>
+<tr><td>برنامه ریست یا قفل می‌شود</td><td>handler HardFault + <code>addr2line</code></td><td>سرنخ دقیق می‌دهد</td></tr>
+<tr><td>زمان‌بندی/وقفه مشکوک است</td><td>پایهٔ دیباگ + تحلیلگر منطقی</td><td>بدون مزاحمت اندازه می‌گیرد</td></tr>
+<tr><td>گاهی و بدون الگو خراب می‌شود</td><td>لاگ سبک در بافر حلقوی + شمارندهٔ خطا، بعد ثبت آخرین رویدادها</td><td>دیباگر جو را عوض می‌کند</td></tr>
+<tr><td>حافظه کم می‌شود یا داده خراب است</td><td>رنگ‌آمیزی پشته، canary، <code>watch</code></td><td>مقصر را در لحظهٔ نوشتن می‌گیرد</td></tr>
+</tbody></table></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">اولین کار درست هنگام باگی که «گاهی» رخ می‌دهد چیست؟</p>
+  <ol>
+    <li data-why="بدون دانستن علت، این فال است. ممکن است باگ را پنهان کنی نه رفع.">اول چند خط را بی‌دلیل عوض کنیم و ببینیم درست می‌شود</li>
+    <li>راهی برای تکرار مطمئن آن پیدا کنیم (ورودی ثابت، شمارهٔ دور مشخص)</li>
+    <li data-why="بدون تکرار، حتی نمی‌دانی رفع کرده‌ای یا اتفاقی نشده.">بلافاصله <code>printf</code> در همهٔ توابع بگذاریم</li>
+    <li data-why="خرابی پنهان می‌شود ولی از بین نمی‌رود.">فقط آن را ریست خودکار کنیم</li>
+  </ol>
+  <div class="fb">باگ قابل‌تکرار نیمی از راه حل است: بعد از آن می‌توان مشکل را کوچک و نصف کرد.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">کد <code>assert(count++ &lt; 10);</code> در نسخهٔ ساخته‌شده با <code>-DNDEBUG</code> چه می‌شود؟</p>
+  <ol>
+    <li data-why="assert با NDEBUG کامل حذف می‌شود، نه اینکه شرط را اجرا کند و بی‌اثر بگذارد.">شرط اجرا می‌شود ولی خطا نمی‌دهد</li>
+    <li data-why="این اتفاق نمی‌افتد؛ کامپایل درست انجام می‌شود.">برنامه کامپایل نمی‌شود</li>
+    <li data-why="بالعکس: چون کل assert حذف شده، هیچ‌چیزی اجرا نمی‌شود.">count دوبار زیاد می‌شود</li>
+    <li>کل دستور حذف می‌شود و <code>count</code> دیگر زیاد نمی‌شود؛ رفتار برنامه عوض می‌شود</li>
+  </ol>
+  <div class="fb">با <code>NDEBUG</code> ماکرو <code>assert</code> به «هیچ» تبدیل می‌شود. پس شرط assert نباید اثر جانبی داشته باشد.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">در GDB می‌خواهی هر بار مقدار متغیر <code>sum</code> عوض شد برنامه بایستد. کدام فرمان؟</p>
+  <ol>
+    <li><code>watch sum</code></li>
+    <li data-why="break برای رسیدن به یک تابع یا خط است، نه تغییر مقدار.">‌<code>break sum</code></li>
+    <li data-why="finish تا برگشت از تابع می‌رود و ربطی به تغییر متغیر ندارد.">‌<code>finish sum</code></li>
+    <li data-why="print فقط مقدار فعلی را نشان می‌دهد و برنامه را نمی‌ایستاند.">‌<code>print sum</code></li>
+  </ol>
+  <div class="fb"><code>watch</code> یک ناظر می‌گذارد که با هر تغییر متغیر برنامه را نگه می‌دارد و مقدار قدیم و جدید را نشان می‌دهد.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">در handler HardFault، اشاره‌گر <code>frame</code> به هشت کلمهٔ ذخیره‌شده روی پشته اشاره می‌کند. آدرس دستور خطادار کدام است؟</p>
+  <ol>
+    <li data-why="frame[0] مقدار R0 است، نه PC.">‌<code>frame[0]</code></li>
+    <li data-why="frame[5] مقدار LR (آدرس برگشت) است؛ PC یک کلمه بعد از آن می‌آید.">‌<code>frame[5]</code></li>
+    <li><code>frame[6]</code></li>
+    <li data-why="frame[7] مقدار xPSR (ثبات وضعیت) است.">‌<code>frame[7]</code></li>
+  </ol>
+  <div class="fb">ترتیب: R0, R1, R2, R3, R12, LR, PC, xPSR؛ پس PC هفتمین کلمه یعنی <code>frame[6]</code> است.</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">تابعی در ISR هر ۵۰ میکروثانیه اجرا می‌شود و می‌خواهی زمان اجرایش را بسنجی. کدام روش مناسب‌تر است؟</p>
+  <ol>
+    <li data-why="printf روی UART میلی‌ثانیه‌ها طول می‌کشد؛ زمان‌بندی ISR را کاملا به هم می‌ریزد.">داخل ISR یک <code>printf</code> با زمان بگذاریم</li>
+    <li data-why="نقطهٔ توقف ISR را روی برد متوقف می‌کند و زمان واقعی را از بین می‌برد.">نقطهٔ توقف در ISR بگذاریم و زمان را با ساعت خودمان بگیریم</li>
+    <li data-why="semihosting بسیار کند است و هسته را می‌ایستاند.">با semihosting در ISR بنویسیم</li>
+    <li>ابتدای ISR یک پایه را بالا و آخرش پایین ببریم و با تحلیلگر منطقی عرض پالس را ببینیم</li>
+  </ol>
+  <div class="fb">پایهٔ دیباگ یکی دو دستور <code>BSRR</code> است و مزاحمت ناچیز دارد؛ عرض پالس زمان واقعی است.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">علامت آب (<span class="en">high-water mark</span>) پشته چیست؟</p>
+  <ol>
+    <li>بیشترین عمقی که پشته تا حالا مصرف شده است (کمترین کلمهٔ دست‌نخورده)</li>
+    <li data-why="اندازهٔ کل پشته همان مقداری است که در linker script تعیین می‌کنی، نه علامت آب.">اندازهٔ کل ناحیهٔ پشته در linker script</li>
+    <li data-why="این آدرس SP لحظه‌ای است. علامت آب حداکثر مصرف در گذشته را می‌گوید.">آدرس فعلی SP</li>
+    <li data-why="پشته حاوی داده‌هاست و ربطی به تعداد وقفه‌ها ندارد.">تعداد وقفه‌هایی که تا حالا اجرا شده‌اند</li>
+  </ol>
+  <div class="fb">با رنگ‌آمیزی پشته و شمردن کلمه‌های دست‌نخورده، عمیق‌ترین نقطهٔ رسیده‌شده را می‌فهمی. حاشیهٔ امن = کلمه‌های دست‌نخورده.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: میانگین با پارازیت</div>
+<p>برنامهٔ <code>avg_dbg.c</code> این درس، پارازیت ۹۹۹۹ را هم جمع می‌کند و ۲۱۶۸ چاپ می‌کند. می‌خواهیم اصلاحش کنیم.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> بدون اجرا، میانگین چهار خوانش سالم (۲۱۰، ۲۱۵، ۲۱۲، ۲۰۸) با تقسیم صحیح چند می‌شود؟</li>
+  <li><b>حل:</b> تابع <code>average</code> را طوری تغییر بده که خوانش‌های بزرگ‌تر از ۱۰۰۰ را نادیده بگیرد و فقط روی خوانش‌های معتبر میانگین بگیرد (تعدادشان را بشمار).</li>
+  <li><b>دیباگ:</b> برنامه را با <code>-g -O0</code> بساز و در GDB <code>watch used</code> بگذار. چند بار می‌ایستد؟ چرا؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>یک شمارندهٔ <code>used</code> بگذار. داخل حلقه اگر <code>v[i] &gt; MAX_OK</code>، از <code>continue</code> استفاده کن تا جمع نشود و شمارنده هم بالا نرود. تقسیم را بر <code>used</code> بزن (و اگر صفر بود، جواب صفر بده تا تقسیم بر صفر نشود).</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="avg_fix.c">
+$ ./avg_fix
+average = 211
+</pre>
+<p>مجموع ۸۴۵ بر ۴ = ۲۱۱٫۲۵ که با تقسیم صحیح ۲۱۱ می‌شود. <code>watch used</code> چهار بار می‌ایستد، یک بار برای هر خوانش سالم.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="avg_fix.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+#define N      5
+#define MAX_OK 1000
+
+static int32_t readings[N] = {210, 215, 9999, 212, 208};
+
+static int32_t average(const int32_t *v, int n)
+{
+    int32_t sum = 0;
+    int used = 0;
+    for (int i = 0; i &lt; n; i++) {
+        if (v[i] &gt; MAX_OK)
+            continue;               // پارازیت را رد کن
+        sum += v[i];
+        used++;
+    }
+    return used &gt; 0 ? sum / used : 0;
+}
+
+int main(void)
+{
+    printf("average = %d\n", (int)average(readings, N));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="4-5"><b class="what">ثابت‌ها.</b> تعداد خوانش‌ها و حد بالای منطقی.
+    <span class="why">عدد جادویی ۱۰۰۰ را به‌جای متن پخش‌شده نام‌گذاری کن (درس ۴.۱).</span></li>
+  <li data-lines="12-13"><b class="what">دو شمارنده.</b> جمع و تعداد خوانش‌های معتبر.</li>
+  <li data-lines="15-16"><b class="what">رد پارازیت.</b> <code>continue</code> بقیهٔ بدنهٔ حلقه را می‌پرد.</li>
+  <li data-lines="17-18"><b class="what">جمع معتبرها.</b> فقط خوانش‌های سالم.</li>
+  <li data-lines="20"><b class="what">تقسیم امن.</b> اگر هیچ خوانش سالمی نبود، صفر برمی‌گرداند.
+    <span class="why">در MCU تقسیم بر صفر می‌تواند خطا بدهد یا بی‌صدا صفر بدهد؛ در هر دو حالت باید وارسی کنی.</span></li>
+</ol>
+<pre class="term" data-from="avg_fix.c">
+$ gcc -std=c11 -Wall -Wextra -o avg_fix avg_fix.c
+$ ./avg_fix
+average = 211
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: رمزگشای HFSR</div>
+<p>در درس، <code>decode_cfsr</code> را دیدی. ثبات <code>HFSR</code> (آدرس ۰xE000ED2C) هم علت HardFault را می‌گوید: بیت ۱ = <code>VECTTBL</code> (خطا هنگام خواندن جدول وقفه)، بیت ۳۰ = <code>FORCED</code> (یک خطای دیگر ارتقا یافته)، بیت ۳۱ = <code>DEBUGEVT</code>.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> اگر <code>HFSR = 0x40000000</code> باشد، چه بیتی روشن است؟ برای نمونهٔ درس (خواندن از ۰xA0000000) این مقدار منطقی است؟ چرا؟</li>
+  <li><b>حل:</b> رمزگشا را تعمیم بده: یک تابع <code>decode(const char *reg, uint32_t v, ...)</code> که برای هر دو ثبات کار کند و برای <code>0x40000000</code> بنویسد <code>HFSR = 0x40000000: FORCED</code>.</li>
+  <li><b>فکر کن:</b> اگر <code>FORCED</code> روشن باشد، باید بعدش کدام ثبات را بخوانی؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>یک ساختار <code>bit_name</code> و یک جدول برای HFSR بساز و تابع را طوری بنویس که جدول و طولش را بگیرد. برای ب بخش پ: <code>FORCED</code> یعنی خطا ارتقا یافته؛ علتش در CFSR است.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="hfsr.c">
+$ ./hfsr
+HFSR = 0x40000000: FORCED
+CFSR = 0x00008200: PRECISERR BFARVALID
+</pre>
+<p>جواب الف: بیت ۳۰. بله؛ چون BusFault جدا فعال نیست، به HardFault ارتقا می‌یابد و FORCED روشن می‌شود. جواب پ: CFSR (و بعد BFAR/MMFAR).</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="hfsr.c" data-lang="c" data-verify="host" id="ex2">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+struct bit_name {
+    uint8_t bit;
+    const char *name;
+};
+
+static const struct bit_name hfsr_bits[] = {
+    {1, "VECTTBL"}, {30, "FORCED"}, {31, "DEBUGEVT"},
+};
+
+static const struct bit_name cfsr_bits[] = {
+    {8, "IBUSERR"}, {9, "PRECISERR"}, {15, "BFARVALID"}, {25, "DIVBYZERO"},
+};
+
+static void decode(const char *reg, uint32_t v, const struct bit_name *t, unsigned n)
+{
+    printf("%s = 0x%08X:", reg, (unsigned)v);
+    for (unsigned i = 0; i &lt; n; i++) {
+        if (v &amp; (1u &lt;&lt; t[i].bit))
+            printf(" %s", t[i].name);
+    }
+    printf("\n");
+}
+
+int main(void)
+{
+    decode("HFSR", 0x40000000u, hfsr_bits, sizeof hfsr_bits / sizeof hfsr_bits[0]);
+    decode("CFSR", 0x00008200u, cfsr_bits, sizeof cfsr_bits / sizeof cfsr_bits[0]);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="4-7"><b class="what">ساختار ردیف.</b> همان قالب جدول درس.</li>
+  <li data-lines="9-15"><b class="what">دو جدول.</b> یکی برای HFSR و یکی (کوتاه‌شده) برای CFSR.</li>
+  <li data-lines="17-25"><b class="what">تابع عمومی.</b> نام ثبات، مقدار، جدول و تعداد ردیف را می‌گیرد.
+    <span class="why">طول جدول جدا فرستاده می‌شود چون آرایه در پارامتر تابع به اشاره‌گر تبدیل می‌شود و <code>sizeof</code> داخل تابع غلط می‌شود (درس ۶.۲).</span></li>
+  <li data-lines="29-30"><b class="what">استفاده.</b> <code>sizeof</code> در جایی که آرایه تعریف شده حساب می‌شود، نه داخل تابع.</li>
+</ol>
+<pre class="term" data-from="hfsr.c">
+$ gcc -std=c11 -Wall -Wextra -o hfsr hfsr.c
+$ ./hfsr
+HFSR = 0x40000000: FORCED
+CFSR = 0x00008200: PRECISERR BFARVALID
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: هر خطا handler خودش را داشته باشد</div>
+<p>می‌خواهیم علاوه بر HardFault، خطاهای BusFault، UsageFault و MemManage هم handler جدا بگیرند و تقسیم بر صفر و دسترسی ناهم‌تراز به‌جای خاموشی بی‌صدا، خطا بدهند.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> بیت‌های <code>SCB_SHCSR</code> (آدرس ۰xE000ED24) برای فعال‌کردن این سه: MEMFAULTENA بیت ۱۶، BUSFAULTENA بیت ۱۷، USGFAULTENA بیت ۱۸. مقدار OR آن‌ها چند است؟</li>
+  <li><b>حل:</b> تابع <code>enable_fault_traps</code> را بنویس که این سه بیت را روشن کند و در <code>SCB_CCR</code> (آدرس ۰xE000ED14) بیت ۴ (<code>DIV_0_TRP</code>) و بیت ۳ (<code>UNALIGN_TRP</code>) را روشن کند. سه handler خالی (<code>for (;;)</code>) هم بگذار.</li>
+  <li><b>سخت‌افزار:</b> چرا این کار کمک می‌کند؟ (راهنمایی: به‌جای همه چیز در HardFault، UsageFault فقط برای خطای ابزار می‌آید.)</li>
+</ol>
+<details><summary>راهنمایی</summary><p>هر ثبات را با <code>|=</code> عوض کن؛ اگر می‌خواهی دقیق باشی، پیش از نوشتن مقدار فعلی را بخوان (چون بعضی بیت‌ها ممکن است قبلا روشن باشند). نام handler ها باید دقیقا <code>BusFault_Handler</code> و <code>UsageFault_Handler</code> و <code>MemManage_Handler</code> باشد تا با جدول وقفهٔ startup بخوانند.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>این کد فقط کامپایل می‌شود و اجرای مستقلی ندارد؛ باید بدون هشدار با <code>arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -Wall -Wextra -ffreestanding -c</code> کامپایل شود. جواب الف: <code>(1u&lt;&lt;16) | (1u&lt;&lt;17) | (1u&lt;&lt;18)</code> = ۰x۰۰۰۷۰۰۰۰.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="trap_enable.c" data-lang="c" data-verify="arm" id="ex3">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define SCB_CCR   (*(volatile uint32_t *)0xE000ED14u)
+#define SCB_SHCSR (*(volatile uint32_t *)0xE000ED24u)
+
+void enable_fault_traps(void)
+{
+    SCB_SHCSR |= (1u &lt;&lt; 16) | (1u &lt;&lt; 17) | (1u &lt;&lt; 18);   // MemManage، BusFault، UsageFault فعال
+    SCB_CCR   |= (1u &lt;&lt; 4) | (1u &lt;&lt; 3);                   // تقسیم بر صفر و ناهم‌ترازی هم خطا بدهند
+}
+
+void BusFault_Handler(void)   { for (;;) { } }
+void UsageFault_Handler(void) { for (;;) { } }
+void MemManage_Handler(void)  { for (;;) { } }
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="3-4"><b class="what">ثبات‌های SCB.</b> <code>CCR</code> تنظیمات هسته و <code>SHCSR</code> فعال‌سازی handler های سیستم است.</li>
+  <li data-lines="6-9"><b class="what">فعال‌سازی.</b> بیت‌های ۱۶ تا ۱۸ سه خطای جدا را روشن می‌کنند.
+    <span class="why">بدون این‌ها هر خطا به HardFault ارتقا می‌یابد و <code>FORCED</code> روشن می‌شود؛ با آن‌ها می‌فهمی نوع دقیق خطا از همان ورودی است.</span></li>
+  <li data-lines="10"><b class="what">تله‌های اضافه.</b> <code>DIV_0_TRP</code> تقسیم بر صفر و <code>UNALIGN_TRP</code> دسترسی ناهم‌تراز را به UsageFault تبدیل می‌کند.
+    <span class="why">پیش‌فرض این‌ها خاموش است و بی‌صدا صفر یا مقدار غلط می‌دهد؛ فعال‌کردنشان باگ را همان لحظه آشکار می‌کند.</span></li>
+  <li data-lines="13-15"><b class="what">handler ها.</b> در جدول وقفهٔ startup (درس ۵.۱) با همین نام‌ها صدا زده می‌شوند. اینجا فقط می‌ایستند تا دیباگر ببیند.</li>
+</ol></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>تقریبا همه در دو جای این درس گیر می‌کنند. اول: <b>«بی‌خیال ابزار؛ printf می‌زنم!»</b> برای باگ ساده خوب است، ولی روی MCU بیشتر باگ‌ها زمان‌بندی یا حافظه‌اند و printf آن‌ها را عوض می‌کند. یک ساعت یادگیری GDB و SWD سال‌ها وقت را نجات می‌دهد. دوم: <b>«HardFault یعنی تراشه خراب شده»</b>؛ تقریبا هیچ‌وقت. تراشه دارد با تو حرف می‌زند: PC می‌گوید کجا، CFSR می‌گوید چه، BFAR می‌گوید کدام آدرس. اگر یک کار بکنی، همان handler درس را در هر پروژهٔ Cortex-M از روز اول بگذار. و یادت باشد: باگی که رفع کردی، یک تست می‌خواهد.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li>روش: تکرار، کوچک‌کردن، حدس قابل‌آزمایش، اندازه‌گیری، رفع و تست. نصف‌کردن جای مشکوک سریع‌ترین راه است.</li>
+  <li>لاگ سطح‌بندی‌شده با ماکرو؛ روی MCU <code>printf</code> گران است و در ISR ممنوع.</li>
+  <li><code>assert</code> برای «نباید هرگز رخ دهد»؛ با <code>NDEBUG</code> حذف می‌شود، پس بدون اثر جانبی.</li>
+  <li>GDB: <code>break</code> (شرطی)، <code>watch</code>، <code>bt</code>، <code>x</code>، <code>print</code>؛ با <code>-g -O0</code> بساز. sanitizer روی PC باگ حافظه را می‌گیرد.</li>
+  <li>مسیر سخت‌افزاری: <code>arm-none-eabi-gdb</code> ← OpenOCD ← ST-LINK ← SWD ← Cortex-M. راه‌های خروجی: UART، semihosting، SWO/ITM، RTT.</li>
+  <li>پایهٔ دیباگ با <code>BSRR</code> و تحلیلگر منطقی، زمان اجرا را بدون مزاحمت می‌سنجد.</li>
+  <li>HardFault: قاب پشته (<code>frame[6]</code> = PC)، <code>CFSR</code>/<code>BFAR</code>، <code>addr2line</code>؛ ESP32: backtrace و <code>idf.py monitor</code>. رنگ‌آمیزی پشته و canary سرریز پشته را نشان می‌دهد.</li>
+</ul>
+<p>درس بعد: <a href="6-2.html">۶.۲ رفتار تعریف‌نشده و تله‌های C</a>. درس قبل: <a href="5-7.html">۵.۷ معماری لایه‌ای درایور و HAL</a>.</p></div>
+
+</article>
+</body>
+</html>
