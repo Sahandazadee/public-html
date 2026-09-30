@@ -1,0 +1,1259 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>کد امن و آنالیز ایستا · C برای میکروکنترلر</title>
+<meta name="description" content="پرچم‌های هشدار gcc، cppcheck و clang-tidy با خروجی واقعی، معرفی MISRA C و CERT C، ده قانون ناسا و برنامه‌نویسی دفاعی برای C در میکروکنترلر.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="6-3">
+
+<p class="lede">در دیباگ (درس <a href="6-1.html">۶.۱</a>) باگ را <b>بعد از</b> خراب‌شدن پیدا می‌کنی؛ ولی بهترین باگ، باگی است که هرگز اجرا نشود. کامپایلر و چند ابزار رایگان می‌توانند کدت را «بخوانند» و قبل از اینکه حتی برد را روشن کنی بگویند «این خط مشکوک است». در این درس یاد می‌گیری چطور آن‌ها را جدی کار بگیری، قانون‌نامه‌های معروف (MISRA، CERT و ده قانون ناسا) چه می‌گویند، و چطور کدی بنویسی که حتی ورودی بد هم آن را خراب نکند.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>پرچم‌های هشدار مهم <code>gcc</code> را بشناسی و با <code>-Werror</code> به‌کار ببری</li>
+    <li><code>cppcheck</code> و <code>clang-tidy</code> را روی کدت اجرا کنی و خروجی‌شان را بخوانی</li>
+    <li>بگویی هر ابزار چه چیزی را می‌گیرد و چه چیزی را از دست می‌دهد</li>
+    <li>MISRA C، SEI CERT C و «ده قانون ناسا» را با زبان ساده توضیح بدهی</li>
+    <li>تابع دفاعی بنویسی: پارامتر را بررسی کند، خطا برگرداند و حلقهٔ بی‌پایان نداشته باشد</li>
+    <li>یک چک‌لیست بازبینی کد (code review) و فایل <code>.clang-format</code> داشته باشی</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="6-2.html">۶.۲</a> (رفتار تعریف‌نشده؛ بیشتر خطاهای این درس همان‌هاست)</li>
+    <li>درس <a href="4-2.html">۴.۲</a> (پروژهٔ چندفایلی و <code>make</code>) و <a href="2-6.html">۲.۶</a> (تابع)</li>
+    <li>ابزارها: <code>gcc</code>، <code>cppcheck</code> و <code>clang-tidy</code> (نصب‌شان در <a href="1-3.html">۱.۳</a>)؛ <code>clang-format</code> اختیاری است</li>
+    <li>سخت‌افزار لازم نیست</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: بازرس ساختمان قبل از افتتاح</h2>
+<p>ساختمانی را تصور کن که قرار است صدها نفر در آن زندگی کنند. سازنده «حس می‌کند» همه‌چیز درست است. ولی قبل از افتتاح، بازرس‌ها می‌آیند: یکی با متر و ترازو (خطاهای ساده)، یکی با نقشهٔ برق و لوله (خطاهای پنهان)، یکی با کتاب آیین‌نامه (قاعده‌های ساخت)، و آخر سر یک نفر با یک زلزلهٔ آزمایشی (تست واقعی). هیچ‌کدام تنها کافی نیست، اما هرکدام چیزی را می‌بیند که بقیه نمی‌بینند.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>خلبان‌ها قبل از هر پرواز «چک‌لیست» را از رو می‌خوانند، حتی اگر ده هزار ساعت پرواز کرده باشند. نه چون احمق‌اند؛ چون انسان خسته می‌شود و یک مورد را جا می‌اندازد. ابزارهای این درس همان چک‌لیست خودکارند: خسته نمی‌شوند و هر بار همهٔ موارد را نگاه می‌کنند.</p></div>
+
+<p>چرا در میکروکنترلر این‌قدر مهم است؟ چون باگ روی دستگاهی که در دیوار نصب شده یا داخل یک بسته‌بندی است، شاید ماه‌ها بعد فقط یک‌بار ظاهر شود و هیچ‌کس هم <code>printf</code> جلوی چشمش نداشته باشد. پیدا کردن باگ قبل از اجرا ارزان‌ترین راه است.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="کد از پنج توری می‌گذرد: کامپایلر، تحلیلگر ایستا، بازبینی و استاندارد، تست و دستگاه؛ هر توری نوع باگ خودش را می‌گیرد">
+  <defs><marker id="ar63a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">هر مرحله، نوع خاصی از باگ را می‌گیرد</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="606" y="52" width="128" height="76" rx="12" fill="#ffd60a"/>
+    <rect x="462" y="52" width="128" height="76" rx="12" fill="#7ea3ff"/>
+    <rect x="318" y="52" width="128" height="76" rx="12" fill="#ff86b3"/>
+    <rect x="174" y="52" width="128" height="76" rx="12" fill="#3ddc97"/>
+    <rect x="30" y="52" width="128" height="76" rx="12" fill="#ff9a4d"/>
+  </g>
+  <g fill="#15120a" font-size="15" font-weight="800" text-anchor="middle">
+    <text x="670" y="86">کد تو</text>
+    <text x="526" y="86">کامپایلر</text><text x="526" y="108" font-size="12.5" font-weight="600">با پرچم‌ها</text>
+    <text x="382" y="86">تحلیلگر ایستا</text><text x="382" y="108" font-size="12.5" font-weight="600">cppcheck ...</text>
+    <text x="238" y="86">بازبینی</text><text x="238" y="108" font-size="12.5" font-weight="600">و استاندارد</text>
+    <text x="94" y="86">تست</text><text x="94" y="108" font-size="12.5" font-weight="600">و دستگاه</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M604 90H594" marker-end="url(#ar63a)"/><path d="M460 90H450" marker-end="url(#ar63a)"/>
+    <path d="M316 90H306" marker-end="url(#ar63a)"/><path d="M172 90H162" marker-end="url(#ar63a)"/>
+  </g>
+  <g class="s-tx" font-size="13.5" font-weight="700" text-anchor="middle">
+    <text x="526" y="164">تبدیل بی‌خبر</text><text x="526" y="186">نام سایه‌زده</text><text x="526" y="208">switch ناقص</text>
+    <text x="382" y="164">نشت حافظه</text><text x="382" y="186">خارج از آرایه</text><text x="382" y="208">متغیر بی‌مقدار</text>
+    <text x="238" y="164">طراحی بد</text><text x="238" y="186">قاعدهٔ پروژه</text><text x="238" y="208">منطق غلط</text>
+    <text x="94" y="164">رفتار واقعی</text><text x="94" y="186">زمان‌بندی</text><text x="94" y="208">سخت‌افزار</text>
+  </g>
+  <text x="380" y="256" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="700">ارزان و سریع (ثانیه‌ها) ← گران و کند (روزها و هفته‌ها)</text>
+  <text x="380" y="280" text-anchor="middle" class="s-tx" font-size="13.5">هرچه باگ زودتر گرفته شود، ارزان‌تر است؛ سه مرحلهٔ اول را همین درس می‌گوید و مرحلهٔ تست را درس ۶.۴</text>
+</svg></div>
+<figcaption>هیچ توری تنها کافی نیست. توری‌های سمت راست ارزان‌ترند و باید همیشه روشن باشند.</figcaption></figure>
+
+<h2 id="flags">قدم ۱: کامپایلر را به حرف بیاور</h2>
+<p>در درس‌های قبل همیشه با <code>-Wall -Wextra</code> کامپایل کردیم. این‌ها فقط بخشی از هشدارهای <code>gcc</code> را روشن می‌کنند (اسم «all» گول‌زننده است!). چند پرچم مهم دیگر برای کد embedded هست. اول جدولشان را ببین:</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>پرچم</th><th>چه چیزی را می‌گیرد؟</th><th>چرا در embedded مهم است؟</th></tr></thead>
+<tbody>
+<tr><td><code>-Wconversion</code></td><td>تبدیل نوع که ممکن است مقدار را ببُرد (مثل <code>int</code> به <code>uint8_t</code>)</td><td>رجیسترها و بایت‌ها کوچک‌اند؛ برش بی‌صدای عدد یعنی باگ بی‌صدا</td></tr>
+<tr><td><code>-Wshadow</code></td><td>متغیر محلی که اسمش را از یک متغیر بیرونی «قرض گرفته»</td><td>فکر می‌کنی <code>level</code> سراسری را عوض می‌کنی، ولی یک نسخهٔ محلی را عوض کرده‌ای</td></tr>
+<tr><td><code>-Wstrict-prototypes</code></td><td>تابعی که با <code>()</code> نوشته شده، به‌جای <code>(void)</code></td><td>در C خالی‌بودن پرانتز یعنی «پارامترها را چک نکن»</td></tr>
+<tr><td><code>-Wcast-align</code></td><td>تبدیل اشاره‌گر به نوعی که تراز بیشتری می‌خواهد</td><td>بعضی هسته‌های ARM با دسترسی ناهم‌تراز HardFault می‌دهند (پایین‌تر ببین)</td></tr>
+<tr><td><code>-Wswitch</code> (در <code>-Wall</code>)</td><td><code>switch</code> روی <code>enum</code> که یک مقدار را فراموش کرده</td><td>اگر حالت جدید به FSM اضافه کنی، کامپایلر یادت می‌اندازد کجاها را به‌روز کنی</td></tr>
+<tr><td><code>-Werror</code></td><td>هر هشدار را به خطا تبدیل می‌کند</td><td>هشدارِ نادیده‌گرفته‌شده هیچ فایده‌ای ندارد؛ خطا را نمی‌شود نادیده گرفت</td></tr>
+</tbody></table></div>
+
+<p>ببین کدی که با <code>-Wall -Wextra</code> هیچ صدایی ندارد، با این پرچم‌ها چه می‌گوید. این کد را ننویس و اجرا نکن؛ فقط بخوان و ببین چند مشکل در آن است:</p>
+
+<div class="code" data-file="risky.c" data-lang="c" data-verify="host-fail" data-cflags="-Wconversion -Wshadow -Wstrict-prototypes -Wcast-align -Werror" id="c1">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+static uint8_t level;
+
+void set_level(int raw)
+{
+    level = raw * 2;            // int در uint8_t
+}
+
+int clamp(int value)
+{
+    int level = value;          // هم‌نام متغیر سراسری
+    if (level &gt; 100) {
+        level = 100;
+    }
+    return level;
+}
+
+int read_sensor()               // بدون void
+{
+    return 42;
+}
+
+int main(void)
+{
+    set_level(read_sensor());
+    printf("%d %d\n", level, clamp(250));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="c1">
+  <li data-lines="4"><b class="what">متغیر سراسری کوچک.</b> <code>level</code> فقط یک بایت است (۰ تا ۲۵۵).
+    <span class="why">اندازهٔ کوچک، مثل رجیستر ۸ بیتی، دقیقا جایی است که برش عدد اتفاق می‌افتد.</span></li>
+  <li data-lines="6-9"><b class="what">مشکل اول: برش بی‌صدا.</b> <code>raw * 2</code> از نوع <code>int</code> است (۳۲ بیت). گذاشتنش در یک بایت، اگر بزرگ‌تر از ۲۵۵ باشد بی‌هیچ صدایی بریده می‌شود.
+    <span class="why">قانون درس ۲.۲: تبدیل به نوع کوچک‌تر، مقدار را «باقی‌مانده به ۲۵۶» می‌کند. مثلا ۳۰۰ می‌شود ۴۴.</span></li>
+  <li data-lines="11-18"><b class="what">مشکل دوم: سایه‌زدن.</b> در <code>clamp</code> یک <code>level</code> محلی ساخته‌ایم که <code>level</code> سراسری خط ۴ را «سایه» می‌کند. تا آخر تابع هر جا <code>level</code> بنویسی، منظورت نسخهٔ محلی است.
+    <span class="why">اگر روزی کسی در این تابع بخواهد متغیر سراسری را عوض کند، بدون هشدار نسخهٔ محلی را عوض می‌کند. هم‌نام‌بودن دو چیز مثل دو همکار هم‌نام در یک دفتر است.</span></li>
+  <li data-lines="20-23"><b class="what">مشکل سوم: پرانتز خالی.</b> <code>int read_sensor()</code> در C یعنی «تعداد و نوع پارامترها اعلام نشده»، نه «بدون پارامتر». برای «بدون پارامتر» باید <code>(void)</code> بنویسی.
+    <span class="why">با پرانتز خالی می‌توانی <code>read_sensor(1, 2, 3)</code> بنویسی و کامپایلر اعتراض نمی‌کند. <code>(void)</code> این در را می‌بندد.</span></li>
+  <li data-lines="25-30"><b class="what">برنامهٔ اصلی.</b> سنسور را می‌خواند، دو برابرش را در <code>level</code> می‌گذارد و چاپ می‌کند. روی کاغذ درست کار می‌کند (۴۲ × ۲ = ۸۴)، ولی سه سوراخ بالا را دارد.</li>
+</ol>
+
+<pre class="term" data-kind="cmd">
+$ gcc -std=c11 -Wall -Wextra -o risky risky.c
+(هیچ خروجی. کامپایلر راضی است.)
+</pre>
+<p>حالا همان فایل با پرچم‌های سخت‌گیرانه‌تر:</p>
+<pre class="term" data-kind="err" data-from="risky.c">
+$ gcc -std=c11 -Wall -Wextra -Wconversion -Wshadow -Wstrict-prototypes -Wcast-align -Werror -o risky risky.c
+risky.c: In function 'set_level':
+risky.c:8:13: error: conversion from 'int' to 'uint8_t' {aka 'unsigned char'} may change value [-Werror=conversion]
+risky.c: In function 'clamp':
+risky.c:13:9: error: declaration of 'level' shadows a global declaration [-Werror=shadow]
+risky.c: At top level:
+risky.c:20:5: error: function declaration isn't a prototype [-Werror=strict-prototypes]
+</pre>
+<p>هر سه مشکل پیدا شد. نگاه کن که <code>-Werror</code> اسم هر هشدار را آخر خط گذاشته (مثل <code>[-Werror=shadow]</code>). اگر بخواهی یک هشدار خاص را موقتا خاموش کنی، از همین اسم استفاده می‌کنی: <code>-Wno-shadow</code>. ولی اول سعی کن کد را درست کنی، نه ساکت کنی.</p>
+
+<h3 id="fixflags">نسخهٔ اصلاح‌شده</h3>
+<p>حالا همان برنامه، بدون هیچ‌کدام از سه مشکل. این را با <b>همان پرچم‌های سخت‌گیر و <code>-Werror</code></b> هم می‌سازیم:</p>
+
+<div class="code" data-file="safe_level.c" data-lang="c" data-verify="host" data-cflags="-Wconversion -Wshadow -Wstrict-prototypes -Wcast-align -Werror" id="c2">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+static uint8_t level;
+
+/* ۰ = موفق، -۱ = ورودی خارج از محدوده */
+static int set_level(int raw)
+{
+    if ((raw &lt; 0) || (raw &gt; 127)) {
+        return -1;                      // جلوی سرریز را همین‌جا می‌گیریم
+    }
+    level = (uint8_t)(raw * 2);         // حالا می‌دانیم جا می‌شود
+    return 0;
+}
+
+static int clamp(int value)
+{
+    int limited = value;                // اسم تازه؛ level را سایه نمی‌زند
+    if (limited &gt; 100) {
+        limited = 100;
+    }
+    return limited;
+}
+
+static int read_sensor(void)            // void = بدون پارامتر
+{
+    return 42;
+}
+
+int main(void)
+{
+    if (set_level(read_sensor()) != 0) {
+        printf("out of range\n");
+        return 1;
+    }
+    printf("%d %d\n", level, clamp(250));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="c2">
+  <li data-lines="6-14"><b class="what">تابعی که قبل از کار، ورودی را می‌سنجد.</b> اگر <code>raw</code> بیرون از ۰ تا ۱۲۷ باشد، <code>-1</code> برمی‌گرداند و <code>level</code> را دست نمی‌زند.
+    <span class="why">وقتی از قبل مطمئنی <code>raw * 2</code> بین ۰ تا ۲۵۴ است، «برش» تبدیل به یک <code>cast</code> آگاهانه می‌شود، نه یک اتفاق ناخواسته.</span></li>
+  <li data-lines="12"><b class="what">cast صریح.</b> <code>(uint8_t)</code> به کامپایلر می‌گوید «می‌دانم چه می‌کنم». هشدار <code>-Wconversion</code> با همین cast ساکت می‌شود.
+    <span class="why">cast فقط وقتی امن است که <b>قبلش</b> ثابت کرده باشی مقدار جا می‌شود (خطوط ۹ تا ۱۱). cast بدون آن، فقط هشدار را دفن می‌کند نه باگ را.</span></li>
+  <li data-lines="16-23"><b class="what">نام غیرتکراری.</b> متغیر محلی <code>limited</code> شد و دیگر با <code>level</code> قاطی نمی‌شود.</li>
+  <li data-lines="25-28"><b class="what">(void) در تعریف.</b> حالا اگر کسی <code>read_sensor(5)</code> بنویسد، کامپایلر خطا می‌دهد.</li>
+  <li data-lines="30-38"><b class="what">مصرف‌کننده کد وضعیت را چک می‌کند.</b> نتیجهٔ <code>set_level</code> نادیده گرفته نمی‌شود.
+    <span class="why">تابعی که خطا برمی‌گرداند، اگر کسی نگاهش نکند بی‌فایده است. بخش «برنامه‌نویسی دفاعی» پایین‌تر همین را ادامه می‌دهد.</span></li>
+</ol>
+<pre class="term" data-from="safe_level.c">
+$ gcc -std=c11 -Wall -Wextra -Wconversion -Wshadow -Wstrict-prototypes -Wcast-align -Werror -o safe_level safe_level.c
+$ ./safe_level
+84 100
+</pre>
+
+<div class="callout warn"><div class="ct">-Werror را کجا بگذاریم؟</div>
+<p><code>-Werror</code> برای کد <b>خودت</b> عالی است. ولی کتابخانه‌های بیرونی (مثل هدرهای HAL شرکت ST یا ESP-IDF) هشدار زیاد دارند و مال تو نیستند که درستشان کنی. راه رایج: مسیر آن‌ها را با <code>-isystem</code> به‌جای <code>-I</code> بده؛ <code>gcc</code> هشدارهای فایل‌های «سیستمی» را نشان نمی‌دهد. و در CMake ESP-IDF، پرچم را فقط برای کامپوننت خودت بگذار (پایین‌تر).</p></div>
+
+<h3 id="widget">چرا -Wconversion؟ ببین چه می‌شود</h3>
+<p>با این ابزارک نوع را روی <code>uint8_t</code> بگذار و عدد را از ۲۵۵ بالاتر ببر. همان چیزی را می‌بینی که خط ۸ <code>risky.c</code> بی‌صدا انجام می‌داد:</p>
+<div class="widget" data-w="overflow" data-type="uint8_t"></div>
+
+<h3 id="arm">پرچمی که فقط روی ARM حرف می‌زند</h3>
+<p><code>-Wcast-align</code> جالب است: روی رایانهٔ x86 تقریبا هرگز چیزی نمی‌گوید، ولی روی ARM می‌گوید. کد زیر یک «بایت‌آرایه» را به «کلمهٔ ۳۲ بیتی» تبدیل می‌کند (الگوی رایج در پارس‌کردن بسته‌های شبکه):</p>
+<div class="code" data-file="cast_align.c" data-lang="c" data-verify="frag" id="c3">
+<pre>
+#include &lt;stdint.h&gt;
+
+uint32_t first_word(uint8_t *p)
+{
+    return *(uint32_t *)p;      // p ممکن است آدرس فرد باشد!
+}
+</pre></div>
+<ol class="walk" data-for="c3">
+  <li data-lines="3-6"><b class="what">تفسیر بایت‌ها به‌عنوان uint32_t.</b> اگر <code>p</code> مثلا <code>0x20000001</code> باشد، این چهار بایت روی مرز چهار بایتی نیستند.
+    <span class="why">هستهٔ Cortex-M0 و M0+ خواندن ناهم‌تراز را با HardFault پاسخ می‌دهد. Cortex-M4 برای بعضی دستورها تحمل می‌کند ولی برای بعضی نه؛ و آن‌ها که تحمل می‌کنند کندترند. راه امن: <code>memcpy</code> بایت‌ها را به یک <code>uint32_t</code> محلی کپی کن (درس <a href="3-4.html">۳.۴</a>).</span></li>
+</ol>
+<pre class="term" data-kind="cmd">
+$ gcc -Wcast-align -c cast_align.c
+(روی x86: ساکت)
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -Wcast-align -c cast_align.c
+cast_align.c: In function 'first_word':
+cast_align.c:5:13: warning: cast increases required alignment of target type [-Wcast-align]
+</pre>
+<p>این یک مثال خوب است از اینکه چرا «روی PC کار می‌کند» دلیل درستی نیست. همان پرچم را حتما روی کامپایلر خود میکروکنترلر هم روشن کن.</p>
+
+<h3 id="switchdemo">هدیهٔ رایگان: switch کامل</h3>
+<p>یادت هست ماشین حالت (درس <a href="4-6.html">۴.۶</a>) با <code>enum</code> و <code>switch</code> نوشته شد؟ اگر یک مقدار جدید به <code>enum</code> اضافه کنی و فراموش کنی در <code>switch</code> جایش را بدهی، <code>-Wall</code> (پرچم <code>-Wswitch</code>) تو را می‌گیرد. این هشدار فقط وقتی کار می‌کند که <code>default</code> <b>نگذاشته باشی</b>. (چرا؟ چون <code>default</code> یعنی «هر چه هست را گرفته‌ام» و کامپایلر دیگر شکایت نمی‌کند.)</p>
+
+<div class="code" data-file="enum_switch.c" data-lang="c" data-verify="host-fail" data-cflags="-Werror=switch" id="c4">
+<pre>
+#include &lt;stdio.h&gt;
+
+typedef enum { MODE_IDLE, MODE_RUN, MODE_SLEEP } run_mode_t;
+
+static const char *name(run_mode_t m)
+{
+    switch (m) {
+    case MODE_IDLE: return "idle";
+    case MODE_RUN:  return "run";
+    }
+    return "?";
+}
+
+int main(void)
+{
+    printf("%s\n", name(MODE_SLEEP));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="c4">
+  <li data-lines="3"><b class="what">سه حالت.</b> <code>MODE_SLEEP</code> تازه اضافه شده است.</li>
+  <li data-lines="7-11"><b class="what">switch بدون default و بدون MODE_SLEEP.</b> برنامه‌نویس یادش رفته این حالت را بنویسد.
+    <span class="why">اگر <code>default</code> داشتیم، این باگ ساکت می‌ماند و برای <code>MODE_SLEEP</code> همیشه یک نتیجهٔ کلی می‌گرفتیم. سبک بی‌<code>default</code> روی <code>enum</code> یعنی «کامپایلر را نگهبان کن».</span></li>
+  <li data-lines="12"><b class="what">مقدار پیش‌فرض بعد از switch.</b> برای وقتی که مقدار خارج از فهرست باشد (مثلا رجیستر خراب).</li>
+</ol>
+<pre class="term" data-kind="err" data-from="enum_switch.c">
+enum_switch.c: In function 'name':
+enum_switch.c:7:5: error: enumeration value 'MODE_SLEEP' not handled in switch [-Werror=switch]
+</pre>
+<div class="callout info"><div class="ct">MISRA برعکس می‌گوید</div>
+<p>قاعدهٔ MISRA این است که هر <code>switch</code> یک <code>default</code> داشته باشد. دو فلسفه با هم درگیر می‌شوند: «کامپایلر نگهبان باشد» یا «هیچ مسیری بدون پاسخ نماند». راه میانه که بسیاری از تیم‌ها می‌روند: <code>default</code> بگذار ولی ابزار دیگری (مثل <code>-Wswitch-enum</code> یا cppcheck) را برای کامل‌بودن حالت‌ها فعال نگه دار. مهم این است که تیم تصمیم بگیرد و یکنواخت رفتار کند.</p></div>
+
+<h2 id="static">قدم ۲: تحلیل ایستا</h2>
+<p><span class="term" data-t="staticanalysis">تحلیل ایستا</span> یعنی خواندن کد بدون اجرایش. کامپایلر هم در حد خودش این کار را می‌کند، ولی ابزارهای تخصصی عمیق‌تر می‌روند: مسیرهای ممکن اجرا را در ذهنشان می‌سازند (اگر <code>if</code> درست باشد چه می‌شود؟ اگر <code>malloc</code> شکست بخورد؟) و دنبال باگ می‌گردند. سه ابزار را امتحان می‌کنیم: <span class="term" data-t="cppcheck">cppcheck</span>، <span class="term" data-t="clangtidy">clang-tidy</span> و تحلیلگر داخلی <code>gcc</code>.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>غلط‌گیر املایی Word را در نظر بگیر: زیر واژه‌های مشکوک خط قرمز می‌کشد. گاهی درست است، گاهی نه («نام خاص است!»). ابزارهای تحلیل ایستا هم همین‌طورند: پیشنهاد می‌دهند، و <b>تصمیم نهایی با توست</b>. پیشنهاد اشتباهشان را <span class="term" data-t="falsepositive">هشدار کاذب</span> (false positive) می‌نامند.</p></div>
+
+<h3 id="target">فایلی پر از باگ</h3>
+<p>این فایل چهار باگ دارد. مهم: این را <b>اجرا نکن</b>، فقط تحلیلش کن (اجرایش رفتار تعریف‌نشده دارد). ببین خودت چند تا را پیدا می‌کنی:</p>
+
+<div class="code" data-file="buggy.c" data-lang="c" data-verify="frag" id="c5">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+
+#define N 8
+
+static int table[N];
+
+int fill(int count)
+{
+    for (int i = 0; i &lt;= N; i++) {       // یک خانه بیشتر
+        table[i] = i * count;
+    }
+    return table[0];
+}
+
+char *make_name(const char *src)
+{
+    char *buf = malloc(8);
+    strcpy(buf, src);                   // بدون بررسی اندازه و NULL
+    return buf;
+}
+
+int average(const int *v, int n)
+{
+    int sum;                            // مقدار اولیه ندارد
+    for (int i = 0; i &lt; n; i++) {
+        sum += v[i];
+    }
+    return sum / n;
+}
+
+void cleanup(void)
+{
+    char *p = malloc(16);
+    if (p == NULL) {
+        return;
+    }
+    p[0] = 'x';                         // free فراموش شده
+}
+
+int main(void)
+{
+    int v[3] = { 1, 2, 3 };
+    printf("%d\n", average(v, 3));
+    printf("%d\n", fill(2));
+    free(make_name("abc"));
+    cleanup();
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="c5">
+  <li data-lines="5-7"><b class="what">آرایهٔ ۸ خانه‌ای.</b> خانه‌ها از ۰ تا ۷ شماره‌گذاری می‌شوند؛ خانهٔ ۸ وجود ندارد.</li>
+  <li data-lines="9-15"><b class="what">باگ ۱: یکی زیادی.</b> شرط <code>i &lt;= N</code> یعنی <code>i</code> تا ۸ می‌رود و <code>table[8]</code> بیرون آرایه را می‌نویسد.
+    <span class="why">این معروف‌ترین باگ C است (off-by-one). اگر آن خانه به یک رجیستر یا متغیر دیگر بخورد، دیباگ‌کردنش جهنم است.</span></li>
+  <li data-lines="17-22"><b class="what">باگ ۲: کپی بی‌کنترل.</b> <code>malloc</code> ممکن است <code>NULL</code> برگرداند و <code>strcpy</code> نمی‌داند طول <code>src</code> چقدر است (بیشتر از ۸ بایت؟).
+    <span class="why">در MCU که حافظه کم است، <code>malloc</code> بیشتر از PC شکست می‌خورد (درس <a href="4-4.html">۴.۴</a>).</span></li>
+  <li data-lines="24-31"><b class="what">باگ ۳: متغیر بدون مقدار.</b> <code>sum</code> بدون مقدار اولیه شروع می‌شود و به آشغال اضافه می‌شود. تازه اگر <code>n</code> صفر باشد، <code>sum / n</code> تقسیم بر صفر است.
+    <span class="why">این همان «مقدار آشغال» درس <a href="2-1.html">۲.۱</a> است، در لباس یک حلقه.</span></li>
+  <li data-lines="33-40"><b class="what">باگ ۴: نشت حافظه.</b> حافظه گرفته می‌شود ولی هیچ‌وقت <code>free</code> نمی‌شود.
+    <span class="why">در دستگاهی که ماه‌ها روشن می‌ماند، هر بار نشت کوچک هم‌جمع می‌شود تا حافظه تمام شود.</span></li>
+  <li data-lines="42-50"><b class="what">main.</b> همهٔ توابع را صدا می‌زند تا «کد مرده» نباشند.</li>
+</ol>
+
+<h3 id="gccO2">ابزار اول: خود gcc، ولی با بهینه‌سازی</h3>
+<p>کامپایلر برای فهمیدن «این متغیر مقدار ندارد» باید جریان داده را تحلیل کند، و این تحلیل فقط وقتی انجام می‌شود که <b>بهینه‌سازی روشن</b> باشد. یک نکتهٔ کم‌دانسته:</p>
+<pre class="term" data-kind="cmd">
+$ gcc -std=c11 -Wall -Wextra -c buggy.c
+(بدون خروجی. بدون بهینه‌سازی چیزی نمی‌بیند!)
+$ gcc -std=c11 -O2 -Wall -Wextra -c buggy.c
+buggy.c: In function 'fill':
+buggy.c:12:18: warning: iteration 8 invokes undefined behavior [-Waggressive-loop-optimizations]
+buggy.c: In function 'average':
+buggy.c:28:13: warning: 'sum' may be used uninitialized [-Wmaybe-uninitialized]
+buggy.c:28:13: warning: 'sum' is used uninitialized [-Wuninitialized]
+</pre>
+<p>با <code>-O2</code> دو باگ از چهار باگ پیدا شد. برای همین در CI (درس <a href="6-4.html">۶.۴</a>) یک ساخت با <code>-O2 -Wall -Wextra</code> فقط برای هشدارها می‌گذارند، حتی اگر روی دستگاه <code>-Os</code> یا <code>-Og</code> بسازند (درس ۶.۵).</p>
+
+<h3 id="cppcheck">ابزار دوم: cppcheck</h3>
+<p><code>cppcheck</code> رایگان و سبک است و هیچ‌وقت به کامپایلر کد نیاز ندارد؛ خودش فایل را می‌خواند. پرچم <code>--enable</code> به آن می‌گوید چه دسته‌هایی را بررسی کند (<code>warning</code>، <code>style</code>، <code>performance</code>، <code>portability</code> یا همه با <code>all</code>). <code>--template</code> قالب خروجی را شبیه <code>gcc</code> می‌کند تا ویرایشگرها بفهمند.</p>
+<pre class="term" data-kind="cmd">
+$ cppcheck -q --enable=warning,style,performance,portability --std=c11 --inconclusive --template='{file}:{line}:{column}: {severity}: {message} [{id}]' buggy.c
+buggy.c:12:14: error: Array 'table[8]' accessed at index 8, which is out of bounds. [arrayIndexOutOfBounds]
+buggy.c:40:1: error: Memory leak: p [memleak]
+buggy.c:44:9: style: Variable 'v' can be declared as const array [constVariable]
+buggy.c:30:12: warning: Uninitialized variable: sum [uninitvar]
+buggy.c:28:9: error: Uninitialized variable: sum [legacyUninitvar]
+</pre>
+<p>سه باگ از چهار باگ: خارج از آرایه، نشت، و <code>sum</code> بدون مقدار (دوبار گزارش شده، چون دو مسیر تحلیلش آن را دیده‌اند). یک پیشنهاد سبک هم داد (<code>v</code> را می‌شود <code>const</code> کرد). باگ <code>strcpy</code> را نگرفت.</p>
+<p>هر خط را بخوان: <b>فایل:خط:ستون</b>، <b>شدت</b> (<code>error</code>، <code>warning</code>، <code>style</code>)، <b>پیام</b> و <b>شناسهٔ ابزار</b> در کروشه. شناسه را بعدا برای «خاموش‌کردن» یک هشدار نیاز داری.</p>
+
+<h3 id="tidy">ابزار سوم: clang-tidy</h3>
+<p><code>clang-tidy</code> از کامپایلر <code>clang</code> استفاده می‌کند؛ پس بعد از فایل، دو خط تیره <code>--</code> و بعد پرچم‌های کامپایل را می‌دهی. با <code>--checks</code> فهرست بررسی‌ها را انتخاب می‌کنی (<code>*</code> یعنی «همهٔ آن خانواده»؛ <code>-</code> جلوی اسم یعنی «این یکی را نه»). ما سه خانواده را روشن کردیم: <code>clang-analyzer-*</code> (مسیرشناسی عمیق)، <code>bugprone-*</code> (الگوهای باگ‌خیز) و <code>cert-*</code> (قواعد CERT).</p>
+<pre class="term" data-kind="cmd">
+$ clang-tidy -quiet buggy.c --checks='clang-analyzer-*,bugprone-*,cert-*,-bugprone-easily-swappable-parameters' -- -std=c11
+buggy.c:20:5: warning: Call to function 'strcpy' is insecure as it does not provide bounding of the memory buffer. Replace unbounded copy functions with analogous functions that support length arguments such as 'strlcpy'. CWE-119 [clang-analyzer-security.insecureAPI.strcpy]
+buggy.c:28:13: warning: The left expression of the compound assignment is an uninitialized value. The computed value will also be garbage [clang-analyzer-core.uninitialized.Assign]
+buggy.c:40:1: warning: Potential leak of memory pointed to by 'p' [clang-analyzer-unix.Malloc]
+</pre>
+<p>(خروجی کامل پر از خط‌های «note» است که مسیر رسیدن به باگ را قدم‌به‌قدم می‌گوید؛ اینجا فقط خط‌های <code>warning</code> را نگه داشتیم. خودت یک بار کامل اجرا کن؛ آموزنده است.) این بار <code>strcpy</code> پیدا شد، ولی اندیس ۸ آرایه را نگرفت.</p>
+
+<div class="callout deep"><div class="ct">ابزار چهارم: تحلیلگر داخلی gcc</div>
+<p>نسخه‌های تازهٔ <code>gcc</code> (از ۱۰ به بعد) گزینهٔ <code>-fanalyzer</code> دارند. برای C کار می‌کند و مثل <code>clang-analyzer</code> مسیرها را دنبال می‌کند. روی همین فایل: <code>-fanalyzer</code> نشت (<code>-Wanalyzer-malloc-leak</code>)، استفاده از مقدار بی‌مقدار (<code>-Wanalyzer-use-of-uninitialized-value</code>) و «ممکن است <code>malloc</code> صفر برگرداند» (<code>-Wanalyzer-possible-null-argument</code>) را گفت؛ ولی اندیس ۸ را نه. اجراها با <code>gcc</code> نسخهٔ نصب‌شده روی همین ماشین بود؛ در نسخهٔ دیگر ممکن است فرق کند.</p></div>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 320" role="img" aria-label="جدول مقایسه: هر ابزار کدام یک از چهار باگ فایل buggy.c را پیدا کرد">
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">چه کسی کدام باگ فایل buggy.c را گرفت؟</text>
+  <g stroke="#15120a" stroke-width="2.5">
+    <rect x="560" y="44" width="180" height="40" fill="#ffd60a"/>
+    <rect x="430" y="44" width="130" height="40" fill="#7ea3ff"/><rect x="300" y="44" width="130" height="40" fill="#7ea3ff"/><rect x="170" y="44" width="130" height="40" fill="#7ea3ff"/><rect x="40" y="44" width="130" height="40" fill="#7ea3ff"/>
+    <!-- ردیف ۱ -->
+    <rect x="560" y="84" width="180" height="50" fill="#fff"/>
+    <rect x="430" y="84" width="130" height="50" fill="#3ddc97"/><rect x="300" y="84" width="130" height="50" fill="#3ddc97"/><rect x="170" y="84" width="130" height="50" fill="#ff86b3"/><rect x="40" y="84" width="130" height="50" fill="#ff86b3"/>
+    <!-- ردیف ۲ -->
+    <rect x="560" y="134" width="180" height="50" fill="#fff"/>
+    <rect x="430" y="134" width="130" height="50" fill="#3ddc97"/><rect x="300" y="134" width="130" height="50" fill="#3ddc97"/><rect x="170" y="134" width="130" height="50" fill="#3ddc97"/><rect x="40" y="134" width="130" height="50" fill="#3ddc97"/>
+    <!-- ردیف ۳ -->
+    <rect x="560" y="184" width="180" height="50" fill="#fff"/>
+    <rect x="430" y="184" width="130" height="50" fill="#ff86b3"/><rect x="300" y="184" width="130" height="50" fill="#3ddc97"/><rect x="170" y="184" width="130" height="50" fill="#3ddc97"/><rect x="40" y="184" width="130" height="50" fill="#3ddc97"/>
+    <!-- ردیف ۴ -->
+    <rect x="560" y="234" width="180" height="50" fill="#fff"/>
+    <rect x="430" y="234" width="130" height="50" fill="#ff86b3"/><rect x="300" y="234" width="130" height="50" fill="#ff86b3"/><rect x="170" y="234" width="130" height="50" fill="#3ddc97"/><rect x="40" y="234" width="130" height="50" fill="#3ddc97"/>
+  </g>
+  <g fill="#15120a" font-size="14" font-weight="800" text-anchor="middle">
+    <text x="650" y="70">باگ</text>
+  </g>
+  <g class="mono" fill="#15120a" font-size="12.5" font-weight="800" text-anchor="middle">
+    <text x="495" y="70">gcc -O2</text><text x="365" y="70">cppcheck</text><text x="235" y="70">clang-tidy</text><text x="105" y="70">-fanalyzer</text>
+  </g>
+  <g fill="#15120a" font-size="13.5" font-weight="700" text-anchor="end">
+    <text x="730" y="114">اندیس ۸ در آرایهٔ ۸تایی</text>
+    <text x="730" y="164">متغیر بدون مقدار اولیه</text>
+    <text x="730" y="214">نشت حافظه</text>
+    <text x="730" y="264">کپی رشته بدون بررسی</text>
+  </g>
+  <g fill="#15120a" font-size="13.5" font-weight="800" text-anchor="middle">
+    <text x="495" y="114">می‌گیرد</text><text x="365" y="114">می‌گیرد</text><text x="235" y="114">نمی‌گیرد</text><text x="105" y="114">نمی‌گیرد</text>
+    <text x="495" y="164">می‌گیرد</text><text x="365" y="164">می‌گیرد</text><text x="235" y="164">می‌گیرد</text><text x="105" y="164">می‌گیرد</text>
+    <text x="495" y="214">نمی‌گیرد</text><text x="365" y="214">می‌گیرد</text><text x="235" y="214">می‌گیرد</text><text x="105" y="214">می‌گیرد</text>
+    <text x="495" y="264">نمی‌گیرد</text><text x="365" y="264">نمی‌گیرد</text><text x="235" y="264">می‌گیرد</text><text x="105" y="264">می‌گیرد</text>
+  </g>
+  <text x="380" y="308" text-anchor="middle" class="s-tx" font-size="13.5">نتیجه: ابزار «بهترین» وجود ندارد؛ چند ابزار را با هم بگذار.</text>
+</svg></div>
+<figcaption>نتیجهٔ اجرای واقعی روی همین ماشین. سطر آخر: <span class="en">strcpy</span> را ابزارها به‌شکل «ناامن است» یا «ممکن است null باشد» گرفتند، نه به‌شکل «۸ بایت کم است».</figcaption></figure>
+
+<h3 id="tidy2">یک مثال دیگر از clang-tidy: عادت‌های بد</h3>
+<p>این فایل کوچک‌تر است و روی «سبک» و «قاعده‌های CERT» تمرکز دارد. یک پیش‌بینی بکن: چند مشکل می‌بینی؟</p>
+
+<div class="code" data-file="tidy_demo.c" data-lang="c" data-verify="frag" id="c6">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+#define SQUARE(x) x * x
+#define TIMEOUT_MS 100
+
+static uint8_t buf[16];
+
+int scale(int a)
+{
+    return SQUARE(a + 1);
+}
+
+void copy_in(const uint8_t *src, size_t n)
+{
+    memcpy(buf, src, sizeof(buf));
+    if (n &gt; sizeof(buf))
+        n = sizeof(buf);
+    for (size_t i = 0; i &lt; n; i++)
+        buf[i] = src[i];
+}
+
+int main(void)
+{
+    uint8_t data[4] = { 1, 2, 3, 4 };
+    int32_t big = 70000;
+    uint16_t small = big;
+    copy_in(data, sizeof(data));
+    printf("%d %u\n", scale(2), small);
+    fputs("done\n", stdout);
+    return TIMEOUT_MS;
+}
+</pre></div>
+<ol class="walk" data-for="c6">
+  <li data-lines="5"><b class="what">ماکروی بدون پرانتز.</b> <code>SQUARE(a + 1)</code> به <code>a + 1 * a + 1</code> باز می‌شود، نه <code>(a+1)*(a+1)</code>.
+    <span class="why">پیش‌پردازنده فقط متن را جایگزین می‌کند و به اولویت عملگرها کاری ندارد (درس <a href="4-1.html">۴.۱</a>). برای <code>a = 2</code> نتیجه ۵ می‌شود، نه ۹.</span></li>
+  <li data-lines="17-21"><b class="what">کپی با اندازهٔ بافر مقصد.</b> خط ۱۷ همیشه ۱۶ بایت را از <code>src</code> می‌خواند، حتی وقتی <code>src</code> فقط ۴ بایت است. خط‌های ۱۸ تا ۲۱ همان کار را درست‌تر (با <code>n</code>) انجام می‌دهند.
+    <span class="why">خواندن ۱۶ بایت از آرایهٔ ۴ بایتی یعنی خواندن بیرون از آرایه (رفتار تعریف‌نشده، درس <a href="6-2.html">۶.۲</a>).</span></li>
+  <li data-lines="18-21"><b class="what">if و for بدون آکولاد.</b> کد درست کار می‌کند، ولی اگر بعدا کسی یک خط به بدنه اضافه کند، فقط خط اول داخل آن می‌ماند. (معروف به باگ «goto fail» اپل.)</li>
+  <li data-lines="27-28"><b class="what">تبدیل ۳۲ به ۱۶ بیت.</b> عدد ۷۰۰۰۰ در <code>uint16_t</code> نمی‌گنجد و می‌شود ۴۴۶۴.</li>
+  <li data-lines="31"><b class="what">مقدار برگشتی نادیده.</b> <code>fputs</code> خطا را با مقدار برگشتی خبر می‌دهد و ما نگاهش نمی‌کنیم.</li>
+</ol>
+<pre class="term" data-kind="cmd">
+$ clang-tidy -quiet tidy_demo.c --checks='bugprone-*,cert-*,readability-braces-around-statements,-bugprone-easily-swappable-parameters' -- -std=c11
+tidy_demo.c:17:5: warning: Call to function 'memcpy' is insecure as it does not provide security checks introduced in the C11 standard. Replace with analogous functions that support length arguments or provides boundary checks such as 'memcpy_s' in case of C11 [clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling]
+tidy_demo.c:18:25: warning: statement should be inside braces [readability-braces-around-statements]
+tidy_demo.c:20:35: warning: statement should be inside braces [readability-braces-around-statements]
+tidy_demo.c:31:5: warning: the value returned by this function should not be disregarded; neglecting it may lead to errors [cert-err33-c]
+$ gcc -std=c11 -Wall -Wextra -Wconversion -c tidy_demo.c
+tidy_demo.c: In function 'main':
+tidy_demo.c:28:22: warning: conversion from 'int32_t' {aka 'int'} to 'uint16_t' {aka 'short unsigned int'} may change value [-Wconversion]
+</pre>
+<div class="callout warn"><div class="ct">درس صادقانه: ابزار همه‌چیز را نمی‌گیرد</div>
+<p>دو ابزار همراه هم روی این فایل هیچ هشداری دربارهٔ <b>ماکروی بدون پرانتز</b> ندادند و خواندن ۱۶ بایت از آرایهٔ ۴ بایتی را هم (با پرچم‌هایی که ما گذاشتیم) نگرفتند. این‌ها را فقط یک انسان در بازبینی می‌بیند. نتیجه: تحلیل ایستا <b>جای فکر کردن را نمی‌گیرد</b>؛ فقط کار کسل‌کننده را از دوشت برمی‌دارد. و «گزارش تمیز» یعنی «این ابزار چیزی ندید»، نه «باگ ندارد».</p></div>
+
+<h3 id="noise">هشدار کاذب: با آن چه کنیم؟</h3>
+<p>گاهی ابزار اشتباه می‌کند، یا تو آگاهانه کاری می‌کنی که ابزار دوست ندارد. دو قانون:</p>
+<ol class="steps">
+  <li><b>اول کد را درست کن.</b> اگر می‌شود کد را جوری نوشت که هشدار نیاید (و خواناتر هم بشود)، همین را بکن.</li>
+  <li><b>اگر واقعا هشدار کاذب است،</b> فقط همان یک خط را ساکت کن و <b>دلیلش را کنارش بنویس</b>. ساکت‌کردن کل ابزار یا کل فایل، یعنی خودت را کور کردن.</li>
+</ol>
+<div class="code" data-file="suppress.c" data-lang="c" data-verify="frag" id="c7">
+<pre>
+/* نیازمند: cppcheck --inline-suppr */
+int main(void)
+{
+    // cppcheck-suppress unreadVariable   // این متغیر برای دیباگر است
+    int marker = 5;
+    fputs("hi\n", stdout);   // NOLINT(cert-err33-c)  // خروجی دیباگ است؛ خطایش مهم نیست
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="c7">
+  <li data-lines="1"><b class="what">تنظیم لازم.</b> کامنت‌های <code>cppcheck-suppress</code> فقط با گزینهٔ <code>--inline-suppr</code> فعال می‌شوند.</li>
+  <li data-lines="4-5"><b class="what">ساکت‌کردن cppcheck.</b> کامنت را <b>قبل از</b> خط می‌گذاری و شناسهٔ هشدار (<code>unreadVariable</code>) را می‌نویسی. فقط همان هشدار روی همان خط ساکت می‌شود.</li>
+  <li data-lines="6"><b class="what">ساکت‌کردن clang-tidy.</b> <code>NOLINT(نام‌بررسی)</code> در انتهای همان خط. اگر نام را ننویسی همهٔ بررسی‌ها ساکت می‌شوند؛ نام را بنویس.
+    <span class="why">کامنت دلیل دار به بازبین بعدی (که شش ماه بعد خودت هستی) می‌گوید ابزار را عمدی ساکت کرده‌ای.</span></li>
+</ol>
+
+<p>و یک فایل تنظیمات برای اینکه هر بار پرچم‌ها را تایپ نکنی. <code>clang-tidy</code> فایل <code>.clang-tidy</code> را از پوشهٔ پروژه می‌خواند:</p>
+<div class="code" data-file=".clang-tidy" data-lang="text" data-verify="frag" id="c8">
+<pre>
+Checks: 'clang-analyzer-*,bugprone-*,cert-*,readability-braces-around-statements,-bugprone-easily-swappable-parameters'
+WarningsAsErrors: 'clang-analyzer-*,cert-*'
+HeaderFilterRegex: '^(src|include)/'
+</pre></div>
+<ol class="walk" data-for="c8">
+  <li data-lines="1"><b class="what">چه بررسی‌هایی.</b> همان فهرستی که در ترمینال می‌دادیم.</li>
+  <li data-lines="2"><b class="what">کدام‌ها خطا باشند.</b> نتیجهٔ این دو خانواده، خطا حساب می‌شود و ساخت را قرمز می‌کند.</li>
+  <li data-lines="3"><b class="what">فقط کد خودت.</b> هدرهای داخل <code>src</code> و <code>include</code> بررسی می‌شوند؛ هدرهای HAL و کتابخانه‌ها نه.</li>
+</ol>
+
+<div class="widget" data-w="mem" data-config='{"title":"چرا sum بدون مقدار خطرناک است","code":["int sum;","sum += v[0];","sum += v[1];","printf(sum)"],"intro":"v = {1, 2}. روی بعدی بزن.","cells":[{"addr":"RAM","name":"sum","val":null,"kind":"var"},{"addr":"RAM","name":"v[0]","val":"1","kind":"var"},{"addr":"RAM","name":"v[1]","val":"2","kind":"var"}],"steps":[{"line":0,"set":{"0":"آشغال"},"hot":[0],"say":"قفسهٔ sum ساخته شد، ولی هرچه از قبل در آن بوده همان‌جا مانده. این را کسی نمی‌داند."},{"line":1,"set":{"0":"آشغال+1"},"hot":[0,1],"say":"آشغال به ۱ اضافه شد؛ نتیجه هنوز آشغال است."},{"line":2,"set":{"0":"آشغال+3"},"hot":[0,2],"say":"باز هم آشغال. هیچ خطایی هم نیست."},{"line":3,"set":{},"hot":[0],"say":"عدد چاپ‌شده هر بار می‌تواند فرق کند. cppcheck و clang-tidy و gcc -O2 هر سه همین را از قبل می‌گفتند."}]}'></div>
+
+<h2 id="standards">قدم ۳: قانون‌نامه‌ها</h2>
+<p>ابزار می‌گوید «این خط مشکوک است». ولی «چه چیزی مجاز است و چه چیزی نه» را یک <span class="term" data-t="codingstandard">استاندارد کدنویسی</span> تعیین می‌کند: فهرستی از قاعده‌ها که تیم قبول کرده رعایت کند. مثل آیین‌نامهٔ رانندگی: لازم نیست هر راننده از اول اختراعش کند.</p>
+<p>سه قانون‌نامهٔ معروف را می‌شناسی (با <b>زبان خودمان</b> می‌گوییم؛ متن رسمی MISRA حق نشر دارد و باید از خودِ سازمان تهیه شود):</p>
+
+<h3 id="misra">MISRA C</h3>
+<p><span class="term" data-t="misra">MISRA C</span> را انجمنی از صنعت خودرو (در بریتانیا) نوشته و امروز در خودرو، هوافضا، پزشکی و راه‌آهن رایج است. نسخهٔ پرکاربرد آن «MISRA C:2012» است (نسخه‌های تازه‌تر و اصلاحیه‌ها هم دارد؛ به سایت رسمی MISRA ببین). ایده‌اش: از قسمت‌های خطرناک و مبهم C دوری کن تا کد قابل‌پیش‌بینی بماند. اجزای آن:</p>
+<ul>
+  <li><b>دستورالعمل (Directive):</b> کلی و گاهی نیازمند قضاوت انسان (مثل «کد را باید ردیابی کرد»).</li>
+  <li><b>قاعده (Rule):</b> دقیق‌تر، و معمولا یک ابزار می‌تواند خودکار بررسی‌اش کند.</li>
+  <li>هر مورد یکی از سه <b>دسته</b> را دارد. دسته‌ها در شکل پایین.</li>
+  <li><b>انحراف (deviation):</b> اگر مجبوری از یک قاعدهٔ «لازم» تخطی کنی، باید با دلیل و مستند انجامش بدهی (ننوشته و پنهانی نه).</li>
+</ul>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 290" role="img" aria-label="سه دستهٔ قاعده‌های MISRA: الزامی مطلق، لازم و توصیه‌ای، با نحوهٔ برخورد با هرکدام">
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">سه دسته قاعده در MISRA C</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="30" y="48" width="700" height="62" rx="12" fill="#ff86b3"/>
+    <rect x="30" y="122" width="700" height="62" rx="12" fill="#ffd60a"/>
+    <rect x="30" y="196" width="700" height="62" rx="12" fill="#7ea3ff"/>
+  </g>
+  <g fill="#15120a" text-anchor="start">
+    <text x="470" y="74" font-size="16" font-weight="800" class="mono" direction="ltr">Mandatory</text>
+    <text x="470" y="98" font-size="14" font-weight="700">الزامی مطلق</text>
+    <text x="450" y="86" font-size="14" text-anchor="end">هیچ استثنایی مجاز نیست</text>
+    <text x="470" y="148" font-size="16" font-weight="800" class="mono" direction="ltr">Required</text>
+    <text x="470" y="172" font-size="14" font-weight="700">لازم</text>
+    <text x="450" y="160" font-size="14" text-anchor="end">استثنا فقط با دلیل مکتوب و تأیید</text>
+    <text x="470" y="222" font-size="16" font-weight="800" class="mono" direction="ltr">Advisory</text>
+    <text x="470" y="246" font-size="14" font-weight="700">توصیه‌ای</text>
+    <text x="450" y="234" font-size="14" text-anchor="end">می‌شود کنار گذاشت، ولی تصمیم را ثبت کن</text>
+  </g>
+  <text x="380" y="280" text-anchor="middle" class="s-tx" font-size="13.5">جزئیات دسته‌بندی و نحوهٔ انحراف را از سند رسمی MISRA Compliance بخوان.</text>
+</svg></div>
+<figcaption>هرچه بالاتر، سخت‌گیرتر. حتی در شرکت‌هایی که «MISRA را رعایت می‌کنند»، معمولا فهرست انحراف‌های تأییدشده وجود دارد.</figcaption></figure>
+
+<p>چند نمونه از «روح» قاعده‌ها، با کلمات خودمان (شمارهٔ دقیق و متن رسمی را در سند خودِ MISRA ببین؛ شماره‌ها در نسخه‌های مختلف ممکن است فرق کنند):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>ایدهٔ قاعده</th><th>دلیل</th><th>مثال کد</th></tr></thead>
+<tbody>
+<tr><td>حافظهٔ پویای کتابخانهٔ استاندارد (<code>malloc</code>/<code>free</code>) استفاده نشود</td><td>قابل‌پیش‌بینی‌نبودن و پراکندگی حافظه (درس <a href="4-4.html">۴.۴</a>)</td><td>به‌جایش آرایه‌های ثابت و <code>static</code></td></tr>
+<tr><td>هیچ تابعی خودش را صدا نزند (بازگشت ممنوع)</td><td>عمق پشته قابل‌اندازه‌گیری نیست؛ روی MCU سرریز پشته یعنی HardFault</td><td>حلقه به‌جای بازگشت</td></tr>
+<tr><td>هر <code>switch</code> یک بخش <code>default</code> داشته باشد</td><td>هر مسیر پاسخ دارد، حتی اگر «نمی‌شود اتفاق بیفتد»</td><td><code>default:</code> که خطا ثبت می‌کند</td></tr>
+<tr><td>کد غیرقابل‌دسترس نباشد</td><td>کدی که هیچ‌وقت اجرا نمی‌شود، معمولا نشانهٔ یک اشتباه منطقی است</td><td>دستور بعد از <code>return</code></td></tr>
+<tr><td>شرط <code>if</code> از نوع «درست/غلط» باشد، نه عدد</td><td><code>if (x)</code> گنگ است؛ <code>if (x != 0U)</code> نیتت را نشان می‌دهد</td><td><code>if ((flags &amp; MASK) != 0U)</code></td></tr>
+</tbody></table></div>
+<p>MISRA رایگان نیست: سند را می‌خرند و ابزارهای تجاری (مثل PC-lint، Polyspace، Cppcheck Premium، Helix QAC و...) قاعده‌هایش را بررسی می‌کنند. نسخهٔ رایگان <code>cppcheck</code> یک افزونهٔ MISRA دارد که متن قاعده‌ها را ندارد و فقط شماره را گزارش می‌کند؛ برای متن باید سند رسمی را داشته باشی.</p>
+
+<h3 id="cert">SEI CERT C</h3>
+<p><span class="term" data-t="certc">SEI CERT C</span> را «مؤسسهٔ مهندسی نرم‌افزار» دانشگاه کارنگی‌ملون نوشته و رایگان و آنلاین است. تمرکزش <b>امنیت</b> است: چه الگوهایی باعث می‌شوند مهاجم کد را بشکند؟ هر قاعده یک شناسه دارد مثل <code>INT32-C</code> (سه حرف موضوع، دو رقم، و <code>-C</code>). چند نمونه، با بیان خودمان:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>شناسه</th><th>خلاصه</th><th>کجا در دوره دیده‌ای؟</th></tr></thead>
+<tbody>
+<tr><td><code>EXP33-C</code></td><td>حافظه‌ای را که مقدار نگرفته نخوان</td><td>درس ۲.۱ و مثال <code>sum</code> همین درس</td></tr>
+<tr><td><code>EXP34-C</code></td><td>اشاره‌گر <code>NULL</code> را dereference نکن</td><td>درس ۳.۲</td></tr>
+<tr><td><code>ARR30-C</code></td><td>از محدودهٔ آرایه بیرون نزن</td><td>درس ۲.۷ و باگ <code>i &lt;= N</code></td></tr>
+<tr><td><code>INT32-C</code></td><td>سرریز اعداد علامت‌دار را قبل از رخ‌دادن جلوگیری کن</td><td>درس ۲.۲ و ۶.۲</td></tr>
+<tr><td><code>INT30-C</code></td><td>دور زدن (wrap) اعداد بی‌علامت را با دقت بررسی کن</td><td>درس ۴.۷ و شمارندهٔ بافر حلقوی</td></tr>
+<tr><td><code>MEM30-C</code></td><td>بعد از <code>free</code> به حافظه دست نزن</td><td>درس ۴.۴</td></tr>
+<tr><td><code>STR31-C</code></td><td>مطمئن شو جای کافی برای رشته (و صفر انتهایی) هست</td><td>درس ۲.۸ و <code>strcpy</code> بالا</td></tr>
+<tr><td><code>ERR33-C</code></td><td>خطای توابع کتابخانه را تشخیص بده و رسیدگی کن</td><td>اخطار <code>cert-err33-c</code> بالا</td></tr>
+</tbody></table></div>
+<p>نکتهٔ خوب: <code>clang-tidy</code> بررسی‌هایی با پیشوند <code>cert-</code> دارد که بخشی از این قواعد را می‌گیرند (دیدی که <code>cert-err33-c</code> چه کرد). پس CERT از MISRA راحت‌تر شروع می‌شود: رایگان است و ابزار رایگان دارد.</p>
+
+<h3 id="barr">Barr Group و دیگران</h3>
+<p>شرکت مشاورهٔ Barr Group یک <b>استاندارد کدنویسی embedded</b> منتشر کرده که فلسفه‌اش «اول جلوی باگ‌های رایج را بگیر، بعد سلیقه‌ای‌ها» است (مثل همیشه آکولاد گذاشتن، استفاده از نوع‌های <code>stdint.h</code> و...) و رایگان می‌شود آن را خواند. خیلی از تیم‌ها یک ترکیب می‌سازند: هستهٔ MISRA یا CERT، به‌علاوهٔ سبک نگارش تیم. این جدول جمع‌بندی است:</p>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>MISRA C</th><th>SEI CERT C</th><th>ده قانون ناسا</th></tr></thead>
+<tbody>
+<tr><td>تمرکز</td><td>ایمنی و قابل‌پیش‌بینی‌بودن</td><td>امنیت و رفتار تعریف‌نشده</td><td>سادگی و قابل‌تحلیل‌بودن</td></tr>
+<tr><td>حجم</td><td>ده‌ها صفحه، صدها مورد</td><td>ده‌ها قاعده و توصیه</td><td>فقط ده جمله</td></tr>
+<tr><td>هزینه</td><td>سند پولی</td><td>رایگان</td><td>رایگان (مقالهٔ کوتاه)</td></tr>
+<tr><td>کجا رایج است</td><td>خودرو، هوافضا، پزشکی</td><td>سیستم‌های متصل به شبکه</td><td>ماموریت‌های فضایی؛ الگوی الهام‌بخش</td></tr>
+</tbody></table></div>
+
+<h2 id="p10">ده قانون ناسا</h2>
+<p>در سال ۲۰۰۶ مهندس <b>Gerard Holzmann</b> از آزمایشگاه «نرم‌افزار قابل‌اعتماد» در JPL ناسا مقاله‌ای کوتاه با نام <i>The Power of 10: Rules for Developing Safety-Critical Code</i> منتشر کرد. ایده: به‌جای صدها قاعده، <b>ده قاعده</b> که هم‌ه‌ی برنامه‌نویس‌ها بتوانند به‌خاطر بسپارند و ابزار بتواند کنترلشان کند. این‌ها را «ده قانون» می‌نامند (<span class="term" data-t="powerof10">Power of 10</span>). این فهرست به قلم خودم (خلاصه‌ٔ دقیق نه ترجمهٔ کلمه‌به‌کلمه):</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>قاعده (خلاصه)</th><th>چرا؟</th><th>در MCU یعنی</th></tr></thead>
+<tbody>
+<tr><td>۱</td><td>ساختار کنترلی ساده: <code>goto</code>، <code>setjmp</code>/<code>longjmp</code> و بازگشت (مستقیم یا غیرمستقیم) ممنوع</td><td>گراف اجرا ساده می‌ماند و ابزار می‌تواند تحلیلش کند</td><td>پشتهٔ قابل‌محاسبه؛ بدون HardFault ناشی از سرریز پشته</td></tr>
+<tr><td>۲</td><td>هر حلقه یک سقف ثابت تکرار داشته باشد که ابزار بتواند سادگی ثابتش کند</td><td>بی‌پایان‌شدن حلقه یعنی قفل‌شدن دستگاه</td><td>انتظار برای پرچم سخت‌افزار باید timeout داشته باشد</td></tr>
+<tr><td>۳</td><td>بعد از راه‌اندازی، حافظهٔ پویا نگیر</td><td>شکست تخصیص و پراکندگی حافظه در حین کار</td><td>همه‌چیز را در ابتدا و به‌صورت <code>static</code> بگیر</td></tr>
+<tr><td>۴</td><td>هیچ تابعی بلندتر از یک برگ کاغذ نباشد (حدود ۶۰ خط)</td><td>تابع بزرگ فهمیده نمی‌شود</td><td>ISR و توابع درایور کوتاه</td></tr>
+<tr><td>۵</td><td>به‌طور میانگین حداقل دو <code>assert</code> در هر تابع؛ بدون عارضهٔ جانبی</td><td>فرض‌های ذهن را به کد تبدیل می‌کند</td><td>خطای فرض را در آزمایشگاه بگیر</td></tr>
+<tr><td>۶</td><td>داده‌ها را در کوچک‌ترین دامنهٔ ممکن تعریف کن</td><td>کمتر دستکاری اشتباه</td><td><code>static</code> در فایل، نه سراسری</td></tr>
+<tr><td>۷</td><td>هر فراخوانی، مقدار برگشتی را چک کند؛ هر تابع، پارامترها را</td><td>خطای پنهان نمی‌ماند</td><td>خطای HAL را نادیده نگیر</td></tr>
+<tr><td>۸</td><td>پیش‌پردازنده فقط برای <code>#include</code> و ماکروهای ساده</td><td>ماکروی پیچیده تحلیل‌ناپذیر است</td><td>ماکرو فقط برای ثابت و ماسک</td></tr>
+<tr><td>۹</td><td>اشاره‌گر محدود: حداکثر یک سطح dereference، بدون dereference پنهان در ماکرو یا typedef، و <b>بدون اشاره‌گر تابع</b></td><td>مسیر داده و اجرا قابل‌ردیابی می‌ماند</td><td>(به توضیح پایین توجه کن)</td></tr>
+<tr><td>۱۰</td><td>از روز اول با همهٔ هشدارها در سخت‌گیرانه‌ترین حالت کامپایل کن؛ هیچ هشداری نماند؛ حداقل با یک تحلیلگر ایستا هر روز چک کن</td><td>باگ را زود می‌گیرد</td><td>همین درس</td></tr>
+</tbody></table></div>
+
+<div class="callout info"><div class="ct">قانون ۹ و اشاره‌گر تابع: تناقض؟</div>
+<p>در درس‌های قبل (مثلا <a href="4-3.html">۴.۳</a> و بخش <span class="en">callback</span>) اشاره‌گر تابع را خودمان به‌کار بردیم. قانون ۹ ناسا آن را ممنوع می‌کند، چون تحلیل‌گر نمی‌تواند بفهمد کدام تابع صدا زده می‌شود. حقیقت این است که ناسا نرم‌افزار پرواز می‌نویسد و ما اکثرا برنامهٔ کاربردی. «قانون» برای موقعیت است، نه برای همه. مهم این است که هرجا از قانون تخطی می‌کنی، <b>آگاهانه و با دلیل</b> باشد (در درس <a href="6-4.html">۶.۴</a> از همین اشاره‌گر تابع برای mock استفاده می‌کنیم).</p></div>
+
+<p>ببین قانون ۲ در دنیای MCU چطور به‌نظر می‌رسد. این حلقه‌ای است که بسیاری از مبتدی‌ها می‌نویسند:</p>
+<div class="code" data-file="wait_bad.c" data-lang="c" data-verify="frag" id="c9">
+<pre>
+#define UART_SR   (*(volatile uint32_t *)0x40004400U)   /* نمونه */
+#define TXE_BIT   (1U &lt;&lt; 7)
+
+void uart_send(uint8_t byte)
+{
+    while ((UART_SR &amp; TXE_BIT) == 0U) {
+        /* منتظر آماده‌شدن */
+    }
+    /* ... نوشتن byte در ثبات داده ... */
+}
+</pre></div>
+<ol class="walk" data-for="c9">
+  <li data-lines="1-2"><b class="what">ثبات و بیت.</b> آدرس نمونه (شکل کار درس <a href="3-6.html">۳.۶</a>)؛ بیت ۷ در ثبات وضعیت معمولا «فرستنده خالی است» (TXE) است.</li>
+  <li data-lines="6-8"><b class="what">انتظار بی‌سقف.</b> اگر سخت‌افزار خراب باشد یا کلاک UART روشن نشده باشد، بیت هرگز یک نمی‌شود و این حلقه <b>تا ابد</b> می‌چرخد.
+    <span class="why">قانون ۲ می‌گوید حلقه سقف ثابت داشته باشد. در تمرین ۳ همین را درست می‌کنی.</span></li>
+</ol>
+
+<h2 id="defensive">برنامه‌نویسی دفاعی</h2>
+<p><span class="term" data-t="defensive">برنامه‌نویسی دفاعی</span> یعنی فرض کن <b>هر ورودی می‌تواند بد باشد</b>: پارامتر از یک تابع دیگر، بایت رسیده از UART، مقدار خوانده‌شده از سنسور. مثل رانندهٔ دفاعی که فرض می‌کند بقیهٔ ماشین‌ها ممکن است اشتباه کنند.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 250" role="img" aria-label="تابع دفاعی: ورودی نامطمئن از دروازهٔ بررسی می‌گذرد، کار اصلی انجام می‌شود، وضعیت برمی‌گردد و مصرف‌کننده بررسی می‌کند؛ ورودی بد زود برمی‌گردد">
+  <defs><marker id="ar63b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="604" y="58" width="130" height="70" rx="12" fill="#ffd60a"/>
+    <rect x="452" y="58" width="130" height="70" rx="12" fill="#ff86b3"/>
+    <rect x="300" y="58" width="130" height="70" rx="12" fill="#3ddc97"/>
+    <rect x="148" y="58" width="130" height="70" rx="12" fill="#7ea3ff"/>
+    <rect x="452" y="170" width="226" height="52" rx="12" fill="#ff9a4d"/>
+  </g>
+  <g fill="#15120a" font-size="14.5" font-weight="800" text-anchor="middle">
+    <text x="669" y="88">ورودی</text><text x="669" y="110" font-size="12.5" font-weight="600">نامطمئن</text>
+    <text x="517" y="88">دروازه</text><text x="517" y="110" font-size="12.5" font-weight="600">بررسی پارامتر</text>
+    <text x="365" y="88">کار اصلی</text><text x="365" y="110" font-size="12.5" font-weight="600">فرض‌ها برقرارند</text>
+    <text x="213" y="88">کد وضعیت</text><text x="213" y="110" font-size="12.5" font-weight="600">OK یا خطا</text>
+    <text x="565" y="192">ورودی بد: زود برگرد</text><text x="565" y="212" font-size="12.5" font-weight="600">با کد خطا، بدون دست‌زدن به حالت</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M602 93H586" marker-end="url(#ar63b)"/><path d="M450 93H434" marker-end="url(#ar63b)"/><path d="M298 93H282" marker-end="url(#ar63b)"/>
+    <path d="M517 130V168" marker-end="url(#ar63b)"/>
+    <path d="M452 196H213V132" marker-end="url(#ar63b)"/>
+  </g>
+  <text x="90" y="80" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">مصرف‌کننده</text>
+  <text x="90" y="100" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">نتیجه را چک می‌کند</text>
+  <path d="M146 93H126" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#ar63b)"/>
+  <text x="380" y="30" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">تابع دفاعی: بررسی در ورودی، اعلام خطا در خروجی</text>
+  <text x="380" y="246" text-anchor="middle" class="s-tx" font-size="13.5">هر تابع مسئول خودش است؛ به اینکه «حتما تماس‌گیرنده درست می‌فرستد» تکیه نکن.</text>
+</svg></div>
+<figcaption>سه ایده: در ورودی بسنج، در خطا زود و بی‌اثر برگرد، و وضعیت را به‌صراحت گزارش بده.</figcaption></figure>
+
+<p>این برنامه یک متن مثل <code>"42"</code> را به عدد ۰ تا ۱۰۰ (درصد) تبدیل می‌کند. ورودی‌هایی مثل <code>NULL</code>، رشتهٔ خالی، حرف غلط و عدد بزرگ را هم می‌شناسد. توجه کن که از هر پنج ایدهٔ بالا استفاده کرده است:</p>
+
+<div class="code" data-file="parse.c" data-lang="c" data-verify="host" data-cflags="-Wconversion -Wshadow -Wstrict-prototypes -Wcast-align -Werror" id="c10">
+<pre>
+#include &lt;assert.h&gt;
+#include &lt;stddef.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+#define MAX_DIGITS 3U
+
+typedef enum {
+    PARSE_OK = 0,
+    PARSE_NULL,
+    PARSE_EMPTY,
+    PARSE_BAD_CHAR,
+    PARSE_RANGE
+} parse_status_t;
+
+static const char *status_name(parse_status_t s)
+{
+    switch (s) {
+    case PARSE_OK:       return "OK";
+    case PARSE_NULL:     return "NULL";
+    case PARSE_EMPTY:    return "EMPTY";
+    case PARSE_BAD_CHAR: return "BAD_CHAR";
+    case PARSE_RANGE:    return "RANGE";
+    default:             return "?";
+    }
+}
+
+/* متن «۰ تا ۱۰۰» را به عدد تبدیل می‌کند؛ در هر حالت خطا *out دست‌نخورده می‌ماند */
+static parse_status_t parse_percent(const char *text, uint8_t *out)
+{
+    if ((text == NULL) || (out == NULL)) {
+        return PARSE_NULL;
+    }
+    if (text[0] == '\0') {
+        return PARSE_EMPTY;
+    }
+
+    uint32_t value = 0U;
+    size_t i = 0U;
+    while (text[i] != '\0') {
+        if (i >= MAX_DIGITS) {
+            return PARSE_RANGE;             /* خیلی بلند است */
+        }
+        if ((text[i] &lt; '0') || (text[i] &gt; '9')) {
+            return PARSE_BAD_CHAR;
+        }
+        value = (value * 10U) + (uint32_t)(text[i] - '0');
+        i++;
+    }
+    assert(value &lt;= 999U);                  /* ناوردا: حداکثر سه رقم */
+    if (value &gt; 100U) {
+        return PARSE_RANGE;
+    }
+    *out = (uint8_t)value;
+    return PARSE_OK;
+}
+
+int main(void)
+{
+    const char *inputs[] = { "42", "100", "101", "", "4x2", "1234", NULL };
+    uint8_t pct = 0U;
+
+    for (size_t k = 0U; k &lt; (sizeof(inputs) / sizeof(inputs[0])); k++) {
+        parse_status_t st = parse_percent(inputs[k], &amp;pct);
+        printf("%-6s -&gt; %-8s (pct=%u)\n",
+               (inputs[k] != NULL) ? inputs[k] : "(null)", status_name(st), (unsigned)pct);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="c10">
+  <li data-lines="7"><b class="what">سقف ثابت.</b> بیش از سه رقم را اصلا قبول نمی‌کنیم.
+    <span class="why">هم اندازهٔ «طولانی‌ترین ورودی» را مشخص می‌کند، هم مانع سرریز <code>value</code> می‌شود؛ ۹۹۹ بسیار کمتر از ۳۲ بیت است.</span></li>
+  <li data-lines="9-15"><b class="what">وضعیت‌های صریح.</b> به‌جای <code>-1</code> و <code>-2</code> مرموز، هر خطا یک اسم دارد.
+    <span class="why">قانون ۷ ناسا: خطا باید قابل‌تشخیص و قابل‌چک باشد. اسم‌ها به کد خودتوضیح‌گر می‌دهند.</span></li>
+  <li data-lines="17-26"><b class="what">تبدیل وضعیت به رشته، با switch کامل.</b> همهٔ مقدارها را دارد و یک <code>default</code> (قاعدهٔ MISRA).</li>
+  <li data-lines="28-29"><b class="what">قرارداد در کامنت.</b> «در حالت خطا <code>*out</code> دست‌نخورده می‌ماند». مصرف‌کننده می‌تواند روی این قول حساب کند.</li>
+  <li data-lines="30-36"><b class="what">دروازه.</b> اشاره‌گر <code>NULL</code> و رشتهٔ خالی، قبل از هر کاری رد می‌شوند.
+    <span class="why">این‌ها همان EXP34-C (خواندن <code>NULL</code>) هستند. یک تابع که مطمئن نیست تماس‌گیرنده درست می‌فرستد، اول می‌سنجد.</span></li>
+  <li data-lines="38-49"><b class="what">حلقه با سقف.</b> حلقه از روی رشته می‌رود، ولی خط ۴۱ آن را به سه رقم محدود کرده. رشتهٔ بی‌پایان هم بی‌گمان تمام می‌شود.
+    <span class="why">قانون ۲ ناسا: حلقه‌ای که ابزار بتواند ثابت کند تمام می‌شود.</span></li>
+  <li data-lines="42-44"><b class="what">رقم‌بودن را بسنج.</b> هر کاراکتر باید بین <code>'0'</code> و <code>'9'</code> باشد؛ وگرنه <code>PARSE_BAD_CHAR</code>.</li>
+  <li data-lines="45"><b class="what">تبدیل رقم به عدد.</b> کاراکتر <code>'7'</code> عدد ۵۵ (در ASCII) است؛ با کم‌کردن <code>'0'</code> می‌شود ۷. cast به <code>uint32_t</code> صریح است تا <code>-Wconversion</code> ساکت باشد.
+    <span class="why">در بازهٔ <code>'0'..'9'</code> نتیجه همیشه ۰ تا ۹ است، پس cast بی‌خطر است (چون خط ۴۲ آن را تضمین کرده).</span></li>
+  <li data-lines="48"><b class="what">assert برای فرض داخلی.</b> اگر آخر حلقه <code>value</code> بیشتر از ۹۹۹ باشد، منطق خود ما خراب است.
+    <span class="why">فرق مهم: ورودی بد با <b>کد وضعیت</b> رسیدگی می‌شود (چون پیش می‌آید)، ولی فرض‌های داخلی با <b>assert</b> (چون نباید هرگز پیش بیاید و اگر آمد یعنی باگ داریم).</span></li>
+  <li data-lines="49-53"><b class="what">تنها در موفقیت می‌نویسیم.</b> بعد از بررسی نهایی، مقدار در <code>*out</code> می‌رود.</li>
+  <li data-lines="56-65"><b class="what">آزمایش.</b> شش ورودی مختلف، از جمله رشتهٔ خالی، حرف و <code>NULL</code>. توجه کن که <code>pct</code> پس از اولین موفقیت (۱۰۰) تا آخر همان می‌ماند؛ یعنی خطاها به آن دست نزدند.</li>
+</ol>
+<pre class="term" data-from="parse.c">
+$ gcc -std=c11 -Wall -Wextra -Wconversion -Wshadow -Wstrict-prototypes -Wcast-align -Werror -o parse parse.c
+$ ./parse
+42     -> OK       (pct=42)
+100    -> OK       (pct=100)
+101    -> RANGE    (pct=100)
+       -> EMPTY    (pct=100)
+4x2    -> BAD_CHAR (pct=100)
+1234   -> RANGE    (pct=100)
+(null) -> NULL     (pct=100)
+</pre>
+
+<div class="callout deep"><div class="ct">assert در محصول نهایی؟</div>
+<p>ماکروی <code>assert</code> اگر <code>NDEBUG</code> تعریف شده باشد (ساخت release)، کاملا حذف می‌شود. یعنی هرچه داخل آن بنویسی (مثلا <code>assert(x++ &gt; 0)</code>) دیگر اجرا نمی‌شود؛ پس هیچ‌وقت عارضهٔ جانبی داخل <code>assert</code> نگذار. در MCU هم <code>assert</code> استاندارد به <code>printf</code> و <code>abort</code> تکیه دارد که شاید نداشته باشی؛ اغلب تیم‌ها یک ماکروی <code>ASSERT</code> اختصاصی می‌نویسند که در خطا، مثلا LED را روشن کرده و منتظر watchdog می‌ماند (درس <a href="6-1.html">۶.۱</a>).</p></div>
+
+<h3 id="const">const-correctness: قول به تماس‌گیرنده</h3>
+<p>یادت هست <code>const</code> قفل است. در پارامتر اشاره‌گر، <code>const char *text</code> به تماس‌گیرنده قول می‌دهد که «من فقط می‌خوانم». دو فایده: اگر اشتباهی بنویسی <code>text[0] = 'x'</code>، کامپایلر خطا می‌دهد؛ و می‌توانی رشتهٔ ثابت (که در Flash است) را به تابع بدهی. قاعده: <b>هرچه را تغییر نمی‌دهی، <code>const</code> کن</b>؛ حتی <code>cppcheck</code> در خروجی بالا پیشنهاد <code>const</code> برای <code>v</code> داد.</p>
+
+<h2 id="ci">دو فایل تنظیم برای تیم</h2>
+<p>یک نکتهٔ عملی: هرچه ابزار به‌صورت <b>خودکار و در هر بار ساخت</b> اجرا شود، بیشتر فایده دارد. در درس بعد (<a href="6-4.html">۶.۴</a>) همین‌ها را در CI می‌گذاریم. اینجا دو فایل کوچک:</p>
+
+<h3 id="format">.clang-format: سبک واحد برای همه</h3>
+<p>جر و بحث دربارهٔ جای آکولاد یا تعداد فاصله، اتلاف وقت است. <code>clang-format</code> کد را طبق یک فایل تنظیمات خودکار مرتب می‌کند و بحث را می‌بندد:</p>
+<div class="code" data-file=".clang-format" data-lang="text" data-verify="frag" id="c11">
+<pre>
+BasedOnStyle: LLVM
+IndentWidth: 4
+BreakBeforeBraces: Allman
+ColumnLimit: 80
+InsertBraces: true
+</pre></div>
+<ol class="walk" data-for="c11">
+  <li data-lines="1"><b class="what">پایه.</b> از سبک LLVM شروع کن و فقط تفاوت‌ها را بنویس.</li>
+  <li data-lines="2-3"><b class="what">تورفتگی و آکولاد.</b> چهار فاصله؛ آکولاد باز روی خط جدا (سبک Allman).</li>
+  <li data-lines="4"><b class="what">حداکثر عرض خط.</b> ۸۰ نویسه.</li>
+  <li data-lines="5"><b class="what">آکولاد همیشه.</b> برای <code>if</code> و <code>for</code> تک‌خطی هم آکولاد اضافه می‌کند (نسخه‌های تازهٔ <code>clang-format</code>). این همان مشکل «goto fail» است که پیش‌تر گفتیم.</li>
+</ol>
+<p>یک کد نامرتب را از آن می‌گذرانیم:</p>
+<pre class="term" data-kind="cmd">
+$ cat ugly.c
+#include &lt;stdint.h&gt;
+int  clampv(int v,int lo,int hi){
+if(v&lt;lo){return lo;}
+    else if(v&gt;hi)
+      {return hi;}
+  return v;}
+$ clang-format --style=file ugly.c
+#include &lt;stdint.h&gt;
+int clampv(int v, int lo, int hi)
+{
+    if (v &lt; lo)
+    {
+        return lo;
+    }
+    else if (v &gt; hi)
+    {
+        return hi;
+    }
+    return v;
+}
+</pre>
+
+<h3 id="cmake">پرچم‌ها در پروژهٔ واقعی</h3>
+<p>روی STM32 با <code>Makefile</code>، پرچم‌ها را در <code>CFLAGS</code> می‌گذاری. روی ESP32 با ESP-IDF، پرچم را برای کامپوننت خودت در <code>CMakeLists.txt</code> می‌افزایی (نه برای کل پروژه، که کد ESP-IDF هشدار می‌دهد). ساختار فایل و نام‌ها مطابق ESP-IDF v5.x است؛ ولی جزئیات دقیقش را در راهنمای رسمی <a href="https://docs.espressif.com/projects/esp-idf/" target="_blank" rel="noopener">Espressif</a> ببین.</p>
+<div class="code" data-file="Makefile" data-lang="make" data-verify="frag" id="c12">
+<pre>
+# سخت‌گیر برای کد خودمان
+WARN = -Wall -Wextra -Wconversion -Wshadow -Wstrict-prototypes -Wcast-align -Werror
+# HAL شرکت سازنده: با -isystem تا هشدارهایش دیده نشود
+CFLAGS = -std=c11 $(WARN) -isystem vendor/hal/include -Iinclude
+</pre></div>
+<ol class="walk" data-for="c12">
+  <li data-lines="2"><b class="what">یک متغیر برای هشدارها.</b> جای واحد برای تغییر؛ CI هم از همین استفاده می‌کند.</li>
+  <li data-lines="4"><b class="what">-isystem برای کد دیگران.</b> هدرهای آن پوشه «سیستمی» حساب می‌شوند و <code>gcc</code> هشدارهایشان را نشان نمی‌دهد. <code>-Iinclude</code> برای هدرهای خودت است که هشدارشان دیده می‌شود.</li>
+</ol>
+<div class="code" data-file="CMakeLists.txt" data-lang="cmake" data-verify="frag" id="c13">
+<pre>
+idf_component_register(SRCS "sensor.c" "main.c"
+                       INCLUDE_DIRS ".")
+
+target_compile_options(${COMPONENT_LIB} PRIVATE
+    -Wconversion -Wshadow -Wstrict-prototypes)
+</pre></div>
+<ol class="walk" data-for="c13">
+  <li data-lines="1-2"><b class="what">ثبت کامپوننت.</b> فایل‌های منبع و پوشهٔ هدر.</li>
+  <li data-lines="4-5"><b class="what">پرچم فقط برای این کامپوننت.</b> <code>PRIVATE</code> یعنی فقط همین کامپوننت با این پرچم‌ها ساخته می‌شود. <code>-Werror</code> را وقتی اضافه کن که کدت تمیز شد.</li>
+</ol>
+
+<h2 id="checklist">چک‌لیست بازبینی کد</h2>
+<p>وقتی دو نفر یک کد را نگاه می‌کنند، باگ‌هایی را می‌بینند که ابزار نمی‌بیند (مثل ماکروی <code>SQUARE</code> بالا). بازبینی (code review) بدون چک‌لیست، به سلیقه می‌رسد؛ با چک‌لیست، به عادت. این را در تیم‌ات به‌کار ببر:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>بخش</th><th>بپرس</th></tr></thead>
+<tbody>
+<tr><td>ورودی و خروجی</td><td>هر پارامتر اشاره‌گر <code>NULL</code> یا خارج از محدوده بررسی شده؟ مقدار برگشتی چک می‌شود؟</td></tr>
+<tr><td>حلقه‌ها</td><td>سقف تکرار دارند؟ انتظار سخت‌افزار timeout دارد؟ شرط <code>&lt;=</code> و <code>&lt;</code> درست انتخاب شده؟</td></tr>
+<tr><td>نوع‌ها</td><td>از <code>stdint.h</code> استفاده شده؟ تبدیل نوع صریح و پس از بررسی محدوده است؟ مخلوط علامت‌دار/بی‌علامت نیست؟</td></tr>
+<tr><td>حافظه</td><td>هیچ <code>malloc</code> بعد از راه‌اندازی نیست؟ آرایه‌ها اندازهٔ ثابت دارند؟ عمق پشته کنترل شده؟</td></tr>
+<tr><td>هم‌زمانی</td><td>متغیر مشترک با ISR <code>volatile</code> است؟ دسترسی چندبایتی به داده‌ٔ مشترک، بخش بحرانی دارد؟</td></tr>
+<tr><td>ماکروها</td><td>هر پارامتر و کل عبارت پرانتز دارد؟ ماکرو بیش از یک‌بار پارامتر را ارزیابی نمی‌کند؟</td></tr>
+<tr><td>اسم‌ها</td><td>واحد در اسم است؟ اسم سراسری پیشوند ماژول دارد؟ چیزی سایه نمی‌زند؟</td></tr>
+<tr><td>ابزارها</td><td>ساخت بدون هشدار؟ cppcheck/clang-tidy تمیز یا هشدار کاذب مستند؟</td></tr>
+<tr><td>تست</td><td>برای رفتار جدید تست هست؟ (درس ۶.۴)</td></tr>
+</tbody></table></div>
+
+<h2 id="mcu">در STM32 و ESP32 یعنی چه؟</h2>
+<ul>
+  <li><b>همان ابزارها روی هر دو.</b> پرچم‌های <code>gcc</code> برای <code>arm-none-eabi-gcc</code> (STM32) و کامپایلر Xtensa/RISC-V ESP-IDF یکی هستند. همان‌طور که دیدی، برخی (مثل <code>-Wcast-align</code>) فقط روی کامپایلر مقصد معنی می‌دهند.</li>
+  <li><b>کد سخت‌افزاری و تحلیلگر.</b> ابزارهای PC معمولا <code>volatile uint32_t *</code> با آدرس ثابت را می‌شناسند، ولی ممکن است در هدرهای ST یا ESP-IDF (ماکرو-سنگین) هشدار کاذب بدهند. برای همین <code>HeaderFilterRegex</code> و <code>-isystem</code> را داشتیم.</li>
+  <li><b>MISRA در دنیای واقعی.</b> اگر شرکت‌ت خودرو یا پزشکی است، MISRA را خواهی دید. برای پروژهٔ شخصی، ترکیب «<code>-Wall -Wextra -Wconversion</code> + <code>cppcheck</code> + <code>clang-tidy</code> با <code>cert-*</code>» ۹۰٪ فایدهٔ آن را بدون هزینه می‌دهد.</li>
+  <li><b>گران‌ترین باگ‌ها روی سخت‌افزار پیدا می‌شوند.</b> حلقهٔ بی‌پایان روی دستگاه در دیوار، یعنی کسی باید برود و آن را ریست کند. یک <b>watchdog</b> (تایمری که اگر به موقع «تغذیه» نشود دستگاه را ریست می‌کند) آخرین پناه است، ولی پیش از آن باید قانون ۲ را رعایت کنی.</li>
+</ul>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+
+<div class="quiz" data-answer="2">
+  <p class="q">کدی با <code>-Wall -Wextra</code> هیچ هشداری نمی‌دهد. کدام نتیجه درست است؟</p>
+  <ol>
+    <li data-why="این استنتاج رایج ولی غلط است. در همین درس دیدیم همان فایل risky.c با پرچم‌های بیشتر سه مشکل داشت.">کد بدون باگ است</li>
+    <li>کد ممکن است هنوز مشکل داشته باشد؛ پرچم‌های دیگر (مثل <code>-Wconversion</code>) و ابزارهای تحلیل ایستا هم لازم‌اند</li>
+    <li data-why="-Wall هم هشدارهایی را می‌دهد؛ مسئله این است که همهٔ هشدارها را روشن نمی‌کند، نه اینکه خراب باشد.">پرچم -Wall کار نمی‌کند</li>
+    <li data-why="برعکس؛ بدون بهینه‌سازی بعضی هشدارها (مثل متغیر بدون مقدار) اصلا تولید نمی‌شوند.">باید با -O0 کامپایل کنیم تا هشدار بیشتری بگیریم</li>
+  </ol>
+  <div class="fb"><code>-Wall</code> و <code>-Wextra</code> فقط بخشی از هشدارها هستند. <code>-Wconversion</code>، <code>-Wshadow</code> و <code>-Wstrict-prototypes</code> را جدا روشن می‌کنیم و <code>-O2</code> هم بعضی تحلیل‌ها را ممکن می‌کند.</div>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="q">خروجی این برنامه چیست؟ (به تابع <code>parse_percent</code> همین درس ورودی <code>"4x2"</code> می‌دهیم.)</p>
+  <ol>
+    <li data-why="فقط رشته‌هایی با رقم‌های ۰ تا ۹ قبول می‌شوند؛ حرف x جزو رقم نیست.">PARSE_OK با مقدار ۴۲</li>
+    <li data-why="PARSE_RANGE برای رشتهٔ بلند یا عدد بیشتر از ۱۰۰ است؛ اینجا کاراکتر بد داریم و طول کوتاه است.">PARSE_RANGE</li>
+    <li>PARSE_BAD_CHAR، و <code>*out</code> دست‌نخورده می‌ماند</li>
+    <li data-why="این تابع خودش رشته را می‌سنجد و برنامه را نمی‌اندازد؛ فقط کد وضعیت می‌دهد.">برنامه با assert متوقف می‌شود</li>
+  </ol>
+  <div class="fb">رقم اول (<code>'4'</code>) قبول است، ولی <code>'x'</code> بین <code>'0'</code> و <code>'9'</code> نیست، پس <code>PARSE_BAD_CHAR</code> برمی‌گردد. در حالت خطا تابع هیچ چیز را در <code>*out</code> نمی‌نویسد.</div>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="q">کدام حلقه قانون ۲ ناسا («سقف ثابت برای هر حلقه») را می‌شکند؟</p>
+  <ol>
+    <li><code>while ((UART_SR &amp; TXE_BIT) == 0U) { }</code></li>
+    <li data-why="این حلقه دقیقا ۱۰ بار اجرا می‌شود؛ سقف ثابت دارد."><code>for (int i = 0; i &lt; 10; i++) { ... }</code></li>
+    <li data-why="سقف ثابت دارد: ۱۰۰۰ تکرار. اگر شرط زودتر برقرار شود، زودتر بیرون می‌آید.">حلقه‌ای که با شمارندهٔ <code>n &lt; 1000</code> منتظر پرچم می‌ماند</li>
+    <li data-why="سقف اندازهٔ آرایه است که ثابت و مشخص است.">حلقه‌ای که روی همهٔ ۸ عضو یک آرایهٔ ثابت می‌گردد</li>
+  </ol>
+  <div class="fb">اولی می‌تواند برای همیشه بچرخد اگر بیت هرگز ۱ نشود. سه گزینهٔ دیگر تعداد تکرار مشخصی دارند. راه درست: شمارندهٔ timeout اضافه کن (تمرین ۳).</div>
+</div>
+
+<div class="quiz" data-answer="4">
+  <p class="q">چرا <code>-Wcast-align</code> روی ARM (مثلا Cortex-M0) هشدار می‌دهد و روی x86 معمولا ساکت است؟</p>
+  <ol>
+    <li data-why="این ربطی به گران‌بودن هشدار ندارد. ابزار دقیقا همین‌قدر روی هر دو می‌تواند حساب کند.">چون x86 سریع‌تر است</li>
+    <li data-why="بیشتر یا کمتر بودن حافظه ربطی به تراز ندارد.">چون ARM حافظهٔ کمتری دارد</li>
+    <li data-why="هشدار به تبدیل اشاره‌گر مربوط است، نه به اندازهٔ int.">چون int روی ARM چهار بایت است</li>
+    <li>چون بعضی هسته‌های ARM خواندن ناهم‌تراز را با HardFault پاسخ می‌دهند، ولی x86 آن را تحمل می‌کند</li>
+  </ol>
+  <div class="fb">تراز (alignment) قاعده‌ای سخت‌افزاری است: در Cortex-M0 خواندن ۴ بایتی از آدرس فرد یک خطای جدی است. x86 کند می‌شود ولی از کار نمی‌افتد. پس کد «روی PC کار می‌کند» ممکن است روی MCU بترکد.</div>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="q"><code>cppcheck</code> روی فایل شما هیچ هشداری نداد. چه نتیجه‌ای بگیریم؟</p>
+  <ol>
+    <li data-why="ابزار چیزی نگفته، ولی ثابت نکرده باشد. دیدیم دو ابزار ماکروی SQUARE را نگرفتند.">فایل بدون باگ است</li>
+    <li>ابزار چیزی ندید؛ هنوز بازبینی انسانی، ابزارهای دیگر و تست لازم است</li>
+    <li data-why="ابزار سالم است. برای فایل‌های خاص گاهی چیزی نمی‌بیند، ولی این دلیل خرابی نیست.">cppcheck خراب است</li>
+    <li data-why="نیازی به همچین کاری نیست؛ جواب خالی هم یک جواب معتبر است.">باید <code>--enable=all</code> بگذاریم تا حتما یک هشدار بدهد</li>
+  </ol>
+  <div class="fb">تحلیل ایستا فقط بخشی از باگ‌ها را می‌گیرد؛ «هشدار ندارد» معنی «باگ ندارد» نمی‌دهد. سه لایه (کامپایلر، تحلیل، بازبینی) و تست را با هم بگذار.</div>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="q">کدام رفتار درست‌ترین واکنش به یک هشدار کاذب <code>clang-tidy</code> است؟</p>
+  <ol>
+    <li data-why="خاموش‌کردن کل ابزار، خودت را کور می‌کند. باگ‌های واقعی هم دیگر دیده نمی‌شوند.">کل clang-tidy را از پروژه حذف کنیم</li>
+    <li data-why="نادیده‌گرفتن بی‌دلیل باعث می‌شود بقیه هم هشدار را نادیده بگیرند تا هشدار مهم دفن شود.">هشدار را نادیده می‌گیریم و بدون توضیح می‌گذاریم بماند</li>
+    <li>اگر واقعا کاذب است، فقط همان خط را با <code>NOLINT(نام‌بررسی)</code> و یک دلیل کوتاه ساکت می‌کنیم</li>
+    <li data-why="غیرفعال‌کردن -Werror ربطی به مسئله ندارد؛ هشدار clang-tidy از ابزار دیگری است.">-Werror را از Makefile برمی‌داریم</li>
+  </ol>
+  <div class="fb">اول ببین کد را می‌شود واضح‌تر کرد؛ اگر نه، فقط همان خط و همان بررسی را ساکت کن و دلیلش را بنویس تا بازبین بعدی بفهمد.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: سه هشدار را رفع کن</div>
+<p>این فایل با <code>-Wall -Wextra</code> ساکت است. با <code>-Wconversion -Wshadow -Wstrict-prototypes -Werror</code> سه مشکل نشان می‌دهد.</p>
+<div class="code" data-lang="c" id="ex1bad"><pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+static uint16_t total;
+
+void add_sample(uint8_t sample)
+{
+    uint8_t total = sample;         // (۱)
+    (void)total;
+}
+
+uint8_t half(int value)
+{
+    return value / 2;               // (۲)
+}
+
+int get_count()                     // (۳)
+{
+    return 3;
+}
+</pre></div>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> هر سه مورد را با کلمه شرح بده: چه هشدارهایی و روی کدام خط‌ها؟</li>
+  <li><b>حل:</b> فایل را درست کن. برای <code>half</code> باید ورودی را بسنجی و در صورت مشکل خطا بدهی (پارامتر <code>uint8_t *out</code>).</li>
+  <li><b>چالش:</b> در <code>add_sample</code> قصد اصلی این بوده که به <code>total</code> سراسری اضافه شود. آن را با <code>uint16_t</code> امن بنویس؛ اگر سرریز شود چه کنی؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>مورد ۱: <code>-Wshadow</code>. مورد ۲: <code>-Wconversion</code> (int به uint8_t). مورد ۳: <code>-Wstrict-prototypes</code>. برای چالش، قبل از جمع‌کردن ببین <code>total + sample</code> از <code>UINT16_MAX</code> بیشتر می‌شود یا نه.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="ex1_fixed.c">
+$ gcc -std=c11 -Wall -Wextra -Wconversion -Wshadow -Wstrict-prototypes -Werror -o ex1 ex1_fixed.c
+$ ./ex1
+half(10) = 5 (status 0)
+half(-4) = 5 (status -1)
+total = 65535 (saturated)
+</pre>
+<p>نکته: خط دوم مقدار قبلی (۵) را نگه داشته چون در حالت خطا <code>*out</code> دست‌نخورده می‌ماند.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="ex1_fixed.c" data-lang="c" data-verify="host" data-cflags="-Wconversion -Wshadow -Wstrict-prototypes -Werror" id="ex1">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+static uint16_t total;
+
+/* اضافه می‌کند؛ اگر از حد بگذرد روی حداکثر می‌ماند (اشباع) */
+static void add_sample(uint8_t sample)
+{
+    if (total &gt; (uint16_t)(UINT16_MAX - sample)) {
+        total = UINT16_MAX;
+    } else {
+        total = (uint16_t)(total + sample);
+    }
+}
+
+static int half(int value, uint8_t *out)
+{
+    if ((out == NULL) || (value &lt; 0) || (value &gt; 510)) {
+        return -1;
+    }
+    *out = (uint8_t)(value / 2);
+    return 0;
+}
+
+static int get_count(void)
+{
+    return 3;
+}
+
+int main(void)
+{
+    uint8_t h = 5U;
+    int st = half(10, &amp;h);
+    printf("half(10) = %u (status %d)\n", (unsigned)h, st);
+    st = half(-4, &amp;h);
+    printf("half(-4) = %u (status %d)\n", (unsigned)h, st);
+
+    for (int i = 0; i &lt; get_count() * 100000; i++) {
+        add_sample(255U);
+        if (total == UINT16_MAX) {
+            break;
+        }
+    }
+    printf("total = %u (saturated)\n", (unsigned)total);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="4"><b class="what">مشکل ۱ رفع شد.</b> متغیر محلی حذف شد؛ فقط یک <code>total</code> داریم.</li>
+  <li data-lines="6-14"><b class="what">اشباع (saturation).</b> اگر جمع از سقف بگذرد، عدد روی سقف می‌ماند، نه اینکه به صفر برگردد. شرط را <b>قبل</b> از جمع می‌سنجیم: <code>total + sample &gt; MAX</code> را به شکل <code>total &gt; MAX - sample</code> می‌نویسیم تا خودِ شرط سرریز نکند.
+    <span class="why">اگر اول جمع کنی و بعد بسنجی، برای بی‌علامت‌ها «دور زدن» رخ داده و دیگر نمی‌توانی تشخیص بدهی. (درس ۴.۷)</span></li>
+  <li data-lines="16-23"><b class="what">مشکل ۲ رفع شد.</b> ورودی را می‌سنجد (۰ تا ۵۱۰)، تا <code>value / 2</code> در ۸ بیت بگنجد؛ و وضعیت را برمی‌گرداند. cast صریح بعد از اثبات محدوده.</li>
+  <li data-lines="25-28"><b class="what">مشکل ۳ رفع شد.</b> <code>(void)</code> داخل پرانتز.</li>
+  <li data-lines="30-46"><b class="what">آزمایش.</b> ورودی درست، ورودی منفی و پرکردن با اشباع.</li>
+</ol>
+<pre class="term" data-from="ex1_fixed.c">
+$ ./ex1
+half(10) = 5 (status 0)
+half(-4) = 5 (status -1)
+total = 65535 (saturated)
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: باگ‌یاب با ابزار</div>
+<p>فایل <code>stats.c</code> مثل یک مبتدی نوشته شده. بدون اجرا کردنش، فقط با ابزار بگرد.</p>
+<div class="code" data-lang="c" id="ex2bad"><pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+#define COUNT 5U
+
+static const int readings[COUNT] = { 10, 20, 30, 40, 50 };
+
+int max_of(void)
+{
+    int best;
+    for (unsigned i = 0U; i &lt;= COUNT; i++) {
+        if (readings[i] &gt; best) {
+            best = readings[i];
+        }
+    }
+    return best;
+}
+
+int is_zero(int x)
+{
+    if (x = 0) {
+        return 1;
+    }
+    return 0;
+}
+
+int main(void)
+{
+    printf("%d %d\n", max_of(), is_zero(3));
+    return 0;
+}
+</pre></div>
+<ol class="parts">
+  <li><b>ابزار:</b> این سه فرمان را بزن: <code>gcc -std=c11 -Wall -Wextra -c stats.c</code>، <code>cppcheck --enable=warning,style stats.c</code>، <code>clang-tidy stats.c --checks='clang-analyzer-*,bugprone-*' -- -std=c11</code>. هر ابزار چه گفت؟</li>
+  <li><b>حل:</b> همه باگ‌ها را رفع کن. <code>max_of</code> باید کوچک‌ترین بار شروع را از <code>readings[0]</code> بگیرد.</li>
+  <li><b>چالش:</b> ابزارها یک باگ دیگر را نمی‌بینند: اگر <code>COUNT</code> صفر شود، <code>readings[0]</code> چه می‌شود؟ چطور جلویش را بگیریم؟ (راهنمایی: <code>_Static_assert</code>)</li>
+</ol>
+<details><summary>راهنمایی</summary><p>سه باگ: خانهٔ اضافی (<code>&lt;=</code>)، مقدار اولیه‌ٔ <code>best</code>، و <code>=</code> به‌جای <code>==</code>. برای چالش، آرایه‌ای با اندازهٔ صفر در C ممنوع است؛ ولی <code>COUNT</code> ممکن است از ماکروی تنظیمات بیاید و صفر شود.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<p>خروجی ابزارها روی همین فایل (اجرای واقعی):</p>
+<pre class="term" data-kind="cmd">
+$ gcc -std=c11 -Wall -Wextra -c stats.c
+stats.c: In function 'is_zero':
+stats.c:21:9: warning: suggest parentheses around assignment used as truth value [-Wparentheses]
+$ cppcheck -q --enable=warning,style --std=c11 --template='{file}:{line}:{column}: {severity}: {message} [{id}]' stats.c
+stats.c:12:21: error: Array 'readings[5]' accessed at index 5, which is out of bounds. [arrayIndexOutOfBounds]
+stats.c:21:11: style: Condition 'x=0' is always false [knownConditionTrueFalse]
+stats.c:12:27: warning: Uninitialized variable: best [uninitvar]
+stats.c:21:11: style: Variable 'x' is assigned a value that is never used. [unreadVariable]
+$ clang-tidy -quiet stats.c --checks='clang-analyzer-*,bugprone-*,cert-*' -- -std=c11
+stats.c:12:25: warning: The right operand of '&gt;' is a garbage value [clang-analyzer-core.UndefinedBinaryOperatorResult]
+stats.c:21:9: warning: Although the value stored to 'x' is used in the enclosing expression, the value is never actually read from 'x' [clang-analyzer-deadcode.DeadStores]
+stats.c:21:11: warning: an assignment within an 'if' condition is bug-prone [bugprone-assignment-in-if-condition]
+stats.c:21:11: warning: using the result of an assignment as a condition without parentheses [clang-diagnostic-parentheses]
+</pre>
+<p>ببین: <code>gcc</code> بدون <code>-O</code> فقط <code>=</code> را می‌گیرد؛ <code>cppcheck</code> هر سه را؛ و <code>clang-tidy</code> دو مورد (مقدار بی‌مقدار، <code>=</code>) ولی نه خانهٔ اضافی.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="stats_fixed.c" data-lang="c" data-verify="host" data-cflags="-Wconversion -Wshadow -Wstrict-prototypes -Werror" id="ex2">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+#define COUNT 5U
+
+_Static_assert(COUNT &gt; 0U, "COUNT must be positive");
+
+static const int readings[COUNT] = { 10, 20, 30, 40, 50 };
+
+static int max_of(void)
+{
+    int best = readings[0];             // مقدار اولیهٔ معتبر
+    for (unsigned i = 1U; i &lt; COUNT; i++) {
+        if (readings[i] &gt; best) {
+            best = readings[i];
+        }
+    }
+    return best;
+}
+
+static int is_zero(int x)
+{
+    if (x == 0) {                       // مقایسه، نه انتساب
+        return 1;
+    }
+    return 0;
+}
+
+int main(void)
+{
+    printf("%d %d\n", max_of(), is_zero(3));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="7"><b class="what">تضمین زمان کامپایل.</b> <code>_Static_assert</code> (C11) شرط را همان موقع ساخت می‌سنجد. اگر <code>COUNT</code> صفر شود، ساخت نمی‌شود.
+    <span class="why">خطای زمان ساخت ارزان‌ترین خطاست. اگر <code>assert</code> معمولی بود تا اجرا نمی‌فهمیدیم.</span></li>
+  <li data-lines="12-13"><b class="what">مقدار اولیه از داده.</b> <code>best</code> با اولین عضو شروع می‌شود و حلقه از ۱ می‌رود؛ شرط <code>i &lt; COUNT</code> (نه <code>&lt;=</code>).</li>
+  <li data-lines="24"><b class="what">== نه =.</b> مقایسه شد.</li>
+  <li data-lines="21,29"><b class="what">static.</b> توابع فقط در همین فایل دیده می‌شوند (درس ۴.۲). دلیل ضمنی: <code>-Wmissing-prototypes</code> برای توابع سراسری بدون اعلان هشدار می‌دهد.</li>
+</ol>
+<pre class="term" data-from="stats_fixed.c">
+$ gcc -std=c11 -Wall -Wextra -Wconversion -Wshadow -Wstrict-prototypes -Werror -o stats stats_fixed.c
+$ ./stats
+50 0
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: انتظار با timeout (سخت‌افزار)</div>
+<p>حلقهٔ <code>uart_send</code> همین درس (بخش «ده قانون ناسا») بی‌پایان می‌شود. آن را به تابعی تبدیل کن که با تعداد تکرار محدود صبر کند و <code>TX_TIMEOUT</code> برگرداند. ثبات را در این تمرین با یک متغیر ساختگی شبیه‌سازی می‌کنیم، تا روی PC هم اجرا شود.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> اگر بیت TXE هرگز یک نشود، حلقهٔ اصلی چه می‌شود؟ و حلقهٔ تو؟</li>
+  <li><b>حل:</b> تابع <code>wait_txe(volatile uint32_t *sr, uint32_t limit)</code> بنویس که <code>TX_OK</code> یا <code>TX_TIMEOUT</code> برگرداند.</li>
+  <li><b>چالش:</b> عدد <code>limit</code> را چطور انتخاب می‌کنی؟ (فکر کن: کلاک، سرعت باود، بدترین حالت.) و این ثبات چرا باید <code>volatile</code> باشد؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>شمارندهٔ <code>n</code> از صفر تا <code>limit</code>؛ در هر دور بیت را بخوان، اگر یک بود <code>TX_OK</code> برگردان. بعد از حلقه یعنی هیچ دوری موفق نشد: <code>TX_TIMEOUT</code>.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="ex3.c">
+$ ./ex3
+sr=0x00 -> TX_TIMEOUT
+sr=0x80 -> TX_OK
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="ex3.c" data-lang="c" data-verify="host" data-cflags="-Wconversion -Wshadow -Wstrict-prototypes -Werror" id="ex3">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+#define TXE_BIT     (1U &lt;&lt; 7)
+#define WAIT_LIMIT  1000U
+
+typedef enum { TX_OK = 0, TX_TIMEOUT } tx_status_t;
+
+static volatile uint32_t fake_sr;       // ثبات ساختگی (روی MCU: آدرس واقعی)
+
+static tx_status_t wait_txe(volatile uint32_t *sr, uint32_t limit)
+{
+    for (uint32_t n = 0U; n &lt; limit; n++) {
+        if ((*sr &amp; TXE_BIT) != 0U) {
+            return TX_OK;
+        }
+    }
+    return TX_TIMEOUT;
+}
+
+static const char *name(tx_status_t s)
+{
+    return (s == TX_OK) ? "TX_OK" : "TX_TIMEOUT";
+}
+
+int main(void)
+{
+    fake_sr = 0U;
+    printf("sr=0x%02X -&gt; %s\n", (unsigned)fake_sr, name(wait_txe(&amp;fake_sr, WAIT_LIMIT)));
+    fake_sr = TXE_BIT;
+    printf("sr=0x%02X -&gt; %s\n", (unsigned)fake_sr, name(wait_txe(&amp;fake_sr, WAIT_LIMIT)));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="4-5"><b class="what">ثابت‌های نام‌دار.</b> بیت ۷ و سقف تکرار جدا از منطق.
+    <span class="why">عدد جادویی (magic number) در وسط کد یعنی بازبین نمی‌داند چرا ۱۰۰۰. اسم به آن معنی می‌دهد.</span></li>
+  <li data-lines="9"><b class="what">ثبات ساختگی.</b> روی PC یک متغیر معمولی است ولی <code>volatile</code>؛ روی MCU جایش یک آدرس ثابت می‌آید.</li>
+  <li data-lines="11-19"><b class="what">حلقه با سقف.</b> حداکثر <code>limit</code> بار می‌خواند. اگر بیت بیاید <code>TX_OK</code>، وگرنه <code>TX_TIMEOUT</code>.
+    <span class="why">اگر <code>sr</code> <code>volatile</code> نبود، کامپایلر مقدار را یک‌بار می‌خواند و تصور می‌کرد تغییر نمی‌کند (درس ۳.۶): حلقه یا بی‌پایان یا حذف می‌شد.</span></li>
+  <li data-lines="21-24"><b class="what">تبدیل وضعیت به متن.</b> برای چاپ.</li>
+  <li data-lines="26-33"><b class="what">دو آزمایش.</b> اول ثبات صفر (زمان سنجی می‌گذرد)، بعد بیت ۷ روشن.</li>
+</ol>
+<pre class="term" data-from="ex3.c">
+$ ./ex3
+sr=0x00 -> TX_TIMEOUT
+sr=0x80 -> TX_OK
+</pre>
+<p>روی MCU مقدار <code>limit</code> را از بدترین حالت محاسبه می‌کنی: مثلا ارسال یک بایت در ۱۱۵۲۰۰ باود حدود ۸۷ میکروثانیه است؛ اگر هر دور حلقه چند چرخه بگیرد، تعداد تکرار لازم را حساب کن و ضریب اطمینان بده. یا از SysTick (درس <a href="5-4.html">۵.۴</a>) زمان‌سنج واقعی استفاده کن.</p></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>معمولا سه جا گیر می‌کنند. اول: <b>ابزار را یک‌بار اجرا می‌کنند و فراموشش می‌کنند.</b> ارزش این ابزارها در «هر بار ساخت» است، نه یک‌بار. دوم: <b>وقتی ۲۰۰ هشدار می‌آید، ناامید می‌شوند</b> و همه را خاموش می‌کنند. راه درست: روی پروژهٔ نو از روز اول شروع کن (قانون ۱۰ ناسا)؛ روی پروژهٔ قدیمی، فقط ماژول‌های جدید را سخت‌گیر کن و رفته‌رفته گسترش بده. سوم: <b>MISRA را با «ایمنی مطلق» اشتباه می‌گیرند.</b> هیچ استانداردی باگ را حذف نمی‌کند؛ فقط احتمالش را کم می‌کند. امروز اگر فقط یک کار بکنی: <code>-Wconversion -Wshadow -O2</code> را در ساخت خودت بگذار و هشدارها را یکی‌یکی صفر کن. حس می‌کنی چیزی را یاد گرفته‌ای که کتاب‌ها فقط اشاره‌اش می‌کنند.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li><b>سه توری:</b> کامپایلر با پرچم‌ها، تحلیلگر ایستا، بازبینی و استاندارد؛ بعدش تست (درس ۶.۴). هیچ‌کدام تنها کافی نیست.</li>
+  <li><b>پرچم‌ها:</b> <code>-Wall -Wextra</code> + <code>-Wconversion -Wshadow -Wstrict-prototypes -Wcast-align</code> + <code>-Werror</code> (برای کد خودت) و <code>-O2</code> برای تحلیل جریان داده. <code>-isystem</code> برای هدرهای دیگران.</li>
+  <li><b>ابزارها:</b> <code>cppcheck</code> و <code>clang-tidy</code> رایگان‌اند، هرکدام چیزهای متفاوتی می‌گیرند؛ «گزارش تمیز» یعنی «ابزار چیزی ندید».</li>
+  <li><b>هشدار کاذب:</b> اول کد را درست کن؛ اگر نشد فقط همان خط را با <code>NOLINT</code>/<code>cppcheck-suppress</code> و دلیل ساکت کن.</li>
+  <li><b>MISRA</b> (ایمنی، پولی، سه دستهٔ قاعده)، <b>CERT C</b> (امنیت، رایگان، شناسه‌هایی مثل <code>INT32-C</code>) و <b>ده قانون ناسا</b> (سادگی: بدون بازگشت، حلقهٔ سقف‌دار، بدون حافظهٔ پویا پس از راه‌اندازی، اشاره‌گر محدود، ...).</li>
+  <li><b>دفاعی بنویس:</b> ورودی را در دروازه بسنج؛ خطا را زود و بی‌اثر برگردان؛ وضعیت صریح بده؛ فرض‌های داخلی با <code>assert</code>؛ هر انتظار سخت‌افزاری timeout دارد.</li>
+  <li>بعدی: <a href="6-4.html">۶.۴ تست واحد روی PC</a>، تا رفتار کد را هم خودکار وارسی کنیم.</li>
+</ul></div>
+
+</article>
+</body>
+</html>
