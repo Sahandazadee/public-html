@@ -1,0 +1,1341 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ریاضی روی میکروکنترلر · C برای میکروکنترلر</title>
+<meta name="description" content="هزینهٔ float در مقابل عدد صحیح، ثابت‌ممیز Q15، تبدیل ADC، سرریز و اشباع، جدول جستجو، endianness، CRC-8 و LFSR؛ همه با کد وارسی‌شده.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="4-7">
+
+<p class="lede">میکروکنترلر ماشین‌حساب علمی نیست. بعضی‌هایشان اصلا دستور «تقسیم» ندارند و بعضی‌ها اعشار را با یک کتابخانهٔ کند شبیه‌سازی می‌کنند. خبر خوب این است که برای بیشتر کارهای واقعی (خواندن سنسور، ساختن موج، بستهٔ داده، بررسی خطا) به <b>عدد صحیح و چند ترفند</b> نیاز داری. در این درس ریاضیِ «به‌صرفه» را یاد می‌گیری: چه چیزی گران است، چه چیزی ارزان، و چطور بدون سرریز و بدون خطا حساب کنیم.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>هزینهٔ <code>float</code> و <code>double</code> را روی Cortex-M0، Cortex-M4F و ESP32 توضیح بدهی و از تله‌ی <code>0.1</code> (به‌جای <code>0.1f</code>) دوری کنی</li>
+    <li>اعداد ثابت‌ممیز (Q15 و Q16.16) بسازی، ضرب و تقسیم کنی و بدون <code>float</code> چاپ کنی</li>
+    <li>خروجی ADC را با گرد کردن درست و بدون سرریز به میلی‌ولت تبدیل کنی</li>
+    <li>جمع امن و جمع اشباعی بنویسی و تقسیم/شیفت اعداد منفی را درست پیش‌بینی کنی</li>
+    <li>جدول جستجو با درون‌یابی خطی بسازی و خطایش را اندازه بگیری</li>
+    <li>بایت‌ها را جابه‌جا کنی (endianness)، بیت‌ها را بشماری و برعکس کنی، CRC-8 و LFSR بنویسی</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="2-2.html">۲.۲</a> (نوع‌های <code>stdint.h</code>، سرریز) و <a href="2-3.html">۲.۳</a> (تقدم عملگرها، تقسیم صحیح)</li>
+    <li>درس <a href="3-1.html">۳.۱</a> (عملگرهای بیتی و شیفت) و <a href="2-7.html">۲.۷</a> (آرایه و جدول <code>const</code>)</li>
+    <li>درس <a href="3-5.html">۳.۵</a> (جدول <code>const</code> در Flash می‌ماند)</li>
+    <li><code>gcc</code> برای همهٔ کدها و <code>arm-none-eabi-gcc</code> برای چند نمونهٔ اسمبلی</li>
+    <li>هیچ سخت‌افزاری لازم نیست</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: قیمت را به سنت بنویس</h2>
+<p>فروشگاه‌ها قیمت «۱۹٫۹۹ دلار» را در پایگاه داده به‌شکل <b>۱۹۹۹ سنت</b> نگه می‌دارند. چرا؟ چون با عدد صحیح هیچ خطای گردکردنی وجود ندارد: ۱۰ سنت + ۲۰ سنت همیشه دقیقا ۳۰ سنت است. اما اعشار در کامپیوتر (مبنای دو) دقیقا همین‌قدر ساده نیست:</p>
+
+<div class="code" data-file="money.c" data-lang="c" data-verify="host" id="code1">
+<pre>
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    double a = 0.1;
+    double b = 0.2;
+    printf("float:  0.1 + 0.2 == 0.3 ? %s\n", (a + b == 0.3) ? "yes" : "no");
+
+    int a_cent = 10;                 // ۰٫۱۰ به‌صورت ده سنت
+    int b_cent = 20;                 // ۰٫۲۰ به‌صورت بیست سنت
+    printf("cents:  10 + 20 == 30 ? %s\n", (a_cent + b_cent == 30) ? "yes" : "no");
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code1">
+  <li data-lines="5-6"><b class="what">دو عدد اعشاری.</b> <code>0.1</code> و <code>0.2</code> را در نوع <code>double</code> نگه می‌داریم.
+    <span class="why">در مبنای دو، عدد ۰٫۱ مثل ۱/۳ در مبنای ده است: بی‌پایان تکرار می‌شود. کامپیوتر ناچار نزدیک‌ترین عدد قابل‌ذخیره را می‌گذارد.</span></li>
+  <li data-lines="7"><b class="what">مقایسه.</b> آیا <code>a + b</code> برابر <code>0.3</code> است؟
+    <span class="why">جمع دو مقدار «تقریبی» و مقایسه با مقدار تقریبی سوم، هم‌ارز نیست. جواب «نه» است (درس <a href="2-4.html">۲.۴</a> دربارهٔ مقایسهٔ float گفته بود).</span></li>
+  <li data-lines="9-10"><b class="what">همان مقدارها به سنت.</b> ۱۰ و ۲۰ دو عدد صحیح‌اند و <code>10 + 20</code> دقیقا ۳۰ است.</li>
+  <li data-lines="11"><b class="what">مقایسه.</b> اینجا جواب «بله» است و همیشه هم بله می‌ماند.</li>
+</ol>
+<pre class="term" data-from="money.c">
+$ gcc -std=c11 -Wall -Wextra -o money money.c
+$ ./money
+float:  0.1 + 0.2 == 0.3 ? no
+cents:  10 + 20 == 30 ? yes
+</pre>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>خط‌کش نجار را ببین. او «۲٫۳۵ متر» نمی‌گوید؛ می‌گوید «۲۳۵۰ میلی‌متر». واحد را آن‌قدر کوچک می‌کند که همه‌چیز عدد صحیح شود. ریاضیدانی که با اعداد صحیح کار کند سریع‌تر و دقیق‌تر است. اسم این کار در دنیای کامپیوتر <span class="term" data-t="fixedpoint">ثابت‌ممیز</span> (fixed-point) است.</p></div>
+
+<h2 id="cost">هزینهٔ float: هر تراشه یک داستان دارد</h2>
+<p>اول ببینیم چرا اصلا به این ترفندها نیاز داریم. ضرب دو عدد اعشاری در C فقط یک ستاره است (<code>a * b</code>)، ولی روی سخت‌افزار ممکن است یک دستور باشد یا یک تابع صدها دستوری. کامپایلر <code>arm-none-eabi-gcc</code> را روی سه تابع ساده اجرا می‌کنیم و اسمبلی واقعی را می‌بینیم:</p>
+
+<div class="code" data-file="fl.c" data-lang="c" data-verify="arm" data-cflags="-O2 -mfpu=fpv4-sp-d16 -mfloat-abi=hard" id="code2">
+<pre>
+float  mul_f(float a, float b)   { return a * b; }
+double mul_d(double a, double b) { return a * b; }
+int    mul_i(int a, int b)       { return a * b; }
+</pre></div>
+<ol class="walk" data-for="code2">
+  <li data-lines="1"><b class="what">ضرب <code>float</code>.</b> تک‌دقت (۳۲ بیتی).</li>
+  <li data-lines="2"><b class="what">ضرب <code>double</code>.</b> دوبل‌دقت (۶۴ بیتی).</li>
+  <li data-lines="3"><b class="what">ضرب <code>int</code>.</b> عدد صحیح ۳۲ بیتی.
+    <span class="why">این سه تابع را با سه «تراشه» ترجمه می‌کنیم و اسمبلی‌شان را با هم مقایسه می‌کنیم.</span></li>
+</ol>
+
+<p>یک بار برای هستهٔ <b>Cortex-M4F</b> (مثل STM32F411، با واحد اعشاری <span class="term" data-t="fpu">FPU</span> تک‌دقت) و یک بار برای <b>Cortex-M0+</b> (بدون FPU) ساخته‌ایم. فقط دستورهای اصلی را نگه داشته‌ایم:</p>
+<pre class="term" data-nocheck data-from="fl.c">
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -O2 -S -o - fl.c
+mul_f:
+    vmul.f32 s0, s0, s1
+    bx lr
+mul_d:
+    push {r3, lr}
+    vmov r0, r1, d0
+    vmov r2, r3, d1
+    bl __aeabi_dmul
+    vmov d0, r0, r1
+    pop {r3, pc}
+mul_i:
+    mul r0, r1, r0
+    bx lr
+</pre>
+<pre class="term" data-nocheck data-from="fl.c">
+$ arm-none-eabi-gcc -mcpu=cortex-m0plus -O2 -S -o - fl.c
+mul_f:
+    push {r4, lr}
+    bl __aeabi_fmul
+    pop {r4, pc}
+mul_d:
+    push {r4, lr}
+    bl __aeabi_dmul
+    pop {r4, pc}
+mul_i:
+    muls r0, r1
+    bx lr
+</pre>
+
+<div class="table-wrap"><table>
+<thead><tr><th>عملیات</th><th>Cortex-M4F</th><th>Cortex-M0+</th></tr></thead>
+<tbody>
+<tr><td><code>int * int</code></td><td>یک دستور <code>mul</code></td><td>یک دستور <code>muls</code></td></tr>
+<tr><td><code>float * float</code></td><td>یک دستور <code>vmul.f32</code> (سخت‌افزار)</td><td>صدا زدن تابع <code>__aeabi_fmul</code> از کتابخانهٔ نرم‌افزاری</td></tr>
+<tr><td><code>double * double</code></td><td>باز هم صدا زدن <code>__aeabi_dmul</code> (نرم‌افزار!)</td><td>صدا زدن <code>__aeabi_dmul</code></td></tr>
+</tbody></table></div>
+
+<p>پس سه نکتهٔ مهم:</p>
+<ul>
+  <li>روی <b>Cortex-M0/M0+</b> هر عمل <code>float</code> یک تابع نرم‌افزاری است (<span class="term" data-t="softfloat">soft-float</span>): ده‌ها تا صدها چرخهٔ ساعت به‌جای یک تا چند چرخه.</li>
+  <li>روی <b>STM32F411 (M4F)</b> و <b>ESP32</b> واحد اعشاری فقط <b>تک‌دقت</b> است. <code>float</code> سریع است، ولی <code>double</code> هنوز نرم‌افزاری و کند است.</li>
+  <li>روی <b>AVR (آردوینو Uno)</b> هم FPU نیست. <code>int</code> همیشه ارزان‌ترین است.</li>
+</ul>
+
+<div class="callout warn"><div class="ct">تله: <code>0.1</code> یک double است، نه float</div>
+<p>در C عدد اعشاری بدون پسوند <code>double</code> است. اگر بنویسی <code>x * 0.1</code> و <code>x</code> از نوع <code>float</code> باشد، کامپایلر <code>x</code> را به <code>double</code> تبدیل می‌کند، به روش نرم‌افزاری ضرب می‌کند، و دوباره به <code>float</code> برمی‌گرداند. حتی روی M4F که FPU دارد! پسوند <code>f</code> را فراموش نکن (درس <a href="2-2.html">۲.۲</a>):</p></div>
+
+<div class="code" data-file="lit.c" data-lang="c" data-verify="arm" data-cflags="-O2 -mfpu=fpv4-sp-d16 -mfloat-abi=hard" id="code3">
+<pre>
+float scale_bad(float x)  { return x * 0.1;  }
+float scale_good(float x) { return x * 0.1f; }
+</pre></div>
+<ol class="walk" data-for="code3">
+  <li data-lines="1"><b class="what">نسخهٔ بد.</b> <code>0.1</code> بدون پسوند: ضرب <code>float × double</code>.
+    <span class="why">قانون C: وقتی دو نوع ترکیب شوند، نوع «کوچک‌تر» به بزرگ‌تر تبدیل می‌شود.</span></li>
+  <li data-lines="2"><b class="what">نسخهٔ خوب.</b> <code>0.1f</code>: هر دو <code>float</code> هستند.
+    <span class="why">پسوند <code>f</code> با یک حرف، صدها چرخه صرفه‌جویی می‌کند.</span></li>
+</ol>
+<pre class="term" data-nocheck data-from="lit.c">
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -O2 -S -o - lit.c
+scale_bad:
+    push {r3, lr}
+    vmov r0, s0
+    bl __aeabi_f2d
+    adr r3, .L4
+    ldrd r2, [r3]
+    bl __aeabi_dmul
+    bl __aeabi_d2f
+    vmov s0, r0
+    pop {r3, pc}
+scale_good:
+    vldr.32 s15, .L7
+    vmul.f32 s0, s0, s15
+    bx lr
+</pre>
+<p>در <code>scale_bad</code> سه بار تابع کتابخانه صدا زده می‌شود (<code>__aeabi_f2d</code>، <code>__aeabi_dmul</code>، <code>__aeabi_d2f</code>)؛ در <code>scale_good</code> فقط یک <code>vmul.f32</code>. برای پیدا کردن چنین جاهایی به کامپایلر بگو: <code>-Wdouble-promotion</code>. (خروجی واقعی روی همین کد: «implicit conversion from 'float' to 'double' to match other operand of binary expression».)</p>
+
+<div class="callout deep"><div class="ct">زیر کاپوت: FPU باید روشن شود</div>
+<p>در Cortex-M4 واحد اعشاری بعد از reset <b>خاموش</b> است. اگر کدی که دستور اعشاری دارد اجرا شود و FPU روشن نشده باشد، CPU خطای «UsageFault» می‌دهد و معمولا به HardFault می‌رسد. روشن‌کردنش وظیفهٔ کد استارت‌آپ است (در فایل CMSIS شرکت ST داخل <code>SystemInit</code>). در درس <a href="5-1.html">۵.۱</a> استارت‌آپ را می‌نویسیم و این نکته را دوباره می‌بینی.</p></div>
+
+<h2 id="fixed">ثابت‌ممیز: عدد صحیح با ممیز خیالی</h2>
+<p>ایده ساده است: یک عدد صحیح معمولی را در نظر بگیر و <b>قرارداد کن</b> که ممیز در جای معینی از آن قرار دارد. مثل «قیمت به سنت»: عدد ۱۹۹۹ را می‌بینیم ولی می‌دانیم منظور ۱۹٫۹۹ است. سخت‌افزار هیچ‌چیز از این قرارداد نمی‌داند؛ فقط برنامه‌نویس آن را رعایت می‌کند.</p>
+<p>در مبنای دو، «مقیاس» یک توان دو است تا ضرب و تقسیم مقیاس با شیفت انجام شود. نام‌گذاری استاندارد <b>Q<i>m</i>.<i>n</i></b> است: <i>m</i> بیت صحیح، <i>n</i> بیت کسری. مقدار واقعی = عدد ذخیره‌شده ÷ ۲<sup><i>n</i></sup>.</p>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 330" role="img" aria-label="چیدمان بیت‌ها در قالب Q16.16 (شانزده بیت صحیح و شانزده بیت کسری) و Q1.15 (یک بیت علامت و پانزده بیت کسری)">
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">ثابت‌ممیز: عدد صحیح معمولی + «ممیز خیالی» که فقط در ذهن ماست</text>
+  <text x="380" y="52" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="800">Q16.16 در یک int32_t (مثال: 3.25)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="60" y="84" width="300" height="52" fill="#ffd60a"/>
+    <rect x="360" y="84" width="300" height="52" fill="#7ea3ff"/>
+  </g>
+  <path d="M360 80V146" stroke="#15120a" stroke-width="3" stroke-dasharray="6 5" fill="none"/>
+  <g fill="#15120a" font-size="15" font-weight="800" text-anchor="middle">
+    <text x="210" y="116">۱۶ بیت صحیح</text><text x="510" y="116">۱۶ بیت کسری</text>
+  </g>
+  <text x="360" y="76" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="700">ممیز خیالی</text>
+  <g class="mono s-tx" font-size="16" font-weight="700" text-anchor="middle">
+    <text x="210" y="168">0x0003</text><text x="510" y="168">0x4000</text>
+    <text x="210" y="190">= 3</text><text x="510" y="190">= 16384 / 65536 = 0.25</text>
+  </g>
+  <text x="380" y="228" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="800">Q1.15 در یک int16_t (عددی بین 1- و 1)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="60" y="248" width="90" height="46" fill="#ff86b3"/>
+    <rect x="150" y="248" width="510" height="46" fill="#7ea3ff"/>
+  </g>
+  <g fill="#15120a" font-size="15" font-weight="800" text-anchor="middle">
+    <text x="105" y="277">علامت</text><text x="405" y="277">۱۵ بیت کسری</text>
+  </g>
+  <g class="mono s-tx" font-size="14" font-weight="700" text-anchor="middle">
+    <text x="200" y="316">0x4000 = +0.5</text><text x="520" y="316">0xA000 = -0.75</text>
+  </g>
+</svg>
+
+</div><figcaption>دو قالب پرکاربرد. Q16.16 در ۳۲ بیت و Q1.15 در ۱۶ بیت (سیگنال بین ۱− و ۱، مثل نمونهٔ صدا). <span class="term" data-t="qformat">Q-format</span> فقط یک قرارداد است.</figcaption></figure>
+
+<div class="table-wrap"><table>
+<thead><tr><th>قالب</th><th>نوع ذخیره</th><th>بازه</th><th>ریزترین قدم</th></tr></thead>
+<tbody>
+<tr><td>Q1.15</td><td><code>int16_t</code></td><td>از ۱− تا ۰٫۹۹۹۹۷</td><td>۱ ÷ ۳۲۷۶۸ ≈ ۰٫۰۰۰۰۳</td></tr>
+<tr><td>Q8.8</td><td><code>int16_t</code></td><td>از ۱۲۸− تا ۱۲۷٫۹۹</td><td>۱ ÷ ۲۵۶ ≈ ۰٫۰۰۴</td></tr>
+<tr><td>Q16.16</td><td><code>int32_t</code></td><td>از ۳۲۷۶۸− تا ۳۲۷۶۷٫۹۹۹۹</td><td>۱ ÷ ۶۵۵۳۶ ≈ ۰٫۰۰۰۰۱۵</td></tr>
+<tr><td>«سنت» (مقیاس ۱۰۰)</td><td>هر عدد صحیح</td><td>بسته به نوع</td><td>۰٫۰۱ (مقیاس دهدهی، نه توان دو)</td></tr>
+</tbody></table></div>
+
+<p>جمع و تفریق ساده‌اند: اگر دو عدد هم‌قالب‌اند، فقط عدد صحیحشان را جمع کن (۰٫۵ + ۰٫۲۵: ‏<code>16384 + 8192 = 24576</code> که در Q15 همان ۰٫۷۵ است). ولی ضرب و تقسیم کمی مراقبت می‌خواهد. ابزارک زیر ضرب Q15 را قدم‌به‌قدم نشان می‌دهد:</p>
+
+<div class="widget" data-w="mem" data-config='{"title":"ضرب Q15: ۰٫۵ × ۰٫۵","code":["q15_t a = 16384;   // 0.5","q15_t b = 16384;   // 0.5","int32_t p = (int32_t)a * b;","p += 1 << 14;      // گرد کردن","p >>= 15;          // برگشت به Q15"],"intro":"دو عدد ۰٫۵ در قالب Q15 عدد ۱۶۳۸۴ هستند. روی بعدی بزن.","cells":[{"addr":"int16_t","name":"a","val":null,"kind":"var"},{"addr":"int16_t","name":"b","val":null,"kind":"var"},{"addr":"int32_t","name":"p","val":null,"kind":"var"}],"steps":[{"line":0,"set":{"0":16384},"hot":[0],"say":"۰٫۵ در Q15 یعنی ۰٫۵ × ۳۲۷۶۸ = <b>۱۶۳۸۴</b>."},{"line":1,"set":{"1":16384},"hot":[1],"say":"b هم همان ۰٫۵ است."},{"line":2,"set":{"2":268435456},"hot":[2],"say":"اول <b>به ۳۲ بیت ارتقا می‌دهیم</b> و بعد ضرب می‌کنیم: ۱۶۳۸۴ × ۱۶۳۸۴ = ۲۶۸۴۳۵۴۵۶. این عدد در قالب Q30 است (۳۰ بیت کسری) و در ۱۶ بیت جا نمی‌شد."},{"line":3,"set":{"2":268451840},"hot":[2],"say":"نصفِ واحدِ آخر (۱۶۳۸۴) را اضافه می‌کنیم تا شیفت بعدی «بِبُرد» نکند و به نزدیک‌ترین گرد شود."},{"line":4,"set":{"2":8192},"hot":[2],"say":"۱۵ بیت کسری را دور می‌ریزیم: ۲۶۸۴۵۱۸۴۰ ÷ ۳۲۷۶۸ = ۸۱۹۲ (بخش صحیح). و ۸۱۹۲ در Q15 یعنی ۰٫۲۵. درست شد!"}]}'></div>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="ضرب دو عدد Q15: دو ورودی شانزده‌بیتی در هم ضرب می‌شوند و نتیجهٔ Q30 در سی‌ودو بیت جا می‌گیرد، سپس با پانزده شیفت به راست به Q15 برمی‌گردد">
+  <defs><marker id="f2a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">ضرب Q15: گام‌به‌گام برای 0.5 × 0.5</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="30" y="50" width="150" height="62" rx="10" fill="#ffd60a"/>
+    <rect x="30" y="140" width="150" height="62" rx="10" fill="#ffd60a"/>
+    <rect x="270" y="80" width="200" height="86" rx="10" fill="#ff9a4d"/>
+    <rect x="560" y="80" width="170" height="86" rx="10" fill="#3ddc97"/>
+  </g>
+  <g fill="#15120a" text-anchor="middle">
+    <text x="105" y="76" font-size="14" font-weight="800">a (Q15)</text>
+    <text x="105" y="100" class="mono" font-size="15" font-weight="700">0x4000 = 0.5</text>
+    <text x="105" y="166" font-size="14" font-weight="800">b (Q15)</text>
+    <text x="105" y="190" class="mono" font-size="15" font-weight="700">0x4000 = 0.5</text>
+    <text x="370" y="108" font-size="14" font-weight="800">p (Q30 در int32_t)</text>
+    <text x="370" y="134" class="mono" font-size="15" font-weight="700">0x10000000</text>
+    <text x="370" y="154" font-size="12.5">= 268435456</text>
+    <text x="645" y="108" font-size="14" font-weight="800">نتیجه (Q15)</text>
+    <text x="645" y="134" class="mono" font-size="15" font-weight="700">0x2000</text>
+    <text x="645" y="154" font-size="12.5">= 8192 = 0.25</text>
+  </g>
+  <g stroke="#15120a" stroke-width="3" fill="none">
+    <path d="M182 82C222 82 232 110 266 118" marker-end="url(#f2a)"/>
+    <path d="M182 172C222 172 232 138 266 130" marker-end="url(#f2a)"/>
+    <path d="M472 123H556" marker-end="url(#f2a)"/>
+  </g>
+  <text x="228" y="150" text-anchor="middle" class="mono s-tx" font-size="26" font-weight="800">×</text>
+  <text x="514" y="112" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">&gt;&gt; 15</text>
+  <text x="380" y="240" text-anchor="middle" class="s-tx" font-size="14" font-weight="700">هر Q15 پانزده بیت کسری دارد؛ حاصل‌ضرب سی بیت کسری دارد (Q30)</text>
+  <text x="380" y="264" text-anchor="middle" class="s-tx" font-size="14">برای برگشت به Q15 باید پانزده بیت کسری را دور بریزیم: شیفت به راست</text>
+  <text x="380" y="288" text-anchor="middle" class="s-tx" font-size="13.5">اگر ضرب را در int16_t نگه داری، 0x10000000 جا نمی‌شود و سرریز می‌کند</text>
+</svg>
+
+</div><figcaption>ضرب Q15 دو مرحله دارد: ضرب در نوع پهن‌تر (Q30) و شیفت به راست برای برگشت به Q15.</figcaption></figure>
+
+<p>حالا کد کامل. روی هر تابع دقت کن: نوع پهن‌تر، شیفت، و اشباع.</p>
+
+<div class="code" data-file="fixed.c" data-lang="c" data-verify="host" id="code4">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+typedef int16_t q15_t;              // Q1.15: مقدار واقعی = raw / 32768
+typedef int32_t q16_t;              // Q16.16: مقدار واقعی = raw / 65536
+
+static q15_t q15_from_double(double x)
+{
+    double r = x * 32768.0;
+    if (r &gt;  32767.0) r =  32767.0;         // اشباع
+    if (r &lt; -32768.0) r = -32768.0;
+    return (q15_t)(r &lt; 0 ? r - 0.5 : r + 0.5);
+}
+
+static q15_t q15_mul(q15_t a, q15_t b)
+{
+    int32_t p = (int32_t)a * (int32_t)b;    // نتیجه Q30 است، در ۳۲ بیت جا می‌شود
+    p += 1 &lt;&lt; 14;                           // نصفِ آخرین بیتِ دورریختنی: گرد کردن
+    p &gt;&gt;= 15;                               // برگشت به Q15
+    if (p &gt; 32767) p = 32767;               // فقط (-1)*(-1) اینجا می‌رسد
+    return (q15_t)p;
+}
+
+static q16_t q16_mul(q16_t a, q16_t b)
+{
+    int64_t p = (int64_t)a * b;             // Q32 در ۶۴ بیت
+    return (q16_t)(p &gt;&gt; 16);
+}
+
+static q16_t q16_div(q16_t a, q16_t b)
+{
+    return (q16_t)(((int64_t)a * 65536) / b);   // اول بزرگ کن، بعد تقسیم
+}
+
+int main(void)
+{
+    q15_t half = q15_from_double(0.5);
+    q15_t neg  = q15_from_double(-0.75);
+    q15_t m1   = q15_from_double(-1.0);
+
+    printf("half = %d, neg = %d, m1 = %d\n", half, neg, m1);
+    printf("0.5 * 0.5   -&gt; raw %d\n", q15_mul(half, half));
+    printf("0.5 * -0.75 -&gt; raw %d\n", q15_mul(half, neg));
+    printf("-1 * -1     -&gt; raw %d (saturated)\n", q15_mul(m1, m1));
+
+    q16_t a = (q16_t)(3.25 * 65536);        // 3.25
+    q16_t b = (q16_t)(2.5  * 65536);        // 2.5
+    q16_t c = q16_mul(a, b);                // 8.125
+    printf("q16: %d * %d -&gt; %d\n", a, b, c);
+    printf("as text: %d.%03d\n", c &gt;&gt; 16, ((c &amp; 0xFFFF) * 1000) &gt;&gt; 16);
+    printf("q16: %d / %d -&gt; %d\n", c, b, q16_div(c, b));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code4">
+  <li data-lines="4-5"><b class="what">دو نام برای دو قالب.</b> <code>q15_t</code> همان <code>int16_t</code> است ولی نامش به خواننده می‌گوید «این ثابت‌ممیز است».
+    <span class="why">اگر همه‌جا <code>int16_t</code> بنویسی، هیچ‌کس (حتی خودت) نمی‌فهمی کدام عدد Q15 است و کدام عدد صحیح معمولی.</span></li>
+  <li data-lines="7-13"><b class="what">تبدیل از اعشار (فقط برای تست/جدول).</b> عدد را در ۳۲۷۶۸ ضرب می‌کند، به بازهٔ مجاز می‌بُرد و به نزدیک‌ترین عدد صحیح گرد می‌کند.
+    <span class="why">۱٫۰ در Q15 <b>قابل نمایش نیست</b> (بیشینه ۳۲۷۶۷ است)؛ پس اشباع لازم است. در تراشه‌ای بدون FPU این تابع را روی PC اجرا کن و نتیجه را در جدول <code>const</code> بگذار.</span></li>
+  <li data-lines="15-19,21-22"><b class="what">ضرب Q15.</b> اول هر دو را به <code>int32_t</code> تبدیل می‌کنیم، ضرب می‌کنیم (Q30)، نیم واحد اضافه می‌کنیم، ۱۵ بیت شیفت می‌دهیم، و به ۱۶ بیت برمی‌گردانیم.
+    <span class="why">ضرب در همان ۱۶ بیت سرریز می‌کرد. تبدیل باید <b>قبل از ضرب</b> باشد، نه بعد از آن (بعد از آن دیگر دیر است).</span></li>
+  <li data-lines="20"><b class="what">حالت خاص.</b> تنها ورودی که از بازه بیرون می‌زند ‏<code>(-1) × (-1) = +1</code> است. عدد ۳۲۷۶۸ در ۱۶ بیت علامت‌دار جا نمی‌شود؛ پس به ۳۲۷۶۷ اشباع می‌کنیم.
+    <span class="why">بدون این خط، نتیجه به <code>-32768</code> می‌پیچید (یعنی ۱− به‌جای ۱+). این یک باگ کلاسیک صدا و کنترل است.</span></li>
+  <li data-lines="24-28"><b class="what">ضرب Q16.16.</b> حاصل‌ضرب دو عدد ۳۲ بیتی ۶۴ بیت می‌شود؛ پس از <code>int64_t</code> استفاده می‌کنیم و ۱۶ بیت راست را دور می‌ریزیم.
+    <span class="why">روی Cortex-M4 ضرب ۳۲×۳۲ با نتیجهٔ ۶۴ بیتی یک دستور است؛ روی M0 چند دستور.</span></li>
+  <li data-lines="30-33"><b class="what">تقسیم Q16.16.</b> اول صورت را ۶۵۵۳۶ برابر می‌کنیم و بعد تقسیم می‌کنیم.
+    <span class="why">اگر اول تقسیم کنی، قسمت کسری از بین می‌رود (۸٫۱۲۵ ÷ ۲٫۵ می‌شد ۳ به‌جای ۳٫۲۵). ضرب با <code>* 65536</code> نوشته شده، نه <code>&lt;&lt; 16</code>، چون شیفت به چپِ عدد منفی در C رفتار تعریف‌نشده دارد.</span></li>
+  <li data-lines="37-39"><b class="what">سه عدد Q15.</b> ۰٫۵ و ‏−۰٫۷۵ و ‏−۱.</li>
+  <li data-lines="41-44"><b class="what">چاپ خام.</b> ‏۰٫۵×۰٫۵ = ۸۱۹۲ (یعنی ۰٫۲۵)، ‏۰٫۵×(−۰٫۷۵) = ‏−۱۲۲۸۸ (یعنی ‏−۰٫۳۷۵) و حالت اشباع.</li>
+  <li data-lines="46-49"><b class="what">Q16.16.</b> ۳٫۲۵ × ۲٫۵ = ۸٫۱۲۵. مقدار خام <code>532480</code> است (۸٫۱۲۵ × ۶۵۵۳۶).</li>
+  <li data-lines="50"><b class="what">چاپ بدون float.</b> بخش صحیح = <code>c &gt;&gt; 16</code>. بخش کسری = (۱۶ بیت پایین × ۱۰۰۰) ÷ ۶۵۵۳۶، که با شیفت ۱۶ انجام شده. نتیجه «۸٫۱۲۵» است، بدون هیچ <code>float</code>.
+    <span class="why">printf با %f روی newlib-nano معمولا پشتیبانی نمی‌شود و کد سنگینی دارد (درس <a href="2-8.html">۲.۸</a>). این ترفند سبک و کافی است.</span></li>
+  <li data-lines="51"><b class="what">تقسیم.</b> ۸٫۱۲۵ ÷ ۲٫۵ = ۳٫۲۵ که خام‌اش <code>212992</code> است.</li>
+</ol>
+<pre class="term" data-from="fixed.c">
+$ gcc -std=c11 -Wall -Wextra -o fixed fixed.c
+$ ./fixed
+half = 16384, neg = -24576, m1 = -32768
+0.5 * 0.5   -&gt; raw 8192
+0.5 * -0.75 -&gt; raw -12288
+-1 * -1     -&gt; raw 32767 (saturated)
+q16: 212992 * 163840 -&gt; 532480
+as text: 8.125
+q16: 532480 / 163840 -&gt; 212992
+</pre>
+
+<p>یک ابزارک دیگر: ‏<b>Q8.8</b> (۱۶ بیت: ۸ صحیح، ۸ کسری). بیت‌ها را روشن و خاموش کن و عدد را بر ۲۵۶ تقسیم کن. مثلا وقتی فقط بیت ۸ روشن باشد (<code>0x0100</code>)، مقدار ۱ است؛ بیت ۷ روشن باشد (<code>0x0080</code>)، مقدار ۰٫۵.</p>
+<div class="widget" data-w="bits" data-width="16" data-reg="Q8_8" data-title="یک عدد Q8.8: مقدار واقعی = عدد ÷ ۲۵۶" data-fields='[{"name":"بخش صحیح","hi":15,"lo":8},{"name":"بخش کسری","hi":7,"lo":0}]'></div>
+
+<div class="callout tip"><div class="ct">کدام قالب؟</div>
+<p>اول بازهٔ مقدارها و دقت لازم را بنویس. مثال: دمای ‏۴۰− تا ۱۲۵ درجه با دقت ۰٫۰۱: مقیاس ۱۰۰ می‌دهد بازهٔ ‏−۴۰۰۰ تا ‏۱۲۵۰۰ که در <code>int16_t</code> جا می‌شود. <b>ساده‌ترین حالت اغلب «مقیاس دهدهی» است</b> (سنت، میلی‌ولت، صدم درجه)؛ چون خروجی چاپ‌شدنی و خوانا است. Q-format وقتی می‌درخشد که مدام ضرب می‌کنی (فیلتر، صدا، PID).</p></div>
+
+<h2 id="adc">تبدیل خروجی ADC: رگبار ریزه‌کاری</h2>
+<p>مبدل آنالوگ به دیجیتال (ADC) ولتاژ را به عدد تبدیل می‌کند. روی STM32F411 ADC تا ۱۲ بیت است: عدد <code>raw</code> بین ۰ تا ۴۰۹۵ با ولتاژ مرجع ۳٫۳ ولت (فرض ما). فرمول:</p>
+<p style="text-align:center"><code>mV = raw × 3300 ÷ 4095</code></p>
+<p>سه تله در این یک خط هست:</p>
+<ol class="steps">
+  <li><b>سرریز میانی.</b> <code>4095 × 3300 = 13 513 500</code>. در ۳۲ بیت جا می‌شود، ولی در <code>int</code> ۱۶ بیتی (AVR) نه. پس <b>قبل از ضرب</b> به <code>uint32_t</code> تبدیل کن.</li>
+  <li><b>ترتیب.</b> ضرب اول، تقسیم آخر. اگر <code>raw / 4095 * 3300</code> بنویسی، تقسیم صحیح همیشه ۰ می‌دهد (به جز خود ۴۰۹۵).</li>
+  <li><b>گرد کردن.</b> تقسیم صحیح می‌بُرد. با اضافه کردن <b>نصف مقسوم‌علیه</b> قبل از تقسیم، به نزدیک‌ترین گرد می‌شود.</li>
+</ol>
+
+<div class="code" data-file="scale.c" data-lang="c" data-verify="host" id="code5">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+#define VREF_MV 3300u
+#define ADC_MAX 4095u
+
+/* ADC 12 بیتی به میلی‌ولت، با گرد کردن به نزدیک‌ترین */
+static uint32_t adc_to_mv(uint16_t raw)
+{
+    return ((uint32_t)raw * VREF_MV + ADC_MAX / 2u) / ADC_MAX;
+}
+
+/* همان محاسبه با بریدن (بدون گرد کردن) */
+static uint32_t adc_to_mv_trunc(uint16_t raw)
+{
+    return ((uint32_t)raw * VREF_MV) / ADC_MAX;
+}
+
+int main(void)
+{
+    const uint16_t samples[] = { 0, 1, 620, 2048, 4095 };
+
+    for (unsigned i = 0; i &lt; sizeof samples / sizeof samples[0]; i++) {
+        printf("raw=%4u  trunc=%4u mV  round=%4u mV\n",
+               (unsigned)samples[i],
+               (unsigned)adc_to_mv_trunc(samples[i]),
+               (unsigned)adc_to_mv(samples[i]));
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code5">
+  <li data-lines="4-5"><b class="what">ثابت‌ها با پسوند <code>u</code>.</b> ولتاژ مرجع و بیشینهٔ ADC بی‌علامت‌اند.
+    <span class="why">با <code>u</code> عبارت <code>raw * VREF_MV</code> بی‌علامت می‌شود و سرریزش تعریف‌شده است؛ ضمنا تبدیل نوع مخلوط علامت‌دار/بی‌علامت پیش نمی‌آید (درس <a href="2-2.html">۲.۲</a>).</span></li>
+  <li data-lines="8-11"><b class="what">تبدیل با گرد کردن.</b> <code>(uint32_t)raw</code> اول، ضرب در ۳۳۰۰، جمع با ۲۰۴۷ (= ۴۰۹۵ ÷ ۲ با تقسیم صحیح)، بعد تقسیم بر ۴۰۹۵.
+    <span class="why">۲۰۴۷٫۵ با تقسیم صحیح می‌شود ۲۰۴۷. خطای این تقریب ناچیز است و نتیجه هنوز به نزدیک‌ترین گرد می‌شود.</span></li>
+  <li data-lines="14-17"><b class="what">همان بدون گرد کردن.</b> برای مقایسه.</li>
+  <li data-lines="21"><b class="what">نمونه‌ها.</b> صفر، کمترین گام، یک مقدار میانی، نصف بازه و بیشینه.</li>
+  <li data-lines="23-28"><b class="what">چاپ هر دو نتیجه.</b> <code>sizeof samples / sizeof samples[0]</code> تعداد عضوها را می‌دهد (درس <a href="2-7.html">۲.۷</a>).</li>
+</ol>
+<pre class="term" data-from="scale.c">
+$ gcc -std=c11 -Wall -Wextra -o scale scale.c
+$ ./scale
+raw=   0  trunc=   0 mV  round=   0 mV
+raw=   1  trunc=   0 mV  round=   1 mV
+raw= 620  trunc= 499 mV  round= 500 mV
+raw=2048  trunc=1650 mV  round=1650 mV
+raw=4095  trunc=3300 mV  round=3300 mV
+</pre>
+<p>ببین برای <code>raw = 1</code> بریدن ۰ می‌دهد، اما مقدار واقعی ۰٫۸ میلی‌ولت است و ۱ نزدیک‌تر است. برای <code>620</code> بریدن ۴۹۹ می‌دهد ولی درست ۵۰۰ است (۶۲۰ × ۳۳۰۰ ÷ ۴۰۹۵ = ۴۹۹٫۶).</p>
+
+<div class="callout example"><div class="ct">مثال: دما از سنسور آنالوگ</div>
+<p>سنسورهایی مثل LM35 برای هر درجه سلسیوس ۱۰ میلی‌ولت ولتاژ می‌دهند. یعنی هر ۱ میلی‌ولت = ۰٫۱ درجه. پس بعد از تبدیل بالا، عدد <b>میلی‌ولت همان دما به دهم درجه است</b>: ‏۲۵۰ mV یعنی ‏۲۵٫۰ °C. بدون هیچ ضرب اضافه‌ای! برای نمایش: <code>temp_dc / 10</code> و <code>temp_dc % 10</code>.</p></div>
+
+<div class="callout info"><div class="ct">ESP32</div>
+<p>ADC در ESP32 کلاسیک ۱۲ بیتی است ولی پاسخش کاملا خطی نیست و به کالیبراسیون نیاز دارد. ESP-IDF ابزار کالیبراسیون دارد؛ نام دقیق API را از مستندات رسمی نسخهٔ خودت بخوان (<a href="https://docs.espressif.com/projects/esp-idf/" target="_blank" rel="noopener">docs.espressif.com/projects/esp-idf</a>). ریاضی بعدی (گرد کردن، عدد صحیح) همان است.</p></div>
+
+<h2 id="safe">سرریز: نگذار حساب‌هایت بپیچد</h2>
+<p>در درس <a href="2-2.html">۲.۲</a> دیدی سرریز بی‌علامت می‌پیچد (<span class="term" data-t="wraparound">wraparound</span>) و سرریز علامت‌دار <b>رفتار تعریف‌نشده</b> است (درس <a href="6-2.html">۶.۲</a> عمیق‌تر می‌گوید). در سیستمی که موتور می‌چرخاند، پیچیدنِ ناگهانی «۲۵۵ به ۰» فاجعه است: ولوم صدا از بلندترین به صفر می‌پرد، PWM ناگهان خاموش می‌شود. سه راه داری:</p>
+<ol class="steps">
+  <li><b>نوع پهن‌تر.</b> در <code>uint32_t</code> یا <code>int64_t</code> حساب کن و بعد برگردان.</li>
+  <li><b>بررسی قبل از عمل.</b> ببین جواب جا می‌شود یا نه. بعد انجام بده.</li>
+  <li><b><span class="term" data-t="saturation">اشباع</span> (saturation).</b> اگر جا نشد، به نزدیک‌ترین مقدار مجاز بچسب (به‌جای پیچیدن).</li>
+</ol>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 330" role="img" aria-label="نمودار خروجی جمع ۸ بیتی بر حسب حاصل‌جمع واقعی؛ در جمع معمولی بعد از ۲۵۵ به صفر برمی‌گردد و در جمع اشباعی روی ۲۵۵ می‌ماند">
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">جمع معمولی (چرخش) در برابر جمع اشباعی</text>
+  <g stroke="#15120a" stroke-width="2.5" fill="none"><path d="M90 270H705"/><path d="M90 270V68"/></g>
+  <text x="90.0" y="292" text-anchor="middle" class="mono s-tx" font-size="12.5">0</text><text x="290.0" y="292" text-anchor="middle" class="mono s-tx" font-size="12.5">128</text><text x="488.4" y="292" text-anchor="middle" class="mono s-tx" font-size="12.5">255</text><text x="690.0" y="292" text-anchor="middle" class="mono s-tx" font-size="12.5">384</text>
+  <text x="380" y="318" text-anchor="middle" class="s-tx" font-size="13">حاصل‌جمع واقعی (بدون محدودیت ۸ بیت)</text>
+  <text x="62" y="84" text-anchor="middle" class="mono s-tx" font-size="12.5">255</text>
+  <text x="74" y="274" text-anchor="middle" class="mono s-tx" font-size="12.5">0</text>
+  <path d="M488.4 270V76" stroke="#15120a" stroke-width="1.5" stroke-dasharray="4 4"/>
+  <polyline points="90.0,270.0 488.4375,80.0 690.0,80.0" fill="none" stroke="#3ddc97" stroke-width="7" stroke-linejoin="round" transform="translate(0,-4)"/>
+  <polyline points="90.0,270.0 488.4375,80.0 488.4375,80.0 490.0,270.0 690.0,174.62745098039215" fill="none" stroke="#ff9a4d" stroke-width="5" stroke-linejoin="round"/>
+  <text x="597.8" y="58" text-anchor="middle" class="s-tx" font-size="14" font-weight="700">اشباعی: می‌ماند روی ۲۵۵</text>
+  <text x="597.8" y="261.1" text-anchor="middle" class="s-tx" font-size="14" font-weight="700">معمولی: می‌پرد به ۰</text>
+</svg>
+</div><figcaption>با جمع معمولی وقتی حاصل‌جمع از ۲۵۵ رد شود، خروجی دوباره از صفر شروع می‌کند. با جمع اشباعی، خروجی روی بیشینه می‌ماند.</figcaption></figure>
+
+<div class="code" data-file="safe.c" data-lang="c" data-verify="host" id="code6">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;stdbool.h&gt;
+
+/* جمع امن: قبل از جمع بررسی می‌کند که جا می‌شود یا نه */
+static bool add_i32_checked(int32_t a, int32_t b, int32_t *out)
+{
+    if ((b &gt; 0 &amp;&amp; a &gt; INT32_MAX - b) ||
+        (b &lt; 0 &amp;&amp; a &lt; INT32_MIN - b)) {
+        return false;                       /* سرریز می‌شد */
+    }
+    *out = a + b;
+    return true;
+}
+
+/* جمع اشباعی بی‌علامت ۸ بیتی: از ۲۵۵ رد نمی‌شود */
+static uint8_t add_sat_u8(uint8_t a, uint8_t b)
+{
+    unsigned sum = (unsigned)a + b;         /* در نوع پهن‌تر جمع می‌کنیم */
+    return (sum &gt; 255u) ? 255u : (uint8_t)sum;
+}
+
+/* جمع اشباعی علامت‌دار ۱۶ بیتی */
+static int16_t add_sat_i16(int16_t a, int16_t b)
+{
+    int32_t sum = (int32_t)a + b;
+    if (sum &gt; INT16_MAX) return INT16_MAX;
+    if (sum &lt; INT16_MIN) return INT16_MIN;
+    return (int16_t)sum;
+}
+
+int main(void)
+{
+    int32_t r = 0;
+
+    printf("wrap u8 : %u\n", (unsigned)(uint8_t)(250 + 10));
+    printf("sat  u8 : %u\n", (unsigned)add_sat_u8(250, 10));
+    printf("sat  i16: %d\n", add_sat_i16(30000, 5000));
+    printf("sat  i16: %d\n", add_sat_i16(-30000, -5000));
+
+    if (add_i32_checked(2000000000, 2000000000, &amp;r)) {
+        printf("sum = %ld\n", (long)r);
+    } else {
+        printf("overflow detected\n");
+    }
+    if (add_i32_checked(1000, 2000, &amp;r)) {
+        printf("sum = %ld\n", (long)r);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code6">
+  <li data-lines="6-14"><b class="what">جمع علامت‌دار با بررسی.</b> اگر <code>b</code> مثبت است و <code>a</code> بزرگ‌تر از <code>INT32_MAX - b</code> باشد، جواب جا نمی‌شود. برای منفی‌ها حالت قرینه. اگر جا شد در <code>*out</code> می‌نویسد و <code>true</code> برمی‌گرداند.
+    <span class="why">چرا <code>INT32_MAX - b</code>؟ چون خودِ این تفریق هرگز از بازه بیرون نمی‌زند (وقتی <code>b</code> مثبت است). مقایسه را طوری نوشته‌ایم که <b>هرگز خودش سرریز نکند</b>. اگر می‌نوشتی <code>a + b > INT32_MAX</code> دیر بود؛ جمع قبلا رفتار تعریف‌نشده داشت.</span></li>
+  <li data-lines="17-21"><b class="what">اشباع بی‌علامت ۸ بیتی.</b> اول در <code>unsigned</code> (پهن‌تر) جمع می‌کنیم؛ اگر از ۲۵۵ بیشتر شد، ۲۵۵ برمی‌گردانیم.
+    <span class="why">در C عملوندهای <code>uint8_t</code> قبل از جمع خودبه‌خود به <code>int</code> ارتقا پیدا می‌کنند (promotion، درس <a href="2-2.html">۲.۲</a>). پس خود جمع سرریز نمی‌کند؛ مشکل در ذخیرهٔ نتیجه در ۸ بیت است.</span></li>
+  <li data-lines="24-30"><b class="what">اشباع علامت‌دار ۱۶ بیتی.</b> جمع در ۳۲ بیت، بعد به بازهٔ <code>INT16_MIN</code> تا <code>INT16_MAX</code> می‌چسبانیم. این همان کاری است که یک ولوم صوتی یا کنترل‌کننده لازم دارد.</li>
+  <li data-lines="36"><b class="what">نسخهٔ معمولی.</b> <code>(uint8_t)(250 + 10)</code> می‌شود ۴ (چون ۲۶۰ منهای ۲۵۶). </li>
+  <li data-lines="37-39"><b class="what">نسخهٔ اشباعی.</b> ۲۵۵ و ‏۳۲۷۶۷ و ‏−۳۲۷۶۸.</li>
+  <li data-lines="41-48"><b class="what">جمع ۲ میلیارد + ۲ میلیارد.</b> جا نمی‌شود (بیشینهٔ <code>int32_t</code> حدود ۲٫۱۴۷ میلیارد است). تابع «سرریز» گزارش می‌کند. ۱۰۰۰ + ۲۰۰۰ درست جمع می‌شود.</li>
+</ol>
+<pre class="term" data-from="safe.c">
+$ gcc -std=c11 -Wall -Wextra -o safe safe.c
+$ ./safe
+wrap u8 : 4
+sat  u8 : 255
+sat  i16: 32767
+sat  i16: -32768
+overflow detected
+sum = 3000
+</pre>
+
+<div class="callout tip"><div class="ct">ابزار آماده</div>
+<p>GCC و Clang توابع داخلی <code>__builtin_add_overflow(a, b, &amp;result)</code> و مشابه برای ضرب و تفریق دارند که سرریز را با دستور درست پردازنده تشخیص می‌دهند. وقتی فقط به کامپایلرهای GCC/Clang کار می‌کنی، خواناتر و سریع‌تر از کد دستی‌اند (اما استاندارد C11 نیستند و در MISRA ممنوع می‌شوند).</p>
+<p>روی Cortex-M4 دستورهای اشباع سخت‌افزاری مثل <code>SSAT</code> و <code>USAT</code> هم هست (CMSIS آن‌ها را به‌شکل <code>__SSAT</code> و <code>__USAT</code> عرضه می‌کند). Cortex-M0 این دستورها را ندارد و کد C بالا لازم است.</p></div>
+
+<h2 id="round">تقسیم، شیفت و گرد کردن</h2>
+<p>در C99 به بعد تقسیم صحیح <b>به سمت صفر</b> بریده می‌شود: <code>7/2 = 3</code> و <code>-7/2 = -3</code> (نه ‏−۴). ولی شیفت به راست یک عدد منفی، <b>به سمت منفی‌بی‌نهایت</b> می‌رود (روی GCC و همهٔ ARMها): <code>-7 &gt;&gt; 1 = -4</code>. پس «شیفت به‌جای تقسیم بر دو» برای اعداد منفی <b>یکی نیست</b>.</p>
+<div class="callout warn"><div class="ct">شیفت راست علامت‌دار رفتار «تعریف‌شده توسط پیاده‌ساز» دارد</div>
+<p>استاندارد C نمی‌گوید شیفت به راست عدد منفی چه می‌کند. GCC برای ARM «شیفت حسابی» می‌کند (بیت علامت را حفظ می‌کند). کدی که به این وابسته است، قابل‌حمل نیست. ساده‌ترین راه: بنویس <code>/ 2</code> و به کامپایلر اعتماد کن؛ برای عدد ثابت توان دو، خودش بهترین دستور را (با اصلاح برای منفی‌ها) می‌سازد.</p></div>
+
+<div class="code" data-file="divr.c" data-lang="c" data-verify="host" id="code7">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+/* تقسیم صحیح با گرد کردن به نزدیک‌ترین (برای اعداد مثبت) */
+static uint32_t div_round(uint32_t n, uint32_t d)
+{
+    return (n + d / 2u) / d;
+}
+
+/* نسخهٔ علامت‌دار: نیم را در جهت علامت نتیجه اضافه می‌کنیم */
+static int32_t div_round_s(int32_t n, int32_t d)
+{
+    return (((n &lt; 0) == (d &lt; 0)) ? (n + d / 2) : (n - d / 2)) / d;
+}
+
+int main(void)
+{
+    printf("7 / 2          = %d\n", 7 / 2);
+    printf("-7 / 2         = %d\n", -7 / 2);
+    printf("-7 &gt;&gt; 1        = %d\n", -7 &gt;&gt; 1);
+    printf("7u &gt;&gt; 1        = %u\n", 7u &gt;&gt; 1);
+    printf("div_round(7,2) = %u\n", (unsigned)div_round(7, 2));
+    printf("div_round(9,4) = %u\n", (unsigned)div_round(9, 4));
+    printf("div_round_s(-7,2) = %d\n", div_round_s(-7, 2));
+    printf("div_round_s(-9,4) = %d\n", div_round_s(-9, 4));
+
+    /* درصد: مقدار 3 از 8 */
+    uint32_t v = 3u, mx = 8u;
+    printf("pct trunc = %u, pct round = %u\n",
+           (unsigned)(v * 100u / mx), (unsigned)div_round(v * 100u, mx));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code7">
+  <li data-lines="5-8"><b class="what">گرد به نزدیک‌ترین (مثبت).</b> نیمِ مقسوم‌علیه را به صورت اضافه کن، بعد تقسیم کن. <code>(7+1)/2 = 4</code> و <code>(9+2)/4 = 2</code> (چون ۲٫۲۵ به ۲ نزدیک‌تر است).
+    <span class="why">این معادل <code>round(n / d)</code> است، بدون هیچ <code>float</code>. برای مقدارهای بسیار بزرگ (<code>n + d/2</code> نزدیک بیشینه) سرریز می‌کند؛ مراقب باش.</span></li>
+  <li data-lines="11-14"><b class="what">گرد به نزدیک‌ترین (علامت‌دار).</b> اگر علامت صورت و مخرج یکی است، نیم را اضافه می‌کند؛ وگرنه کم می‌کند.
+    <span class="why">جواب منفی است؛ پس برای دور شدن از صفر باید «نیم» هم منفی باشد. اگر همیشه اضافه می‌کردی، منفی‌ها به سمت صفر گرد می‌شدند و مثبت‌ها از صفر دور؛ نامتقارن!</span></li>
+  <li data-lines="18-21"><b class="what">تقسیم و شیفت.</b> ۷÷۲=۳، ‏−۷÷۲=‏−۳، ولی ‏−۷»۱=‏−۴. بی‌علامت: ۷»۱=۳.</li>
+  <li data-lines="22-25"><b class="what">نمونه‌های گرد.</b> ۷÷۲=۳٫۵ به ۴ می‌رود. ‏−۷÷۲=‏−۳٫۵ به ‏−۴ (دور از صفر، متقارن).</li>
+  <li data-lines="28-30"><b class="what">درصد.</b> ۳ از ۸ می‌شود ۳۷٫۵٪. بریدن ۳۷ می‌دهد، گرد کردن ۳۸.
+    <span class="why">در نوارِ نمایش باتری فرقی نمی‌کند؛ ولی وقتی چند درصد را جمع می‌کنی، خطاها جمع می‌شوند.</span></li>
+</ol>
+<pre class="term" data-from="divr.c">
+$ gcc -std=c11 -Wall -Wextra -o divr divr.c
+$ ./divr
+7 / 2          = 3
+-7 / 2         = -3
+-7 &gt;&gt; 1        = -4
+7u &gt;&gt; 1        = 3
+div_round(7,2) = 4
+div_round(9,4) = 2
+div_round_s(-7,2) = -4
+div_round_s(-9,4) = -2
+pct trunc = 37, pct round = 38
+</pre>
+
+<h2 id="lut">جدول جستجو و درون‌یابی</h2>
+<p>محاسبهٔ <code>sin(x)</code> با سری‌های ریاضی (یا <code>sinf()</code> کتابخانه‌ای) برای میکروکنترلر گران است. جایگزین قدیمی و مؤثر: <b>یک بار حساب کن، در جدول <code>const</code> بگذار، هر بار فقط بخوان</b> (<span class="term" data-t="lookuptable">جدول جستجو</span>؛ جدول در Flash می‌ماند و RAM را نمی‌گیرد، درس <a href="3-5.html">۳.۵</a>).</p>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>تابلوی کیلومتر کنار جاده را ببین: هر ۱۰ کیلومتر یک تابلو. اگر بدانی بین تابلوی ۴۰ و ۵۰ هستی و از تابلو ۳ کیلومتر جلو آمده‌ای، می‌گویی «حدود ۴۳». اسم این کار <span class="term" data-t="interpolation">درون‌یابی</span> (interpolation) خطی است: بین دو نقطهٔ معلوم، فرض می‌کنیم مقدار روی یک خط مستقیم حرکت می‌کند.</p></div>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 320" role="img" aria-label="نمودار sin از صفر تا نود درجه با ده نقطهٔ جدول و خطوط مستقیم بین آنها؛ در ۴۵ درجه مقدار درون‌یابی‌شده ۲۳۰۸۱ است و مقدار دقیق ۲۳۱۷۰">
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">جدول ۱۰ نقطه‌ای + خط مستقیم بین نقطه‌ها</text>
+  <g stroke="#15120a" stroke-width="2.5" fill="none"><path d="M90 250H715" /><path d="M90 250V38"/></g>
+  <text x="90.0" y="272" text-anchor="middle" class="mono s-tx" font-size="12.5">0</text><text x="157.8" y="272" text-anchor="middle" class="mono s-tx" font-size="12.5">10</text><text x="225.6" y="272" text-anchor="middle" class="mono s-tx" font-size="12.5">20</text><text x="293.3" y="272" text-anchor="middle" class="mono s-tx" font-size="12.5">30</text><text x="361.1" y="272" text-anchor="middle" class="mono s-tx" font-size="12.5">40</text><text x="428.9" y="272" text-anchor="middle" class="mono s-tx" font-size="12.5">50</text><text x="496.7" y="272" text-anchor="middle" class="mono s-tx" font-size="12.5">60</text><text x="564.4" y="272" text-anchor="middle" class="mono s-tx" font-size="12.5">70</text><text x="632.2" y="272" text-anchor="middle" class="mono s-tx" font-size="12.5">80</text><text x="700.0" y="272" text-anchor="middle" class="mono s-tx" font-size="12.5">90</text>
+  <text x="380" y="298" text-anchor="middle" class="s-tx" font-size="13">زاویه (درجه)</text>
+  <text x="52" y="58" text-anchor="middle" class="mono s-tx" font-size="12.5">32767</text>
+  <text x="70" y="254" text-anchor="middle" class="mono s-tx" font-size="12.5">0</text>
+  <polyline points="90.0,250.0 110.3,239.5 130.7,229.1 151.0,218.7 171.3,208.4 191.7,198.2 212.0,188.2 232.3,178.3 252.7,168.7 273.0,159.2 293.3,150.0 313.7,141.1 334.0,132.4 354.3,124.1 374.7,116.2 395.0,108.6 415.3,101.4 435.7,94.6 456.0,88.2 476.3,82.3 496.7,76.8 517.0,71.8 537.3,67.3 557.7,63.3 578.0,59.8 598.3,56.8 618.7,54.4 639.0,52.5 659.3,51.1 679.7,50.3 700.0,50.0" fill="none" stroke="#ff86b3" stroke-width="3" stroke-dasharray="7 5"/>
+  <polyline points="90.0,250.0 157.8,215.3 225.6,181.6 293.3,150.0 361.1,121.4 428.9,96.8 496.7,76.8 564.4,62.1 632.2,53.0 700.0,50.0" fill="none" stroke="#15120a" stroke-width="3"/>
+  <path d="M361.1 121.4L428.9 96.8" stroke="#3ddc97" stroke-width="7" fill="none"/>
+  <circle cx="90.0" cy="250.0" r="5.5" fill="#ffd60a" stroke="#15120a" stroke-width="2.5"/><circle cx="157.8" cy="215.3" r="5.5" fill="#ffd60a" stroke="#15120a" stroke-width="2.5"/><circle cx="225.6" cy="181.6" r="5.5" fill="#ffd60a" stroke="#15120a" stroke-width="2.5"/><circle cx="293.3" cy="150.0" r="5.5" fill="#ffd60a" stroke="#15120a" stroke-width="2.5"/><circle cx="361.1" cy="121.4" r="5.5" fill="#ffd60a" stroke="#15120a" stroke-width="2.5"/><circle cx="428.9" cy="96.8" r="5.5" fill="#ffd60a" stroke="#15120a" stroke-width="2.5"/><circle cx="496.7" cy="76.8" r="5.5" fill="#ffd60a" stroke="#15120a" stroke-width="2.5"/><circle cx="564.4" cy="62.1" r="5.5" fill="#ffd60a" stroke="#15120a" stroke-width="2.5"/><circle cx="632.2" cy="53.0" r="5.5" fill="#ffd60a" stroke="#15120a" stroke-width="2.5"/><circle cx="700.0" cy="50.0" r="5.5" fill="#ffd60a" stroke="#15120a" stroke-width="2.5"/>
+  <circle cx="395.0" cy="109.1" r="6" fill="#3ddc97" stroke="#15120a" stroke-width="2.5"/>
+  <circle cx="395.0" cy="108.6" r="6" fill="#ff86b3" stroke="#15120a" stroke-width="2.5"/>
+  <text x="455.0" y="149.1" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">جدول: 23081</text>
+  <text x="365.0" y="90.6" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">دقیق: 23170</text>
+  <g font-size="13" class="s-tx" text-anchor="middle"><rect x="480" y="176" width="26" height="4" fill="#15120a"/><text x="560" y="182">خط بین نقطه‌ها</text><rect x="480" y="200" width="26" height="4" fill="#ff86b3"/><text x="558" y="206">منحنی واقعی</text></g>
+</svg>
+</div><figcaption>ده نقطهٔ جدول (دایره‌های زرد) و خط‌های بین آن‌ها. در ۴۵° مقدار درون‌یابی‌شده ۲۳۰۸۱ است و مقدار دقیق ۲۳۱۷۰؛ خطای حدود ۰٫۴٪.</figcaption></figure>
+
+<div class="code" data-file="lut.c" data-lang="c" data-verify="host" id="code8">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;math.h&gt;
+
+/* sin(0..90 درجه) هر ۱۰ درجه، در قالب Q15 (۳۲۷۶۷ = ۱٫۰) */
+static const int16_t sin_tab[10] = {
+    0, 5690, 11207, 16383, 21062, 25101, 28377, 30791, 32269, 32767
+};
+
+/* زاویه ۰ تا ۹۰ درجه؛ بین دو نقطهٔ جدول خطی درون‌یابی می‌کند */
+static int16_t sin_q15(uint8_t deg)
+{
+    if (deg &gt;= 90u) {
+        return sin_tab[9];                  /* از انتهای جدول بیرون نزنیم */
+    }
+    uint8_t  i    = deg / 10u;              /* کدام بازه */
+    uint8_t  frac = deg % 10u;              /* چند دهم راه رفته‌ایم (۰ تا ۹) */
+    int32_t  y0   = sin_tab[i];
+    int32_t  y1   = sin_tab[i + 1];
+    return (int16_t)(y0 + (y1 - y0) * frac / 10);
+}
+
+int main(void)
+{
+    const uint8_t test[] = { 0, 5, 15, 30, 45, 60, 89, 90 };
+    for (unsigned k = 0; k &lt; sizeof test; k++) {
+        printf("deg=%2u  table=%5d  exact=%7.1f\n", (unsigned)test[k],
+               sin_q15(test[k]), 32767.0 * sin(test[k] * 3.14159265358979 / 180.0));
+    }
+
+    int maxerr = 0;
+    for (uint8_t d = 0; d &lt;= 90; d++) {
+        int e = (int)(sin_q15(d) - 32767.0 * sin(d * 3.14159265358979 / 180.0));
+        if (e &lt; 0) e = -e;
+        if (e &gt; maxerr) maxerr = e;
+    }
+    printf("max error = %d of 32767\n", maxerr);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code8">
+  <li data-lines="6-8"><b class="what">جدول ۱۰ ‌نقطه‌ای.</b> <code>sin</code> در زاویه‌های ۰، ۱۰، ...، ۹۰ درجه، در قالب Q15 (۳۲۷۶۷ یعنی ۱٫۰). با <code>const</code> در Flash می‌ماند.
+    <span class="why">این عددها را یک بار با یک برنامهٔ PC ساخته‌ایم. ۱۰ عدد ۱۶ بیتی = ۲۰ بایت؛ ولی کل ۹۱ زاویه را در حافظه نگه نمی‌داریم.</span></li>
+  <li data-lines="13-15"><b class="what">نگهبان انتها.</b> اگر زاویه ۹۰ یا بیشتر بود، همان آخرین عدد را برمی‌گردانیم.
+    <span class="why">بدون این خط، برای ۹۰ درجه <code>i</code> برابر ۹ می‌شود و <code>sin_tab[i + 1]</code> از جدول بیرون می‌زند (بیرون از محدوده، درس <a href="2-7.html">۲.۷</a>)؛ خطایی که کامپایلر خبر نمی‌دهد.</span></li>
+  <li data-lines="16-17"><b class="what">کدام بازه و چقدر جلو.</b> <code>i</code> = شمارهٔ نقطهٔ سمت چپ (زاویه÷۱۰) و <code>frac</code> = باقیمانده (۰ تا ۹) یعنی چند دهم راه تا نقطهٔ بعد.</li>
+  <li data-lines="18-20"><b class="what">فرمول درون‌یابی.</b> <code>y0 + (y1 - y0) * frac / 10</code>: از <code>y0</code> شروع کن، <code>frac/10</code> از اختلاف را اضافه کن. همهٔ محاسبات در <code>int32_t</code> است.
+    <span class="why">ضرب قبل از تقسیم (تا اعشار از بین نرود) و در ۳۲ بیت (تا سرریز نشود): ‏<code>(y1 - y0) * frac</code> تا حدود ۶۰۰۰×۹ = ۵۴۰۰۰ می‌شود، که در ۱۶ بیت جا نمی‌شد.</span></li>
+  <li data-lines="25-29"><b class="what">چند نمونه.</b> جدول در برابر مقدار دقیق (با <code>sin</code> از <code>math.h</code> روی PC).</li>
+  <li data-lines="31-37"><b class="what">بیشینهٔ خطا.</b> روی همهٔ زاویه‌های صحیح ۰ تا ۹۰ اجرا می‌کنیم.
+    <span class="why">هرگز نگو «دقتش خوب است». اندازه بگیر و عدد را بنویس. اگر ۱۲۴ از ۳۲۷۶۷ کافی نیست، جدول را ریزتر کن یا به Q31 برو.</span></li>
+</ol>
+<pre class="term" data-from="lut.c">
+$ gcc -std=c11 -Wall -Wextra -o lut lut.c -lm
+$ ./lut
+deg= 0  table=    0  exact=    0.0
+deg= 5  table= 2845  exact= 2855.8
+deg=15  table= 8448  exact= 8480.7
+deg=30  table=16383  exact=16383.5
+deg=45  table=23081  exact=23169.8
+deg=60  table=28377  exact=28377.1
+deg=89  table=32717  exact=32762.0
+deg=90  table=32767  exact=32767.0
+max error = 124 of 32767
+</pre>
+
+<div class="callout tip"><div class="ct">جدول با گام توان دو</div>
+<p>اگر گام جدول توان دو باشد (مثلا ۱۲۸ نقطه برای ۰ تا ۲۵۵)، <code>/ گام</code> و <code>% گام</code> با <code>&gt;&gt;</code> و <code>&amp;</code> جایگزین می‌شوند. در تراشه‌ای بدون تقسیم سخت‌افزاری (Cortex-M0) این تفاوت واقعی است.</p></div>
+
+<h2 id="endian">ترتیب بایت‌ها: endianness</h2>
+<p>یک عدد ۳۲ بیتی چهار بایت است. کدام بایت در آدرس کمتر بنشیند؟ در درس‌های <a href="1-2.html">۱.۲</a> و <a href="3-3.html">۳.۳</a> دیدی STM32، ESP32 و PC همه <span class="term" data-t="little_endian">little-endian</span> هستند: کم‌ارزش‌ترین بایت اول. اما بسیاری از پروتکل‌های شبکه و چیپ‌های سنسور بایت پرارزش را اول می‌فرستند: <span class="term" data-t="bigendian">big-endian</span>.</p>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>تاریخ را در ایران «۱۴۰۵/۰۷/۱۰» (سال، ماه، روز؛ بزرگ‌ترین واحد اول) می‌نویسیم، ولی در بعضی جاها «۱۰/۰۷/۱۴۰۵» (کوچک‌ترین واحد اول). هر دو درست‌اند؛ فقط باید همه قبول کنند کدام را دارند. در بایت‌ها هم همین است.</p></div>
+
+<figure><div class="frame">
+<svg viewBox="0 0 760 300" role="img" aria-label="عدد 0x12345678 در حافظهٔ little-endian به‌صورت 78 56 34 12 و در big-endian به‌صورت 12 34 56 78 ذخیره می‌شود">
+  <defs><marker id="f4a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">یک عدد ۳۲ بیتی، دو چیدمان در حافظه: 0x12345678</text>
+  <text x="380" y="62" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="800">little-endian (STM32، ESP32، PC)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="130" y="76" width="120" height="52" fill="#ffd60a"/><rect x="250" y="76" width="120" height="52" fill="#ff9a4d"/>
+    <rect x="370" y="76" width="120" height="52" fill="#3ddc97"/><rect x="490" y="76" width="120" height="52" fill="#7ea3ff"/>
+  </g>
+  <g class="mono" font-size="24" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="190" y="112">78</text><text x="310" y="112">56</text><text x="430" y="112">34</text><text x="550" y="112">12</text>
+  </g>
+  <g class="mono s-tx" font-size="12" text-anchor="middle" font-weight="600">
+    <text x="190" y="146">+0</text><text x="310" y="146">+1</text><text x="430" y="146">+2</text><text x="550" y="146">+3</text>
+  </g>
+  <text x="380" y="198" text-anchor="middle" class="s-tx" font-size="14.5" font-weight="800">big-endian (بسیاری از پروتکل‌ها و سنسورها)</text>
+  <g stroke="#15120a" stroke-width="3">
+    <rect x="130" y="212" width="120" height="52" fill="#7ea3ff"/><rect x="250" y="212" width="120" height="52" fill="#3ddc97"/>
+    <rect x="370" y="212" width="120" height="52" fill="#ff9a4d"/><rect x="490" y="212" width="120" height="52" fill="#ffd60a"/>
+  </g>
+  <g class="mono" font-size="24" font-weight="800" fill="#15120a" text-anchor="middle">
+    <text x="190" y="248">12</text><text x="310" y="248">34</text><text x="430" y="248">56</text><text x="550" y="248">78</text>
+  </g>
+  <g class="mono s-tx" font-size="12" text-anchor="middle" font-weight="600">
+    <text x="190" y="284">+0</text><text x="310" y="284">+1</text><text x="430" y="284">+2</text><text x="550" y="284">+3</text>
+  </g>
+  <text x="90" y="112" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">آدرس کم</text>
+  <text x="672" y="108" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">آدرس زیاد</text>
+  <path d="M732 128V212" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#f4a)" marker-start="url(#f4a)"/>
+  <text x="690" y="176" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">swap32</text>
+</svg>
+
+</div><figcaption>همان عدد ‏<code>0x12345678</code> در دو روش. جابه‌جا کردن ترتیب بایت‌ها (<span class="term" data-t="byteswap">byte swap</span>) بین این دو حالت تبدیل می‌کند.</figcaption></figure>
+
+<div class="code" data-file="bswap.c" data-lang="c" data-verify="host" id="code9">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+static uint32_t swap32(uint32_t x)
+{
+    return  (x &lt;&lt; 24)
+          | ((x &amp; 0x0000FF00u) &lt;&lt; 8)
+          | ((x &gt;&gt; 8) &amp; 0x0000FF00u)
+          |  (x &gt;&gt; 24);
+}
+
+/* خواندن عدد ۱۶ بیتی big-endian از بافر، بدون وابستگی به ماشین */
+static uint16_t read_be16(const uint8_t *p)
+{
+    return (uint16_t)(((uint16_t)p[0] &lt;&lt; 8) | p[1]);
+}
+
+int main(void)
+{
+    uint32_t v = 0x12345678u;
+    const uint8_t *b = (const uint8_t *)&amp;v;     /* دید بایتی به همان حافظه */
+
+    printf("bytes in memory: %02X %02X %02X %02X\n", b[0], b[1], b[2], b[3]);
+    printf("swap32(0x12345678) = 0x%08lX\n", (unsigned long)swap32(v));
+    printf("builtin            = 0x%08lX\n", (unsigned long)__builtin_bswap32(v));
+
+    const uint8_t packet[] = { 0x01, 0x90, 0xFF, 0x38 };   /* دو عدد big-endian */
+    printf("be16 #0 = %u\n", (unsigned)read_be16(&amp;packet[0]));
+    printf("be16 #1 = %u\n", (unsigned)read_be16(&amp;packet[2]));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code9">
+  <li data-lines="4-10"><b class="what">جابه‌جایی چهار بایت.</b> بایت ۰ به جای بایت ۳، بایت ۱ به جای ۲ و بالعکس، با شیفت و ماسک (درس <a href="3-1.html">۳.۱</a>).
+    <span class="why">هر <code>|</code> یک بایت را در جای جدیدش قرار می‌دهد. ماسک‌ها فقط بایت‌های میانی را جدا می‌کنند.</span></li>
+  <li data-lines="13-16"><b class="what">خواندن big-endian از بافر.</b> بایت اول را ۸ بیت به چپ می‌بریم و با بایت دوم <code>|</code> می‌کنیم.
+    <span class="why">این روش <b>مستقل از ماشین</b> است. روی little-endian و big-endian یک جواب می‌دهد. بهتر از تبدیل اشاره‌گر <code>uint16_t*</code> که ناهم‌ترازی و strict-aliasing دارد (درس <a href="3-3.html">۳.۳</a>).</span></li>
+  <li data-lines="20-21"><b class="what">دید بایتی.</b> اشاره‌گر <code>uint8_t*</code> به همان متغیر ۳۲ بیتی.
+    <span class="why">خواندن حافظه با نوع بایتی همیشه مجاز است. این تنها «دید» مجاز به یک شیء با نوع دیگر است.</span></li>
+  <li data-lines="23"><b class="what">چاپ بایت‌های حافظه.</b> ‏<code>78 56 34 12</code> یعنی little-endian.</li>
+  <li data-lines="24-25"><b class="what">دو راه جابه‌جایی.</b> تابع خودمان و <code>__builtin_bswap32</code> (GCC/Clang) نتیجهٔ یکسان می‌دهند.</li>
+  <li data-lines="27-29"><b class="what">بستهٔ نمونه.</b> بایت‌های <code>01 90</code> یعنی ۴۰۰؛ ‏<code>FF 38</code> یعنی ۶۵۳۳۶ (بی‌علامت). اگر این دو بایت یک عدد علامت‌دار ۱۶ بیتی بودند، جوابش <code>-200</code> می‌شد.</li>
+</ol>
+<pre class="term" data-from="bswap.c">
+$ gcc -std=c11 -Wall -Wextra -o bswap bswap.c
+$ ./bswap
+bytes in memory: 78 56 34 12
+swap32(0x12345678) = 0x78563412
+builtin            = 0x78563412
+be16 #0 = 400
+be16 #1 = 65336
+</pre>
+
+<p>روی Cortex-M جابه‌جایی ۳۲ بیتی یک دستور اختصاصی دارد (<code>rev</code>). کامپایلر تابع <code>swap32</code> را به همان دستور تبدیل می‌کند. با همین کد برای ARM:</p>
+<div class="code" data-file="sw.c" data-lang="c" data-verify="arm" data-cflags="-O2" id="code10">
+<pre>
+#include &lt;stdint.h&gt;
+
+uint32_t swap32(uint32_t x)
+{
+    return  (x &lt;&lt; 24)
+          | ((x &amp; 0x0000FF00u) &lt;&lt; 8)
+          | ((x &gt;&gt; 8) &amp; 0x0000FF00u)
+          |  (x &gt;&gt; 24);
+}
+
+unsigned ones(uint32_t x)
+{
+    return (unsigned)__builtin_popcount(x);     // تعداد بیت‌های ۱
+}
+</pre></div>
+<ol class="walk" data-for="code10">
+  <li data-lines="3-9"><b class="what">همان <code>swap32</code>.</b> بدون هیچ تغییر.</li>
+  <li data-lines="11-14"><b class="what">شمارش بیت.</b> با <code>__builtin_popcount</code> (پایین‌تر می‌گوییم).</li>
+</ol>
+<pre class="term" data-nocheck data-from="sw.c">
+$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -O2 -S -o - sw.c
+swap32:
+    rev r0, r0
+    bx lr
+ones:
+    push {r3, lr}
+    bl __popcountsi2
+    pop {r3, pc}
+</pre>
+<p>کل تابع دو دستور شد: <code>rev</code> و <code>bx lr</code> (برگشت). دست‌ساز نوشتن چهار شیفت و ماسک لازم نبود؛ کامپایلر الگو را تشخیص داد. برای <code>popcount</code> اما دستور تک‌دستوری در Cortex-M نیست و <code>__popcountsi2</code> از کتابخانهٔ کامپایلر صدا زده شد.</p>
+
+<h2 id="bits">ترفندهای بیتی: شمارش، برعکس، توان دو</h2>
+<p>شمارش بیت‌های ۱ (<span class="term" data-t="popcount">popcount</span>)، وارونه‌کردن بیت‌ها و تشخیص توان دو: چند کار کوچک که مدام لازم می‌شود و با ماسک و شیفت (درس <a href="3-1.html">۳.۱</a>) سریع انجام می‌شود:</p>
+<div class="code" data-file="bitops.c" data-lang="c" data-verify="host" id="code11">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+static unsigned popcount_loop(uint32_t x)
+{
+    unsigned n = 0;
+    while (x != 0u) {
+        x &amp;= x - 1u;            /* پایین‌ترین بیت ۱ را پاک می‌کند */
+        n++;
+    }
+    return n;
+}
+
+static uint8_t reverse8(uint8_t x)
+{
+    uint8_t r = 0;
+    for (int i = 0; i &lt; 8; i++) {
+        r = (uint8_t)((r &lt;&lt; 1) | (x &amp; 1u));
+        x &gt;&gt;= 1;
+    }
+    return r;
+}
+
+static int is_pow2(uint32_t x)
+{
+    return x != 0u &amp;&amp; (x &amp; (x - 1u)) == 0u;
+}
+
+int main(void)
+{
+    printf("popcount(0xF0F0) = %u\n", popcount_loop(0xF0F0u));
+    printf("popcount(0x80000001) = %u\n", popcount_loop(0x80000001u));
+    printf("builtin(0xF0F0) = %d\n", __builtin_popcount(0xF0F0u));
+    printf("reverse8(0x01) = 0x%02X\n", (unsigned)reverse8(0x01));
+    printf("reverse8(0x2C) = 0x%02X\n", (unsigned)reverse8(0x2C));
+    printf("is_pow2: 64-&gt;%d 96-&gt;%d 0-&gt;%d\n", is_pow2(64), is_pow2(96), is_pow2(0));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code11">
+  <li data-lines="4-12"><b class="what">شمارش بیت‌های ۱ (popcount).</b> تا وقتی عدد صفر نشده: <code>x &amp;= x - 1</code> پایین‌ترین بیت ۱ را پاک می‌کند و یکی می‌شماریم.
+    <span class="why">چرا؟ <code>x - 1</code> همهٔ صفرهای انتهایی را به ۱ و اولین ۱ را به ۰ تبدیل می‌کند. <code>&amp;</code> با <code>x</code> فقط آن یک بیت را پاک می‌کند. تعداد دورها = تعداد بیت‌های ۱، نه ۳۲.</span></li>
+  <li data-lines="14-22"><b class="what">وارونه کردن ۸ بیت.</b> هر دور، پایین‌ترین بیت <code>x</code> را به انتهای <code>r</code> می‌چسباند. بعد از هشت دور، ترتیب برعکس شده.
+    <span class="why">در بعضی پروتکل‌ها (مثلا UART و SPI) اول بیت پرارزش می‌آید و در بعضی اول کم‌ارزش. وقتی سخت‌افزار خلاف انتظار می‌فرستد، وارونه‌سازی کمک می‌کند.</span></li>
+  <li data-lines="24-27"><b class="what">آیا توان دو است؟</b> عدد مثبت و <code>x &amp; (x-1) == 0</code> (فقط یک بیت ۱ دارد).
+    <span class="why">اندازهٔ بافر حلقوی را در درس <a href="4-5.html">۴.۵</a> توان دو می‌گیریم تا <code>% N</code> با <code>&amp; (N-1)</code> جایگزین شود؛ این تابع بررسی‌اش می‌کند.</span></li>
+  <li data-lines="31-33"><b class="what">تعداد بیت.</b> ‏<code>0xF0F0</code> هشت بیت ۱ دارد. ‏<code>0x80000001</code> دو تا. نتیجهٔ حلقهٔ ما و <code>__builtin_popcount</code> یکی است.</li>
+  <li data-lines="34-35"><b class="what">وارونه.</b> ‏<code>0x01</code> (۰۰۰۰۰۰۰۱) می‌شود <code>0x80</code> (۱۰۰۰۰۰۰۰). ‏<code>0x2C</code> (۰۰۱۰۱۱۰۰) می‌شود <code>0x34</code> (۰۰۱۱۰۱۰۰).</li>
+  <li data-lines="36"><b class="what">توان دو.</b> ۶۴ بله، ۹۶ نه، ۰ نه (صفر توان دو نیست).</li>
+</ol>
+<pre class="term" data-from="bitops.c">
+$ gcc -std=c11 -Wall -Wextra -o bitops bitops.c
+$ ./bitops
+popcount(0xF0F0) = 8
+popcount(0x80000001) = 2
+builtin(0xF0F0) = 8
+reverse8(0x01) = 0x80
+reverse8(0x2C) = 0x34
+is_pow2: 64-&gt;1 96-&gt;0 0-&gt;0
+</pre>
+
+<h2 id="crc">CRC-8: کد تشخیص خطا</h2>
+<p>وقتی بایت‌ها روی سیم (UART، I2C) یا رادیو جابه‌جا می‌شوند، ممکن است یک بیت خراب شود. راه ساده: به آخر بسته یک عدد کوچک «امضا» اضافه کن که از همهٔ بایت‌ها حساب شده. گیرنده دوباره حساب می‌کند؛ اگر با امضای رسیده نخواند، بسته خراب است.</p>
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>رقم آخر شمارهٔ کارت‌های بانکی یا کد ملی «رقم کنترل» است که از بقیهٔ ارقام حساب می‌شود. اگر یک رقم را اشتباه بنویسی، رقم کنترل نمی‌خواند. CRC همان ایده است، ولی با بیت‌ها و خیلی قوی‌تر.</p></div>
+<p><span class="term" data-t="crc">CRC</span> (Cyclic Redundancy Check) در اصل «باقیماندهٔ تقسیم» یک عدد بزرگ (کل پیام) بر یک <b>چندجمله‌ای مولد</b> در ریاضیات مبنای دو است. ولی لازم نیست ریاضی‌اش را بدانی؛ الگوریتم فقط XOR و شیفت است:</p>
+<div class="code" data-file="crc8.c" data-lang="c" data-verify="host" id="code12">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;stddef.h&gt;
+
+/* CRC-8 بیت‌به‌بیت. چندجمله‌ای x^8+x^2+x+1 = 0x07، مقدار اولیه ۰ */
+static uint8_t crc8_bitwise(const uint8_t *data, size_t len, uint8_t poly, uint8_t init)
+{
+    uint8_t crc = init;
+    for (size_t i = 0; i &lt; len; i++) {
+        crc ^= data[i];
+        for (int bit = 0; bit &lt; 8; bit++) {
+            if (crc &amp; 0x80u) {
+                crc = (uint8_t)((crc &lt;&lt; 1) ^ poly);
+            } else {
+                crc = (uint8_t)(crc &lt;&lt; 1);
+            }
+        }
+    }
+    return crc;
+}
+
+static uint8_t crc_table[256];
+
+static void crc8_make_table(uint8_t poly)
+{
+    for (unsigned n = 0; n &lt; 256u; n++) {
+        uint8_t byte = (uint8_t)n;
+        crc_table[n] = crc8_bitwise(&amp;byte, 1, poly, 0);
+    }
+}
+
+static uint8_t crc8_table(const uint8_t *data, size_t len)
+{
+    uint8_t crc = 0;
+    for (size_t i = 0; i &lt; len; i++) {
+        crc = crc_table[crc ^ data[i]];
+    }
+    return crc;
+}
+
+int main(void)
+{
+    const uint8_t msg[] = { '1', '2', '3', '4', '5', '6', '7', '8', '9' };
+    crc8_make_table(0x07);
+
+    printf("crc8 bitwise = 0x%02X\n", (unsigned)crc8_bitwise(msg, sizeof msg, 0x07, 0x00));
+    printf("crc8 table   = 0x%02X\n", (unsigned)crc8_table(msg, sizeof msg));
+    printf("table[1..3]  = 0x%02X 0x%02X 0x%02X\n",
+           (unsigned)crc_table[1], (unsigned)crc_table[2], (unsigned)crc_table[3]);
+
+    const uint8_t w[] = { 0xBE, 0xEF };
+    printf("poly 0x31 init 0xFF over BE EF = 0x%02X\n",
+           (unsigned)crc8_bitwise(w, sizeof w, 0x31, 0xFF));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code12">
+  <li data-lines="6-8"><b class="what">تابع بیت‌به‌بیت.</b> چندجمله‌ای (<code>poly</code>) و مقدار اولیه (<code>init</code>) پارامترند. <code>crc</code> از مقدار اولیه شروع می‌شود.
+    <span class="why">دو چیپ با چندجمله‌ای یا مقدار اولیهٔ متفاوت، جواب متفاوت می‌دهند. باید دقیقا همانی را بنویسی که datasheet گفته.</span></li>
+  <li data-lines="9-10"><b class="what">برای هر بایت.</b> بایت را با <code>crc</code> XOR می‌کنیم.</li>
+  <li data-lines="11-17"><b class="what">هشت بیت.</b> اگر بیت بالا ۱ است، یک بیت شیفت به چپ و XOR با <code>poly</code>؛ وگرنه فقط شیفت.
+    <span class="why">این همان «تقسیم» است، بیت به بیت: XOR با مولد در جایی که بیت بالا ۱ است.</span></li>
+  <li data-lines="22-30"><b class="what">ساخت جدول ۲۵۶ تایی.</b> CRC هر بایت ممکن را یک بار حساب می‌کنیم.
+    <span class="why">با جدول، به‌جای ۸ دور برای هر بایت، فقط یک جست‌وجو داریم. هزینه‌اش ۲۵۶ بایت حافظه است (در Flash با <code>const</code> بهتر است).</span></li>
+  <li data-lines="32-39"><b class="what">نسخهٔ جدولی.</b> برای هر بایت: <code>crc = table[crc ^ byte]</code>. بسیار سریع.</li>
+  <li data-lines="43-49"><b class="what">آزمون استاندارد.</b> رشتهٔ <code>123456789</code> را CRC می‌کنیم. برای CRC-8 با چندجمله‌ای <code>0x07</code> و مقدار اولیهٔ صفر، «مقدار بررسی» شناخته‌شده <code>0xF4</code> است.
+    <span class="why">هر نسخهٔ CRC را با این رشته و مقدار بررسی‌اش آزمایش می‌کنند. اگر ندهد، الگوریتم غلط است.</span></li>
+  <li data-lines="51-53"><b class="what">نمونه از دنیای واقعی.</b> بسیاری از سنسورهای شرکت Sensirion (مثل سری SHT3x) از CRC-8 با چندجمله‌ای <code>0x31</code> و مقدار اولیهٔ <code>0xFF</code> استفاده می‌کنند؛ برای دو بایت <code>BE EF</code> جواب <code>0x92</code> می‌شود.</li>
+</ol>
+<pre class="term" data-from="crc8.c">
+$ gcc -std=c11 -Wall -Wextra -o crc8 crc8.c
+$ ./crc8
+crc8 bitwise = 0xF4
+crc8 table   = 0xF4
+table[1..3]  = 0x07 0x0E 0x09
+poly 0x31 init 0xFF over BE EF = 0x92
+</pre>
+
+<div class="callout warn"><div class="ct">CRC رمزنگاری نیست</div>
+<p>CRC برای خطای تصادفی خوب است، نه برای مهاجم. کسی که بسته را دستکاری می‌کند، CRC را هم دوباره حساب می‌کند. برای امنیت باید از HMAC و امضا استفاده کرد (درس <a href="7-2.html">۷.۲</a> اشاره می‌کند).</p></div>
+
+<h2 id="lfsr">عدد شبه‌تصادفی سبک: LFSR</h2>
+<p>گاهی یک «جریان بیت شبیه تصادفی» می‌خواهی: نویز برای آزمایش، الگوی تست برای ارتباط، پخش‌کردن رنگ LEDها. <code>rand()</code> کتابخانه‌ای سنگین است. یک <span class="term" data-t="lfsr">LFSR</span> (شیفت‌رجیستر با پس‌خوراند خطی) با چند دستور کار می‌کند: هر بار یک بیت شیفت بده و اگر بیتی که بیرون می‌افتد ۱ بود، با یک ماسک ثابت XOR کن.</p>
+<div class="code" data-file="lfsr.c" data-lang="c" data-verify="host" id="code13">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+/* LFSR ۱۶ بیتی نوع Galois با ماسک 0xB400 (چندجمله‌ای بیشینه‌طول) */
+static uint16_t lfsr_next(uint16_t s)
+{
+    uint16_t lsb = s &amp; 1u;
+    s &gt;&gt;= 1;
+    if (lsb) {
+        s ^= 0xB400u;
+    }
+    return s;
+}
+
+int main(void)
+{
+    const uint16_t seed = 0xACE1u;
+    uint16_t s = seed;
+
+    printf("first states:");
+    for (int i = 0; i &lt; 5; i++) {
+        s = lfsr_next(s);
+        printf(" %04X", (unsigned)s);
+    }
+    printf("\n");
+
+    s = seed;
+    unsigned period = 0;
+    do {
+        s = lfsr_next(s);
+        period++;
+    } while (s != seed);
+    printf("period = %u\n", period);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code13">
+  <li data-lines="5-13"><b class="what">یک قدم.</b> بیت کم‌ارزش را نگه می‌داریم، یک شیفت به راست می‌دهیم، و اگر آن بیت ۱ بود XOR با <code>0xB400</code>.
+    <span class="why">ماسک <code>0xB400</code> از چندجمله‌ای‌ای انتخاب شده که ماشین را از همهٔ ۶۵۵۳۵ حالت غیرصفر بگذراند. اگر ماسک دیگری بگذاری، چرخه کوتاه می‌شود.</span></li>
+  <li data-lines="17-18"><b class="what">بذر (seed).</b> هر عدد غیرصفر. <b>صفر ممنوع</b>؛ چون از صفر شیفت و XOR هرگز به جای دیگری نمی‌رود.</li>
+  <li data-lines="20-25"><b class="what">پنج حالت اول.</b> دنباله بی‌نظم به‌نظر می‌رسد.</li>
+  <li data-lines="27-33"><b class="what">طول چرخه.</b> می‌شماریم چند قدم لازم است تا دوباره به بذر برسیم: دقیقا ۶۵۵۳۵ = ۲<sup>۱۶</sup>−۱.
+    <span class="why">یعنی هر عدد ۱۶ بیتی غیرصفر دقیقا یک بار دیده می‌شود، بعد تکرار. ضمنا این یعنی <b>قابل‌پیش‌بینی</b> است؛ برای رمزنگاری یا شانس واقعی مناسب نیست.</span></li>
+</ol>
+<pre class="term" data-from="lfsr.c">
+$ gcc -std=c11 -Wall -Wextra -o lfsr lfsr.c
+$ ./lfsr
+first states: E270 7138 389C 1C4E 0E27
+period = 65535
+</pre>
+
+<h2 id="choose">جمع‌بندی: کی چه؟</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>مسئله</th><th>انتخاب پیشنهادی</th><th>چرا</th></tr></thead>
+<tbody>
+<tr><td>دما، ولتاژ، فاصله با دقت ثابت</td><td><code>int</code> با مقیاس دهدهی (mV، دهم درجه)</td><td>ساده، سریع، چاپ‌پذیر</td></tr>
+<tr><td>فیلتر، PID، صدا، ضرب‌های مکرر</td><td>Q15 یا Q16.16</td><td>ضرب با شیفت؛ دامنه‌ی معلوم</td></tr>
+<tr><td>محاسبات نادر و پیچیده (M4F/ESP32)</td><td><code>float</code> با پسوند <code>f</code></td><td>FPU تک‌دقت سریع است</td></tr>
+<tr><td>هر محاسبه روی M0 / AVR</td><td>عدد صحیح</td><td>float نرم‌افزاری است</td></tr>
+<tr><td><code>double</code> در هر جا</td><td>به‌ندرت؛ به <code>float</code> تبدیل کن</td><td>حتی روی M4F نرم‌افزاری است</td></tr>
+<tr><td>تابع مثلثاتی یا منحنی غیرخطی سنسور</td><td>جدول <code>const</code> + درون‌یابی</td><td>یک بار حساب، همیشه ارزان</td></tr>
+<tr><td>بستهٔ رسیده از شبکه/سنسور</td><td>خواندن بایت‌به‌بایت با شیفت + CRC</td><td>مستقل از endianness و ناهم‌ترازی</td></tr>
+</tbody></table></div>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+<div class="quiz" data-answer="2">
+  <p class="q">عدد ۰٫۵ در قالب Q1.15 (روی <code>int16_t</code>) چه مقدار خامی دارد؟</p>
+  <ol>
+    <li data-why="۵۰۰۰ اصلا توان دو نیست؛ مقیاس Q15 برابر ۳۲۷۶۸ است، نه ۱۰۰۰۰.">۵۰۰۰</li>
+    <li>۱۶۳۸۴</li>
+    <li data-why="۳۲۷۶۷ نزدیک ۱٫۰ است، نه ۰٫۵. نصف می‌شود ۱۶۳۸۴.">۳۲۷۶۷</li>
+    <li data-why="۸۱۹۲ برابر ۰٫۲۵ است. برای ۰٫۵ باید ۳۲۷۶۸ را نصف کنی.">۸۱۹۲</li>
+  </ol>
+  <div class="fb">مقدار خام = مقدار واقعی × ۳۲۷۶۸ = ۰٫۵ × ۳۲۷۶۸ = ۱۶۳۸۴ (<code>0x4000</code>).</div>
+</div>
+<div class="quiz" data-answer="4">
+  <p class="q">در STM32F411 (Cortex-M4F) کدام عمل روی سخت‌افزار (FPU) انجام <b>نمی‌شود</b> و صدا زدن تابع نرم‌افزاری لازم دارد؟</p>
+  <ol>
+    <li data-why="ضرب float روی M4F یک دستور vmul.f32 است، سخت‌افزاری.">ضرب دو <code>float</code></li>
+    <li data-why="ضرب int یک دستور mul است.">ضرب دو <code>int</code></li>
+    <li data-why="جمع float هم با FPU (دستور vadd.f32) انجام می‌شود.">جمع دو <code>float</code></li>
+    <li>ضرب دو <code>double</code></li>
+  </ol>
+  <div class="fb">FPU در STM32F411 (و ESP32) فقط تک‌دقت است. <code>double</code> از تابع کتابخانه‌ای (<code>__aeabi_dmul</code>) می‌گذرد. یک <code>0.1</code> بدون پسوند <code>f</code> می‌تواند کل محاسبه را به <code>double</code> ببرد.</div>
+</div>
+<div class="quiz" data-answer="1">
+  <p class="q">خروجی این کد چیست؟<br><code>int a = -7; printf("%d %d", a / 2, a &gt;&gt; 1);</code></p>
+  <ol>
+    <li>‏<code>-3 -4</code></li>
+    <li data-why="تقسیم صحیح در C به سمت صفر می‌بُرد (-3)، و شیفت به سمت منفی بی‌نهایت می‌رود (-4). این دو یکی نیستند.">‏<code>-4 -4</code></li>
+    <li data-why="هر دو -3 نیست: شیفت راست برای منفی‌ها به سمت پایین گرد می‌شود و -4 می‌دهد.">‏<code>-3 -3</code></li>
+    <li data-why="شیفت راست علامت‌دار در GCC/ARM بیت علامت را حفظ می‌کند؛ نتیجه منفی می‌ماند.">‏<code>-3 3</code></li>
+  </ol>
+  <div class="fb"><code>-7 / 2</code> به سمت صفر می‌رود: ‏−۳. ‏<code>-7 &gt;&gt; 1</code> به سمت منفی بی‌نهایت می‌رود: ‏−۴ (روی GCC؛ استاندارد C این را «تعریف‌شده توسط پیاده‌ساز» می‌داند).</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">کدام خط در تابع میانگین زیر باگ سرریز دارد؟<br><code>uint32_t avg(uint32_t a, uint32_t b) { return (a + b) / 2u; }</code></p>
+  <ol>
+    <li data-why="تقسیم بر ۲u مشکلی ندارد؛ مشکل قبل از تقسیم رخ می‌دهد.">تقسیم بر <code>2u</code></li>
+    <li data-why="نوع برگشتی مناسب است؛ مشکل در محاسبهٔ میانی است.">نوع برگشتی <code>uint32_t</code></li>
+    <li>عبارت <code>a + b</code> (ممکن است از ۳۲ بیت رد شود و بپیچد)</li>
+    <li data-why="پارامترها درست‌اند؛ خطا در خود جمع است.">اعلان پارامترها</li>
+  </ol>
+  <div class="fb">اگر <code>a</code> و <code>b</code> هر دو ۳ میلیارد باشند، مجموع ۶ میلیارد در ۳۲ بیت جا نمی‌شود و می‌پیچد. حل: <code>a + (b - a) / 2</code> (اگر <code>b ≥ a</code>) یا <code>uint64_t</code>.</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">روی STM32 (little-endian) عدد <code>uint32_t v = 0x12345678;</code> در حافظه به‌ترتیب آدرس از کم به زیاد چه بایت‌هایی دارد؟</p>
+  <ol>
+    <li data-why="این حالت big-endian است؛ STM32 و ESP32 little-endian هستند.">‏12 34 56 78</li>
+    <li>‏78 56 34 12</li>
+    <li data-why="ترتیب بایت‌ها با هم قاطی شده؛ فقط دو حالت ممکن است: 12 34 56 78 یا 78 56 34 12.">‏56 78 12 34</li>
+    <li data-why="این هم اشتباه است؛ بایت‌ها یک‌جا جابه‌جا می‌شوند، نه جفت‌جفت.">‏34 12 78 56</li>
+  </ol>
+  <div class="fb">little-endian: کم‌ارزش‌ترین بایت (<code>0x78</code>) در کمترین آدرس. بستهٔ big-endian را با <code>(p[0] &lt;&lt; 8) | p[1]</code> بخوان تا به این قضیه وابسته نباشی.</div>
+</div>
+<div class="quiz" data-answer="3">
+  <p class="q">یک ADC ۱۲ بیتی با مرجع ۳٫۳ ولت داری. کدام نوشتن، مقدار میلی‌ولت را روی یک AVR (که <code>int</code> آن ۱۶ بیتی است) <b>درست</b> می‌دهد؟</p>
+  <ol>
+    <li data-why="در ۱۶ بیت raw*3300 برای raw بالای ۹ سرریز می‌کند (بیشینه ۳۲۷۶۷).">‏<code>int mv = raw * 3300 / 4095;</code></li>
+    <li data-why="اول تقسیم می‌کنی: raw/4095 تقریبا همیشه صفر است.">‏<code>int mv = raw / 4095 * 3300;</code></li>
+    <li>‏<code>uint32_t mv = (uint32_t)raw * 3300u / 4095u;</code></li>
+    <li data-why="float روی AVR نرم‌افزاری و کند است و نیازی هم نیست.">‏<code>float mv = raw * 3.3f / 4.095f;</code></li>
+  </ol>
+  <div class="fb">تبدیل به <code>uint32_t</code> قبل از ضرب، ضرب قبل از تقسیم. روی ۳۲ بیتی‌ها هم همین کد درست و قابل‌حمل است.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: درصد باتری</div>
+<p>ولتاژ باتری لیتیومی را به میلی‌ولت داری. برای تمرین فرض کن ۳۰۰۰ mV یعنی ۰٪ و ۴۲۰۰ mV یعنی ۱۰۰٪ و بین آن‌ها خطی است (در واقعیت خطی نیست).</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> ‏۳۶۰۰ mV چند درصد است؟ ‏۴۱۰۰ mV چه؟ (گرد کن.)</li>
+  <li><b>حل:</b> تابع <code>battery_percent(int mv)</code> بنویس که زیر ۳۰۰۰ صفر و بالای ۴۲۰۰ صد بدهد و بین آن‌ها گرد کند.</li>
+  <li><b>باگ:</b> اگر بنویسی <code>(mv - 3000) / (4200 - 3000) * 100</code> چه می‌شود؟ چرا؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>ضرب قبل از تقسیم. برای گرد کردن نصف مقسوم‌علیه (۶۰۰) را قبل از تقسیم اضافه کن. مقدارهای کناری را با دو <code>if</code> جدا کن.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="bat.c">
+$ gcc -std=c11 -Wall -Wextra -o bat bat.c
+$ ./bat
+2900 mV -&gt;   0 %   (bad:   0 %)
+3000 mV -&gt;   0 %   (bad:   0 %)
+3300 mV -&gt;  25 %   (bad:   0 %)
+3600 mV -&gt;  50 %   (bad:   0 %)
+3900 mV -&gt;  75 %   (bad:   0 %)
+4100 mV -&gt;  92 %   (bad:   0 %)
+4300 mV -&gt; 100 %   (bad: 100 %)
+</pre>
+<p>در ستون <code>bad</code> فقط ۴۳۰۰ mV درست است و همهٔ بقیه صفر.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="bat.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+#define MV_EMPTY 3000
+#define MV_FULL  4200
+
+/* درصد باتری (فرض تمرینی: خطی بین ۳۰۰۰ و ۴۲۰۰ میلی‌ولت) */
+static int battery_percent(int mv)
+{
+    if (mv &lt;= MV_EMPTY) return 0;
+    if (mv &gt;= MV_FULL)  return 100;
+    int span = MV_FULL - MV_EMPTY;
+    return ((mv - MV_EMPTY) * 100 + span / 2) / span;
+}
+
+/* نسخهٔ خراب: تقسیم زودتر از ضرب */
+static int battery_percent_bad(int mv)
+{
+    if (mv &lt;= MV_EMPTY) return 0;
+    if (mv &gt;= MV_FULL)  return 100;
+    return (mv - MV_EMPTY) / (MV_FULL - MV_EMPTY) * 100;
+}
+
+int main(void)
+{
+    const int test[] = { 2900, 3000, 3300, 3600, 3900, 4100, 4300 };
+    for (unsigned i = 0; i &lt; sizeof test / sizeof test[0]; i++) {
+        printf("%4d mV -&gt; %3d %%   (bad: %3d %%)\n",
+               test[i], battery_percent(test[i]), battery_percent_bad(test[i]));
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="4-5"><b class="what">دو ثابت.</b> کران‌ها به‌جای عدد جادویی (درس <a href="4-1.html">۴.۱</a>).</li>
+  <li data-lines="8-14"><b class="what">تابع درست.</b> دو <code>if</code> کران‌ها را جدا می‌کند. <code>span</code> = ۱۲۰۰. <code>(mv - 3000) * 100</code> اول (حداکثر ۱۲۰۰۰۰)، بعد <code>span/2</code> برای گرد شدن، و تقسیم آخر.
+    <span class="why">۱۲۰۰۰۰ در <code>int</code> ۳۲ بیتی جا می‌شود. روی AVR (۱۶ بیت) نمی‌شد؛ باید <code>long</code> می‌گرفتی.</span></li>
+  <li data-lines="17-22"><b class="what">نسخهٔ خراب.</b> اول <code>(mv - 3000) / 1200</code> تقسیم صحیح است؛ برای هر مقدار زیر ۴۲۰۰ می‌شود ۰. حاصل‌ضرب صفر است.
+    <span class="why">قانون: <b>تقسیم را همیشه آخر انجام بده</b> مگر اینکه دلیل داشته باشی.</span></li>
+  <li data-lines="26-31"><b class="what">آزمون.</b> ۳۶۰۰ mV → ۵۰٪ و ‏۴۱۰۰ mV → ‏۹۲٪ (۹۱٫۶٧ گرد می‌شود).</li>
+</ol>
+</details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: میانگین که می‌ترکد</div>
+<p>کدی که دو مقدار بزرگ را میانگین می‌گیرد جواب عجیب می‌دهد.</p>
+<div class="code" data-file="avg.c" data-lang="c" data-verify="host" id="ex2bad">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+/* میانگین دو عدد. نسخهٔ ساده و خراب */
+static uint32_t avg_bad(uint32_t a, uint32_t b)
+{
+    return (a + b) / 2u;
+}
+
+int main(void)
+{
+    uint32_t a = 3000000000u;
+    uint32_t b = 3000000000u;
+    printf("bad = %lu\n", (unsigned long)avg_bad(a, b));
+    return 0;
+}
+</pre></div>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> اگر <code>a</code> و <code>b</code> هر دو ۳٬۰۰۰٬۰۰۰٬۰۰۰ باشند، چه چیزی برمی‌گردد؟ (بیشینهٔ <code>uint32_t</code> حدود ۴٫۲۹۴ میلیارد است.)</li>
+  <li><b>حل:</b> با نوع <code>uint64_t</code> درستش کن.</li>
+  <li><b>چالش:</b> بدون <code>uint64_t</code> و فقط با عملگرهای بیتی درستش کن (راهنمایی: <code>(a &amp; b) + ((a ^ b) &gt;&gt; 1)</code>). چرا کار می‌کند؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p>مجموع ۶ میلیارد است و در ۳۲ بیت نمی‌شود. حاصل <code>6000000000 - 4294967296 = 1705032704</code> می‌ماند. نصفش ۸۵۲٬۵۱۶٬۳۵۲.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="avg.c">
+$ gcc -std=c11 -Wall -Wextra -o avg avg.c
+$ ./avg
+bad = 852516352
+</pre>
+<p>عدد اشتباه ۸۵۲٬۵۱۶٬۳۵۲ (به‌جای ۳ میلیارد). و بعد از اصلاح:</p>
+<pre class="term" data-from="avg_fix.c">
+$ gcc -std=c11 -Wall -Wextra -o avg_fix avg_fix.c
+$ ./avg_fix
+bit trick = 3000000000
+uint64    = 3000000000
+7 and 10  = 8
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="avg_fix.c" data-lang="c" data-verify="host" id="ex2">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+/* میانگین بدون سرریز، بدون نیاز به نوع پهن‌تر */
+static uint32_t avg_u32(uint32_t a, uint32_t b)
+{
+    return (a &amp; b) + ((a ^ b) &gt;&gt; 1);      /* بیت‌های مشترک + نصفِ تفاوت */
+}
+
+static uint32_t avg_wide(uint32_t a, uint32_t b)
+{
+    return (uint32_t)(((uint64_t)a + b) / 2u);
+}
+
+int main(void)
+{
+    uint32_t a = 3000000000u;
+    uint32_t b = 3000000000u;
+    printf("bit trick = %lu\n", (unsigned long)avg_u32(a, b));
+    printf("uint64    = %lu\n", (unsigned long)avg_wide(a, b));
+    printf("7 and 10  = %lu\n", (unsigned long)avg_u32(7u, 10u));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="5-8"><b class="what">ترفند بیتی.</b> <code>a &amp; b</code> بیت‌هایی است که در هر دو ۱ هستند (میانگینشان خودشان است). <code>a ^ b</code> بیت‌هایی که فقط در یکی ۱ هستند (میانگینشان نصف). پس میانگین = مشترک‌ها + نصف تفاوت‌ها.
+    <span class="why">هیچ‌کدام از دو عبارت از ۳۲ بیت بیرون نمی‌زند؛ پس سرریز محال است. مثال: ۷ و ۱۰ → ‏<code>(7&amp;10)=2</code> و <code>(7^10)>>1=13>>1=6</code> → ‏۸.</span></li>
+  <li data-lines="10-13"><b class="what">راه ساده‌تر.</b> در <code>uint64_t</code> جمع کن و برگردان. روی Cortex-M4 ارزان است؛ روی AVR ۸ بیتی گران.</li>
+  <li data-lines="17-22"><b class="what">آزمون.</b> هر دو نسخه ۳ میلیارد می‌دهند و ۷ و ۱۰ می‌شود ۸ (۸٫۵ بریده شد).</li>
+</ol>
+</details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: فیلتر پایین‌گذر با شیفت</div>
+<p>خوانش ADC نویز دارد. فیلتر ساده: میانگین متحرک نمایی. <code>acc = acc + x - (acc &gt;&gt; K)</code> و خروجی <code>acc &gt;&gt; K</code>. با <code>K = 3</code> تقریبا میانگین ۸ نمونهٔ اخیر است، بدون هیچ ضرب یا تقسیم.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> اگر ورودی همیشه ۱۰۰۰ باشد و <code>acc</code> از صفر شروع کند، اولین خروجی چند است؟ (راهنمایی: ۱۰۰۰ ÷ ۸.)</li>
+  <li><b>حل:</b> برنامه را اجرا کن. بعد از چند قدم خروجی به ۱۰۰۰ نزدیک می‌شود؟</li>
+  <li><b>ارتباط با سخت‌افزار:</b> اگر ورودی ADC ۱۲ بیتی باشد (بیشینه ۴۰۹۵)، <code>acc</code> حداقل چند بیت باید باشد؟ آیا <code>uint16_t</code> کافی است؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p><code>acc</code> در حالت پایدار برابر <code>x &lt;&lt; K</code> است (اگر <code>x</code> ثابت بماند). برای ۱۰۰۰ می‌شود ۸۰۰۰.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="lpf.c">
+$ gcc -std=c11 -Wall -Wextra -o lpf lpf.c
+$ ./lpf
+step  1: y = 125
+step  2: y = 234
+step  3: y = 330
+step  4: y = 413
+step  5: y = 487
+step  6: y = 551
+step  7: y = 607
+step  8: y = 656
+step  9: y = 699
+step 10: y = 737
+step 11: y = 770
+step 12: y = 798
+</pre>
+<p>خروجی هر قدم به ۱۰۰۰ نزدیک‌تر می‌شود (سرعتش با <code>K</code> تنظیم می‌شود). با ۱۲ قدم فقط به ۷۹۸ رسیده‌ایم؛ چون ثابت زمانی حدود ۸ قدم است.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="lpf.c" data-lang="c" data-verify="host" id="ex3">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+#define K 3                                  /* میانگین‌گیری روی ۲^۳ = ۸ نمونه */
+
+typedef struct {
+    uint16_t acc;                            /* ۱۲ بیت ADC + ۳ بیت اضافه = ۱۵ بیت */
+} lpf_t;
+
+static uint16_t lpf_update(lpf_t *f, uint16_t x)
+{
+    f-&gt;acc = (uint16_t)(f-&gt;acc + x - (f-&gt;acc &gt;&gt; K));
+    return (uint16_t)(f-&gt;acc &gt;&gt; K);
+}
+
+int main(void)
+{
+    lpf_t f = { 0 };
+    for (int i = 1; i &lt;= 12; i++) {
+        printf("step %2d: y = %u\n", i, (unsigned)lpf_update(&amp;f, 1000u));
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="4"><b class="what">ثابت K.</b> ‏<code>2^K</code> = تعداد نمونه‌های موثر.</li>
+  <li data-lines="6-8"><b class="what">ساختار حالت.</b> فقط یک عدد ۱۶ بیتی.
+    <span class="why">۱۲ بیت ADC + ۳ بیت K = ۱۵ بیت؛ بیشینه ۴۰۹۵×۸ = ۳۲۷۶۰ که در <code>uint16_t</code> (حتی در <code>int16_t</code>) جا می‌شود.</span></li>
+  <li data-lines="10-14"><b class="what">به‌روز‌رسانی.</b> ‏<code>acc</code> را با ورودی جدید جمع می‌کند و یک هشتم خودش را کم می‌کند. خروجی هشتمِ acc است.
+    <span class="why">تفریقِ <code>acc &gt;&gt; K</code> نقش «فراموشی» را دارد. بدون آن acc همیشه بالا می‌رفت.</span></li>
+  <li data-lines="18-22"><b class="what">مشاهده.</b> ورودی ثابت ۱۰۰۰ بدهیم، خروجی آرام‌آرام بالا می‌رود: ۱۲۵، ۲۳۴، ۳۳۰، ...</li>
+</ol>
+<p>همین تابع را برای Cortex-M4 (بدون <code>main</code> و <code>printf</code>) هم کامپایل می‌کنیم؛ همان کدی که در برنامهٔ واقعی می‌نشیند:</p>
+<div class="code" data-file="lpf_core.c" data-lang="c" data-verify="arm" data-cflags="-O2" id="ex3b">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define K 3                                     // ۲^۳ = ۸ نمونه
+
+typedef struct { uint16_t acc; } lpf_t;
+
+uint16_t lpf_update(lpf_t *f, uint16_t x)
+{
+    f-&gt;acc = (uint16_t)(f-&gt;acc + x - (f-&gt;acc &gt;&gt; K));
+    return (uint16_t)(f-&gt;acc &gt;&gt; K);
+}
+</pre></div>
+<ol class="walk" data-for="ex3b">
+  <li data-lines="3"><b class="what">ثابت K.</b> همان مقدار قبلی.</li>
+  <li data-lines="5"><b class="what">ساختار حالت.</b> همان ۱۶ بیت.</li>
+  <li data-lines="7"><b class="what">تابع بیرونی.</b> بدون <code>static</code> تا فایل‌های دیگر (مثلا کد وقفهٔ ADC) صدایش بزنند.</li>
+  <li data-lines="9-10"><b class="what">به‌روزرسانی.</b> دقیقا همان محاسبه؛ فقط بدون <code>printf</code> و <code>main</code>.</li>
+</ol></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>در این درس همه ساده به نظر می‌رسند، ولی خطاهای واقعی از جای دیگری می‌آیند: ‏<b>سرریز در محاسبهٔ میانی</b> و <b>ترتیب ضرب و تقسیم</b>. قبل از هر فرمول ریاضی بپرس: «بزرگ‌ترین مقدار هر مرحله چند است و در نوع من جا می‌شود؟» بعد از نوشتن، با مقدارهای مرزی (صفر، بیشینه، منفی) امتحان کن. هرگز «دقتش خوب است» نگو؛ خطا را اندازه بگیر و بنویس. و اگر <code>float</code> می‌خواهی، اول ببین تراشه‌ات FPU دارد یا نه.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li>روی M0 و AVR هر <code>float</code> نرم‌افزاری است. روی M4F و ESP32 فقط <code>float</code> (نه <code>double</code>) سخت‌افزاری است. <code>0.1</code> یعنی double؛ برای float بنویس <code>0.1f</code>.</li>
+  <li><b>ثابت‌ممیز:</b> عدد صحیح با ممیز خیالی. Q15 در <code>int16_t</code>، Q16.16 در <code>int32_t</code>. ضرب: نوع پهن‌تر، بعد شیفت (و گرد کردن).</li>
+  <li>مقیاس دهدهی (mV، دهم درجه) اغلب ساده‌ترین است. ضرب را <b>قبل</b> از تقسیم و در نوع پهن‌تر انجام بده. با <code>+ d/2</code> گرد کن.</li>
+  <li>سرریز را با نوع پهن‌تر، بررسی پیش از عمل، یا اشباع مهار کن. سرریز علامت‌دار رفتار تعریف‌نشده دارد.</li>
+  <li>تقسیم منفی‌ها به سمت صفر می‌رود؛ شیفت راست به سمت منفی بی‌نهایت. با <code>/</code> بنویس و به کامپایلر اعتماد کن.</li>
+  <li>جدول <code>const</code> + درون‌یابی خطی جای تابع گران را می‌گیرد؛ خطا را اندازه بگیر.</li>
+  <li>پروتکل‌ها اغلب big-endian‌اند: با شیفت بخوان (<code>(p[0] &lt;&lt; 8) | p[1]</code>). <code>x &amp; (x-1)</code> پایین‌ترین بیت ۱ را پاک می‌کند. CRC-8 و LFSR فقط XOR و شیفت‌اند.</li>
+</ul></div>
+
+</article>
+</body>
+</html>
