@@ -1,0 +1,1310 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>UART، SPI و I2C از دید کد C · C برای میکروکنترلر</title>
+<meta name="description" content="سه پروتکل ارتباطی UART، SPI و I2C با نمودار زمانی، ارسال polling روی USART2 در STM32، محاسبهٔ BRR، و طرح درایور با لایهٔ انتقال (اشاره‌گر به تابع) که با mock روی PC آزمایش می‌شود.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='%23ffd60a' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='7' fill='%23fff' stroke='%23111' stroke-width='3'/%3E%3C/svg%3E">
+<script defer src="assets/course.js"></script>
+<script defer src="assets/glossary.js"></script>
+<script defer src="assets/app.js"></script>
+</head>
+<body>
+<article class="page" data-page="5-5">
+
+<p class="lede">میکروکنترلر تنها زندگی نمی‌کند: سنسور دما، نمایشگر، کارت حافظه، ماژول GPS و رایانهٔ تو، همه باید با آن «حرف بزنند». اما سیم فقط ولتاژ بالا و پایین است؛ برای حرف زدن باید دو طرف روی <b>قرارداد</b> توافق کنند: چند سیم، کِی بیت را بخوانند و نوبت چه کسی است. سه قرارداد رایج <b>UART</b>، <b>SPI</b> و <b>I2C</b> اند. در این درس هر سه را از دید کد C می‌بینی: نمودار زمانی، رجیسترهای USART2 در STM32، و مهم‌تر از همه یک طرح تمیز برای نوشتن درایور که روی PC هم قابل‌آزمایش است.</p>
+
+<div class="goals">
+  <div><h2>🎯 بعد از این درس می‌توانی</h2><ul>
+    <li>فریم UART (۸N1) را روی کاغذ بکشی و <code>baud</code> و <code>BRR</code> را حساب کنی</li>
+    <li>با رجیسترهای USART2 روی STM32 یک رشته بفرستی و بایت دریافتی را بخوانی</li>
+    <li>فرق polling، وقفه و DMA را بگویی و یک گیرندهٔ UART با وقفه بنویسی</li>
+    <li>SPI را با CPOL/CPHA و نمودار زمانی توضیح بدهی و مود درست را انتخاب کنی</li>
+    <li>I2C را با START، آدرس، ACK و STOP توضیح بدهی و اشتباه آدرس ۷ و ۸ بیتی را بشناسی</li>
+    <li>درایور سنسور را با «لایهٔ انتقال» (اشاره‌گر به تابع) بنویسی که با <code>mock</code> روی PC آزمایش شود</li>
+  </ul></div>
+  <div><h2>🧰 پیش‌نیاز و وسایل</h2><ul>
+    <li>درس <a href="3-6.html">۳.۶</a> (رجیستر و <code>volatile</code>) و <a href="5-2.html">۵.۲</a> (GPIO با رجیستر)</li>
+    <li>درس <a href="4-3.html">۴.۳</a> (اشاره‌گر به تابع) و <a href="4-5.html">۴.۵</a> (بافر حلقوی)</li>
+    <li>درس <a href="5-3.html">۵.۳</a> (وقفه) و <a href="5-4.html">۵.۴</a> (<code>millis()</code> و مهلت)</li>
+    <li><code>gcc</code>، <code>make</code> و <code>arm-none-eabi-gcc</code>؛ برد Nucleo-F411RE اختیاری است (USART2 آن به ST-LINK وصل است و از راه USB روی رایانه یک پورت سریال می‌شود)</li>
+  </ul></div>
+</div>
+
+<h2 id="idea">ایدهٔ اصلی: سه شیوهٔ حرف زدن</h2>
+<p>سه صحنه را تصور کن:</p>
+<ul>
+  <li><b>UART = دو نفر با بی‌سیم.</b> هر کدام یک سیم برای حرف زدن دارد و یک سیم برای شنیدن. ساعت مشترکی ندارند؛ پیش از شروع قرار گذاشته‌اند «با چه سرعتی حرف بزنیم». هر بایت با یک «الو» (بیت شروع) آغاز می‌شود.</li>
+  <li><b>SPI = رهبر ارکستر.</b> رهبر با یک چوب ضرب می‌گیرد (سیم کلاک)؛ هر ضرب یک بیت جابه‌جا می‌شود. رهبر همزمان حرف می‌زند و می‌شنود. با اشاره به یک نوازنده (سیم <span class="term" data-t="chipselect">CS</span>) می‌گوید «الان تو».</li>
+  <li><b>I2C = کلاس درس با اسم‌خوانی.</b> همه روی دو سیم مشترک‌اند. معلم اول اسم را می‌گوید («آقای ۷۶!»)، فقط او جواب می‌دهد و بقیه ساکت می‌مانند.</li>
+</ul>
+
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>UART</th><th>SPI</th><th>I2C</th></tr></thead>
+<tbody>
+<tr><td>سیم‌ها</td><td>TX، RX (و زمین مشترک)</td><td>SCK، MOSI، MISO و یک CS برای هر دستگاه</td><td>SDA، SCL (مشترک بین همه)</td></tr>
+<tr><td>کلاک</td><td>ندارد؛ هر دو طرف سرعت را از قبل می‌دانند</td><td>دارد (SCK از طرف مستر)</td><td>دارد (SCL)</td></tr>
+<tr><td>چند دستگاه</td><td>معمولا فقط دو دستگاه</td><td>هر دستگاه یک CS جدا</td><td>هر دستگاه یک آدرس یکتا</td></tr>
+<tr><td>سرعت معمول</td><td>۹۶۰۰ تا چند صد هزار baud</td><td>چند مگاهرتز تا چند ده مگاهرتز</td><td>۱۰۰ و ۴۰۰ کیلوهرتز (حالت‌های استاندارد)</td></tr>
+<tr><td>معمولا برای</td><td>کنسول دیباگ، GPS، ماژول‌های بی‌سیم</td><td>حافظهٔ فلش، نمایشگر، ADC سریع</td><td>سنسورهای کم‌سرعت، EEPROM، ساعت RTC</td></tr>
+</tbody></table></div>
+
+<h2 id="wires">سیم‌کشی هر سه</h2>
+<figure><div class="frame"><svg viewBox="0 0 760 332" role="img" aria-label="سیم‌کشی سه پروتکل: UART با دو سیم ضربدری و زمین مشترک؛ SPI با چهار سیم SCK و MOSI و MISO و CS؛ I2C با دو سیم SDA و SCL مشترک، مقاومت بالاکش و چند دستگاه با آدرس‌های جدا">
+  <defs><marker id="m55b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <path d="M255 44V330M515 44V330" stroke="#15120a" stroke-width="1.5" stroke-dasharray="5 5" opacity=".4" fill="none"/><text x="130" y="28" text-anchor="middle" class="s-tx" font-size="15" font-weight="800">دو سیم، بدون کلاک (UART)</text><rect x="20" y="56" width="84" height="190" rx="10" fill="#ffd60a" stroke="#15120a" stroke-width="3"/><text x="62.0" y="78" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">MCU</text><rect x="156" y="56" width="84" height="190" rx="10" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/><text x="198.0" y="78" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">دستگاه</text><text x="98" y="115" text-anchor="end" class="mono" fill="#15120a" font-size="13" font-weight="800">TX</text><text x="98" y="165" text-anchor="end" class="mono" fill="#15120a" font-size="13" font-weight="800">RX</text><text x="98" y="215" text-anchor="end" class="mono" fill="#15120a" font-size="13" font-weight="800">GND</text><text x="162" y="115" text-anchor="start" class="mono" fill="#15120a" font-size="13" font-weight="800">TX</text><text x="162" y="165" text-anchor="start" class="mono" fill="#15120a" font-size="13" font-weight="800">RX</text><text x="162" y="215" text-anchor="start" class="mono" fill="#15120a" font-size="13" font-weight="800">GND</text><path d="M104 110L152 160" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#m55b)"/><path d="M104 160L152 110" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#m55b)"/><path d="M104 210L152 210" stroke="#15120a" stroke-width="3" fill="none"/><text x="130" y="276" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="700">پایهٔ TX هر طرف به RX طرف دیگر</text><text x="130" y="298" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="700">زمین (GND) مشترک لازم است</text><text x="385" y="28" text-anchor="middle" class="s-tx" font-size="15" font-weight="800">کلاک + دو خط داده + CS (SPI)</text><rect x="270" y="56" width="80" height="190" rx="10" fill="#ffd60a" stroke="#15120a" stroke-width="3"/><text x="310.0" y="78" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">MCU</text><rect x="430" y="56" width="80" height="190" rx="10" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/><text x="470.0" y="78" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">دستگاه</text><text x="344" y="105" text-anchor="end" class="mono" fill="#15120a" font-size="13" font-weight="800">SCK</text><text x="436" y="105" text-anchor="start" class="mono" fill="#15120a" font-size="13" font-weight="800">SCK</text><text x="344" y="140" text-anchor="end" class="mono" fill="#15120a" font-size="13" font-weight="800">MOSI</text><text x="436" y="140" text-anchor="start" class="mono" fill="#15120a" font-size="13" font-weight="800">MOSI</text><text x="344" y="175" text-anchor="end" class="mono" fill="#15120a" font-size="13" font-weight="800">MISO</text><text x="436" y="175" text-anchor="start" class="mono" fill="#15120a" font-size="13" font-weight="800">MISO</text><text x="344" y="210" text-anchor="end" class="mono" fill="#15120a" font-size="13" font-weight="800">CS</text><text x="436" y="210" text-anchor="start" class="mono" fill="#15120a" font-size="13" font-weight="800">CS</text><path d="M350 100L426 100" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#m55b)"/><path d="M350 135L426 135" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#m55b)"/><path d="M426 170L350 170" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#m55b)"/><path d="M350 205L426 205" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#m55b)"/><text x="390" y="276" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="700">برای هر دستگاه بیشتر، یک CS جدا</text><text x="390" y="298" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="700">همزمان ارسال و دریافت (full duplex)</text><text x="636" y="28" text-anchor="middle" class="s-tx" font-size="15" font-weight="800">دو سیم مشترک + آدرس (I2C)</text><rect x="520" y="100" width="50" height="100" rx="10" fill="#ffd60a" stroke="#15120a" stroke-width="3"/><text x="545.0" y="122" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">MCU</text><text x="566" y="145" text-anchor="end" class="mono" fill="#15120a" font-size="13" font-weight="800">SDA</text><text x="566" y="180" text-anchor="end" class="mono" fill="#15120a" font-size="13" font-weight="800">SCL</text><path d="M570 140H745M570 175H745" stroke="#15120a" stroke-width="3" fill="none"/><path d="M596 62H628" stroke="#15120a" stroke-width="3" fill="none"/><text x="612" y="54" text-anchor="middle" class="mono s-tx" font-size="12.5" font-weight="800">3V3</text><path d="M596 62V78M596 106V140" stroke="#15120a" stroke-width="3" fill="none"/><rect x="588" y="78" width="16" height="28" fill="#ff9a4d" stroke="#15120a" stroke-width="2.5"/><circle cx="596" cy="140" r="4.5" fill="#15120a"/><path d="M628 62V78M628 106V175" stroke="#15120a" stroke-width="3" fill="none"/><rect x="620" y="78" width="16" height="28" fill="#ff9a4d" stroke="#15120a" stroke-width="2.5"/><circle cx="628" cy="175" r="4.5" fill="#15120a"/><text x="646" y="98" text-anchor="start" class="mono s-tx" font-size="12.5" font-weight="700">Rp</text><rect x="640" y="222" width="52" height="52" rx="8" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/><text x="666" y="253" text-anchor="middle" class="mono" fill="#15120a" font-size="13" font-weight="800">0x76</text><path d="M652 140V222M680 175V222" stroke="#15120a" stroke-width="3" fill="none"/><circle cx="652" cy="140" r="4.5" fill="#15120a"/><circle cx="680" cy="175" r="4.5" fill="#15120a"/><rect x="700" y="222" width="52" height="52" rx="8" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/><text x="726" y="253" text-anchor="middle" class="mono" fill="#15120a" font-size="13" font-weight="800">0x50</text><path d="M712 140V222M740 175V222" stroke="#15120a" stroke-width="3" fill="none"/><circle cx="712" cy="140" r="4.5" fill="#15120a"/><circle cx="740" cy="175" r="4.5" fill="#15120a"/><text x="636" y="298" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="700">مقاومت پول‌آپ (Rp) روی هر دو سیم</text><text x="636" y="318" text-anchor="middle" class="s-tx" font-size="12.5" font-weight="700">هر دستگاه یک آدرس یکتا دارد</text>
+</svg></div>
+<figcaption>در UART سیم‌ها ضربدری‌اند (TX من به RX تو). در SPI هر دستگاه یک CS دارد. در I2C همهٔ دستگاه‌ها به همان دو سیم می‌روند و دو مقاومت بالاکش لازم است.</figcaption></figure>
+
+<div class="callout warn"><div class="ct">ولتاژ را نگاه کن</div>
+<p>پایه‌های میکروکنترلر (TTL/CMOS) ۳٫۳ ولتی‌اند. اگر آن را مستقیم به پورت سریال قدیمی RS-232 رایانه (با ولتاژ حدود ±۱۲ ولت) یا به دستگاه ۵ ولتی وصل کنی، ممکن است بسوزد. برای ارتباط با رایانه از مبدل USB-UART یا از همان ST-LINK روی Nucleo استفاده کن. زمین (GND) هر دو طرف باید به هم وصل باشد؛ بدون آن «بالا» و «پایین» معنی ندارد.</p></div>
+
+<h2 id="uart">UART: فریم و بود</h2>
+<p><span class="term" data-t="uart">UART</span> (فرستندهٔ گیرندهٔ ناهمگام همه‌منظوره) یک بایت را به شکل یک <b>فریم</b> می‌فرستد. قرارداد رایج <span class="term" data-t="uartframe">۸N1</span> است: ۸ بیت داده، بدون بیت توازن (Parity)، ۱ بیت توقف. کل فریم ۱۰ بیت می‌شود:</p>
+<ol class="steps">
+  <li><b>حالت بیکار (idle).</b> خط <b>بالا</b> (۱) است.</li>
+  <li><b>بیت شروع (start).</b> فرستنده خط را یک بیت پایین می‌کشد. گیرنده از این لبهٔ پایین‌رو می‌فهمد «حرف شروع شد».</li>
+  <li><b>هشت بیت داده.</b> اول کم‌ارزش‌ترین بیت (LSB). گیرنده هر بیت را در وسط بازهٔ آن نمونه می‌گیرد.</li>
+  <li><b>بیت توقف (stop).</b> خط دوباره بالا می‌رود و تا شروع فریم بعدی همان‌جا می‌ماند.</li>
+</ol>
+
+<figure><div class="frame"><svg viewBox="0 0 760 320" role="img" aria-label="نمودار زمانی فریم UART برای حرف A: خط در حالت بیکار بالاست؛ بیت شروع پایین؛ هشت بیت داده از کم‌ارزش‌ترین با مقدارهای یک، صفر، صفر، صفر، صفر، صفر، یک، صفر؛ بیت توقف بالا">
+  <defs><marker id="m55a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <text x="380" y="26" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">فریم 8N1 برای حرف A (کد 0x41) روی یک سیم</text>
+  <rect x="136" y="84" width="448" height="102" fill="#ffd60a" opacity=".35"/>
+  <path d="M80 84V186" stroke="#15120a" stroke-width="1.2" stroke-dasharray="4 4" opacity=".4" fill="none"/><path d="M136 84V186" stroke="#15120a" stroke-width="1.2" stroke-dasharray="4 4" opacity=".4" fill="none"/><path d="M192 84V186" stroke="#15120a" stroke-width="1.2" stroke-dasharray="4 4" opacity=".4" fill="none"/><path d="M248 84V186" stroke="#15120a" stroke-width="1.2" stroke-dasharray="4 4" opacity=".4" fill="none"/><path d="M304 84V186" stroke="#15120a" stroke-width="1.2" stroke-dasharray="4 4" opacity=".4" fill="none"/><path d="M360 84V186" stroke="#15120a" stroke-width="1.2" stroke-dasharray="4 4" opacity=".4" fill="none"/><path d="M416 84V186" stroke="#15120a" stroke-width="1.2" stroke-dasharray="4 4" opacity=".4" fill="none"/><path d="M472 84V186" stroke="#15120a" stroke-width="1.2" stroke-dasharray="4 4" opacity=".4" fill="none"/><path d="M528 84V186" stroke="#15120a" stroke-width="1.2" stroke-dasharray="4 4" opacity=".4" fill="none"/><path d="M584 84V186" stroke="#15120a" stroke-width="1.2" stroke-dasharray="4 4" opacity=".4" fill="none"/><path d="M640 84V186" stroke="#15120a" stroke-width="1.2" stroke-dasharray="4 4" opacity=".4" fill="none"/>
+  <path d="M20 100H80V170H136V100H192V170H472V100H528V170H584V100H720" stroke="#15120a" stroke-width="4" fill="none" stroke-linejoin="round"/>
+  <text x="108.0" y="72" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">start</text><text x="108.0" y="206" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800">0</text><circle cx="108.0" cy="170" r="5" fill="#ff86b3" stroke="#15120a" stroke-width="2"/><text x="164.0" y="72" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">D0</text><text x="164.0" y="206" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800">1</text><circle cx="164.0" cy="100" r="5" fill="#ff86b3" stroke="#15120a" stroke-width="2"/><text x="220.0" y="72" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">D1</text><text x="220.0" y="206" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800">0</text><circle cx="220.0" cy="170" r="5" fill="#ff86b3" stroke="#15120a" stroke-width="2"/><text x="276.0" y="72" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">D2</text><text x="276.0" y="206" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800">0</text><circle cx="276.0" cy="170" r="5" fill="#ff86b3" stroke="#15120a" stroke-width="2"/><text x="332.0" y="72" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">D3</text><text x="332.0" y="206" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800">0</text><circle cx="332.0" cy="170" r="5" fill="#ff86b3" stroke="#15120a" stroke-width="2"/><text x="388.0" y="72" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">D4</text><text x="388.0" y="206" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800">0</text><circle cx="388.0" cy="170" r="5" fill="#ff86b3" stroke="#15120a" stroke-width="2"/><text x="444.0" y="72" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">D5</text><text x="444.0" y="206" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800">0</text><circle cx="444.0" cy="170" r="5" fill="#ff86b3" stroke="#15120a" stroke-width="2"/><text x="500.0" y="72" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">D6</text><text x="500.0" y="206" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800">1</text><circle cx="500.0" cy="100" r="5" fill="#ff86b3" stroke="#15120a" stroke-width="2"/><text x="556.0" y="72" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">D7</text><text x="556.0" y="206" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800">0</text><circle cx="556.0" cy="170" r="5" fill="#ff86b3" stroke="#15120a" stroke-width="2"/><text x="612.0" y="72" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">stop</text><text x="612.0" y="206" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800">1</text><circle cx="612.0" cy="100" r="5" fill="#ff86b3" stroke="#15120a" stroke-width="2"/>
+  <text x="40" y="92" text-anchor="middle" class="mono s-tx" font-size="12.5" font-weight="700">idle</text>
+  <text x="680" y="92" text-anchor="middle" class="mono s-tx" font-size="12.5" font-weight="700">idle</text>
+  <path d="M80 240H136" stroke="#15120a" stroke-width="2.5" fill="none" marker-start="url(#m55a)" marker-end="url(#m55a)"/>
+  <text x="108.0" y="262" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">یک بیت</text>
+  <path d="M192 240H640" stroke="#15120a" stroke-width="2.5" fill="none" marker-start="url(#m55a)" marker-end="url(#m55a)"/>
+  <text x="416" y="262" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">۸ بیت داده؛ اول کم‌ارزش‌ترین (LSB)</text>
+  <text x="380" y="298" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">با ۱۱۵۲۰۰ بود: هر بیت ۸٫۶۸ میکروثانیه؛ کل فریم ۱۰ بیت ≈ ۸۶٫۸ میکروثانیه. دایرهٔ صورتی = لحظهٔ نمونه‌برداری گیرنده (وسط بیت)</text>
+</svg></div>
+<figcaption>حرف <code>A</code> با کد <code>0x41</code> (باینری <code>01000001</code>) به‌صورت <code>10000010</code> (اول LSB) روی سیم می‌رود.</figcaption></figure>
+
+<p>سرعت را <span class="term" data-t="baudrate">baud</span> می‌گویند: تعداد بیت در ثانیه (شامل بیت‌های شروع و توقف). چون UART کلاک ندارد، دو طرف باید <b>هر دو</b> ۱۱۵۲۰۰ باشند؛ وگرنه گیرنده بیت‌ها را در جای اشتباه نمونه می‌گیرد و «آشغال» می‌بیند. یک برنامهٔ کوچک، فریم و زمان‌ها را حساب می‌کند:</p>
+
+<div class="code" data-file="uart_frame.c" data-lang="c" data-verify="host" id="code1">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+static void print_frame(uint8_t byte)
+{
+    printf("0x%02X: start=0 data=", byte);
+    for (int i = 0; i &lt; 8; i++) {
+        printf("%d", (byte &gt;&gt; i) &amp; 1);      // اول کم‌ارزش‌ترین بیت
+    }
+    printf(" stop=1\n");
+}
+
+int main(void)
+{
+    uint32_t baud = 115200u;
+    uint32_t cpu_hz = 16000000u;
+
+    print_frame('A');
+    print_frame(0x55);
+
+    printf("1 bit   = %u.%02u us\n", (unsigned)(1000000u / baud),
+           (unsigned)(100000000u / baud % 100u));
+    printf("1 frame = 10 bits, %u bytes/s\n", (unsigned)(baud / 10u));
+    printf("CPU cycles per byte at 16 MHz = %u\n", (unsigned)(cpu_hz * 10u / baud));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code1">
+  <li data-lines="4-11"><b class="what">چاپ فریم یک بایت.</b> ابتدا «start=0»، سپس هشت بیت داده و در پایان «stop=1».</li>
+  <li data-lines="7-9"><b class="what">حلقهٔ بیت‌ها.</b> <code>(byte &gt;&gt; i) &amp; 1</code> بیت شمارهٔ <code>i</code> را می‌دهد، از <code>i = 0</code> یعنی کم‌ارزش‌ترین.
+    <span class="why">UART اول LSB را می‌فرستد. اگر MSB اول می‌رفت، رشته‌ها برعکس می‌شدند. این با SPI و I2C فرق دارد (آن‌ها معمولا اول MSB).</span></li>
+  <li data-lines="15-16"><b class="what">سرعت و کلاک.</b> ۱۱۵۲۰۰ بیت در ثانیه و پردازندهٔ ۱۶ مگاهرتزی.</li>
+  <li data-lines="18-19"><b class="what">دو بایت آزمایشی.</b> <code>'A'</code> و <code>0x55</code> (الگوی ۰۱۰۱۰۱۰۱ که روی اسیلوسکوپ زیبا و متناوب است).</li>
+  <li data-lines="21-22"><b class="what">طول یک بیت.</b> ۱ ÷ ۱۱۵۲۰۰ ثانیه. صحیح و اعشار (دو رقم) را جدا حساب می‌کنیم تا بدون <code>float</code> کار کند.</li>
+  <li data-lines="23-24"><b class="what">توان عملی.</b> هر بایت ۱۰ بیت است، پس ۱۱۵۲۰۰ ÷ ۱۰ = ۱۱۵۲۰ بایت در ثانیه. در هر بایت، پردازنده ۱۶ میلیون × ۱۰ ÷ ۱۱۵۲۰۰ ≈ ۱۳۸۸ کلاک وقت دارد.
+    <span class="why">این عدد در بخش «polling، وقفه، DMA» مهم می‌شود: ۱۳۸۸ کلاک زمان زیادی است که نباید با انتظار هدر برود.</span></li>
+</ol>
+<pre class="term" data-from="uart_frame.c">
+$ gcc -std=c11 -Wall -Wextra -o uart_frame uart_frame.c
+$ ./uart_frame
+0x41: start=0 data=10000010 stop=1
+0x55: start=0 data=10101010 stop=1
+1 bit   = 8.68 us
+1 frame = 10 bits, 11520 bytes/s
+CPU cycles per byte at 16 MHz = 1388
+</pre>
+
+<div class="callout deep"><div class="ct">چرا خطای baud را نباید بی‌اهمیت گرفت؟</div>
+<p>گیرنده فقط یک بار (لبهٔ بیت شروع) خود را هم‌زمان می‌کند و بعد ۹ بیت و نیم را با ساعت خودش نمونه می‌گیرد. اگر ساعت او ۳٪ تندتر باشد، تا بیت توقف نمونه‌برداری حدود نیم بیت جابه‌جا شده و به مرز بیت می‌رسد. برای همین در عمل مجموع خطای دو طرف را زیر حدود ۲ تا ۳ درصد نگه می‌دارند (عدد دقیق را در RM0383 و دیتاشیت گیرنده ببین). کریستال‌ها معمولا این را برآورده می‌کنند، ولی نوسان‌ساز داخلی ارزان (RC) ممکن است نه.</p></div>
+
+<h3 id="baud">محاسبهٔ <span class="en">BRR</span> برای USART2</h3>
+<p>در STM32F4 رجیستر <code>USART2_BRR</code> سرعت را می‌سازد. در حالت پیش‌فرض (نمونه‌برداری ۱۶ برابر) داریم:</p>
+<p><code>USARTDIV = f_clk ÷ (16 × baud)</code> و <code>BRR = (بخش صحیح USARTDIV) &lt;&lt; 4 | (بخش اعشاری × ۱۶)</code></p>
+<p>خبر خوب: این دو با هم یک عدد ساده می‌شوند. چون چهار بیت پایین BRR اعشار <b>شانزدهم‌هاست</b>، مقدار کل BRR دقیقا همان <code>f_clk ÷ baud</code> (گرد‌شده) است. بدون هیچ ضرب اعشاری:</p>
+
+<div class="code" data-file="uart_baud.c" data-lang="c" data-verify="host" id="code2">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    uint32_t f_clk = 16000000u;         // کلاک USART2 (APB1)
+    uint32_t baud = 115200u;
+
+    uint32_t brr = (f_clk + baud / 2u) / baud;      // گردکردن به نزدیک‌ترین
+    uint32_t actual = f_clk / brr;
+    int32_t err = ((int32_t)actual - (int32_t)baud) * 10000 / (int32_t)baud;
+
+    printf("BRR = %u = 0x%X (mantissa %u, fraction %u)\n",
+           (unsigned)brr, (unsigned)brr, (unsigned)(brr &gt;&gt; 4), (unsigned)(brr &amp; 0xFu));
+    printf("actual baud = %u\n", (unsigned)actual);
+    printf("error = %c%d.%02d%%\n", err &lt; 0 ? '-' : '+',
+           (int)((err &lt; 0 ? -err : err) / 100), (int)((err &lt; 0 ? -err : err) % 100));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code2">
+  <li data-lines="6-7"><b class="what">ورودی‌ها.</b> کلاک گذرگاه APB1 که USART2 روی آن است: ۱۶ مگاهرتز (پیش‌فرض بعد از reset). سرعت مطلوب ۱۱۵۲۰۰.</li>
+  <li data-lines="9"><b class="what">BRR.</b> <code>f_clk / baud</code> با گرد کردن به نزدیک‌ترین (افزودن نصف مقسوم‌علیه پیش از تقسیم صحیح).
+    <span class="why">تقسیم صحیح به پایین گرد می‌کند؛ «+ baud/2» آن را به نزدیک‌ترین تبدیل می‌کند و خطا نصف می‌شود.</span></li>
+  <li data-lines="10-11"><b class="what">baud واقعی و خطا.</b> با BRR گرد‌شده، سرعت واقعی <code>f_clk / BRR</code> است. خطا را به «صدم درصد» (basis point) حساب می‌کنیم تا با عدد صحیح ممکن باشد.</li>
+  <li data-lines="13-14"><b class="what">چاپ BRR.</b> بخش صحیح (mantissa) <code>BRR &gt;&gt; 4</code> و بخش اعشاری (fraction) <code>BRR &amp; 0xF</code>.</li>
+  <li data-lines="16-17"><b class="what">چاپ خطا.</b> علامت را جدا می‌گذاریم چون <code>-0.08</code> وقتی بخش صحیح صفر است، بدون علامت چاپ می‌شود.</li>
+</ol>
+<pre class="term" data-from="uart_baud.c">
+$ gcc -std=c11 -Wall -Wextra -o uart_baud uart_baud.c
+$ ./uart_baud
+BRR = 139 = 0x8B (mantissa 8, fraction 11)
+actual baud = 115107
+error = -0.08%
+</pre>
+<p>پس برای ۱۱۵۲۰۰ با ۱۶ مگاهرتز، <code>BRR = 0x8B</code> (یعنی ۸ و ۱۱ شانزدهم) و خطا فقط ۰٫۰۸٪ است؛ کاملا بی‌خطر. مقدار را با ابزارک ببین (۱۳۹ را وارد کن):</p>
+<div class="widget" data-w="base" data-value="139" data-width="16"></div>
+
+<h2 id="usart2">USART2 در STM32F411 با رجیستر</h2>
+<p>روی Nucleo-F411RE، پایه‌های PA2 (TX) و PA3 (RX) از راه ST-LINK به رایانه وصل‌اند. پس بدون هیچ سیم اضافه، برنامهٔ روی برد با رایانه حرف می‌زند. مراحل:</p>
+<ol class="steps">
+  <li><b>ساعت‌ها.</b> <code>RCC_AHB1ENR</code> بیت ۰ (GPIOA) و <code>RCC_APB1ENR</code> (آفست <code>0x40</code>) بیت ۱۷ (<code>USART2EN</code>).</li>
+  <li><b>PA2 و PA3 را به USART بده.</b> در <code>GPIOA_MODER</code> هر دو پایه «تابع جایگزین» (<code>10</code>). در <code>GPIOA_AFRL</code> (آفست <code>0x20</code>) چهار بیت هر پایه، مقدار <code>7</code> = AF7 = USART2.</li>
+  <li><b>سرعت.</b> <code>USART2_BRR</code>.</li>
+  <li><b>روشن کن.</b> <code>USART2_CR1</code>: <code>UE</code> (بیت ۱۳)، <code>TE</code> (بیت ۳ فرستنده)، <code>RE</code> (بیت ۲ گیرنده). بقیهٔ تنظیم‌ها (۸ بیت، بدون توازن، یک توقف) پس از reset همان ۸N1 است.</li>
+</ol>
+
+<div class="table-wrap"><table>
+<thead><tr><th>رجیستر</th><th>آدرس</th><th>کاربرد</th></tr></thead>
+<tbody>
+<tr><td><code>USART2_SR</code></td><td><code>0x40004400</code></td><td>وضعیت: <code>RXNE</code> (بیت ۵) داده رسید؛ <code>TC</code> (بیت ۶) ارسال کامل تمام شد؛ <code>TXE</code> (بیت ۷) رجیستر ارسال خالی است</td></tr>
+<tr><td><code>USART2_DR</code></td><td><code>0x40004404</code></td><td>نوشتن = بایت برای ارسال؛ خواندن = بایت دریافتی</td></tr>
+<tr><td><code>USART2_BRR</code></td><td><code>0x40004408</code></td><td>سرعت (mantissa/fraction)</td></tr>
+<tr><td><code>USART2_CR1</code></td><td><code>0x4000440C</code></td><td>روشن، فرستنده، گیرنده، وقفه‌ها</td></tr>
+</tbody></table></div>
+
+<p>ابزارک‌ها را امتحان کن. اول <code>SR</code>: پرچم‌ها را خود سخت‌افزار می‌گذارد، ولی اینجا برای فهمیدن آن‌ها را دستی روشن کن.</p>
+<div class="widget" data-w="bits" data-width="16" data-reg="USART2_SR" data-value="192" data-title="USART2_SR: TXE و TC" data-fields='[{"name":"RXNE","hi":5,"lo":5},{"name":"TC","hi":6,"lo":6},{"name":"TXE","hi":7,"lo":7}]'></div>
+<p>حالت اولیه (مقدار <code>0xC0</code>): <code>TXE = 1</code> و <code>TC = 1</code>. یعنی «رجیستر ارسال خالی است و چیزی هم در حال فرستادن نیست». حالا <code>CR1</code>. برای روشن کردن USART با فرستنده و گیرنده، بیت‌های ۱۳ و ۳ و ۲ را یک کن:</p>
+<div class="widget" data-w="bits" data-width="16" data-reg="USART2_CR1" data-value="0" data-title="USART2_CR1: UE و TE و RE" data-fields='[{"name":"UE","hi":13,"lo":13},{"name":"RXNEIE","hi":5,"lo":5},{"name":"TE","hi":3,"lo":3},{"name":"RE","hi":2,"lo":2}]'></div>
+
+<div class="callout info"><div class="ct">دو پرچم شبیه ولی متفاوت: <span class="en">TXE</span> و <span class="en">TC</span></div>
+<p><code>TXE</code> یعنی «رجیستر <code>DR</code> خالی شد، بایت بعدی را بنویس». ولی همان بایتی که تازه از <code>DR</code> به «ثبات شیفت» رفته هنوز دارد بیت به بیت روی سیم می‌رود. <code>TC</code> (Transmission Complete) وقتی ۱ می‌شود که <b>آخرین بیت واقعا رفته باشد</b>. اگر بعد از آخرین <code>putc</code> بلافاصله پردازنده را بخوابانی یا USART را خاموش کنی، بایت آخر نصفه‌نیمه می‌ماند. پس: برای ارسال پشت‌سرهم به <code>TXE</code> نگاه کن؛ برای «همه چیز رفت» به <code>TC</code>.</p></div>
+
+<div class="code" data-file="uart.c" data-lang="c" data-verify="arm" data-project="stm32u" id="code3">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define RCC_AHB1ENR (*(volatile uint32_t *)0x40023830u)
+#define RCC_APB1ENR (*(volatile uint32_t *)0x40023840u)
+#define GPIOA_MODER (*(volatile uint32_t *)0x40020000u)
+#define GPIOA_AFRL  (*(volatile uint32_t *)0x40020020u)
+
+#define USART2_SR   (*(volatile uint32_t *)0x40004400u)
+#define USART2_DR   (*(volatile uint32_t *)0x40004404u)
+#define USART2_BRR  (*(volatile uint32_t *)0x40004408u)
+#define USART2_CR1  (*(volatile uint32_t *)0x4000440Cu)
+
+#define SR_RXNE (1u &lt;&lt; 5)
+#define SR_TC   (1u &lt;&lt; 6)
+#define SR_TXE  (1u &lt;&lt; 7)
+#define CR1_RE  (1u &lt;&lt; 2)
+#define CR1_TE  (1u &lt;&lt; 3)
+#define CR1_UE  (1u &lt;&lt; 13)
+
+#define PCLK1_HZ 16000000u
+
+void uart_init(uint32_t baud)
+{
+    RCC_AHB1ENR |= 1u &lt;&lt; 0;
+    RCC_APB1ENR |= 1u &lt;&lt; 17;
+    (void)RCC_APB1ENR;
+
+    GPIOA_MODER = (GPIOA_MODER &amp; ~((3u &lt;&lt; 4) | (3u &lt;&lt; 6))) | (2u &lt;&lt; 4) | (2u &lt;&lt; 6);
+    GPIOA_AFRL  = (GPIOA_AFRL &amp; ~((0xFu &lt;&lt; 8) | (0xFu &lt;&lt; 12))) | (7u &lt;&lt; 8) | (7u &lt;&lt; 12);
+
+    USART2_BRR = (PCLK1_HZ + baud / 2u) / baud;
+    USART2_CR1 = CR1_UE | CR1_TE | CR1_RE;
+}
+
+void uart_putc(char c)
+{
+    while ((USART2_SR &amp; SR_TXE) == 0u) {
+    }
+    USART2_DR = (uint32_t)(uint8_t)c;
+}
+
+void uart_puts(const char *s)
+{
+    while (*s != '\0') {
+        uart_putc(*s);
+        s++;
+    }
+    while ((USART2_SR &amp; SR_TC) == 0u) {
+    }
+}
+
+int uart_getc_nb(void)
+{
+    if ((USART2_SR &amp; SR_RXNE) == 0u) {
+        return -1;
+    }
+    return (int)(USART2_DR &amp; 0xFFu);
+}
+</pre></div>
+<ol class="walk" data-for="code3">
+  <li data-lines="3-6"><b class="what">رجیسترهای ساعت و پایه.</b> RCC برای ساعت‌ها، MODER برای حالت پایه، AFRL برای شمارهٔ تابع جایگزین (پایه‌های ۰ تا ۷).</li>
+  <li data-lines="8-11"><b class="what">رجیسترهای USART2.</b> چهار رجیستر با آدرس پایه <code>0x40004400</code> و آفست‌های ۰، ۴، ۸ و <code>0xC</code>؛ همه <code>volatile</code>.</li>
+  <li data-lines="13-18"><b class="what">ماسک بیت‌ها.</b> سه پرچم وضعیت و سه بیت کنترل. اسم دادن جلوی عدد جادویی (درس ۴.۱) را می‌گیرد.</li>
+  <li data-lines="20"><b class="what">کلاک APB1.</b> با تنظیم پیش‌فرض بعد از reset برابر ۱۶ مگاهرتز (HSI). اگر PLL و تقسیم‌کننده را عوض کنی، باید این عدد هم عوض شود.
+    <span class="why">BRR از این حساب می‌شود. عدد اشتباه یعنی baud اشتباه و خروجی «آشغال».</span></li>
+  <li data-lines="22-26"><b class="what">ساعت‌ها.</b> ساعت GPIOA، ساعت USART2 و یک خواندن بی‌مصرف برای تأخیر کوچک تا ساعت برقرار شود (مثل درس ۳.۶).</li>
+  <li data-lines="28"><b class="what">PA2 و PA3 = عملکرد جایگزین.</b> پایه ۲ بیت‌های ۵..۴ و پایه ۳ بیت‌های ۷..۶؛ هر دو <code>10</code>.
+    <span class="why">ماسک <code>(3u &lt;&lt; 4) | (3u &lt;&lt; 6)</code> هر دو فیلد را یک‌جا پاک می‌کند تا بقیهٔ پایه‌ها (مثلا PA5 = LED) دست نخورند.</span></li>
+  <li data-lines="29"><b class="what">AF7.</b> AFRL برای هر پایه چهار بیت دارد: PA2 در بیت‌های ۱۱..۸ و PA3 در ۱۵..۱۲. مقدار ۷ را هر دو جا می‌گذاریم.</li>
+  <li data-lines="31"><b class="what">BRR.</b> همان فرمول گرد‌شدهٔ بخش قبل.</li>
+  <li data-lines="32"><b class="what">روشن.</b> <code>UE | TE | RE</code>. این خط آخر است تا وقتی همه‌چیز پیکربندی شده، USART شروع کند.</li>
+  <li data-lines="35-40"><b class="what">ارسال یک بایت.</b> تا <code>TXE</code> یک نشده منتظر می‌ماند، بعد بایت را در <code>DR</code> می‌نویسد. <code>(uint32_t)(uint8_t)c</code> یعنی اول به بایت بی‌علامت و بعد ۳۲ بیت؛ تا کاراکتر منفی علامت‌گسترش نیابد.
+    <span class="why">این انتظار از نوع polling است. اگر سخت‌افزار خراب باشد یا ساعت USART روشن نشده باشد، برای همیشه گیر می‌کند؛ در تمرین ۳ مهلت (درس ۵.۴) اضافه می‌کنیم.</span></li>
+  <li data-lines="42-50"><b class="what">ارسال رشته.</b> بایت‌به‌بایت تا <code>'\0'</code>؛ در پایان منتظر <code>TC</code> می‌ماند تا آخرین بایت واقعا رفته باشد.</li>
+  <li data-lines="52-58"><b class="what">دریافت بدون بلاک.</b> اگر <code>RXNE</code> صفر است چیزی نرسیده و <code>-1</code> می‌دهد. وگرنه بایت را از <code>DR</code> می‌خواند (که <code>RXNE</code> را پاک می‌کند) و <code>0..255</code> برمی‌گرداند.
+    <span class="why">بازگشت <code>int</code> (نه <code>char</code>) لازم است تا «چیزی نرسید» (-1) از بایت <code>0xFF</code> جدا شود.</span></li>
+</ol>
+
+<p>و برنامهٔ اصلی: یک پیام می‌فرستد و هر چه بشنود همان را پس می‌دهد (echo):</p>
+
+<div class="code" data-file="uart_main.c" data-lang="c" data-verify="arm" data-project="stm32u" id="code4">
+<pre>
+#include &lt;stdint.h&gt;
+
+void uart_init(uint32_t baud);
+void uart_putc(char c);
+void uart_puts(const char *s);
+int uart_getc_nb(void);
+
+int main(void)
+{
+    uart_init(115200u);
+    uart_puts("hello from USART2\r\n");
+
+    for (;;) {
+        int c = uart_getc_nb();
+        if (c &gt;= 0) {
+            uart_putc((char)c);
+        }
+    }
+}
+</pre></div>
+<ol class="walk" data-for="code4">
+  <li data-lines="3-6"><b class="what">اعلان توابع.</b> تعریفشان در <code>uart.c</code> است.</li>
+  <li data-lines="10-11"><b class="what">شروع.</b> ۱۱۵۲۰۰ baud و ارسال پیام. <code>\r\n</code> (بازگشت به اول خط و خط بعد) برای ترمینال‌های رایانه.</li>
+  <li data-lines="13-18"><b class="what">Echo.</b> اگر بایتی رسیده، همان را برگردان. حلقه بلاک نمی‌شود؛ می‌توان کارهای دیگر را هم همین‌جا گذاشت (مثل <code>millis()</code> در ۵.۴).</li>
+</ol>
+<p>هر دو فایل با <code>arm-none-eabi-gcc</code> کامپایل و بی‌هشدار ساخته شدند. برای اجرا روی برد کنار startup و linker script درس‌های <a href="5-1.html">۵.۱</a> و <a href="5-2.html">۵.۲</a> بگذارشان. سمت رایانه یک برنامهٔ ترمینال سریال باز کن (مثلا <code>screen</code>، <code>minicom</code> یا PuTTY) روی پورت ST-LINK (در لینوکس معمولا <code>/dev/ttyACM0</code>) با ۱۱۵۲۰۰، ۸N1.</p>
+
+<h2 id="poll">Polling، وقفه یا DMA؟</h2>
+<p>دیدیم هر بایت ۱۳۸۸ کلاک وقت می‌دهد. سه راه برای «ادارهٔ» این زمان هست:</p>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>Polling</th><th>وقفه (interrupt)</th><th>DMA</th></tr></thead>
+<tbody>
+<tr><td>چه کسی بایت را جابه‌جا می‌کند؟</td><td>پردازنده، با پرسیدن پرچم</td><td>پردازنده، در ISR</td><td>سخت‌افزار DMA، بدون پردازنده</td></tr>
+<tr><td>پردازنده بین بایت‌ها</td><td>مشغول انتظار (یا حلقهٔ اصلی)</td><td>آزاد برای کار دیگر</td><td>آزاد؛ فقط در پایان یا نیمهٔ بلوک مطلع می‌شود</td></tr>
+<tr><td>خطر</td><td>اگر دیر سر بزنی، <code>ORE</code> (سرریز گیرنده)</td><td>ISR بلند یا پرتعداد، سرریز بافر</td><td>پیچیدگی پیکربندی</td></tr>
+<tr><td>مناسب</td><td>ارسال کم، کد ساده، دیباگ</td><td>دریافت پیوسته، بایت‌های تصادفی</td><td>بلوک بزرگ یا سرعت بالا (SPI/ADC)</td></tr>
+</tbody></table></div>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>Polling = هر ده ثانیه بروی سر صندوق نامه ببینی چیزی آمده. وقفه = زنگ صندوق نامه: وقتی زد بلند می‌شوی. DMA = پستچی خودش نامه‌ها را می‌گذارد روی میز، و فقط وقتی یک بسته کامل شد زنگ می‌زند.</p></div>
+
+<p>یک گیرندهٔ UART با وقفه از دو بخش می‌سازیم: ISR بایت را برمی‌دارد و در یک بافر حلقوی (درس <a href="4-5.html">۴.۵</a>) می‌گذارد؛ برنامهٔ اصلی هر وقت وقت داشت از بافر می‌خواند. ISR فقط تولیدکننده (<code>head</code>) و <code>main</code> فقط مصرف‌کننده (<code>tail</code>) است.</p>
+
+<div class="code" data-file="uart_irq.c" data-lang="c" data-verify="arm" data-project="stm32u" id="code5">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define USART2_SR   (*(volatile uint32_t *)0x40004400u)
+#define USART2_DR   (*(volatile uint32_t *)0x40004404u)
+#define USART2_CR1  (*(volatile uint32_t *)0x4000440Cu)
+#define NVIC_ISER1  (*(volatile uint32_t *)0xE000E104u)
+
+#define SR_ORE      (1u &lt;&lt; 3)
+#define SR_RXNE     (1u &lt;&lt; 5)
+#define CR1_RXNEIE  (1u &lt;&lt; 5)
+#define USART2_IRQN 38u
+
+#define RX_SIZE 64u
+
+static volatile uint8_t  rx_buf[RX_SIZE];
+static volatile uint32_t rx_head;
+static volatile uint32_t rx_tail;
+
+void USART2_IRQHandler(void)
+{
+    uint32_t sr = USART2_SR;
+
+    if ((sr &amp; (SR_RXNE | SR_ORE)) != 0u) {
+        uint8_t byte = (uint8_t)USART2_DR;
+        uint32_t next = (rx_head + 1u) &amp; (RX_SIZE - 1u);
+
+        if ((sr &amp; SR_RXNE) != 0u &amp;&amp; next != rx_tail) {
+            rx_buf[rx_head] = byte;
+            rx_head = next;
+        }
+    }
+}
+
+void uart_rx_irq_enable(void)
+{
+    USART2_CR1 |= CR1_RXNEIE;
+    NVIC_ISER1 = 1u &lt;&lt; (USART2_IRQN - 32u);
+}
+
+int uart_read_byte(void)
+{
+    if (rx_tail == rx_head) {
+        return -1;
+    }
+    uint8_t byte = rx_buf[rx_tail];
+    rx_tail = (rx_tail + 1u) &amp; (RX_SIZE - 1u);
+    return (int)byte;
+}
+</pre></div>
+<ol class="walk" data-for="code5">
+  <li data-lines="3-6"><b class="what">رجیسترها.</b> <code>NVIC_ISER1</code> (آدرس <code>0xE000E104</code>) برای فعال‌کردن وقفه‌های ۳۲ تا ۶۳ (درس ۵.۳).</li>
+  <li data-lines="8-11"><b class="what">بیت‌ها و شمارهٔ وقفه.</b> <code>ORE</code> (سرریز گیرنده) بیت ۳؛ <code>RXNEIE</code> (اجازهٔ وقفه هنگام رسیدن بایت) بیت ۵ در CR1؛ USART2 در STM32F4 شمارهٔ وقفهٔ ۳۸ دارد.</li>
+  <li data-lines="13-17"><b class="what">بافر حلقوی ۶۴ بایتی.</b> اندازه توان ۲ است تا با ماسک (<code>&amp; 63</code>) بچرخد. <code>rx_head</code> را ISR و <code>rx_tail</code> را <code>main</code> می‌نویسد؛ همه <code>volatile</code>.</li>
+  <li data-lines="19-21"><b class="what">ISR.</b> اسم باید با جدول وقفهٔ startup یکی باشد (مثل <code>SysTick_Handler</code> در ۵.۴). اول <code>SR</code> را می‌خوانیم.</li>
+  <li data-lines="23-24"><b class="what">خواندن DR.</b> اگر بایتی رسیده (<code>RXNE</code>) یا سرریز شده (<code>ORE</code>)، <code>DR</code> را می‌خوانیم.
+    <span class="why">در F4، پاک شدن <code>ORE</code> با «خواندن SR سپس DR» است. اگر نخوانی، پرچم می‌ماند و ISR بی‌نهایت صدا زده می‌شود.</span></li>
+  <li data-lines="25-30"><b class="what">ذخیره در بافر.</b> اگر بافر پر نیست و بایت واقعی بود، ذخیره کن و <code>head</code> را جلو ببر؛ اگر پر است، بایت دور ریخته می‌شود.</li>
+  <li data-lines="34-38"><b class="what">فعال‌سازی.</b> اول RXNEIE در USART؛ بعد بیت ۶ (۳۸ − ۳۲) از ISER1 که وقفهٔ ۳۸ را در NVIC فعال می‌کند.</li>
+  <li data-lines="40-48"><b class="what">خواندن از سمت main.</b> اگر <code>tail == head</code> بافر خالی است (<code>-1</code>)؛ وگرنه یک بایت بردار و <code>tail</code> را جلو ببر.</li>
+</ol>
+
+<div class="callout tip"><div class="ct">DMA در یک پاراگراف</div>
+<p>DMA (دسترسی مستقیم به حافظه) یک «دستیار» سخت‌افزاری است. تو می‌گویی: «۱۲۸ بایت از این آدرس RAM به <code>USART2_DR</code> ببر» و پردازنده آزاد می‌شود؛ دستیار هر بار که USART آماده شد یک بایت می‌برد و در پایان وقفه می‌دهد. روی STM32 باید جریان (stream) و کانال درست را از جدول RM0383 انتخاب کنی. جزئیات رجیستری DMA از حد این درس بیرون است؛ ولی همین فکر (بافر + پرچم پایان) پایهٔ درایورهای پرسرعت است.</p></div>
+
+<h2 id="spi">SPI: ثبات شیفت دو نفره</h2>
+<p><span class="term" data-t="spi">SPI</span> ساده‌ترین ایده را دارد: <b>دو ثبات شیفت به‌هم وصل‌اند</b>. ثبات مستر خروجی‌اش (MOSI) به ورودی برده و خروجی برده (MISO) به ورودی مستر وصل است. با هر پالس کلاک، هر دو ثبات یک بیت به چپ می‌روند: مستر یک بیت می‌دهد و همان لحظه یک بیت می‌گیرد. بعد از ۸ پالس، دو بایت جا عوض کرده‌اند.</p>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>دو نفر مقابل هم نشسته‌اند و هر کدام یک ردیف ۸ کارت در دست دارد. با هر ضرب رهبر، هر کدام کارت انتهای ردیفش را به دیگری می‌دهد و کارتی که می‌گیرد را ابتدای ردیف می‌گذارد. بعد از ۸ ضرب، ردیف‌ها عوض شده‌اند. برای «فقط خواندن» هم مستر یک بایت بی‌اهمیت (مثلا <code>0x00</code>) می‌فرستد تا کلاک بچرخد.</p></div>
+
+<figure><div class="frame"><svg viewBox="0 0 760 340" role="img" aria-label="نمودار زمانی SPI حالت صفر: CS پایین می‌آید، هشت پالس SCK؛ MOSI بایت 0xA5 و MISO بایت 0x3C همزمان جابه‌جا می‌شوند؛ داده روی لبهٔ بالارو نمونه‌برداری می‌شود">
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">پروتکل SPI در حالت ۰ (CPOL=0, CPHA=0): یک بایت در دو جهت هم‌زمان</text>
+  <text x="34" y="68.0" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">CS</text><text x="34" y="128.0" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">SCK</text><text x="34" y="200.0" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">MOSI</text><text x="34" y="266.0" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">MISO</text>
+  <path d="M60 48H100V78H652V48H700" stroke="#15120a" stroke-width="4" fill="none" stroke-linejoin="round"/>
+  <path d="M60 138H152.0V108H184V138H216.0V108H248V138H280.0V108H312V138H344.0V108H376V138H408.0V108H440V138H472.0V108H504V138H536.0V108H568V138H600.0V108H632V138H700" stroke="#15120a" stroke-width="4" fill="none" stroke-linejoin="round"/>
+  <path d="M100 180H184V210H248V180H312V210H440V180H504V210H568V180H652" stroke="#15120a" stroke-width="4" fill="none" stroke-linejoin="round"/>
+  <path d="M100 276H248V246H504V276H652" stroke="#15120a" stroke-width="4" fill="none" stroke-linejoin="round"/>
+  <text x="136" y="172" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">1</text><text x="136" y="238" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">0</text><path d="M152.0 102V284" stroke="#ff86b3" stroke-width="2.5" stroke-dasharray="5 4" fill="none"/><text x="152.0" y="96" text-anchor="middle" class="mono s-tx" font-size="11.5" font-weight="700">0</text><text x="200" y="172" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">0</text><text x="200" y="238" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">0</text><path d="M216.0 102V284" stroke="#ff86b3" stroke-width="2.5" stroke-dasharray="5 4" fill="none"/><text x="216.0" y="96" text-anchor="middle" class="mono s-tx" font-size="11.5" font-weight="700">1</text><text x="264" y="172" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">1</text><text x="264" y="238" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">1</text><path d="M280.0 102V284" stroke="#ff86b3" stroke-width="2.5" stroke-dasharray="5 4" fill="none"/><text x="280.0" y="96" text-anchor="middle" class="mono s-tx" font-size="11.5" font-weight="700">2</text><text x="328" y="172" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">0</text><text x="328" y="238" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">1</text><path d="M344.0 102V284" stroke="#ff86b3" stroke-width="2.5" stroke-dasharray="5 4" fill="none"/><text x="344.0" y="96" text-anchor="middle" class="mono s-tx" font-size="11.5" font-weight="700">3</text><text x="392" y="172" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">0</text><text x="392" y="238" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">1</text><path d="M408.0 102V284" stroke="#ff86b3" stroke-width="2.5" stroke-dasharray="5 4" fill="none"/><text x="408.0" y="96" text-anchor="middle" class="mono s-tx" font-size="11.5" font-weight="700">4</text><text x="456" y="172" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">1</text><text x="456" y="238" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">1</text><path d="M472.0 102V284" stroke="#ff86b3" stroke-width="2.5" stroke-dasharray="5 4" fill="none"/><text x="472.0" y="96" text-anchor="middle" class="mono s-tx" font-size="11.5" font-weight="700">5</text><text x="520" y="172" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">0</text><text x="520" y="238" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">0</text><path d="M536.0 102V284" stroke="#ff86b3" stroke-width="2.5" stroke-dasharray="5 4" fill="none"/><text x="536.0" y="96" text-anchor="middle" class="mono s-tx" font-size="11.5" font-weight="700">6</text><text x="584" y="172" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">1</text><text x="584" y="238" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">0</text><path d="M600.0 102V284" stroke="#ff86b3" stroke-width="2.5" stroke-dasharray="5 4" fill="none"/><text x="600.0" y="96" text-anchor="middle" class="mono s-tx" font-size="11.5" font-weight="700">7</text>
+  <text x="380" y="308" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">خط صورتی = لبهٔ بالارو: هر دو طرف همان لحظه بیت را می‌خوانند؛ روی لبهٔ پایین‌رو بیت بعدی روی سیم می‌آید</text>
+  <text x="380" y="328" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">داده‌ها: MOSI برابر 0xA5 و MISO برابر 0x3C (اول MSB)؛ CS تا پایان بایت پایین می‌ماند</text>
+</svg></div>
+<figcaption>مستر بایت <code>0xA5</code> را می‌فرستد و بایت <code>0x3C</code> را می‌گیرد. خط <code>CS</code> (معمولا فعال-پایین) دستگاه را انتخاب می‌کند: تا پایین است، دستگاه گوش می‌دهد.</figcaption></figure>
+
+<p>این مکانیسم را با یک شبیه‌ساز کوچک ببین. «برده» یک ثبات شیفت ۸ بیتی است و «مستر» یک تابع <code>spi_transfer</code> که هشت بار کلاک می‌زند. (روی برد همین کار را سخت‌افزار SPI انجام می‌دهد، یا یک حلقهٔ bit-bang.)</p>
+
+<div class="code" data-file="spi_sim.c" data-lang="c" data-verify="host" id="code6">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+/* --- سمت slave (شبیه‌سازی): یک ثبات شیفت هشت‌بیتی --- */
+static uint8_t s_shift;                 // آنچه slave می‌فرستد
+static uint8_t s_in;                    // آنچه slave دریافت می‌کند
+static int s_miso;                      // سیم MISO
+
+static void slave_cs_fall(uint8_t reply)
+{
+    s_shift = reply;
+    s_in = 0u;
+    s_miso = (s_shift &gt;&gt; 7) &amp; 1;        // اولین بیت آماده روی MISO
+}
+
+static void slave_sck_rise(int mosi)
+{
+    s_in = (uint8_t)((s_in &lt;&lt; 1) | (unsigned)mosi);     // نمونه‌برداری
+}
+
+static void slave_sck_fall(void)
+{
+    s_shift = (uint8_t)(s_shift &lt;&lt; 1);
+    s_miso = (s_shift &gt;&gt; 7) &amp; 1;        // بیت بعدی را آماده کن
+}
+
+/* --- سمت master: حالت ۰ (CPOL=0, CPHA=0)، اول MSB --- */
+static uint8_t spi_transfer(uint8_t out)
+{
+    uint8_t in = 0u;
+
+    printf("clk mosi miso\n");
+    for (int i = 7; i &gt;= 0; i--) {
+        int mosi = (out &gt;&gt; i) &amp; 1;
+        slave_sck_rise(mosi);                           // لبهٔ بالارو: هر دو نمونه می‌گیرند
+        in = (uint8_t)((in &lt;&lt; 1) | (unsigned)s_miso);
+        printf("%3d %4d %4d\n", 7 - i, mosi, s_miso);
+        slave_sck_fall();                               // لبهٔ پایین‌رو: بیت بعدی
+    }
+    return in;
+}
+
+int main(void)
+{
+    slave_cs_fall(0x3Cu);                               // CS پایین: slave آماده است
+    uint8_t got = spi_transfer(0xA5u);
+    printf("master sent 0xA5, got 0x%02X; slave got 0x%02X\n", got, s_in);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="code6">
+  <li data-lines="4-7"><b class="what">وضعیت برده.</b> ثبات شیفت خروجی <code>s_shift</code>، آنچه دریافت کرده <code>s_in</code> و سیم <code>MISO</code>.</li>
+  <li data-lines="9-14"><b class="what">CS پایین آمد.</b> برده پاسخش را در ثبات می‌گذارد و MSB آن را روی MISO قرار می‌دهد.
+    <span class="why">در مود ۰، اولین بیت باید <b>قبل از</b> اولین لبهٔ بالارو آماده باشد. برای همین برده از لبهٔ CS شروع می‌کند.</span></li>
+  <li data-lines="16-19"><b class="what">لبهٔ بالارو.</b> برده MOSI را می‌خواند و از سمت راست وارد <code>s_in</code> می‌کند.</li>
+  <li data-lines="21-25"><b class="what">لبهٔ پایین‌رو.</b> برده ثبات را یک بیت شیفت می‌دهد و بیت بعدی را روی MISO می‌گذارد.</li>
+  <li data-lines="27-41"><b class="what">تابع مستر.</b> برای هر بیت (از MSB): ۱) بیت MOSI را آماده کن، ۲) لبهٔ بالارو: هر دو نمونه می‌گیرند؛ مستر MISO را در <code>in</code> جمع می‌کند، ۳) لبهٔ پایین‌رو.
+    <span class="why">ترتیب «بیت آماده ← بالارو ← پایین‌رو» همان نمودار زمانی بالاست: داده وقتی کلاک پایین است عوض می‌شود و روی لبهٔ بالارو خوانده می‌شود.</span></li>
+  <li data-lines="43-49"><b class="what">اجرا.</b> CS را پایین می‌آوریم (<code>0x3C</code> پاسخ برده) و <code>0xA5</code> را می‌فرستیم. در پایان دو بایت جا عوض کرده‌اند.</li>
+</ol>
+<pre class="term" data-from="spi_sim.c">
+$ gcc -std=c11 -Wall -Wextra -o spi_sim spi_sim.c
+$ ./spi_sim
+clk mosi miso
+  0    1    0
+  1    0    0
+  2    1    1
+  3    0    1
+  4    0    1
+  5    1    1
+  6    0    0
+  7    1    0
+master sent 0xA5, got 0x3C; slave got 0xA5
+</pre>
+<p>ستون <code>mosi</code> برابر <code>1 0 1 0 0 1 0 1</code> = <code>0xA5</code> و ستون <code>miso</code> برابر <code>0 0 1 1 1 1 0 0</code> = <code>0x3C</code> است؛ دقیقا مثل نمودار.</p>
+
+<h3 id="spimodes">چهار مود SPI: <span class="en">CPOL</span> و <span class="en">CPHA</span></h3>
+<p>«لبهٔ بالارو» تنها یک انتخاب است. دیتاشیت هر تراشه می‌گوید کدام مود را می‌خواهد. دو بیت تنظیم، چهار <span class="term" data-t="spimode">مود</span> می‌سازند:</p>
+<ul>
+  <li><b>CPOL</b> (قطبیت کلاک): سطح <b>بیکاری</b> SCK؛ ۰ = پایین، ۱ = بالا.</li>
+  <li><b>CPHA</b> (فاز): ۰ = داده روی <b>لبهٔ اول</b> نمونه‌برداری می‌شود؛ ۱ = روی <b>لبهٔ دوم</b>.</li>
+</ul>
+<div class="table-wrap"><table>
+<thead><tr><th>مود</th><th>CPOL</th><th>CPHA</th><th>کلاک بیکار</th><th>لحظهٔ نمونه‌برداری</th></tr></thead>
+<tbody>
+<tr><td>۰</td><td>۰</td><td>۰</td><td>پایین</td><td>لبهٔ بالارو</td></tr>
+<tr><td>۱</td><td>۰</td><td>۱</td><td>پایین</td><td>لبهٔ پایین‌رو</td></tr>
+<tr><td>۲</td><td>۱</td><td>۰</td><td>بالا</td><td>لبهٔ پایین‌رو</td></tr>
+<tr><td>۳</td><td>۱</td><td>۱</td><td>بالا</td><td>لبهٔ بالارو</td></tr>
+</tbody></table></div>
+<p>راه سریع یادگیری: اگر کلاک بیکار «پایین» است (CPOL=0)، لبهٔ اول همان بالارو است. پس CPHA=0 یعنی «روی بالارو» (مود ۰) و CPHA=1 یعنی «روی پایین‌رو» (مود ۱). برای CPOL=1 همه چیز وارونه است. مودی که با دیتاشیت نخواند، معمولا بیت‌های جابه‌جا‌شده (یک‌بیت اشتباه) می‌دهد. چون خیلی تراشه‌ها مود ۰ را می‌خواهند و بقیه مود ۳، این دو رایج‌ترند.</p>
+
+<div class="callout warn"><div class="ct">CS را زود رها نکن</div>
+<p>در پایان انتقال، CS باید پس از فرستادن <b>آخرین بیت</b> بالا برود، نه وقتی «آخرین بایت را در رجیستر داده نوشتیم». در سخت‌افزار SPI یک پرچم «مشغول» (BSY) وجود دارد؛ تا صفر نشده CS را بالا نبر. مثل TXE و TC در UART، نوشتن در رجیستر داده به معنی «تمام شد» نیست.</p></div>
+
+<h2 id="i2c">I2C: دو سیم، چند دستگاه، آدرس</h2>
+<p><span class="term" data-t="i2c">I2C</span> با فقط <b>دو سیم</b> تا ده‌ها دستگاه را سرویس می‌دهد. دو ایدهٔ اصلی:</p>
+<ul>
+  <li><b>سیم‌ها <span class="term" data-t="opendrain">open-drain</span> اند.</b> هیچ‌کس «۱» نمی‌فرستد. هر دستگاه فقط می‌تواند سیم را به زمین بکشد (۰) یا رها کند. مقاومت بالاکش (pull-up) سیم را به ۳٫۳ ولت برمی‌گرداند (۱). به همین دلیل دو دستگاه هرگز جریان اتصال کوتاه به هم نمی‌دهند و چند دستگاه می‌توانند روی یک سیم بنشینند. پول‌آپ‌های معمول چند کیلواهم‌اند؛ مقدار دقیق را از دیتاشیت و طول سیم‌ها بردار.</li>
+  <li><b>هر دستگاه یک <span class="term" data-t="i2caddress">آدرس ۷ بیتی</span> دارد.</b> مستر اول آدرس را می‌گوید؛ فقط دستگاه صاحب آن آدرس جواب می‌دهد.</li>
+</ul>
+
+<div class="callout analogy"><div class="ct">مثال از زندگی روزمره</div>
+<p>کلاس درسی که همه‌ی دانش‌آموزان یک اتاق‌اند. معلم (مستر) می‌گوید «شمارهٔ ۷۶، ... !». فقط دانش‌آموز ۷۶ می‌گوید «بله» (<span class="term" data-t="ack">ACK</span>) و بعد به معلم گوش می‌دهد یا جواب می‌دهد. اگر هیچ‌کس نگفت «بله»، معلم می‌فهمد این دانش‌آموز نیست (NACK). همین‌طور برنامه می‌فهمد سنسور روی باس نیست.</p></div>
+
+<figure><div class="frame"><svg viewBox="0 0 760 362" role="img" aria-label="نمودار زمانی I2C: شرط START، هفت بیت آدرس 0x76 یعنی 1110110، بیت W، بیت ACK که دستگاه با پایین کشیدن SDA می‌دهد، و در پایان شرط STOP">
+  <text x="380" y="24" text-anchor="middle" class="s-tx" font-size="16" font-weight="800">شروع یک انتقال I2C: آدرس 0x76 با بیت نوشتن</text>
+  <text x="34" y="90.0" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">SCL</text>
+  <text x="34" y="190.0" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">SDA</text>
+  <rect x="574" y="60" width="58" height="160" fill="#ff86b3" opacity=".35"/>
+  <path d="M20 70H90V100H124V70H154V100H182V70H212V100H240V70H270V100H298V70H328V100H356V70H386V100H414V70H444V100H472V70H502V100H530V70H560V100H588V70H618V100H680V70H740" stroke="#15120a" stroke-width="4" fill="none" stroke-linejoin="round"/>
+  <path d="M20 170H70V200H110V170H284V200H342V170H458V200H700V170H740" stroke="#15120a" stroke-width="4" fill="none" stroke-linejoin="round"/>
+  <text x="139.0" y="156" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">A6</text><text x="139.0" y="226" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800">1</text><text x="197.0" y="156" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">A5</text><text x="197.0" y="226" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800">1</text><text x="255.0" y="156" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">A4</text><text x="255.0" y="226" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800">1</text><text x="313.0" y="156" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">A3</text><text x="313.0" y="226" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800">0</text><text x="371.0" y="156" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">A2</text><text x="371.0" y="226" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800">1</text><text x="429.0" y="156" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">A1</text><text x="429.0" y="226" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800">1</text><text x="487.0" y="156" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">A0</text><text x="487.0" y="226" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800">0</text><text x="545.0" y="156" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">W</text><text x="545.0" y="226" text-anchor="middle" class="mono s-tx" font-size="15" font-weight="800">0</text><text x="603.0" y="156" text-anchor="middle" class="mono s-tx" font-size="13" font-weight="800">ACK</text>
+  <text x="70" y="240" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">START</text>
+  <text x="700" y="240" text-anchor="middle" class="mono s-tx" font-size="14" font-weight="800">STOP</text>
+  <text x="313.0" y="270" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">آدرس ۷ بیتی = 1110110 = 0x76 (اول MSB)</text>
+  <text x="380" y="298" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">بیت W = ۰ یعنی نوشتن. بیت ACK را دستگاه مقصد با پایین کشیدن SDA می‌دهد.</text>
+  <text x="380" y="326" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">داده فقط وقتی SCL پایین است عوض می‌شود؛ وقتی SCL بالاست باید ثابت بماند</text>
+  <text x="380" y="348" text-anchor="middle" class="s-tx" font-size="13.5" font-weight="700">فقط START و STOP استثنا هستند: در آن‌ها SDA وقتی SCL بالاست تغییر می‌کند.</text>
+</svg></div>
+<figcaption>شروع انتقال: START، هفت بیت آدرس (اول MSB)، بیت W، و ACK از سمت دستگاه.</figcaption></figure>
+
+<p>ترتیب کامل یک <b>خواندن رجیستر</b> (مثلا خواندن ثبات شناسه <code>0xD0</code> از حسگر BME280 با آدرس <code>0x76</code>):</p>
+<ol class="steps">
+  <li><b>START.</b> مستر SDA را وقتی SCL بالاست پایین می‌کشد.</li>
+  <li><b>آدرس + W.</b> بایت <code>0xEC</code> = (<code>0x76 &lt;&lt; 1</code>) | ۰. دستگاه ACK می‌دهد.</li>
+  <li><b>شمارهٔ رجیستر.</b> بایت <code>0xD0</code>. دستگاه ACK می‌دهد.</li>
+  <li><b>START تکراری.</b> بدون STOP، دوباره START می‌دهد تا باس را از دست ندهد.</li>
+  <li><b>آدرس + R.</b> بایت <code>0xED</code> = (<code>0x76 &lt;&lt; 1</code>) | ۱. ACK.</li>
+  <li><b>خواندن.</b> حالا دستگاه SDA را می‌راند و بایت <code>0x60</code> را می‌فرستد.</li>
+  <li><b>NACK و STOP.</b> مستر برای آخرین بایت ACK نمی‌دهد (یعنی «دیگر نمی‌خواهم») و STOP می‌فرستد: SDA را وقتی SCL بالاست بالا می‌برد.</li>
+</ol>
+
+<div class="callout warn"><div class="ct">دام معروف: آدرس ۷ بیتی در برابر ۸ بیتی</div>
+<p>دیتاشیت‌ها گاهی آدرس را ۷ بیتی می‌نویسند (<code>0x76</code>) و گاهی «بایت کامل روی سیم» (<code>0xEC</code> برای نوشتن و <code>0xED</code> برای خواندن). برخی کتابخانه‌ها آدرس ۷ بیتی می‌گیرند، برخی (مثل <code>HAL_I2C_*</code> در STM32) آدرس شیفت‌داده‌شده به چپ. اگر آدرس اشتباه بدهی، جوابی نمی‌گیری (NACK) و معمولا اول فکر می‌کنی سیم‌کشی خراب است. قانون: بدان <b>هر تابع</b> کدام را می‌خواهد. برای BME280 هر دو در دیتاشیت هست: آدرس ۷ بیتی <code>0x76</code> (اگر پایهٔ SDO به زمین) یا <code>0x77</code> (اگر SDO به ولتاژ تغذیه باشد).</p></div>
+
+<div class="callout info"><div class="ct">چند نکتهٔ کوچک ولی مهم</div>
+<ul>
+  <li>سرعت‌های استاندارد ۱۰۰ کیلوهرتز (Standard) و ۴۰۰ کیلوهرتز (Fast).</li>
+  <li>آدرس‌های <code>0x00..0x07</code> و <code>0x78..0x7F</code> رزرو است؛ اسکنر آدرس معمولا از <code>0x08</code> تا <code>0x77</code> می‌گردد.</li>
+  <li>دستگاه کند می‌تواند SCL را پایین نگه دارد تا مستر صبر کند (clock stretching)؛ کد مستر باید مهلت (<code>timeout</code>) داشته باشد (درس ۵.۴).</li>
+  <li>اگر بالاکش نباشد، سیم هرگز به «۱» برنمی‌گردد و هیچ چیز کار نمی‌کند. بعضی بردها بالاکش داخلی ضعیف دارند؛ برای سرعت و طول بیشتر مقاومت بیرونی بگذار.</li>
+</ul></div>
+
+<h2 id="driver">درایور با «لایهٔ انتقال»</h2>
+<p>حالا مهم‌ترین بخش درس. فرض کن درایور سنسور BME280 می‌نویسی. ساده‌ترین راه: داخل درایور مستقیم <code>HAL_I2C_Mem_Read</code> صدا بزنی. مشکل‌ها:</p>
+<ul>
+  <li>درایور به STM32 <b>چسبیده</b> است؛ برای ESP32 باید از نو نوشت.</li>
+  <li>نمی‌توان آن را روی PC آزمایش کرد (تست خودکار، درس <a href="6-4.html">۶.۴</a>)؛ همیشه باید برد داشته باشی.</li>
+  <li>اگر بعدا سنسور را به SPI ببری، درایور از نو نوشته می‌شود.</li>
+</ul>
+<p>راه‌حل: بین درایور و سخت‌افزار یک <b>مرز</b> بگذار؛ به آن <span class="term" data-t="transport">لایهٔ انتقال</span> (transport layer) می‌گوییم. درایور فقط می‌گوید «این بایت‌ها را به آدرس فلان بفرست و این‌قدر بایت بخوان» و <b>نمی‌داند</b> کدام سخت‌افزار زیرش است. این مرز یک struct از اشاره‌گر تابع است (درس <a href="4-3.html">۴.۳</a>):</p>
+
+<figure><div class="frame"><svg viewBox="0 0 760 336" role="img" aria-label="لایه‌های نرم‌افزار: برنامهٔ اصلی روی درایور سنسور، درایور روی رابط bus_t، و زیر آن سه پیاده‌سازی: تقلبی روی PC، STM32 و ESP32">
+  <defs><marker id="m55c" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15120a"/></marker></defs>
+  <rect x="230" y="20" width="300" height="46" rx="10" fill="#ffd60a" stroke="#15120a" stroke-width="3"/><text x="380" y="49" text-anchor="middle" fill="#15120a" font-size="15" font-weight="800">برنامهٔ اصلی (<tspan class="mono" direction="ltr">main.c</tspan>)</text><rect x="200" y="100" width="360" height="46" rx="10" fill="#7ea3ff" stroke="#15120a" stroke-width="3"/><text x="380" y="129" text-anchor="middle" fill="#15120a" font-size="15" font-weight="800">درایور سنسور (<tspan class="mono" direction="ltr">bme.c</tspan>)</text><rect x="110" y="180" width="540" height="46" rx="10" fill="#ff86b3" stroke="#15120a" stroke-width="3"/><text x="380" y="209" text-anchor="middle" class="mono" fill="#15120a" font-size="14" font-weight="800">bus_t: xfer(ctx, addr7, tx, tx_len, rx, rx_len)</text><rect x="30" y="266" width="200" height="54" rx="10" fill="#3ddc97" stroke="#15120a" stroke-width="3"/><text x="130" y="288" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">تقلبی روی PC</text><text x="130" y="309" text-anchor="middle" fill="#15120a" font-size="13" font-weight="700">mock_bus.c</text><rect x="280" y="266" width="200" height="54" rx="10" fill="#ff9a4d" stroke="#15120a" stroke-width="3"/><text x="380" y="288" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">STM32</text><text x="380" y="309" text-anchor="middle" fill="#15120a" font-size="13" font-weight="700">HAL یا رجیستر</text><rect x="530" y="266" width="200" height="54" rx="10" fill="#b394ff" stroke="#15120a" stroke-width="3"/><text x="630" y="288" text-anchor="middle" fill="#15120a" font-size="14" font-weight="800">ESP32</text><text x="630" y="309" text-anchor="middle" fill="#15120a" font-size="13" font-weight="700">درایور ESP-IDF</text><path d="M380 66L380 96" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#m55c)"/><path d="M380 146L380 176" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#m55c)"/><path d="M200 226L150 262" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#m55c)"/><path d="M380 226L380 262" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#m55c)"/><path d="M560 226L630 262" stroke="#15120a" stroke-width="3" fill="none" marker-end="url(#m55c)"/><text x="660" y="118" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">درایور نمی‌داند</text><text x="660" y="138" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">زیرش چه چیزی است</text><text x="100" y="118" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">فقط رجیستر</text><text x="100" y="138" text-anchor="middle" class="s-tx" font-size="13" font-weight="700">سنسور را می‌شناسد</text>
+</svg></div>
+<figcaption>درایور فقط با <code>bus_t</code> حرف می‌زند. زیر آن هر چه بخواهی می‌گذاری: STM32، ESP32، یا یک شبیه‌ساز روی PC.</figcaption></figure>
+
+<p>پروژه پنج فایل دارد. اول <b>رابط</b> (<code>bus.h</code>). یک تابع <code>xfer</code> همه‌کاره: «tx را بنویس، سپس rx را بخوان». اگر <code>tx_len = 1</code> و <code>rx_len &gt; 0</code> باشد، همان «خواندن رجیستر» است؛ اگر <code>tx_len &gt; 1</code> و <code>rx_len = 0</code>، «نوشتن رجیستر». این قالب هم به I2C می‌خورد (شمارهٔ رجیستر + داده) و هم به SPI (بایت فرمان + داده).</p>
+
+<div class="code" data-file="bus.h" data-lang="c" data-verify="make" data-project="sensor" id="p1">
+<pre>
+#ifndef BUS_H
+#define BUS_H
+
+#include &lt;stddef.h&gt;
+#include &lt;stdint.h&gt;
+
+#define BUS_OK        0
+#define BUS_ERR_NACK (-1)
+#define BUS_ERR_ARG  (-2)
+
+typedef struct {
+    int (*xfer)(void *ctx, uint8_t addr7,
+                const uint8_t *tx, size_t tx_len,
+                uint8_t *rx, size_t rx_len);
+    void *ctx;
+} bus_t;
+
+#endif
+</pre></div>
+<ol class="walk" data-for="p1">
+  <li data-lines="1-2,18"><b class="what">Include guard.</b> جلوی وارد شدن دوبارهٔ هدر را می‌گیرد (درس ۴.۲).</li>
+  <li data-lines="4-5"><b class="what">نوع‌ها.</b> <code>stddef.h</code> برای <code>size_t</code> و <code>stdint.h</code> برای <code>uint8_t</code>.</li>
+  <li data-lines="7-9"><b class="what">کدهای خطا.</b> صفر = موفق؛ منفی = خطا. <code>NACK</code> یعنی دستگاه جواب نداد.
+    <span class="why">قرارداد «صفر یعنی خوب» را در کل پروژه نگه دار تا <code>if (rc != 0)</code> همیشه معنی بدهد (درس ۱.۴).</span></li>
+  <li data-lines="11-16"><b class="what">رابط باس.</b> یک اشاره‌گر تابع <code>xfer</code> و یک <code>ctx</code> (اشاره‌گر <code>void*</code> به هر داده‌ای که پیاده‌سازی لازم دارد؛ مثلا دستگیرهٔ I2C یا دستگاه تقلبی).
+    <span class="why"><code>ctx</code> جای متغیر سراسری را می‌گیرد: می‌توانی چند باس مستقل داشته باشی (I2C1 و I2C2) بدون کپی کد.</span></li>
+</ol>
+
+<p>سپس <b>درایور سنسور</b>. فقط ثبات‌های BME280 را می‌شناسد (شمارهٔ رجیستر <code>0xD0</code> شناسهٔ تراشه با مقدار <code>0x60</code> است، <code>0xF4</code> ثبات کنترل اندازه‌گیری، و <code>0xFA..0xFC</code> دمای خام ۲۰ بیتی؛ مقادیر را در دیتاشیت رسمی BME280 تطبیق بده):</p>
+
+<div class="code" data-file="bme.h" data-lang="c" data-verify="make" data-project="sensor" id="p2">
+<pre>
+#ifndef BME_H
+#define BME_H
+
+#include "bus.h"
+
+#define BME_REG_ID        0xD0u
+#define BME_REG_CTRL_MEAS 0xF4u
+#define BME_REG_TEMP_MSB  0xFAu
+#define BME_CHIP_ID       0x60u
+
+typedef enum {
+    BME_OK = 0,
+    BME_ERR_BUS,
+    BME_ERR_ID
+} bme_status_t;
+
+typedef struct {
+    const bus_t *bus;
+    uint8_t addr7;
+} bme_t;
+
+void bme_init(bme_t *dev, const bus_t *bus, uint8_t addr7);
+bme_status_t bme_check_id(bme_t *dev);
+bme_status_t bme_trigger_forced(bme_t *dev);
+bme_status_t bme_read_temp_raw(bme_t *dev, int32_t *raw);
+
+#endif
+</pre></div>
+<ol class="walk" data-for="p2">
+  <li data-lines="6-9"><b class="what">شمارهٔ رجیسترها و شناسه.</b> با اسم نوشته می‌شوند (نه عدد جادویی).</li>
+  <li data-lines="11-15"><b class="what">وضعیت درایور.</b> <code>enum</code> با سه حالت: موفق، خطای باس و «شناسه اشتباه» (دستگاه جواب داد ولی BME280 نیست).
+    <span class="why">جدا کردن «باس خراب» از «چیپ اشتباه» تشخیص عیب را آسان می‌کند: اولی سیم‌کشی، دومی آدرس یا قطعهٔ اشتباه.</span></li>
+  <li data-lines="17-20"><b class="what">ساختار دستگاه.</b> اشاره‌گر به باس و آدرس ۷ بیتی. هر سنسور یک نمونه.</li>
+  <li data-lines="22-25"><b class="what">API.</b> راه‌اندازی، بررسی شناسه، شروع اندازه‌گیری و خواندن دمای خام.</li>
+</ol>
+
+<p>سپس <b>پیاده‌سازی تقلبی</b> (<span class="term" data-t="mocktransport">mock</span>): یک «سنسور ساختگی» با ۲۵۶ رجیستر که در برابر باس جواب می‌دهد. برای آزمایش روی PC:</p>
+
+<div class="code" data-file="mock_bus.h" data-lang="c" data-verify="make" data-project="sensor" id="p3">
+<pre>
+#ifndef MOCK_BUS_H
+#define MOCK_BUS_H
+
+#include "bus.h"
+
+typedef struct {
+    uint8_t addr7;
+    uint8_t regs[256];
+} mock_dev_t;
+
+void mock_dev_init(mock_dev_t *dev, uint8_t addr7);
+bus_t mock_dev_bus(mock_dev_t *dev);
+
+#endif
+</pre></div>
+<ol class="walk" data-for="p3">
+  <li data-lines="6-9"><b class="what">دستگاه ساختگی.</b> آدرس خودش را دارد و یک آرایهٔ رجیستر. بایت‌ها در RAM PC نشسته‌اند.</li>
+  <li data-lines="11-12"><b class="what">دو تابع.</b> ساختن دستگاه و گرفتن <code>bus_t</code> آن.</li>
+</ol>
+
+<div class="code" data-file="mock_bus.c" data-lang="c" data-verify="make" data-project="sensor" id="p4">
+<pre>
+#include "mock_bus.h"
+
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+static int mock_xfer(void *ctx, uint8_t addr7,
+                     const uint8_t *tx, size_t tx_len,
+                     uint8_t *rx, size_t rx_len)
+{
+    mock_dev_t *dev = ctx;
+
+    if (addr7 != dev-&gt;addr7) {
+        printf("[bus] 0x%02X: no ACK\n", addr7);
+        return BUS_ERR_NACK;
+    }
+    if (tx_len == 0u) {
+        return BUS_ERR_ARG;
+    }
+
+    uint8_t reg = tx[0];
+    printf("[bus] 0x%02X: write %u byte(s), read %u byte(s), reg 0x%02X\n",
+           addr7, (unsigned)tx_len, (unsigned)rx_len, reg);
+
+    for (size_t i = 1; i &lt; tx_len; i++) {
+        dev-&gt;regs[(uint8_t)(reg + i - 1u)] = tx[i];
+    }
+    for (size_t i = 0; i &lt; rx_len; i++) {
+        rx[i] = dev-&gt;regs[(uint8_t)(reg + i)];
+    }
+    return BUS_OK;
+}
+
+void mock_dev_init(mock_dev_t *dev, uint8_t addr7)
+{
+    memset(dev, 0, sizeof *dev);
+    dev-&gt;addr7 = addr7;
+    dev-&gt;regs[0xD0] = 0x60u;
+    dev-&gt;regs[0xFA] = 0x7Eu;
+    dev-&gt;regs[0xFB] = 0xEDu;
+    dev-&gt;regs[0xFC] = 0x00u;
+}
+
+bus_t mock_dev_bus(mock_dev_t *dev)
+{
+    bus_t bus = { mock_xfer, dev };
+    return bus;
+}
+</pre></div>
+<ol class="walk" data-for="p4">
+  <li data-lines="6-8"><b class="what">تابع xfer تقلبی.</b> امضای آن دقیقا مثل اشاره‌گر داخل <code>bus_t</code> است.</li>
+  <li data-lines="10"><b class="what">بازیابی ctx.</b> <code>void*</code> را به <code>mock_dev_t*</code> برمی‌گردانیم (در C نیاز به cast صریح نیست).</li>
+  <li data-lines="12-15"><b class="what">آدرس اشتباه = NACK.</b> شبیه رفتار واقعی: دستگاه دیگری روی آن آدرس ACK نمی‌دهد.</li>
+  <li data-lines="16-18"><b class="what">حداقل یک بایت.</b> بدون شمارهٔ رجیستر، عملیات بی‌معنی است.</li>
+  <li data-lines="20-22"><b class="what">لاگ.</b> شمارهٔ رجیستر را می‌خوانیم و هر تراکنش را چاپ می‌کنیم. این چاپ را روی PC آزاد داریم؛ روی برد نه.</li>
+  <li data-lines="24-26"><b class="what">نوشتن.</b> بایت‌های بعد از شمارهٔ رجیستر را از آن رجیستر به بعد می‌نویسد (آدرس خودکار افزایشی).</li>
+  <li data-lines="27-30"><b class="what">خواندن.</b> از رجیستر مقصد به بعد، <code>rx_len</code> بایت می‌خواند.</li>
+  <li data-lines="33-41"><b class="what">مقدار اولیهٔ سنسور ساختگی.</b> همهٔ رجیسترها صفر؛ به‌جز شناسه (<code>0x60</code>) و سه بایت دما (<code>0x7E 0xED 0x00</code>).</li>
+  <li data-lines="43-47"><b class="what">ساخت bus_t.</b> <code>{ mock_xfer, dev }</code>: تابع و ctx.</li>
+</ol>
+
+<div class="code" data-file="bme.c" data-lang="c" data-verify="make" data-project="sensor" id="p5">
+<pre>
+#include "bme.h"
+
+void bme_init(bme_t *dev, const bus_t *bus, uint8_t addr7)
+{
+    dev-&gt;bus = bus;
+    dev-&gt;addr7 = addr7;
+}
+
+static bme_status_t read_regs(bme_t *dev, uint8_t reg, uint8_t *buf, size_t len)
+{
+    int rc = dev-&gt;bus-&gt;xfer(dev-&gt;bus-&gt;ctx, dev-&gt;addr7, &amp;reg, 1u, buf, len);
+    return (rc == BUS_OK) ? BME_OK : BME_ERR_BUS;
+}
+
+bme_status_t bme_check_id(bme_t *dev)
+{
+    uint8_t id = 0u;
+    bme_status_t st = read_regs(dev, BME_REG_ID, &amp;id, 1u);
+
+    if (st != BME_OK) {
+        return st;
+    }
+    return (id == BME_CHIP_ID) ? BME_OK : BME_ERR_ID;
+}
+
+bme_status_t bme_trigger_forced(bme_t *dev)
+{
+    const uint8_t tx[2] = { BME_REG_CTRL_MEAS, 0x25u };
+    int rc = dev-&gt;bus-&gt;xfer(dev-&gt;bus-&gt;ctx, dev-&gt;addr7, tx, sizeof tx, NULL, 0u);
+    return (rc == BUS_OK) ? BME_OK : BME_ERR_BUS;
+}
+
+bme_status_t bme_read_temp_raw(bme_t *dev, int32_t *raw)
+{
+    uint8_t b[3];
+    bme_status_t st = read_regs(dev, BME_REG_TEMP_MSB, b, sizeof b);
+
+    if (st != BME_OK) {
+        return st;
+    }
+    *raw = ((int32_t)b[0] &lt;&lt; 12) | ((int32_t)b[1] &lt;&lt; 4) | ((int32_t)b[2] &gt;&gt; 4);
+    return BME_OK;
+}
+</pre></div>
+<ol class="walk" data-for="p5">
+  <li data-lines="3-7"><b class="what">bme_init.</b> فقط ذخیرهٔ اشاره‌گر باس و آدرس. هیچ‌چیز به سخت‌افزار نمی‌رسد.</li>
+  <li data-lines="9-13"><b class="what">خواندن رجیستر.</b> یک تابع کمکی خصوصی (<code>static</code>). <code>&amp;reg</code> بایت شمارهٔ رجیستر است (tx_len = ۱) و <code>buf</code> جای خواندن. خطای باس را به خطای درایور ترجمه می‌کند.
+    <span class="why">لایهٔ بالاتر نباید کدهای خطای باس را ببیند؛ هر لایه خطاهای خود را دارد.</span></li>
+  <li data-lines="15-24"><b class="what">بررسی شناسه.</b> رجیستر <code>0xD0</code> را می‌خواند. اگر باس خطا داد، همان را برمی‌گرداند؛ اگر <code>0x60</code> نبود، <code>BME_ERR_ID</code>.</li>
+  <li data-lines="26-31"><b class="what">شروع اندازه‌گیری.</b> دو بایت می‌نویسد: شمارهٔ رجیستر <code>0xF4</code> و مقدار <code>0x25</code> (طبق دیتاشیت: دمای ×۱، فشار ×۱، حالت forced). <code>NULL, 0</code> یعنی خواندنی نداریم.</li>
+  <li data-lines="33-43"><b class="what">دمای خام.</b> سه بایت از <code>0xFA</code> می‌خواند. دما ۲۰ بیتی است: بایت اول <code>&lt;&lt; 12</code>، دوم <code>&lt;&lt; 4</code> و چهار بیت بالای سوم <code>&gt;&gt; 4</code>.
+    <span class="why">تبدیل عدد خام به درجهٔ سانتی‌گراد نیاز به ضرایب کالیبراسیون داخل چیپ دارد (فرمول در دیتاشیت)؛ اینجا فقط الگوی درایور مهم است.</span></li>
+</ol>
+
+<div class="code" data-file="main.c" data-lang="c" data-verify="make" data-project="sensor" id="p6">
+<pre>
+#include &lt;stdio.h&gt;
+
+#include "bme.h"
+#include "mock_bus.h"
+
+static const char *status_text(bme_status_t st)
+{
+    switch (st) {
+    case BME_OK:      return "OK";
+    case BME_ERR_BUS: return "bus error";
+    case BME_ERR_ID:  return "wrong chip id";
+    }
+    return "?";
+}
+
+int main(void)
+{
+    mock_dev_t fake;
+    mock_dev_init(&amp;fake, 0x76u);
+    bus_t bus = mock_dev_bus(&amp;fake);
+
+    bme_t sensor;
+    bme_init(&amp;sensor, &amp;bus, 0x76u);
+
+    printf("check id: %s\n", status_text(bme_check_id(&amp;sensor)));
+    printf("trigger:  %s\n", status_text(bme_trigger_forced(&amp;sensor)));
+
+    int32_t raw = 0;
+    bme_status_t st = bme_read_temp_raw(&amp;sensor, &amp;raw);
+    printf("temp raw: %s, %ld (0x%05lX)\n", status_text(st), (long)raw, (unsigned long)raw);
+
+    bme_t wrong;
+    bme_init(&amp;wrong, &amp;bus, 0x77u);
+    printf("check id at 0x77: %s\n", status_text(bme_check_id(&amp;wrong)));
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="p6">
+  <li data-lines="6-14"><b class="what">متن وضعیت.</b> تابع کمکی که <code>enum</code> را به متن ترجمه می‌کند. <code>switch</code> روی <code>enum</code> بدون <code>default</code> تا اگر حالت تازه‌ای اضافه شد، کامپایلر هشدار بدهد.</li>
+  <li data-lines="18-20"><b class="what">سنسور ساختگی.</b> با آدرس <code>0x76</code> ساخته می‌شود و باسش را می‌گیریم.</li>
+  <li data-lines="22-23"><b class="what">درایور.</b> همان باس و همان آدرس را به درایور می‌دهیم.</li>
+  <li data-lines="25-26"><b class="what">شناسه و شروع.</b> دو عملیات و چاپ نتیجه.</li>
+  <li data-lines="28-30"><b class="what">دمای خام.</b> <code>%ld</code> با <code>(long)</code> چون <code>int32_t</code> روی همه‌جا <code>int</code> نیست (درس ۲.۸).</li>
+  <li data-lines="32-34"><b class="what">آدرس غلط.</b> همان باس، آدرس <code>0x77</code> (که دستگاهی روی آن نیست). انتظار: <code>bus error</code>.</li>
+</ol>
+
+<div class="code" data-file="Makefile" data-lang="make" data-verify="make" data-project="sensor" id="p7">
+<pre>
+CC     = gcc
+CFLAGS = -std=c11 -Wall -Wextra -Wpedantic
+OBJS   = main.o bme.o mock_bus.o
+
+all: sensor
+
+sensor: $(OBJS)
+	$(CC) $(OBJS) -o $@
+
+%.o: %.c bus.h bme.h mock_bus.h
+	$(CC) $(CFLAGS) -c $&lt; -o $@
+
+clean:
+	rm -f $(OBJS) sensor
+
+.PHONY: all clean
+</pre></div>
+<ol class="walk" data-for="p7">
+  <li data-lines="1-3"><b class="what">متغیرها.</b> کامپایلر، پرچم‌ها (با <code>-Wpedantic</code> هم) و فهرست فایل‌های شیء.</li>
+  <li data-lines="5"><b class="what">هدف پیش‌فرض.</b> <code>make</code> بدون آرگومان، <code>sensor</code> را می‌سازد.</li>
+  <li data-lines="7-8"><b class="what">لینک.</b> از سه فایل شیء برنامه.</li>
+  <li data-lines="10-11"><b class="what">قاعدهٔ کامپایل.</b> هر <code>.o</code> از <code>.c</code> خودش و سه هدر؛ اگر هدر عوض شود دوباره ساخته می‌شود.
+    <span class="why">در پروژهٔ کوچک، فهرست دستی هدرها کافی است؛ در پروژهٔ بزرگ‌تر از <code>-MMD</code> استفاده کن (درس ۴.۲).</span></li>
+  <li data-lines="13-14,16"><b class="what">پاک‌سازی.</b> <code>make clean</code> و اعلام هدف‌های ساختگی.</li>
+</ol>
+<p>این پروژه با <code>make</code> ساخته شد و بدون هشدار کامپایل می‌شود. اجرای آن (<code>./sensor</code>) این را چاپ می‌کند:</p>
+<pre class="term" data-nocheck>
+$ make
+$ ./sensor
+[bus] 0x76: write 1 byte(s), read 1 byte(s), reg 0xD0
+check id: OK
+[bus] 0x76: write 2 byte(s), read 0 byte(s), reg 0xF4
+trigger:  OK
+[bus] 0x76: write 1 byte(s), read 3 byte(s), reg 0xFA
+temp raw: OK, 519888 (0x7EED0)
+[bus] 0x77: no ACK
+check id at 0x77: bus error
+</pre>
+<p>ببین چه اتفاقی افتاد: درایور کاملا ران شد، شناسه <code>0x60</code> را دید، دمای خام <code>0x7EED0</code> را خواند، و آدرس غلط را درست تشخیص داد. <b>هیچ سخت‌افزاری لازم نبود.</b> وقتی روی برد بروی، فقط <code>mock_bus.c</code> را با پیاده‌سازی واقعی عوض می‌کنی؛ درایور و <code>main</code> یک خط تغییر نمی‌کنند.</p>
+
+<h2 id="backends">پیاده‌سازی واقعی: STM32 و ESP32</h2>
+<p>برای STM32 با کتابخانهٔ HAL شرکت ST، پشتیبان باس چنین می‌شود. (<code>frag</code>: در این محیط کامپایل نمی‌شود چون هدر <code>stm32f4xx_hal.h</code> نیاز دارد؛ نام توابع را با مستندات HAL نسخهٔ خودت تطبیق بده.)</p>
+
+<div class="code" data-file="hal_i2c_bus.c" data-lang="c" data-verify="frag" id="code7">
+<pre>
+#include "stm32f4xx_hal.h"
+#include "bus.h"
+
+static int hal_i2c_xfer(void *ctx, uint8_t addr7,
+                        const uint8_t *tx, size_t tx_len,
+                        uint8_t *rx, size_t rx_len)
+{
+    I2C_HandleTypeDef *h = ctx;
+    uint16_t dev = (uint16_t)(addr7 &lt;&lt; 1);   /* HAL آدرس شیفت‌داده‌شده می‌خواهد */
+    HAL_StatusTypeDef st;
+
+    if (tx_len == 1u &amp;&amp; rx_len &gt; 0u) {
+        st = HAL_I2C_Mem_Read(h, dev, tx[0], I2C_MEMADD_SIZE_8BIT,
+                              rx, (uint16_t)rx_len, 50u);
+    } else if (tx_len &gt; 0u &amp;&amp; rx_len == 0u) {
+        st = HAL_I2C_Master_Transmit(h, dev, (uint8_t *)tx, (uint16_t)tx_len, 50u);
+    } else {
+        return BUS_ERR_ARG;
+    }
+    return (st == HAL_OK) ? BUS_OK : BUS_ERR_NACK;
+}
+
+bus_t hal_i2c_bus(I2C_HandleTypeDef *h)
+{
+    bus_t bus = { hal_i2c_xfer, h };
+    return bus;
+}
+</pre></div>
+<ol class="walk" data-for="code7">
+  <li data-lines="8"><b class="what">ctx = دستگیرهٔ HAL.</b> همان چیزی که بالاتر در <code>bus_t</code> گذاشتیم.</li>
+  <li data-lines="9"><b class="what">تبدیل آدرس.</b> <code>0x76 &lt;&lt; 1</code> = <code>0xEC</code>. اینجا همان اشتباه ۷/۸ بیتی است، ولی این بار در یک جای واحد و مستند.
+    <span class="why">مزیت لایهٔ انتقال: قرارداد «آدرس ۷ بیتی» در تمام پروژه یکی است و فقط این تابع مرز HAL را ترجمه می‌کند.</span></li>
+  <li data-lines="12-14"><b class="what">خواندن رجیستر.</b> <code>HAL_I2C_Mem_Read</code> خودش «آدرس + W، شمارهٔ رجیستر، START تکراری، آدرس + R، خواندن» را انجام می‌دهد؛ مهلت ۵۰ میلی‌ثانیه.</li>
+  <li data-lines="15-16"><b class="what">نوشتن.</b> <code>HAL_I2C_Master_Transmit</code> بایت‌های tx (شمارهٔ رجیستر و داده) را می‌فرستد.</li>
+  <li data-lines="20"><b class="what">ترجمهٔ نتیجه.</b> <code>HAL_OK</code> ← <code>BUS_OK</code>؛ هر چیز دیگر ← NACK (ساده‌شده).</li>
+</ol>
+
+<h2 id="esp32">در ESP32 چه؟</h2>
+<p>ESP-IDF برای هر سه، درایور دارد. UART با <code>driver/uart.h</code>: اول تنظیم و نصب (این نصب یک بافر حلقوی درونی برای دریافت می‌سازد، پس همان الگوی «وقفه + بافر» را خودش انجام می‌دهد):</p>
+
+<div class="code" data-file="esp_uart.c" data-lang="c" data-verify="frag" id="code8">
+<pre>
+#include "driver/uart.h"
+#include "freertos/FreeRTOS.h"
+
+#define UART_PORT UART_NUM_1
+
+void uart_setup(void)
+{
+    const uart_config_t cfg = {
+        .baud_rate = 115200,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_DEFAULT,
+    };
+
+    uart_param_config(UART_PORT, &amp;cfg);
+    uart_set_pin(UART_PORT, 17, 16, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    uart_driver_install(UART_PORT, 256, 0, 0, NULL, 0);
+}
+
+void uart_demo(void)
+{
+    uint8_t buf[32];
+
+    uart_write_bytes(UART_PORT, "hello\r\n", 7);
+    int n = uart_read_bytes(UART_PORT, buf, sizeof buf, pdMS_TO_TICKS(100));
+    if (n &gt; 0) {
+        uart_write_bytes(UART_PORT, (const char *)buf, (size_t)n);
+    }
+}
+</pre></div>
+<ol class="walk" data-for="code8">
+  <li data-lines="4"><b class="what">پورت.</b> <code>UART_NUM_1</code>؛ پورت ۰ معمولا برای کنسول (لاگ‌ها) استفاده می‌شود.</li>
+  <li data-lines="8-15"><b class="what">تنظیمات.</b> همان ۸N1 با ۱۱۵۲۰۰ baud؛ نام‌ها دقیقا همان مفاهیم این درس‌اند. کنترل جریان (RTS/CTS) خاموش است.</li>
+  <li data-lines="17-18"><b class="what">اعمال تنظیمات و پایه‌ها.</b> <code>uart_param_config</code> تنظیمات را می‌نویسد و <code>uart_set_pin</code> پایه‌ها را می‌گذارد. TX روی GPIO17 و RX روی GPIO16 (نمونه؛ پایهٔ آزاد بردت را ببین). <code>UART_PIN_NO_CHANGE</code> برای RTS/CTS یعنی استفاده نمی‌شود.</li>
+  <li data-lines="19"><b class="what">نصب درایور.</b> ۲۵۶ بایت بافر دریافت، بدون بافر ارسال و بدون صف رویداد.
+    <span class="why">این بافر همان بافر حلقوی ISR ماست (درس ۴.۵)؛ ESP-IDF کارش را برایت انجام می‌دهد.</span></li>
+  <li data-lines="26"><b class="what">ارسال.</b> <code>uart_write_bytes</code> رشته و طول.</li>
+  <li data-lines="27-30"><b class="what">دریافت با مهلت.</b> <code>uart_read_bytes</code> تا ۱۰۰ میلی‌ثانیه منتظر می‌ماند (مهلت به تیک FreeRTOS)، تعداد بایت واقعا خوانده‌شده را می‌دهد (صفر = مهلت تمام شد).</li>
+</ol>
+
+<p>برای I2C و SPI هم درایور آمادهٔ ESP-IDF هست. برای I2C دو نسل API وجود دارد: نسخهٔ قدیمی‌تر در <code>driver/i2c.h</code> و نسخهٔ جدیدتر در <code>driver/i2c_master.h</code> (در نسخه‌های تازه‌تر ۵.x). چون نام‌ها بین نسخه‌ها فرق می‌کند، فقط الگو را ببین و نام‌ها را با مستندات نسخهٔ نصب‌شده‌ات تطبیق بده:</p>
+
+<div class="code" data-file="esp_i2c.c" data-lang="c" data-verify="frag" id="code9">
+<pre>
+#include "driver/i2c.h"
+#include "freertos/FreeRTOS.h"
+#include "esp_err.h"
+
+#define I2C_PORT I2C_NUM_0
+
+void i2c_setup(void)
+{
+    i2c_config_t conf = {
+        .mode = I2C_MODE_MASTER,
+        .sda_io_num = 21,
+        .scl_io_num = 22,
+        .sda_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master.clk_speed = 100000,
+    };
+
+    i2c_param_config(I2C_PORT, &amp;conf);
+    i2c_driver_install(I2C_PORT, conf.mode, 0, 0, 0);
+}
+
+int i2c_read_reg(uint8_t addr7, uint8_t reg, uint8_t *buf, size_t len)
+{
+    esp_err_t err = i2c_master_write_read_device(I2C_PORT, addr7, &amp;reg, 1,
+                                                 buf, len, pdMS_TO_TICKS(50));
+    return (err == ESP_OK) ? 0 : -1;
+}
+</pre></div>
+<ol class="walk" data-for="code9">
+  <li data-lines="5"><b class="what">پورت I2C.</b> دو کنترلر داخلی؛ <code>I2C_NUM_0</code> اولی.</li>
+  <li data-lines="9-16"><b class="what">تنظیمات.</b> مستر، پایه‌ها (نمونهٔ رایج: SDA=21، SCL=22)، بالاکش داخلی روشن و ۱۰۰ کیلوهرتز.
+    <span class="why">بالاکش داخلی ESP32 ضعیف است؛ برای طول سیم بیشتر یا سرعت بالا مقاومت بیرونی بگذار (پول‌آپ‌ها، بخش I2C).</span></li>
+  <li data-lines="18-19"><b class="what">اعمال و نصب.</b> پیکربندی و نصب درایور.</li>
+  <li data-lines="24-26"><b class="what">خواندن رجیستر.</b> <code>i2c_master_write_read_device</code> می‌نویسد و می‌خواند در یک تراکنش. اینجا <code>addr7</code> آدرس ۷ بیتی است (تابع خودش بیت R/W را می‌افزاید). خروجی <code>ESP_OK</code> یعنی موفق. همین تابع را می‌توان پشت <code>xfer</code> یک <code>bus_t</code> برای ESP32 گذاشت.</li>
+</ol>
+<p>مستندات رسمی هر سه: <a href="https://docs.espressif.com/projects/esp-idf/" target="_blank" rel="noopener">ESP-IDF Programming Guide</a> (بخش‌های UART، I2C، SPI Master). مرجع رجیسترهای USART در STM32F411: مستند RM0383 از <a href="https://www.st.com" target="_blank" rel="noopener">سایت ST</a>. ساختار کامل لایه‌بندی درایور/HAL در درس <a href="5-7.html">۵.۷</a> می‌آید و ESP32 با FreeRTOS در <a href="5-6.html">۵.۶</a>.</p>
+
+<h2 id="quiz">آزمون این درس</h2>
+<p class="quiz-score"></p>
+
+<div class="quiz" data-answer="3">
+  <p class="q">در UART با قرارداد 8N1 برای فرستادن یک بایت چند بیت روی سیم می‌رود و با ۱۱۵۲۰۰ baud حدودا چقدر طول می‌کشد؟</p>
+  <ol>
+    <li data-why="۸ بیت داده است، ولی بیت شروع و توقف هم می‌روند. در ۱۱۵۲۰۰ هر بیت ۸٫۶۸ میکروثانیه است، پس ۸ بیت ۶۹ میکروثانیه می‌شد که کم است.">۸ بیت، حدود ۶۹ میکروثانیه</li>
+    <li data-why="بیت توازن (Parity) در 8N1 وجود ندارد (N = None). فریم ۱۰ بیت است نه ۱۱.">۱۱ بیت، حدود ۹۵ میکروثانیه</li>
+    <li>۱۰ بیت، حدود ۸۷ میکروثانیه</li>
+    <li data-why="۱۱۵۲۰۰ baud یعنی ۱۱۵۲۰۰ بیت در ثانیه، نه بایت. ۱۰ بیت هر بایت ≈ ۸۶٫۸ میکروثانیه است، نه ۱ میلی‌ثانیه.">۱۰ بیت، حدود ۱ میلی‌ثانیه</li>
+  </ol>
+  <div class="fb">فریم = بیت شروع + ۸ بیت داده + بیت توقف = ۱۰ بیت. هر بیت ۱ ÷ ۱۱۵۲۰۰ ≈ ۸٫۶۸ µs، پس فریم ≈ ۸۶٫۸ µs (۱۱۵۲۰ بایت در ثانیه).</div>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="q">دیتاشیت یک تراشه می‌گوید: «کلاک در حالت بیکار بالاست (idle high) و داده روی لبهٔ اول کلاک، یعنی لبهٔ پایین‌رو، نمونه‌برداری می‌شود.» کدام مود SPI است؟</p>
+  <ol>
+    <li data-why="مود ۰ یعنی CPOL=0 (بیکار پایین) و روی لبهٔ بالارو نمونه‌برداری. اینجا بیکار بالاست.">مود ۰</li>
+    <li>مود ۲ (CPOL=1، CPHA=0)</li>
+    <li data-why="مود ۱ کلاک بیکارش پایین است (CPOL=0). اینجا بیکار بالاست.">مود ۱</li>
+    <li data-why="مود ۳ هم کلاک بیکارش بالاست، ولی روی لبهٔ بالارو (دوم) نمونه می‌گیرد؛ اینجا لبهٔ اول (پایین‌رو) است.">مود ۳</li>
+  </ol>
+  <div class="fb">CPOL=1 (بیکار بالا). CPHA=0 یعنی نمونه‌برداری روی لبهٔ اول، که وقتی کلاک از بالا شروع می‌شود، لبهٔ پایین‌رو است. پس مود ۲.</div>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="q">آدرس ۷ بیتی یک سنسور I2C برابر <code>0x76</code> است. مستر برای «نوشتن» چه بایتی را روی سیم می‌فرستد؟</p>
+  <ol>
+    <li><code>0xEC</code></li>
+    <li data-why="0x76 خود آدرس ۷ بیتی است. بایت روی سیم آدرس را یک بیت به چپ می‌برد و بیت R/W را در جای بیت ۰ می‌گذارد."><code>0x76</code></li>
+    <li data-why="0xED همان آدرس است ولی با بیت R/W برابر ۱ (خواندن)، نه نوشتن."><code>0xED</code></li>
+    <li data-why="0x3B = 0x76 &gt;&gt; 1 است؛ شیفت در جهت اشتباه. برای ساخت بایت باید به چپ شیفت داد."><code>0x3B</code></li>
+  </ol>
+  <div class="fb"><code>0x76 &lt;&lt; 1</code> = <code>0xEC</code>، و بیت پایین ۰ یعنی نوشتن. برای خواندن <code>0xED</code>.</div>
+</div>
+
+<div class="quiz" data-answer="4">
+  <p class="q">در USART2 پرچم <code>TXE</code> یک شده است. دقیق‌ترین معنی چیست؟</p>
+  <ol>
+    <li data-why="آن معنی TC است. TXE فقط می‌گوید رجیستر DR خالی شده؛ بایت قبلی ممکن است هنوز در حال شیفت روی سیم باشد.">آخرین بایت کاملا روی سیم رفته است</li>
+    <li data-why="رسیدن داده را RXNE نشان می‌دهد، نه TXE.">بایتی از خط دریافت شده است</li>
+    <li data-why="TXE ربطی به خطا ندارد؛ خطاها با پرچم‌هایی مثل ORE یا FE نشان داده می‌شوند.">خطای فریم رخ داده است</li>
+    <li>رجیستر <code>DR</code> خالی است و می‌توان بایت بعدی را نوشت</li>
+  </ol>
+  <div class="fb"><code>TXE</code> = «جای بایت بعدی آماده است». <code>TC</code> = «هیچ چیز دیگر در حال ارسال نیست». برای پشت‌سرهم‌فرستادن به TXE نگاه کن و برای «همه چیز رفت» به TC.</div>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="q">کدام خط باعث می‌شود درایور روی برد بنویسد «سنسور پیدا نشد»، در حالی که سیم‌کشی درست است؟<br>
+  <code>1: #define BME_ADDR 0xEC</code><br><code>2: uint8_t reg = 0xD0, id;</code><br><code>3: int rc = bus-&gt;xfer(bus-&gt;ctx, BME_ADDR, &amp;reg, 1, &amp;id, 1);</code><br><code>4: if (rc != BUS_OK) puts("not found");</code></p>
+  <ol>
+    <li data-why="این خط فقط یک رجیستر و یک متغیر تعریف می‌کند و درست است.">خط ۲</li>
+    <li>خط ۱: آدرس ۸ بیتی (<code>0xEC</code>) به‌جای ۷ بیتی (<code>0x76</code>) داده شده</li>
+    <li data-why="فراخوانی با پارامترهای درست است؛ اشکال در مقدار آدرس است که در خط ۱ تعریف شد.">خط ۳</li>
+    <li data-why="بررسی خطا کاملا درست است و کار خودش را می‌کند.">خط ۴</li>
+  </ol>
+  <div class="fb">تابع <code>xfer</code> آدرس ۷ بیتی می‌گیرد. <code>0xEC</code> آدرس ۷ بیتی معتبر نیست (بزرگ‌تر از <code>0x77</code>) و هیچ دستگاهی ACK نمی‌دهد. درست: <code>0x76</code>.</div>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="q">چرا درایور سنسور را با <code>bus_t</code> (اشاره‌گر به تابع) می‌نویسیم و مستقیم <code>HAL_I2C_Mem_Read</code> را صدا نمی‌زنیم؟</p>
+  <ol>
+    <li data-why="اشاره‌گر تابع یک صدا زدن غیرمستقیم است و کمی کندتر یا هم‌سرعت است؛ هدف سرعت نیست.">چون سریع‌تر اجرا می‌شود</li>
+    <li data-why="مصرف Flash تفاوت معناداری ندارد؛ هدف قابلیت آزمون و جابه‌جایی است.">چون Flash کمتری مصرف می‌کند</li>
+    <li>چون درایور از سخت‌افزار جدا می‌شود و می‌توان آن را روی PC با mock آزمایش کرد و به ESP32 یا SPI منتقل کرد</li>
+    <li data-why="STM32 و ESP32 هر دو می‌توانند مستقیم توابع خودشان را صدا بزنند؛ اجباری نیست. طرح لایه‌ای انتخاب مهندسی است.">چون STM32 اجازهٔ صدا زدن مستقیم HAL را نمی‌دهد</li>
+  </ol>
+  <div class="fb">وارونگی وابستگی: درایور به یک «رابط» وابسته است، نه به سخت‌افزار. نتیجه: آزمون‌پذیری روی PC، قابلیت حمل بین بردها و ساده‌ماندن تغییر باس.</div>
+</div>
+
+<h2 id="practice">تمرین‌ها</h2>
+
+<div class="exercise"><div class="ct">تمرین ۱: BRR برای سرعت‌های مختلف</div>
+<p>می‌خواهیم ببینیم سه سرعت رایج با کلاک ۱۶ مگاهرتز چقدر خطا دارند.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> برای ۹۶۰۰ baud مقدار <code>BRR</code> تقریبا چند است؟ (با ماشین‌حساب: ۱۶۰۰۰۰۰۰ ÷ ۹۶۰۰.)</li>
+  <li><b>حل:</b> برنامه‌ای بنویس که برای ۹۶۰۰، ۱۱۵۲۰۰ و ۹۲۱۶۰۰ مقدار <code>BRR</code> (دهدهی و هگز)، baud واقعی و درصد خطا را چاپ کند.</li>
+  <li><b>فکر کن:</b> کدام سرعت به مرز خطرناک (حدود ۲ تا ۳٪) نزدیک است؟ راه‌حل چیست؟</li>
+</ol>
+<details><summary>راهنمایی</summary><p><code>BRR = (f + baud/2) / baud</code>؛ baud واقعی <code>f / BRR</code>؛ خطا را به صدم درصد حساب کن تا با عدد صحیح انجام شود.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="uart_table.c">
+$ ./uart_table
+baud    BRR   hex    actual   error
+9600    1667  0x683  9598     -0.02%
+115200  139   0x8B   115107   -0.08%
+921600  17    0x11   941176   +2.12%
+</pre></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="uart_table.c" data-lang="c" data-verify="host" id="ex1">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    uint32_t f_clk = 16000000u;
+    uint32_t bauds[] = { 9600u, 115200u, 921600u };
+
+    printf("baud    BRR   hex    actual   error\n");
+    for (unsigned i = 0; i &lt; sizeof bauds / sizeof bauds[0]; i++) {
+        uint32_t baud = bauds[i];
+        uint32_t brr = (f_clk + baud / 2u) / baud;
+        uint32_t actual = f_clk / brr;
+        int32_t err = ((int32_t)actual - (int32_t)baud) * 10000 / (int32_t)baud;
+        int32_t mag = err &lt; 0 ? -err : err;
+
+        printf("%-7u %-5u 0x%-4X %-8u %c%d.%02d%%\n", (unsigned)baud, (unsigned)brr,
+               (unsigned)brr, (unsigned)actual, err &lt; 0 ? '-' : '+',
+               (int)(mag / 100), (int)(mag % 100));
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex1">
+  <li data-lines="7"><b class="what">سه سرعت.</b> آرایه‌ای از baudها.</li>
+  <li data-lines="9"><b class="what">سرستون.</b> یک‌بار چاپ.</li>
+  <li data-lines="12-13"><b class="what">BRR و baud واقعی.</b> BRR گرد شده و <code>f / BRR</code>.</li>
+  <li data-lines="14-15"><b class="what">خطا.</b> صدم درصد، و قدرمطلق آن برای چاپ.</li>
+  <li data-lines="17-19"><b class="what">چاپ.</b> <code>%-7u</code> چپ‌چین با عرض ۷؛ <code>%X</code> هگز؛ علامت جدا.</li>
+</ol>
+<pre class="term" data-from="uart_table.c">
+$ gcc -std=c11 -Wall -Wextra -o uart_table uart_table.c
+$ ./uart_table
+baud    BRR   hex    actual   error
+9600    1667  0x683  9598     -0.02%
+115200  139   0x8B   115107   -0.08%
+921600  17    0x11   941176   +2.12%
+</pre>
+<p>جواب قسمت پ: ۹۲۱۶۰۰ با ۱۶ مگاهرتز فقط ۱۷ «قدم» دارد (BRR = ۱۷)، پس خطا +۲٫۱۲٪ می‌شود و به مرز خطرناک نزدیک است. راه‌حل‌ها: کلاک بالاتر (PLL) تا BRR بزرگ‌تر و دقیق‌تر شود، یا حالت نمونه‌برداری ۸ برابر (<code>OVER8</code>)، یا سرعت پایین‌تر مثل ۱۱۵۲۰۰.</p></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۲: سنسور پیدا نشد! (باگ‌یابی)</div>
+<p>برنامهٔ زیر می‌خواهد بفهمد BME280 روی باس هست یا نه. باس ما شبیه‌سازی‌شده است: فقط یک دستگاه با آدرس ۷ بیتی <code>0x76</code> دارد.</p>
+<div class="code" data-file="i2c_addr_bug.c" data-lang="c" data-verify="host" id="ex2bad">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+/* شبیه‌سازی باس: فقط یک دستگاه با آدرس ۷ بیتی 0x76 روی آن هست */
+static int i2c_probe(uint8_t addr7)
+{
+    return addr7 == 0x76u;
+}
+
+int main(void)
+{
+    uint8_t addr = 0xECu;               // «آدرس نوشتن» از روی یک برگهٔ داده
+
+    if (i2c_probe(addr)) {
+        printf("BME280 found\n");
+    } else {
+        printf("no ACK from 0x%02X\n", addr);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> چه چاپ می‌شود؟</li>
+  <li><b>باگ‌یابی:</b> چرا سنسور پیدا نمی‌شود، با اینکه <code>0xEC</code> در برگهٔ داده هست؟</li>
+  <li><b>ساخت:</b> برنامه را طوری بنویس که آدرس واقعی را از بایت نوشتن بگیرد و همهٔ آدرس‌های <code>0x08</code> تا <code>0x77</code> را اسکن کند (مثل ابزار <code>i2cdetect</code>).</li>
+</ol>
+<details><summary>راهنمایی</summary><p>بایت <code>0xEC</code> شامل آدرس ۷ بیتی و بیت R/W در پایین‌ترین بیت است. آدرس واقعی = بایت شیفت‌داده‌شده به راست.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary>
+<pre class="term" data-from="i2c_addr_bug.c">
+$ ./i2c_addr_bug
+no ACK from 0xEC
+</pre>
+<p>نسخهٔ اصلاح‌شده باید <code>found device at 0x76</code> نشان بدهد.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="i2c_scan.c" data-lang="c" data-verify="host" id="ex2">
+<pre>
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+static int i2c_probe(uint8_t addr7)
+{
+    return addr7 == 0x76u;
+}
+
+int main(void)
+{
+    uint8_t write_byte = 0xECu;                 // آنچه روی سیم می‌رود: آدرس‌۷بیتی + بیت W
+    uint8_t addr7 = (uint8_t)(write_byte &gt;&gt; 1); // آدرس واقعی
+
+    printf("8-bit write byte 0x%02X = 7-bit address 0x%02X\n", write_byte, addr7);
+    for (uint8_t a = 0x08u; a &lt;= 0x77u; a++) {
+        if (i2c_probe(a)) {
+            printf("found device at 0x%02X\n", a);
+        }
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex2">
+  <li data-lines="4-7"><b class="what">باس شبیه‌سازی‌شده.</b> فقط آدرس ۷ بیتی <code>0x76</code> جواب می‌دهد.</li>
+  <li data-lines="11"><b class="what">بایت روی سیم.</b> <code>0xEC</code> = آدرس ۷ بیتی در بیت‌های ۷ تا ۱ + بیت W در بیت ۰.</li>
+  <li data-lines="12"><b class="what">آدرس واقعی.</b> یک بیت شیفت به راست: <code>0xEC &gt;&gt; 1 = 0x76</code>.
+    <span class="why">نسخهٔ باگ‌دار <code>0xEC</code> را به‌جای آدرس ۷ بیتی داد؛ عددی بزرگ‌تر از <code>0x77</code> که هیچ دستگاهی نمی‌شنود.</span></li>
+  <li data-lines="14"><b class="what">توضیح.</b> یک خط چاپ می‌شود تا رابطهٔ دو عدد دیده شود.</li>
+  <li data-lines="15-19"><b class="what">اسکن.</b> از <code>0x08</code> تا <code>0x77</code> (آدرس‌های رزرو کنار گذاشته می‌شوند)؛ هر آدرسی که ACK داد چاپ می‌شود.</li>
+</ol>
+<pre class="term" data-from="i2c_scan.c">
+$ gcc -std=c11 -Wall -Wextra -o i2c_scan i2c_scan.c
+$ ./i2c_scan
+8-bit write byte 0xEC = 7-bit address 0x76
+found device at 0x76
+</pre></details></div>
+
+<div class="exercise"><div class="ct">تمرین ۳: ارسال UART با مهلت (ارتباط با سخت‌افزار)</div>
+<p><code>uart_putc</code> ما تا <code>TXE</code> نیاید برای همیشه منتظر می‌ماند. اگر ساعت USART2 روشن نشده باشد، برنامه هنگ می‌کند. با <code>millis()</code> درس <a href="5-4.html">۵.۴</a> نسخهٔ امن بنویس.</p>
+<ol class="parts">
+  <li><b>پیش‌بینی:</b> اگر <code>RCC_APB1ENR</code> بیت ۱۷ را فراموش کنی، <code>TXE</code> چه می‌شود و چرا برنامه هنگ می‌کند؟</li>
+  <li><b>حل:</b> تابع <code>int uart_putc_timeout(char c, uint32_t timeout_ms)</code> بنویس که ۰ در موفقیت و ‌−۱ در صورت تمام‌شدن مهلت بدهد.</li>
+  <li><b>چالش:</b> <code>uart_puts_safe</code> بنویس که همهٔ رشته را بفرستد و در پایان منتظر <code>TC</code> هم (با همان مهلت) بماند.</li>
+</ol>
+<details><summary>راهنمایی</summary><p>الگوی ۵.۴: <code>start = millis()</code> و شرط <code>(uint32_t)(millis() - start) &gt;= timeout_ms</code> داخل حلقهٔ انتظار.</p></details>
+<details class="expect"><summary>چه باید ببینی؟</summary><p>فایل با <code>arm-none-eabi-gcc -c</code> بی‌هشدار کامپایل می‌شود. روی برد، اگر ساعت USART را عمدا خاموش بگذاری، <code>uart_putc_timeout</code> بعد از مهلت <code>-1</code> برمی‌گرداند و برنامه هنگ نمی‌کند.</p></details>
+<details class="answer"><summary>جواب کامل با توضیح</summary>
+<div class="code" data-file="uart_safe.c" data-lang="c" data-verify="arm" id="ex3">
+<pre>
+#include &lt;stdint.h&gt;
+
+#define USART2_SR (*(volatile uint32_t *)0x40004400u)
+#define USART2_DR (*(volatile uint32_t *)0x40004404u)
+
+#define SR_TC  (1u &lt;&lt; 6)
+#define SR_TXE (1u &lt;&lt; 7)
+
+uint32_t millis(void);
+
+int uart_putc_timeout(char c, uint32_t timeout_ms)
+{
+    uint32_t start = millis();
+
+    while ((USART2_SR &amp; SR_TXE) == 0u) {
+        if ((uint32_t)(millis() - start) &gt;= timeout_ms) {
+            return -1;
+        }
+    }
+    USART2_DR = (uint32_t)(uint8_t)c;
+    return 0;
+}
+
+int uart_puts_safe(const char *s, uint32_t timeout_ms)
+{
+    while (*s != '\0') {
+        if (uart_putc_timeout(*s, timeout_ms) != 0) {
+            return -1;
+        }
+        s++;
+    }
+
+    uint32_t start = millis();
+    while ((USART2_SR &amp; SR_TC) == 0u) {
+        if ((uint32_t)(millis() - start) &gt;= timeout_ms) {
+            return -1;
+        }
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="ex3">
+  <li data-lines="3-7"><b class="what">رجیسترها.</b> فقط دو رجیستر و دو پرچم لازم است.</li>
+  <li data-lines="9"><b class="what">millis.</b> از ماژول SysTick (۵.۴) می‌آید؛ اینجا فقط اعلان شده.</li>
+  <li data-lines="11-22"><b class="what">ارسال با مهلت.</b> زمان شروع را بنویس؛ تا <code>TXE</code> نیامده و مهلت تمام نشده صبر کن؛ اگر مهلت تمام شد <code>-1</code>.
+    <span class="why">پیش‌بینی قسمت الف: بدون ساعت، رجیستر‌های USART به نوشتن جواب نمی‌دهند و <code>TXE</code> هرگز یک نمی‌شود؛ انتظار بی‌مهلت هنگ می‌کند.</span></li>
+  <li data-lines="24-31"><b class="what">ارسال رشته.</b> بایت‌به‌بایت؛ اگر یکی شکست بخورد، همان را گزارش کن.</li>
+  <li data-lines="33-38"><b class="what">انتظار TC.</b> یک مهلت تازه برای «آخرین بیت رفت».</li>
+</ol></details></div>
+
+<div class="callout coach"><div class="ct">حرف مربی</div>
+<p>در ارتباط سریالی ۹۰٪ مشکل‌ها از چند چیز ساده‌اند، نه از منطق کد. اگر «هیچ‌چیز نمی‌رسد» به این ترتیب بپرس: <b>زمین مشترک است؟ TX به RX (ضربدری) وصل است؟ ولتاژها یکی است؟ baud دو طرف یکی است؟ ساعت پریفرال و پایهٔ GPIO (با شمارهٔ AF درست) روشن است؟</b> اگر «آشغال» می‌رسد، معمولا baud یا مود SPI است. در I2C اول از همه <b>بالاکش</b> و بعد <b>آدرس ۷ بیتی</b> را بررسی کن. و اگر می‌خواهی واقعا ببینی چه می‌رود، یک تحلیلگر منطقی ارزان (درس ۱.۳) بهترین سرمایه‌گذاری است: همان نمودارهای بالا را روی رایانه‌ات نشان می‌دهد. درایور را همیشه اول با mock روی PC بنویس؛ وقتی روی PC درست بود، روی برد فقط سیم‌کشی مانده.</p></div>
+
+<div class="sum"><h2>خلاصه یک‌دقیقه‌ای</h2>
+<ul>
+  <li><b>UART:</b> دو سیم، بدون کلاک؛ فریم ۸N1 = شروع (۰) + ۸ بیت (اول LSB) + توقف (۱) = ۱۰ بیت؛ دو طرف باید baud یکسان داشته باشند؛ TX به RX ضربدری.</li>
+  <li>USART2 در STM32F411: PA2/PA3 با AF7؛ <code>BRR = round(f_clk / baud)</code> (برای ۱۶ مگاهرتز و ۱۱۵۲۰۰ می‌شود <code>0x8B</code>)؛ <code>CR1 = UE | TE | RE</code>؛ <code>TXE</code> = بایت بعدی را بنویس، <code>TC</code> = همه رفت، <code>RXNE</code> = بایت رسید.</li>
+  <li>Polling ساده است ولی پردازنده را نگه می‌دارد؛ وقفه + بافر حلقوی برای دریافت؛ DMA برای بلوک‌های بزرگ.</li>
+  <li><b>SPI:</b> کلاک + MOSI + MISO + CS؛ ثبات‌های شیفت دو طرف جا عوض می‌کنند؛ مود = CPOL (کلاک بیکار) و CPHA (لبهٔ نمونه‌برداری)؛ مود ۰ = بیکار پایین، نمونه روی بالارو.</li>
+  <li><b>I2C:</b> SDA و SCL open-drain با مقاومت بالاکش؛ START، آدرس ۷ بیتی + R/W، ACK، داده، STOP؛ مراقب آدرس ۷ در برابر ۸ بیتی (<code>0x76</code> در برابر <code>0xEC</code>) باش.</li>
+  <li>درایور را روی رابط <code>bus_t</code> (اشاره‌گر تابع + <code>ctx</code>) بنویس؛ mock روی PC برای آزمون و پیاده‌سازی HAL/ESP-IDF روی برد؛ خطاهای هر لایه جدا و <code>0</code> = موفق.</li>
+  <li>همیشه برای انتظار سخت‌افزار مهلت بگذار (درس ۵.۴).</li>
+</ul></div>
+
+</article>
+</body>
+</html>
