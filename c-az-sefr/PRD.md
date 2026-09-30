@@ -146,8 +146,7 @@ code/<lesson>/*.c     همهٔ برنامه‌ها به‌صورت فایل وا
 - **ناسازگاری با قانون README** ⇒ در همان commit ردیف‌های README همگام می‌شود.
 
 ## ۱۳. وضعیت اجرا (برای ادامهٔ کار پس از ریست سشن)
-- **تحویل و push شده:** موتور (`assets/app.js`, `style.css`, `course.js`), ابزار `assets/tools/build.py`, `WRITING-GUIDE.md`, `LESSON-BRIEFS.md`, صفحهٔ خانه و واژه‌نامه؛ درس‌های ۱-۳، ۱-۴، ۲-۱ تا ۲-۸.
-- **۱-۱ و ۱-۲ کامل و وارسی شدند.** پیش‌نویس (با `build.py verify/check` بسنج): ۳-۱ تا ۳-۶، ۴-۱، ۴-۲ (ایجنت‌ها در حال نوشتن بودند).
+- **تحویل و push شده و با build.py وارسی‌شده:** موتور، ابزارها، صفحهٔ خانه و واژه‌نامه، درس‌های ۱-۱ تا ۱-۴، ۲-۱ تا ۲-۸، ۳-۱ تا ۳-۶، ۴-۱، ۴-۲.
 - **نانوشته:** ۴-۳ تا ۴-۷، فصل ۵، ۶، ۷؛ صفحه‌های `tools.html`، `cheatsheet.html`، `troubleshooting.html`، `references.html`.
-- **پس از نوشتن همه:** `python3 c-az-sefr/assets/tools/build.py all`، به‌روزرسانی README، ریویوی ۵ شاگرد × ۳ دور (بند ۱۰)، حذف پیوندهای شکسته.
-- روش کار: هر نویسنده دو درس با راهنمای `WRITING-GUIDE.md`؛ پس از هر موج commit + push روی master.
+- **پس از نوشتن همه:** `python3 c-az-sefr/assets/tools/build.py all`، به‌روزرسانی README، ریویوی ۵ شاگرد × ۳ دور (بند ۱۰)، رفع پیوندهای شکسته.
+- روش کار: هر نویسنده دو درس با `WRITING-GUIDE.md` و `LESSON-BRIEFS.md`؛ پس از هر موج commit + push روی master.
