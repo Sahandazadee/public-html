@@ -4,8 +4,8 @@ LDFLAGS = -nostdlib -T link.ld
 
 all: button_irq.bin
 
-button_irq.elf: main.o startup.o link.ld
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ main.o startup.o
+button_irq.elf: main.o startup.o vectors.o link.ld
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ main.o startup.o vectors.o
 
 button_irq.bin: button_irq.elf
 	arm-none-eabi-objcopy -O binary $< $@

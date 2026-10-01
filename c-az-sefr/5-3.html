@@ -207,7 +207,7 @@
 <div class="widget" data-w="bits" data-width="16" data-reg="SYSCFG_EXTICR4" data-value="0" data-title="SYSCFG_EXTICR4: انتخاب پورت برای خط‌های ۱۲ تا ۱۵" data-fields='[{"name":"EXTI13","hi":7,"lo":4,"map":["PA","PB","PC","PD","PE","—","—","PH"]},{"name":"EXTI12","hi":3,"lo":0,"map":["PA","PB","PC","PD","PE","—","—","PH"]}]'></div>
 
 <h2 id="code">برنامهٔ کامل: دکمه ← وقفه ← LED</h2>
-<p>پروژه را از ۵.۲ گسترش می‌دهیم. چون این درس باید خودش تنها بایستد، همهٔ فایل‌ها اینجاست: <code>board.h</code> (هدر بزرگ‌تر)، <code>startup.c</code> (جدول برداری با درایهٔ ۵۶)، <code>main.c</code>، و دو فایل بی‌تغییر (<code>link.ld</code> و <code>Makefile</code>).</p>
+<p>پروژه را از ۵.۲ گسترش می‌دهیم. فایل‌های این درس: <code>board.h</code> (هدر بزرگ‌تر)، <code>startup.c</code> (فقط <code>Reset_Handler</code>)، <code>main.c</code>، <code>link.ld</code> و <code>Makefile</code>، به‌علاوهٔ <code>vectors.c</code> که <b>از ۵.۱ برمی‌داری</b> (جدول کامل F411).</p>
 
 <div class="code" data-file="board.h" data-lang="c" data-verify="make" data-project="irq" id="brd">
 <pre>
@@ -298,28 +298,12 @@ static inline void wait_for_irq(void) { __asm volatile ("wfi"); }
     <span class="why">این‌ها در CMSIS با نام‌های <code>__disable_irq()</code>، <code>__enable_irq()</code> و <code>__WFI()</code> هم هستند.</span></li>
 </ol>
 
-<div class="code" data-file="startup.c" data-lang="c" data-verify="make" data-project="irq" id="stu">
+<div class="code" data-file="startup.c" data-lang="c" data-verify="make" data-project="irq" data-needs="5-1/boot/vectors.c" id="stu">
 <pre>
 #include &lt;stdint.h&gt;
 
-extern uint32_t _estack, _sidata, _sdata, _edata, _sbss, _ebss;
+extern uint32_t _sidata, _sdata, _edata, _sbss, _ebss;
 int main(void);
-
-void Reset_Handler(void);
-void Default_Handler(void);
-void NMI_Handler(void)           __attribute__((weak, alias("Default_Handler")));
-void HardFault_Handler(void)     __attribute__((weak, alias("Default_Handler")));
-void EXTI15_10_IRQHandler(void)  __attribute__((weak, alias("Default_Handler")));
-
-/* درایه n وقفهٔ IRQ شمارهٔ n-16 است */
-__attribute__((section(".isr_vector"), used))
-void (*const vector_table[16 + 41])(void) = {
-    [0]  = (void (*)(void))&amp;_estack,
-    [1]  = Reset_Handler,
-    [2]  = NMI_Handler,
-    [3]  = HardFault_Handler,
-    [16 + 40] = EXTI15_10_IRQHandler,
-};
 
 void Reset_Handler(void)
 {
@@ -334,24 +318,14 @@ void Reset_Handler(void)
     for (;;) {
     }
 }
-
-void Default_Handler(void)
-{
-    for (;;) {
-    }
-}
 </pre></div>
 <ol class="walk" data-for="stu">
   <li data-lines="3-4"><b class="what">مرزهای حافظه و main.</b> مثل ۵.۲.</li>
-  <li data-lines="8-10"><b class="what">نام‌های ضعیف.</b> سه handler به <code>Default_Handler</code> اشاره می‌کنند؛ هرکدام را در جای دیگر تعریف کنی، جایگزین می‌شود.
-    <span class="why">اگر نام handler را در <code>main.c</code> غلط بنویسی، این خط ساکت می‌ماند و وقفه به <code>Default_Handler</code> (حلقهٔ بی‌نهایت) می‌رود. بخش «اگر خراب شد» را ببین.</span></li>
-  <li data-lines="12-20"><b class="what">جدول برداری.</b> با <span class="en">designated initializer</span> (درس <a href="3-4.html">۳.۴</a>) فقط درایه‌های لازم را پر می‌کنیم و بقیه صفر می‌مانند. آرایه <code>16 + 41</code> درایه دارد (تا IRQ 40).
-    <span class="why">درایه‌ای که صفر باشد اگر وقفه‌اش فعال شود، CPU را به آدرس صفر می‌فرستد و HardFault می‌شود. ما فقط وقفه‌ای را فعال می‌کنیم که handler‌اش را نوشته‌ایم. (فایل رسمی ST همهٔ درایه‌ها را با <code>Default_Handler</code> پر می‌کند.)</span></li>
-  <li data-lines="15-18"><b class="what">چهار درایهٔ اول.</b> <code>SP</code>، <code>Reset_Handler</code>، <code>NMI</code>، <code>HardFault</code>.</li>
-  <li data-lines="19"><b class="what">درایهٔ ۵۶.</b> <code>[16 + 40]</code> = <code>EXTI15_10_IRQHandler</code>. آفستش در Flash: <code>4 × 56 = 0xE0</code>.</li>
-  <li data-lines="22-34"><b class="what">Reset_Handler.</b> کپی <code>.data</code>، صفر کردن <code>.bss</code>، صدا زدن <code>main</code> (مثل ۵.۲).</li>
-  <li data-lines="36-40"><b class="what">Default_Handler.</b> جای امن برای وقفهٔ ناخواسته.</li>
+  <li data-lines="6-17"><b class="what">Reset_Handler.</b> کپی <code>.data</code>، صفر کردن <code>.bss</code>، صدا زدن <code>main</code> (مثل ۵.۲).</li>
 </ol>
+
+<div class="callout warn"><div class="ct">جدول برداری: همان <code>vectors.c</code> کامل درس ۵.۱</div>
+<p>این‌جا هم جدول را دوباره ننوشتیم. فایل <code>vectors.c</code> درس <a href="5-1.html">۵.۱</a> (پوشهٔ <code>code/5-1/boot</code>) را عینا کنار <code>startup.c</code> بگذار. آن جدول <b>همهٔ ۱۰۲ ورودی</b> F411 را دارد و هر نام <code>*_IRQHandler</code> یک weak alias به <code>Default_Handler</code> است. پس فقط کافی است <code>EXTI15_10_IRQHandler</code> را در <code>main.c</code> با <b>همین نام</b> تعریف کنیم؛ ورودی ۵۶ (<code>16 + 40</code>، آفست <code>4 × 56 = 0xE0</code>) خودکار به آن می‌رسد. (نسخهٔ کوتاه‌شدهٔ قبلی فقط ۴ + ۱ ورودی داشت و هر وقفهٔ دیگری مثل SysTick یا TIM2 را به آدرس صفر می‌فرستاد.)</p></div>
 
 <div class="code" data-file="main.c" data-lang="c" data-verify="make" data-project="irq" id="mn">
 <pre>
@@ -512,8 +486,8 @@ LDFLAGS = -nostdlib -T link.ld
 
 all: button_irq.bin
 
-button_irq.elf: main.o startup.o link.ld
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ main.o startup.o
+button_irq.elf: main.o startup.o vectors.o link.ld
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ main.o startup.o vectors.o
 
 button_irq.bin: button_irq.elf
 	arm-none-eabi-objcopy -O binary $&lt; $@
@@ -524,7 +498,7 @@ button_irq.bin: button_irq.elf
 clean:
 	rm -f *.o *.elf *.bin
 </pre></div>
-<p>مثل ۵.۲ ولی برای یک برنامه: <code>button_irq.elf</code> از <code>main.o</code> و <code>startup.o</code> ساخته می‌شود و <code>objcopy</code> آن را به <code>.bin</code> برای Flash درمی‌آورد. جلوی دستورها Tab است.</p>
+<p>مثل ۵.۲ ولی برای یک برنامه: <code>button_irq.elf</code> از <code>main.o</code>، <code>startup.o</code> و <code>vectors.o</code> (جدول ۵.۱) ساخته می‌شود و <code>objcopy</code> آن را به <code>.bin</code> برای Flash درمی‌آورد. جلوی دستورها Tab است.</p>
 </details>
 
 <p>ساخت و بازرسی (خروجی واقعی، <span class="en">arm-none-eabi-gcc 13.2.1</span>). به آدرس <code>0xE0</code> و مقدار آن دقت کن:</p>
@@ -532,21 +506,21 @@ clean:
 $ make
 $ arm-none-eabi-size button_irq.elf
    text	   data	    bss	    dec	    hex	filename
-    616	      0	      8	    624	    270	button_irq.elf
-$ arm-none-eabi-nm button_irq.elf | sort | grep -E 'vector|EXTI|main'
-08000000 R vector_table
-08000118 T EXTI15_10_IRQHandler
-08000144 T main
+    796	      0	      8	    804	    324	button_irq.elf
+$ arm-none-eabi-nm button_irq.elf | sort | grep -E 'g_vectors|EXTI15|main'
+08000000 R g_vectors
+080001cc T EXTI15_10_IRQHandler
+080001f8 T main
 $ arm-none-eabi-objdump -h button_irq.elf
 Sections:
 Idx Name          Size      VMA       LMA       File off  Algn
-  0 .isr_vector   000000e4  08000000  08000000  00001000  2**2
-  1 .text         00000184  080000e4  080000e4  000010e4  2**2
-  3 .bss          00000008  20000000  08000268  00002000  2**2
-$ arm-none-eabi-objdump -s -j .isr_vector button_irq.elf | tail -1
- 80000e0 19010008                             ....
+  0 .isr_vector   00000198  08000000  08000000  00001000  2**2
+  1 .text         00000184  08000198  08000198  00001198  2**2
+  3 .bss          00000008  20000000  0800031c  00002000  2**2
+$ arm-none-eabi-objdump -s -j .isr_vector button_irq.elf | grep '^ 80000e0'
+ 80000e0 cd010008 19030008 19030008 00000000  ................
 </pre>
-<p>جدول برداری <code>0xE4</code> = ۲۲۸ بایت = ۵۷ کلمه است (درایه‌های ۰ تا ۵۶). آخرین کلمه (<code>0x080000e0</code>) بایت‌های <code>19 01 00 08</code> است. little-endian: <code>0x08000119</code>. آدرس <code>EXTI15_10_IRQHandler</code> <code>0x08000118</code> است و بیت ۰ آن برای حالت Thumb یک شده. یعنی همان چیزی که CPU در وقفه می‌خواند. متغیرهای <code>button_event</code> و <code>press_count</code> در <code>.bss</code> (۸ بایت) هستند و <code>Reset_Handler</code> صفرشان می‌کند.</p>
+<p>جدول برداری <code>0x198</code> = ۴۰۸ بایت = ۱۰۲ کلمه است (جدول کامل ۵.۱؛ <code>.text</code> بعد از آن شروع می‌شود). کلمهٔ ورودی ۵۶ (<code>0x080000e0</code>، اولین کلمهٔ سطر بالا) بایت‌های <code>cd 01 00 08</code> است. little-endian: <code>0x080001cd</code>. آدرس <code>EXTI15_10_IRQHandler</code> <code>0x080001cc</code> است و بیت ۰ آن برای حالت Thumb یک شده. یعنی همان چیزی که CPU در وقفه می‌خواند. کلمه‌های بعدی <code>0x08000319</code> هستند: <code>Default_Handler</code> (<code>0x08000318</code>) برای وقفه‌های دیگر. متغیرهای <code>button_event</code> و <code>press_count</code> در <code>.bss</code> (۸ بایت) هستند و <code>Reset_Handler</code> صفرشان می‌کند.</p>
 
 <div class="callout warn"><div class="ct">این‌ها فقط ساخته شده‌اند، نه اجرا</div>
 <p>کدهای این درس با <code>arm-none-eabi-gcc</code> کامپایل و لینک شده و جدول و آدرس‌ها بازرسی شده‌اند؛ ولی ما در این محیط برد نداریم. روی Nucleo خودت امتحان کن؛ اگر LED واکنش نشان نداد، از فهرست بخش «اگر خراب شد» شروع کن.</p></div>
@@ -774,6 +748,10 @@ uint64_t read_ticks(void)
 <figcaption>ISR B (اولویت ۱) مهم‌تر از A (اولویت ۵) است. پس هنگام اجرای A می‌رسد و آن را قطع می‌کند. پشته هر بار یک قاب جدید می‌گیرد.</figcaption></figure>
 
 <p>پیش‌فرض همهٔ وقفه‌ها اولویت ۰ است (بالاترین)؛ پس بدون تنظیم اولویت، وقفه‌ها هم‌اولویت‌اند و همدیگر را قطع نمی‌کنند. برای شروع، همین را نگه دار و فقط وقتی اولویت بگذار که دلیل داری: مثلا وقفهٔ ارتباطی با محدودیت زمانی سخت را بالاتر از وقفهٔ دکمه بگذار. هر سطح تودرتو بیشتر پشته می‌خورد؛ در سیستم‌های حرفه‌ای عمق را حساب می‌کنند.</p>
+
+<div class="callout info"><div class="ct">دو نکتهٔ ریز برای کنجکاوها</div>
+<p><b>۱) پاک‌کردن پرچم در انتهای ISR:</b> روی Cortex-M4 نوشتن در رجیستر پریفرال ممکن است «بافر» شود و چند چرخه دیرتر به پریفرال برسد. اگر پرچم را در <b>آخرین دستورهای</b> ISR پاک کنی، ممکن است CPU قبل از رسیدن آن نوشتن برگردد و وقفه یک بار دیگر بیاید. دو راه: پرچم را <b>اول ISR</b> پاک کن (همان کاری که ما می‌کنیم)، یا بعد از پاک‌کردن همان رجیستر را یک بار بخوان (یا <code>__DSB()</code> از CMSIS) تا نوشتن تمام شود.</p>
+<p><b>۲) <code>PRIGROUP</code>:</b> بیت‌های اولویت به دو گروه «پیش‌دستی» (preempt) و «زیر‌اولویت» تقسیم می‌شوند و محل تقسیم را <code>SCB-&gt;AIRCR.PRIGROUP</code> تعیین می‌کند. مقدار پیش‌فرض صفر است، یعنی هر ۴ بیت اولویت F411 برای پیش‌دستی‌اند، و ما همین را فرض کرده‌ایم. اگر با CMSIS (<code>NVIC_SetPriority</code> و <code>NVIC_SetPriorityGrouping</code>) کار می‌کنی، جزئیاتش را در مستندات ARM (Cortex-M4 Generic User Guide) ببین.</p></div>
 
 <h2 id="broken">اگر خراب شد چه می‌شود؟</h2>
 <p><b>باگ اول: پرچم را پاک نکردی.</b> ISR می‌پرد، کار می‌کند، برمی‌گردد؛ و چون <code>EXTI_PR</code> هنوز یک است، NVIC همان لحظه دوباره صدایش می‌زند. برنامهٔ اصلی هرگز نوبت نمی‌گیرد. شبیه‌سازی ساده روی PC:</p>
@@ -1183,7 +1161,7 @@ int main(void)
   <li data-lines="44-46"><b class="what">حلقه.</b> <code>wfi</code> تا وقفه بیاید. کار در ISR است.
     <span class="why">این کار با یک نوشتن BSRR ایمن است؛ اگر کار ISR پیچیده‌تر بود باید به main می‌سپردیم.</span></li>
 </ol>
-<p>این برنامه هم مثل ۵.۲ نیاز به startup و جدول برداری دارد؛ همان <code>startup.c</code>، <code>board.h</code> (یا این تعریف‌ها) و <code>link.ld</code> بخش قبل را کنارش بگذار. اینجا فقط <code>arm-none-eabi-gcc -c</code> شد (کامپایل)، نه لینک.</p></details></div>
+<p>این برنامه هم مثل ۵.۲ نیاز به startup و جدول برداری دارد؛ همان <code>startup.c</code>، <code>vectors.c</code> (۵.۱)، <code>board.h</code> (یا این تعریف‌ها) و <code>link.ld</code> بخش قبل را کنارش بگذار. اینجا فقط <code>arm-none-eabi-gcc -c</code> شد (کامپایل)، نه لینک.</p></details></div>
 
 <div class="callout coach"><div class="ct">حرف مربی</div>
 <p>وقفه‌ها جایی است که بیشتر برنامه‌نویس‌ها اولین باگ «هفته‌ها» را می‌بینند: برنامه ۹۹٪ وقت درست کار می‌کند و گاهی، بدون دلیل، خراب می‌شود. علتش تقریبا همیشه یکی از این سه است: پرچم <code>volatile</code> نیست، متغیر مشترک چندبخشی بدون بخش بحرانی خوانده شده، یا ISR کار زیادی می‌کند. اگر یک قاعده را حفظ کنی: <b>ISR فقط خبر می‌دهد؛ main کار می‌کند</b>، ۹۰٪ این باگ‌ها هرگز به سراغت نمی‌آیند. و وقتی گیر کردی، دیباگر (درس ۶.۱) را روی <code>Default_Handler</code> و رجیستر <code>EXTI_PR</code> نگاه کن.</p></div>
