@@ -36,7 +36,7 @@ uint32_t measure(void)
     uint32_t t0 = cyc_now();
     sink = work(n_in);
     uint32_t t1 = cyc_now();
-    return t1 - t0;                     /* بدون علامت: سرریز شمارنده هم درست حساب می‌شود */
+    return t1 - t0;                     /* بی‌علامت: سرریز شمارنده هم درست حساب می‌شود */
 }
 
 uint32_t measure_overhead(void)
