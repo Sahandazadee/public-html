@@ -30,14 +30,17 @@ int main(void)
 
     for (;;) {
         int now = button_pressed();
-        if (now && !was_pressed) {
-            led_on = !led_on;
-            if (led_on) {
-                GPIOA->BSRR = 1u << LED_PIN;
-            } else {
-                GPIOA->BSRR = 1u << (LED_PIN + 16u);
+        if (now != was_pressed) {
+            if (now) {
+                led_on = !led_on;
+                if (led_on) {
+                    GPIOA->BSRR = 1u << LED_PIN;
+                } else {
+                    GPIOA->BSRR = 1u << (LED_PIN + 16u);
+                }
             }
             delay(30000u);
+            now = button_pressed();
         }
         was_pressed = now;
     }

@@ -9,7 +9,7 @@ typedef struct {
     volatile uint32_t OTYPER;   // +0x04
     volatile uint32_t OSPEEDR;  // +0x08
     volatile uint32_t PUPDR;    // +0x0C
-    volatile uint32_t IDR;      // +0x10
+    const volatile uint32_t IDR; // +0x10 (فقط‌خواندنی)
     volatile uint32_t ODR;      // +0x14
     volatile uint32_t BSRR;     // +0x18
     volatile uint32_t LCKR;     // +0x1C
