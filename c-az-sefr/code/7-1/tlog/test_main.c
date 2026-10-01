@@ -156,12 +156,44 @@ static void test_fsm(void)
     CHECK(strstr(uart_out, "-> ALARM") != NULL);
 }
 
+static void test_boundaries(void)                       /* مرزهای دقیق R1 و R4 */
+{
+    logger_t lg;
+    reset_mock();
+    logger_init(&lg, &mock_hal);
+    input = "START\n";
+    next_raw = 1000u;
+    run_ms(&lg, 100u);
+    CHECK(lg.state == LG_SAMPLING);
+
+    /* آستانهٔ روشن شدن را دقیقا برابر دمای یک raw می‌گذاریم */
+    uint16_t hot = 2000u;
+    lg.high = temp_from_raw(hot);
+    next_raw = (uint16_t)(hot - 1u);                    /* یک پله کمتر از آستانه */
+    run_ms(&lg, 1000u);
+    CHECK(lg.state == LG_SAMPLING);
+    next_raw = hot;                                     /* دقیقا برابر آستانه: T >= high */
+    run_ms(&lg, 1000u);
+    CHECK(lg.state == LG_ALARM);
+
+    /* آستانهٔ خاموش شدن (high - پسماند) را دقیقا برابر دمای یک raw می‌گذاریم */
+    uint16_t cool = 1500u;
+    lg.high = (centi_t)(temp_from_raw(cool) + ALARM_HYST_CENTI);
+    next_raw = (uint16_t)(cool + 1u);                   /* یک پله بالاتر از مرز */
+    run_ms(&lg, 1000u);
+    CHECK(lg.state == LG_ALARM);
+    next_raw = cool;                                    /* دقیقا روی مرز: T <= high - پسماند */
+    run_ms(&lg, 1000u);
+    CHECK(lg.state == LG_SAMPLING);
+}
+
 int main(void)
 {
     test_temp();
     test_ring();
     test_parser();
     test_fsm();
+    test_boundaries();
     if (failures != 0) {
         printf("%d of %d checks FAILED\n", failures, checks);
         return 1;

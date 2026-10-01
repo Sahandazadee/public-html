@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* هر سکو (PC، STM32، ESP32) این چهار تابع را می‌دهد؛ منطق برنامه فقط این را می‌شناسد */
+/* هر سکو (PC، STM32، ESP32) این پنج تابع را می‌دهد؛ منطق برنامه فقط این را می‌شناسد */
 typedef struct {
     bool     (*sensor_read)(uint16_t *raw);     /* یک نمونهٔ خام؛ false = خطای سنسور */
     void     (*uart_write)(const char *s);      /* ارسال یک رشته */

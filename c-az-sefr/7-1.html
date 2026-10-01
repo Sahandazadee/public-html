@@ -407,7 +407,7 @@ bool ring_at(const ring_t *r, uint32_t i, sample_t *out)
 #include &lt;stdbool.h&gt;
 #include &lt;stdint.h&gt;
 
-/* هر سکو (PC، STM32، ESP32) این چهار تابع را می‌دهد؛ منطق برنامه فقط این را می‌شناسد */
+/* هر سکو (PC، STM32، ESP32) این پنج تابع را می‌دهد؛ منطق برنامه فقط این را می‌شناسد */
 typedef struct {
     bool     (*sensor_read)(uint16_t *raw);     /* یک نمونهٔ خام؛ false = خطای سنسور */
     void     (*uart_write)(const char *s);      /* ارسال یک رشته */
@@ -905,7 +905,7 @@ void logger_poll(logger_t *lg)
 </pre></div>
 <ol class="walk" data-for="c12">
   <li data-lines="4-21"><b class="what">کمک‌کننده‌های چاپ.</b> <code>say</code> یک رشته را می‌فرستد؛ <code>say_u32</code> و <code>say_temp</code> عدد را در بافر محلی کوچک می‌سازند و می‌فرستند. <span class="why">دلیل: بافر محلی ۱۲ و ۱۶ بایتی روی پشته کافی است (بیشینه‌ی <code>uint32_t</code> ده رقم و «-125.00» هفت نویسه است) و هیچ حافظهٔ پویایی لازم نیست.</span></li>
-  <li data-lines="23-31"><b class="what">نام حالت.</b> <code>switch</code> روی <code>enum</code> بدون <code>default</code>؛ اگر حالت جدیدی اضافه کنی و اینجا فراموش کنی، کامپایلر هشدار می‌دهد (<code>-Wswitch</code> در <code>-Wall</code>).</li>
+  <li data-lines="23-31"><b class="what">نام حالت.</b> <code>switch</code> روی <code>enum</code> بدون <code>default</code>؛ اگر حالت جدیدی اضافه کنی و اینجا فراموش کنی، کامپایلر هشدار می‌دهد (<code>-Wswitch</code> در <code>-Wall</code>). <span class="why">این با سبک «همیشه <code>default</code>» در MISRA (درس ۶.۳) فرق دارد؛ ما عمداً سبک بی‌<code>default</code> را برای گرفتن <code>-Wswitch</code> انتخاب کردیم و <code>return "?"</code> بعد از <code>switch</code> فقط برای مقدار خراب‌شدهٔ <code>enum</code> است. هر تیم باید یکی را انتخاب کند و بنویسد.</span></li>
   <li data-lines="33-43"><b class="what">ورود به حالت.</b> حالت را می‌گذارد، چراغ را با <code>next == LG_ALARM</code> تنظیم می‌کند (فقط در ALARM روشن) و پیام می‌فرستد. <span class="why">دلیل: اگر هر گذار جداگانه چراغ را عوض می‌کرد، یک روز یکی فراموش می‌شد؛ اینجا حالت و چراغ نمی‌توانند ناسازگار باشند.</span></li>
   <li data-lines="45-51"><b class="what">خواندن نمونه.</b> اگر HAL بگوید سنسور خراب است، «ERR sensor» می‌فرستیم و برمی‌گردیم؛ آلارم بر پایهٔ عدد نامعتبر ساخته نمی‌شود.</li>
   <li data-lines="52-54"><b class="what">ثبت.</b> نمونه با لحظه‌اش در بافر می‌رود و شمارنده بالا می‌رود. <span class="why">دلیل: <code>(void)</code> جلوی <code>ring_push</code> یعنی «می‌دانم مقدار برگشتی هست و عمدا نادیده‌اش می‌گیرم» (اینجا به دور ریختن قدیمی‌ترین اهمیتی نمی‌دهیم).</span></li>
@@ -1310,12 +1310,44 @@ static void test_fsm(void)
     CHECK(strstr(uart_out, "-&gt; ALARM") != NULL);
 }
 
+static void test_boundaries(void)                       /* مرزهای دقیق R1 و R4 */
+{
+    logger_t lg;
+    reset_mock();
+    logger_init(&amp;lg, &amp;mock_hal);
+    input = "START\n";
+    next_raw = 1000u;
+    run_ms(&amp;lg, 100u);
+    CHECK(lg.state == LG_SAMPLING);
+
+    /* آستانهٔ روشن شدن را دقیقا برابر دمای یک raw می‌گذاریم */
+    uint16_t hot = 2000u;
+    lg.high = temp_from_raw(hot);
+    next_raw = (uint16_t)(hot - 1u);                    /* یک پله کمتر از آستانه */
+    run_ms(&amp;lg, 1000u);
+    CHECK(lg.state == LG_SAMPLING);
+    next_raw = hot;                                     /* دقیقا برابر آستانه: T &gt;= high */
+    run_ms(&amp;lg, 1000u);
+    CHECK(lg.state == LG_ALARM);
+
+    /* آستانهٔ خاموش شدن (high - پسماند) را دقیقا برابر دمای یک raw می‌گذاریم */
+    uint16_t cool = 1500u;
+    lg.high = (centi_t)(temp_from_raw(cool) + ALARM_HYST_CENTI);
+    next_raw = (uint16_t)(cool + 1u);                   /* یک پله بالاتر از مرز */
+    run_ms(&amp;lg, 1000u);
+    CHECK(lg.state == LG_ALARM);
+    next_raw = cool;                                    /* دقیقا روی مرز: T &lt;= high - پسماند */
+    run_ms(&amp;lg, 1000u);
+    CHECK(lg.state == LG_SAMPLING);
+}
+
 int main(void)
 {
     test_temp();
     test_ring();
     test_parser();
     test_fsm();
+    test_boundaries();
     if (failures != 0) {
         printf("%d of %d checks FAILED\n", failures, checks);
         return 1;
@@ -1333,7 +1365,8 @@ int main(void)
   <li data-lines="83-110"><b class="what">تست پارسر (R5).</b> فرمان‌های درست، اعداد منفی، خارج از محدوده، رشتهٔ غلط، حروف کوچک، خط خیلی بلند و خط ناتمام.</li>
   <li data-lines="112-118"><b class="what">جلو بردن زمان.</b> هر ۱۰ms ساعت را جلو می‌برد و یک دور کار را اجرا می‌کند.</li>
   <li data-lines="120-157"><b class="what">تست ماشین حالت (R1 و R4).</b> IDLE نمونه نمی‌گیرد؛ START اولین نمونه را بلافاصله می‌گیرد؛ هر ۱۰۰۰ms یکی؛ بالای آستانه ALARM؛ در باند پسماند هنوز ALARM؛ پایین‌تر SAMPLING؛ و STOP.</li>
-  <li data-lines="159-171"><b class="what">نتیجه.</b> اگر هر شرطی شکست بخورد، برنامه کد خروج ۱ می‌دهد و <code>make</code> قرمز می‌شود.</li>
+  <li data-lines="159-188"><b class="what">تست مرزها (R1 و R4).</b> آستانه‌ها را دقیقاً برابر دمای یک عدد خام می‌گذارد؛ یک پله کمتر نباید آلارم بدهد و دقیقاً روی مرز باید بدهد؛ برای خاموش‌شدن هم یک پله بالاتر از <code>high − پسماند</code> هنوز ALARM و دقیقاً روی مرز SAMPLING. <span class="why">دلیل: تست‌های بالا فقط دمای ۳۱٫۰۰، ۲۹٫۰۰ و ۲۷٫۰۰ را می‌دیدند و هیچ‌کدام روی مرز نبود؛ پس تغییر <code>&lt;=</code> به <code>&lt;</code> یا <code>&gt;=</code> به <code>&gt;</code> در <code>logger.c</code> از آن‌ها رد می‌شد. با <code>lg.high = temp_from_raw(…)</code> مرز را دقیقاً می‌سازیم، چون <code>raw_for</code> فقط نزدیک‌ترین عدد را می‌دهد، نه دمای دقیق.</span></li>
+  <li data-lines="190-203"><b class="what">نتیجه.</b> اگر هر شرطی شکست بخورد، برنامه کد خروج ۱ می‌دهد و <code>make</code> قرمز می‌شود.</li>
 </ol>
 
 <p>حالا یک بار <code>make</code> را کامل بزن. این خروجی واقعی همین پروژه روی یک PC لینوکس است (یک <code>make</code> برای ساخت، تست، مقایسه و ساخت STM32):</p>
@@ -1342,7 +1375,7 @@ $ make
 gcc -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 -o tlog main.c hal_host.c logger.c parser.c ringbuf.c temp.c sim_sensor.c
 gcc -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 -o tlog_test test_main.c logger.c parser.c ringbuf.c temp.c sim_sensor.c
 ./tlog_test
-all 57 checks passed
+all 62 checks passed
 ./tlog &gt; actual.txt
 diff expected.txt actual.txt
 arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -Wconversion -Os -ffreestanding -ffunction-sections -fdata-sections -nostdlib -T link.ld -Wl,--gc-sections -Wl,-Map=tlog_stm32.map -o tlog_stm32.elf main_stm32.c hal_stm32.c startup.c logger.c parser.c ringbuf.c temp.c sim_sensor.c
@@ -1352,7 +1385,8 @@ arm-none-eabi-size tlog_stm32.elf
 </pre>
 
 <div class="callout tip"><div class="ct">تست‌ها را امتحان کن: «موتاسیون»</div>
-<p>یک آزمون ساده برای اینکه تست‌هایت واقعا کار می‌کنند (به آن <span class="term" data-t="mutation_test">آزمون موتاسیون</span> می‌گویند): عمدا یک باگ کوچک بساز و ببین تست‌ها می‌گیرندش. مثلا در <code>logger.c</code> خط ۶۴ را از <code>&lt;=</code> به <code>&lt;</code> عوض کن؛ در <code>ring_push</code> خط <code>tail++</code> را بردار؛ یا ماسک را حذف کن. اگر <code>make</code> سبز ماند، تست‌هایت سوراخ دارند.</p></div>
+<p>یک آزمون ساده برای اینکه تست‌هایت واقعا کار می‌کنند (به آن <span class="term" data-t="mutation_test">آزمون موتاسیون</span> می‌گویند): عمدا یک باگ کوچک بساز و ببین تست‌ها می‌گیرندش. مثلا در <code>logger.c</code> خط ۶۴ را از <code>&lt;=</code> به <code>&lt;</code> (یا در خط ۶۲ <code>&gt;=</code> را به <code>&gt;</code>) عوض کن؛ در <code>ring_push</code> خط <code>tail++</code> را بردار؛ یا ماسک را حذف کن. هر کدام باید <code>make</code> را قرمز کند. اگر سبز ماند، تست‌هایت سوراخ دارند.</p>
+<p>یک نکتهٔ صادقانه: در نسخهٔ اول این پروژه، تغییر <code>&lt;=</code> به <code>&lt;</code> از تست‌ها رد می‌شد، چون هیچ تستی دقیقاً روی مرز ۲۸٫۰۰ یا ۳۰٫۰۰ نبود. همین سوراخ را با <code>test_boundaries</code> پر کردیم؛ مثالی از اینکه «تست سبز» تا وقتی مرزها را نیازموده‌ای ضمانت نیست.</p></div>
 
 <h2 id="stm32">گام ۹: پورت STM32 (Nucleo-F411RE)</h2>
 <p>حالا همان منطق را به میکروکنترلر می‌بریم؛ به این کار <span class="term" data-t="porting">پورت کردن</span> می‌گویند. چه چیزی باید نوشته شود؟ فقط <b>پنج تابع HAL</b> و «چسب» راه‌اندازی که در درس‌های ۵.۱ تا ۵.۵ ساختی. برای سنسور، همان <code>sim_sensor</code> را نگه می‌داریم (برنامه را با موج دمای ساختگی امتحان می‌کنیم؛ جایگزین کردنش با ADC یا BME280، تنها تغییر <code>sensor_read</code> است).</p>
@@ -1731,6 +1765,8 @@ void app_main(void)
   <li data-lines="6-15"><b class="what">تسک ثبت‌کننده.</b> ثبت‌کننده یک‌بار ساخته می‌شود و بعد در حلقه <code>logger_poll</code> و <code>vTaskDelay</code> ۱۰ms. <span class="why">دلیل: <code>vTaskDelay</code> تسک را می‌خواباند و به بقیهٔ تسک‌ها (و کارهای پس‌زمینهٔ سیستم) CPU می‌دهد؛ حلقهٔ بی‌وقفه‌ی <code>while(1)</code> بدون آن، Watchdog را گرسنه می‌کرد.</span></li>
   <li data-lines="17-20"><b class="what">app_main.</b> نقطهٔ شروع ESP-IDF؛ فقط تسک را می‌سازد. پشتهٔ ۴۰۹۶ بایتی (کلمه‌ها/بایت‌ها بسته به نسخه؛ مستندات <code>xTaskCreate</code> را ببین) و اولویت ۵.</li>
 </ol>
+<div class="callout warn"><div class="ct">دو احتیاط دربارهٔ این پورت</div>
+<p>(۱) <code>UART_NUM_0</code> همان UART است که کنسول و لاگ سیستمی ESP-IDF هم از آن چاپ می‌کنند؛ پس خروجی برنامه با لاگ‌های بوت و سیستم قاطی می‌شود. برای پروژهٔ جدی از UART دیگری (مثلاً <code>UART_NUM_1</code> با پین‌های خودت) استفاده کن یا سطح لاگ را کم کن. (۲) <code>pdMS_TO_TICKS(10)</code> فقط وقتی دقیقاً یک تیک است که <code>CONFIG_FREERTOS_HZ</code> مقدار پیش‌فرض ۱۰۰ باشد؛ با تغییر آن مقدار تیک‌ها عوض می‌شود (و برای ۱۰ ms ممکن است صفر تیک بشود اگر HZ کمتر از ۱۰۰ باشد).</p></div>
 
 <p>دو فایل CMake لازم است. اولی در ریشهٔ پروژه، دومی در پوشهٔ <code>main/</code> کنار فایل‌های منبع؛ فایل‌های هسته (<code>logger.c</code>، <code>parser.c</code>، <code>ringbuf.c</code>، <code>temp.c</code>، <code>sim_sensor.c</code> و همهٔ هدرها) را به <code>main/</code> کپی کن:</p>
 <div class="code" data-file="CMakeLists.txt" data-lang="cmake" data-verify="frag" id="c27">
@@ -1771,12 +1807,28 @@ idf.py -p /dev/ttyUSB0 flash monitor
 </tbody></table></div>
 <pre class="term" data-nocheck>
 $ arm-none-eabi-nm --size-sort -S tlog_stm32.elf | tail -8
+080006bc 00000040 T sim_sensor_read
+08000000 00000040 R vector_table
 080005c4 00000068 T u32_to_dec
+080000c4 00000070 T hal_stm32_init
 0800062c 0000008e T temp_format
 20000000 000000bc b lg.0
 08000438 00000108 T parser_feed
 080001fc 00000218 T logger_poll
 </pre>
+<p>و برای اینکه بدانی عدد ۲۰۱۲ از چه جمع می‌شود:</p>
+<pre class="term" data-nocheck>
+$ arm-none-eabi-size -A tlog_stm32.elf
+section           size        addr
+.isr_vector         64   134217728
+.text             1724   134217792
+.rodata            224   134219516
+.data                0   536870912
+.bss               196   536870912
+.ARM.attributes     46           0
+Total             2254
+</pre>
+<p>Flash برابر <code>.isr_vector + .text + .rodata + .data</code> است: ۶۴ + ۱۷۲۴ + ۲۲۴ + ۰ = ۲۰۱۲. (جدول وقفهٔ ۶۴ بایتی با <code>KEEP</code> در اسکریپت لینک از <code>--gc-sections</code> محافظت می‌شود؛ <code>.ARM.attributes</code> داخل فایل ELF هست ولی روی تراشه نمی‌رود.)</p>
 <p>چند نکته از این عددها: (۱) بیشترین Flash را <code>logger_poll</code> می‌خورد (۵۳۶ بایت)، چون کامپایلر <code>handle_command</code>، <code>take_sample</code> و چاپ‌ها را داخلش inline کرده است. (۲) بیشترین RAM همان ثبت‌کننده <code>lg.0</code> است: ۱۸۸ بایت (۱۶ نمونهٔ ۸ بایتی = ۱۲۸، به‌علاوهٔ پارسر، شمارنده‌ها و اشاره‌گر). ۴ بایت <code>g_ms</code> و ۴ بایت شمارندهٔ سنسور ساختگی، مجموع را ۱۹۶ می‌کنند. (۳) با <code>-fstack-usage</code>، بلندترین زنجیرهٔ فراخوانی <code>main</code> ← <code>logger_poll</code> ← <code>say_temp</code> ← <code>temp_format</code> ← <code>u32_to_dec</code> جمعا حدود ۸ + ۵۶ + ۲۴ + ۴۸ + ۴۸ = ۱۸۴ بایت پشته می‌خواهد (به‌اضافهٔ ۳۲ بایت برای هر وقفه)؛ نگهبان ۱ کیلوبایتی ما با فاصلهٔ خوب برقرار است. (۴) نه <code>printf</code> داریم، نه <code>float</code>، نه <code>malloc</code>: همین‌ها بودند که در درس ۶.۵ اندازه را هزاران بایت بالا می‌بردند.</p>
 
 <h2 id="rubric">Rubric: خودت را نمره بده</h2>
@@ -2121,7 +2173,7 @@ clk=50000000 baud=921600 BRR=   54 (0x36) mantissa=3 fraction=6 err=+0.47%
   <li>اول <b>نیازمندی قابل‌آزمایش</b> (R1 تا R8)، بعد معماری، بعد کد.</li>
   <li><b>منطق فقط قرارداد را می‌شناسد:</b> منطق (<code>logger</code>، <code>parser</code>، <code>ringbuf</code>، <code>temp</code>) با <code>hal.h</code> حرف می‌زند و سکوها (PC، STM32، ESP32) آن را پر می‌کنند. منطق هیچ‌وقت به رجیستر دست نمی‌زند.</li>
   <li>دما = <code>int16_t</code> به صدم درجه؛ بدون <code>float</code> و <code>printf</code>. بافر حلقوی آخرین ۱۶ نمونه را نگه می‌دارد. آلارم با <b>پسماند</b> از لرزش جلوگیری می‌کند.</li>
-  <li>با HAL ساختگی، منطق را روی PC تست کن (۵۷ شرط) و یک خروجی مرجع با <code>diff</code> نگه دار؛ یک <code>make</code> همه را وارسی می‌کند.</li>
+  <li>با HAL ساختگی، منطق را روی PC تست کن (۶۲ شرط) و یک خروجی مرجع با <code>diff</code> نگه دار؛ یک <code>make</code> همه را وارسی می‌کند.</li>
   <li>لایهٔ STM32 فقط <code>hal_stm32.c</code> (UART، LED با <code>BSRR</code>، SysTick)، <code>startup.c</code> و <code>link.ld</code> است؛ ساخته‌شده با ARM: Flash ۲۰۱۲ و RAM ۱۹۶ بایت.</li>
   <li>لایهٔ ESP32 با API ESP-IDF نوشته شد، بدون تغییر منطق؛ اجرایش را روی سخت‌افزار خودت وارسی کن.</li>
   <li>کارت را با rubric نمره بده و ضعیف‌ترین ردیف را بالا ببر.</li>
