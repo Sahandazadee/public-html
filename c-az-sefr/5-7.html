@@ -184,6 +184,7 @@ int main(void)
 
 <h2 id="contract">قرارداد: <span class="en">hal_gpio.h</span></h2>
 <p>قرارداد یک فایل هدر است: نوع‌ها و یک <code>struct</code> از اشاره‌گر تابع. هیچ کدی (پیاده‌سازی) در آن نیست. این فایل را <b>لایهٔ بالا</b> مالک است، نه backend ها.</p>
+<p>دو نکتهٔ طراحی که از تجربهٔ واقعی با برد آمده‌اند: (۱) <b>ورودی</b> هم در قرارداد هست؛ پایه‌ای مثل دکمهٔ PC13 را بدون <code>init_input</code> (ساعت پورت و حالت و مقاومت) نمی‌شود درست خواند. (۲) <code>init_output</code> <b>سطح اولیه</b> می‌گیرد تا هنگام راه‌اندازی هیچ گلیچی روی پایه نیفتد.</p>
 
 <div class="code" data-file="hal_gpio.h" data-lang="c" data-verify="make" data-project="layered" id="p1">
 <pre>
@@ -206,9 +207,19 @@ typedef enum {
     HAL_HIGH = 1
 } hal_level_t;
 
-/* قرارداد: هر backend این سه تابع را می‌دهد */
+typedef enum {
+    HAL_PULL_NONE = 0,
+    HAL_PULL_UP,
+    HAL_PULL_DOWN
+} hal_pull_t;
+
+/* قرارداد: هر backend این چهار تابع را می‌دهد.
+   init_output: سطح اولیه را «پیش از» خروجی‌شدن پایه می‌نویسد (بدون گلیچ).
+   init_input:  پایه را ورودی می‌کند و مقاومت داخلی را تنظیم می‌کند.
+   read:        سطح «واقعی» پایه را می‌دهد، روی ورودی و روی خروجی. */
 typedef struct {
-    hal_status_t (*init_output)(uint8_t pin);
+    hal_status_t (*init_output)(uint8_t pin, hal_level_t initial);
+    hal_status_t (*init_input)(uint8_t pin, hal_pull_t pull);
     hal_status_t (*write)(uint8_t pin, hal_level_t level);
     hal_status_t (*read)(uint8_t pin, hal_level_t *level);
 } hal_gpio_ops_t;
@@ -216,14 +227,17 @@ typedef struct {
 #endif
 </pre></div>
 <ol class="walk" data-for="p1">
-  <li data-lines="1-2,27"><b class="what">Include guard.</b> جلوی وارد شدن دوبارهٔ هدر را می‌گیرد (درس <a href="4-2.html">۴.۲</a>).</li>
+  <li data-lines="1-2,37"><b class="what">Include guard.</b> جلوی وارد شدن دوبارهٔ هدر را می‌گیرد (درس <a href="4-2.html">۴.۲</a>).</li>
   <li data-lines="6-7"><b class="what">شمارهٔ پایه.</b> یک عدد ۸ بیتی: <code>حرف پورت × ۱۶ + شمارهٔ پین</code>. پس PA5 می‌شود ۵، PB0 می‌شود ۱۶ و PC13 می‌شود ۴۵.
     <span class="why">یک عدد ساده روی هر تراشه‌ای معنی دارد. هر backend خودش می‌داند این عدد را چطور به پورت و پین ترجمه کند. ماکرو فقط برای خوانایی است: <code>HAL_PIN('A', 5)</code> از «۵» روشن‌تر است.</span></li>
   <li data-lines="9-13"><b class="what">کد وضعیت.</b> هر تابع HAL یکی از سه حالت را برمی‌گرداند: موفق، پارامتر اشتباه (پایهٔ ناموجود) یا خطای سخت‌افزار.
     <span class="why">صفر = موفق، همان قرارداد پروژه (درس ۱.۴). چون <code>enum</code> است، مقایسه با <code>HAL_ERR_IO</code> از «۲» خواناتر است.</span></li>
   <li data-lines="15-18"><b class="what">سطح منطقی.</b> <code>HAL_LOW</code> و <code>HAL_HIGH</code>: ولتاژ پایین و بالا، نه «روشن» و «خاموش»؛ چون LED فعال-پایین هم هست.</li>
-  <li data-lines="20-25"><b class="what">جدول عملیات.</b> سه اشاره‌گر تابع: خروجی‌کردن یک پایه، نوشتن سطح و خواندن سطح. هر backend یک نمونه از این struct می‌سازد.
+  <li data-lines="20-24"><b class="what">مقاومت داخلی.</b> برای پایهٔ ورودی: بدون مقاومت، بالاکش (به ۳٫۳ ولت) یا پایین‌کش (به زمین). دکمه‌ای که به زمین وصل می‌شود (مثل B1 با مقاومت بیرونی، یا یک دکمهٔ ساده) به بالاکش نیاز دارد.</li>
+  <li data-lines="26-35"><b class="what">جدول عملیات.</b> چهار اشاره‌گر تابع: خروجی‌کردن یک پایه (با <b>سطح اولیه</b>)، ورودی‌کردن یک پایه (با نوع مقاومت)، نوشتن سطح و خواندن سطح. هر backend یک نمونه از این struct می‌سازد.
     <span class="why">این همان «سوکت» مثال ابتدای درس است. اگر یک backend تابعی با امضای متفاوت بگذارد، کامپایلر همان‌جا خطا می‌دهد (پایین‌تر می‌بینی).</span></li>
+  <li data-lines="27"><b class="what">چرا سطح اولیه؟</b> بعد از reset رجیستر خروجی صفر است. اگر اول پایه را خروجی کنی و بعد سطح بنویسی، لحظه‌ای <b>LOW</b> روی پایه می‌آید. برای LED فعال-پایین یا پایهٔ <span class="en">CS</span> یک تراشهٔ SPI، این یعنی فعال‌شدن ناخواستهٔ لحظه‌ای. پس قرارداد می‌گوید: سطح را <b>پیش از</b> خروجی‌شدن بنویس.</li>
+  <li data-lines="29"><b class="what">معنی <code>read</code>.</b> سطح «واقعی» پایه را می‌دهد، چه ورودی باشد چه خروجی. در mock همان آخرین سطح نوشته‌شده است؛ در STM32 رجیستر <code>IDR</code> (که روی خروجی هم سطح واقعی خط را نشان می‌دهد)؛ در ESP32 باید پایه در حالت <code>GPIO_MODE_INPUT_OUTPUT</code> باشد وگرنه <code>gpio_get_level</code> برای پایهٔ فقط-خروجی همیشه ۰ می‌دهد (مستندات ESP-IDF). پس هر backend موظف است این قرارداد را نگه دارد؛ وگرنه «خطای تغییر در <code>led.c</code> = ۰» دروغ می‌شود.</li>
 </ol>
 
 <h2 id="driver">درایور LED: فقط «قرارداد» را می‌شناسد</h2>
@@ -313,11 +327,8 @@ led_status_t led_init(led_t *led, const hal_gpio_ops_t *gpio,
     led-&gt;cfg = *cfg;
     led-&gt;on = false;
 
-    hal_status_t st = gpio-&gt;init_output(cfg-&gt;pin);
-    if (st != HAL_OK) {
-        return from_hal(st);
-    }
-    return led_apply(led, false);
+    hal_level_t off_level = cfg-&gt;active_low ? HAL_HIGH : HAL_LOW;
+    return from_hal(gpio-&gt;init_output(cfg-&gt;pin, off_level));
 }
 
 led_status_t led_on(led_t *led)     { return led_apply(led, true); }
@@ -332,13 +343,13 @@ bool led_is_on(const led_t *led)    { return led-&gt;on; }
   <li data-lines="13-15,17-23"><b class="what">تابع مرکزی.</b> اول سطح ولتاژ را با قطبیت حساب می‌کند. <code>on != active_low</code> یعنی: LED فعال-بالا و روشن ← HIGH؛ فعال-پایین و روشن ← LOW.
     <span class="why">فقط <b>بعد از موفقیت</b> حالت <code>on</code> عوض می‌شود. اگر نوشتن شکست بخورد، حالت درایور با آنچه واقعا روی پایه است همخوان می‌ماند؛ وگرنه <code>toggle</code> بعدی جهت اشتباه می‌رود.</span></li>
   <li data-lines="16"><b class="what">تنها فراخوانی سخت‌افزار.</b> <code>led-&gt;gpio-&gt;write(...)</code>: صدا زدن تابع از راه اشاره‌گر. درایور نمی‌داند این تابع در STM32 است، در ESP32 یا در mock.</li>
-  <li data-lines="25-41"><b class="what">راه‌اندازی.</b> ورودی‌ها را بررسی می‌کند (NULL و اشاره‌گر تابع‌های ضروری)، پیکربندی را کپی می‌کند، پایه را خروجی می‌کند و LED را خاموش می‌گذارد.
-    <span class="why">کپی‌کردن <code>*cfg</code> (نه نگه‌داشتن اشاره‌گر به آن) یعنی کاربر می‌تواند struct پیکربندی را بعد از <code>led_init</code> دور بریزد (مثلا متغیر محلی باشد) بدون خطر آویزان‌شدن اشاره‌گر (درس ۳.۲).</span></li>
-  <li data-lines="43-46"><b class="what">چهار تابع کوچک.</b> همه فقط <code>led_apply</code> را با آرگومان مناسب صدا می‌زنند؛ <code>toggle</code> با <code>!led-&gt;on</code>.</li>
+  <li data-lines="25-38"><b class="what">راه‌اندازی.</b> ورودی‌ها را بررسی می‌کند (NULL و اشاره‌گر تابع‌های ضروری)، پیکربندی را کپی می‌کند، سطح «خاموش» را حساب می‌کند (فعال-بالا ← LOW، فعال-پایین ← HIGH) و پایه را <b>با همان سطح</b> خروجی می‌کند.
+    <span class="why">کپی‌کردن <code>*cfg</code> (نه نگه‌داشتن اشاره‌گر به آن) یعنی کاربر می‌تواند struct پیکربندی را بعد از <code>led_init</code> دور بریزد بدون خطر آویزان‌شدن اشاره‌گر (درس ۳.۲). و چون سطح اولیه همراه <code>init_output</code> می‌رود، پایه هیچ‌وقت لحظه‌ای روی سطح «روشن» نمی‌افتد: نسخهٔ قدیمی‌تر اول خروجی می‌کرد (LOW) و بعد «خاموش» می‌نوشت، که برای LED فعال-پایین یک پالس روشنِ کوتاه می‌داد.</span></li>
+  <li data-lines="40-43"><b class="what">چهار تابع کوچک.</b> همه فقط <code>led_apply</code> را با آرگومان مناسب صدا می‌زنند؛ <code>toggle</code> با <code>!led-&gt;on</code>.</li>
 </ol>
 
 <h2 id="mock">backend اول: تقلبی روی PC</h2>
-<p>حالا اولین «نیروگاه»: پیاده‌سازی <b>تقلبی</b> (<span class="term" data-t="mocktransport">mock</span>) که هیچ سخت‌افزاری ندارد؛ فقط یک آرایه در RAM است که سطح هر پایه را نگه می‌دارد و هر کار را چاپ می‌کند. علاوه بر سه تابع قرارداد، چند «دریچهٔ آزمون» هم دارد که فقط تست‌ها استفاده می‌کنند: خواندن سطح واقعی، شمارش نوشتن‌ها و شکست‌دادن عمدی نوشتن (تزریق خطا).</p>
+<p>حالا اولین «نیروگاه»: پیاده‌سازی <b>تقلبی</b> (<span class="term" data-t="mocktransport">mock</span>) که هیچ سخت‌افزاری ندارد؛ فقط یک آرایه در RAM است که سطح هر پایه را نگه می‌دارد و هر کار را چاپ می‌کند. علاوه بر چهار تابع قرارداد، چند «دریچهٔ آزمون» هم دارد که فقط تست‌ها استفاده می‌کنند: خواندن سطح واقعی، شمارش نوشتن‌ها، شکست‌دادن عمدی نوشتن (تزریق خطا) و «فشردن دکمه».</p>
 
 <div class="code" data-file="hal_gpio_mock.h" data-lang="c" data-verify="make" data-project="layered" id="p4">
 <pre>
@@ -353,13 +364,14 @@ extern const hal_gpio_ops_t hal_gpio_mock_ops;
 hal_level_t hal_gpio_mock_level(uint8_t pin);
 unsigned hal_gpio_mock_write_count(void);
 void hal_gpio_mock_fail_writes(int enable);
+void hal_gpio_mock_set_input(uint8_t pin, hal_level_t level);
 
 #endif
 </pre></div>
 <ol class="walk" data-for="p4">
   <li data-lines="6"><b class="what">تنها نمونهٔ عمومی.</b> فقط جدول عملیات از بیرون دیده می‌شود؛ خود توابع <code>static</code> اند (پنهان).
     <span class="why">هر backend یک شیء برای صدا زدن دارد و همین. کاربر نباید <code>mock_write</code> را مستقیم صدا بزند؛ همیشه از راه قرارداد.</span></li>
-  <li data-lines="8-11"><b class="what">دریچه‌های آزمون.</b> این‌ها در قرارداد HAL نیستند؛ چون فقط mock می‌تواند «سطح واقعی پایه» را گزارش کند. روی برد چنین چیزی نداریم (به جز خواندن IDR).</li>
+  <li data-lines="8-12"><b class="what">دریچه‌های آزمون.</b> این‌ها در قرارداد HAL نیستند؛ چون فقط mock می‌تواند «سطح واقعی پایه» را گزارش کند یا «دکمه را فشار بدهد» (<code>set_input</code>). روی برد چنین چیزی نداریم (به جز خواندن IDR).</li>
 </ol>
 
 <div class="code" data-file="hal_gpio_mock.c" data-lang="c" data-verify="make" data-project="layered" id="p5">
@@ -377,14 +389,26 @@ static int s_fail;
 
 static char port_of(uint8_t pin) { return (char)('A' + pin / 16u); }
 
-static hal_status_t mock_init_output(uint8_t pin)
+static hal_status_t mock_init_output(uint8_t pin, hal_level_t initial)
 {
     if (pin &gt;= MOCK_PINS) {
         return HAL_ERR_PARAM;
     }
+    s_level[pin] = initial;
     s_is_output[pin] = 1u;
-    s_level[pin] = HAL_LOW;
-    printf("[mock] P%c%u = output\n", port_of(pin), (unsigned)(pin % 16u));
+    printf("[mock] P%c%u = output, starts %s\n", port_of(pin),
+           (unsigned)(pin % 16u), initial == HAL_HIGH ? "HIGH" : "LOW");
+    return HAL_OK;
+}
+
+static hal_status_t mock_init_input(uint8_t pin, hal_pull_t pull)
+{
+    if (pin &gt;= MOCK_PINS) {
+        return HAL_ERR_PARAM;
+    }
+    s_is_output[pin] = 0u;
+    s_level[pin] = (pull == HAL_PULL_UP) ? HAL_HIGH : HAL_LOW;
+    printf("[mock] P%c%u = input\n", port_of(pin), (unsigned)(pin % 16u));
     return HAL_OK;
 }
 
@@ -414,6 +438,7 @@ static hal_status_t mock_read(uint8_t pin, hal_level_t *level)
 
 const hal_gpio_ops_t hal_gpio_mock_ops = {
     .init_output = mock_init_output,
+    .init_input = mock_init_input,
     .write = mock_write,
     .read = mock_read,
 };
@@ -421,21 +446,23 @@ const hal_gpio_ops_t hal_gpio_mock_ops = {
 hal_level_t hal_gpio_mock_level(uint8_t pin) { return s_level[pin]; }
 unsigned hal_gpio_mock_write_count(void)     { return s_writes; }
 void hal_gpio_mock_fail_writes(int enable)   { s_fail = enable; }
+void hal_gpio_mock_set_input(uint8_t pin, hal_level_t level) { s_level[pin] = level; }
 </pre></div>
 <ol class="walk" data-for="p5">
   <li data-lines="5"><b class="what">تعداد پایه‌ها.</b> ۸۰ = پنج پورت (A تا E) × ۱۶، مطابق فرمول <code>HAL_PIN</code>.</li>
   <li data-lines="7-10"><b class="what">حالت داخلی.</b> آرایهٔ سطح‌ها، آرایهٔ «آیا خروجی شده؟»، شمارندهٔ نوشتن و پرچم خطا. همه <code>static</code>: فقط این فایل آن‌ها را می‌بیند (درس <a href="3-5.html">۳.۵</a>).</li>
   <li data-lines="12"><b class="what">حرف پورت.</b> برای چاپ زیبا: پایهٔ ۵ می‌شود <code>PA5</code>.</li>
-  <li data-lines="14-23"><b class="what">خروجی‌کردن.</b> پایه‌ای که وجود ندارد خطای پارامتر می‌گیرد؛ وگرنه علامت «خروجی است» می‌خورد و سطحش صفر می‌شود.</li>
-  <li data-lines="25-38"><b class="what">نوشتن.</b> سه بررسی: پایه معتبر است؟ خروجی شده؟ خطا تزریق شده؟ فقط اگر همه درست بود، سطح ذخیره و چاپ می‌شود.
+  <li data-lines="14-24"><b class="what">خروجی‌کردن.</b> پایه‌ای که وجود ندارد خطای پارامتر می‌گیرد؛ وگرنه اول <b>سطح اولیه</b> ذخیره می‌شود و بعد علامت «خروجی است» می‌خورد.</li>
+  <li data-lines="26-35"><b class="what">ورودی‌کردن.</b> علامت «خروجی» برداشته می‌شود. با بالاکش سطح اولیهٔ خط HIGH است (دکمه رها)، وگرنه LOW (شناور؛ در mock صفر می‌گیریم).</li>
+  <li data-lines="37-50"><b class="what">نوشتن.</b> سه بررسی: پایه معتبر است؟ خروجی شده؟ خطا تزریق شده؟ فقط اگر همه درست بود، سطح ذخیره و چاپ می‌شود.
     <span class="why">بررسی «خروجی شده؟» باگ رایج «فراموش کردم init بزنم» را روی PC پیدا می‌کند. روی برد، نوشتن به پایهٔ خروجی‌نشده بی‌سروصدا هیچ اتفاقی نمی‌اندازد و ساعت‌ها دنبال باگ می‌گردی.</span></li>
-  <li data-lines="40-47"><b class="what">خواندن.</b> ساده: سطح ذخیره‌شده را برمی‌گرداند.</li>
-  <li data-lines="49-53"><b class="what">جدول عملیات.</b> با «مقداردهی نامزد» (درس ۳.۴): اسم هر عضو آمده، پس ترتیب مهم نیست و ناخوانا نمی‌شود. <code>const</code> یعنی این جدول تغییر نمی‌کند.</li>
-  <li data-lines="55-57"><b class="what">دریچه‌ها.</b> سه تابع یک‌خطی برای تست‌ها.</li>
+  <li data-lines="52-59"><b class="what">خواندن.</b> سطح ذخیره‌شده را برمی‌گرداند؛ هم روی ورودی هم روی خروجی (همان معنی قرارداد).</li>
+  <li data-lines="61-66"><b class="what">جدول عملیات.</b> با «مقداردهی نامزد» (درس ۳.۴): اسم هر عضو آمده، پس ترتیب مهم نیست و ناخوانا نمی‌شود. <code>const</code> یعنی این جدول تغییر نمی‌کند.</li>
+  <li data-lines="68-71"><b class="what">دریچه‌ها.</b> چهار تابع یک‌خطی برای تست‌ها؛ <code>set_input</code> «دستی که دکمه را فشار می‌دهد» است.</li>
 </ol>
 
 <h2 id="app">برنامه: هیچ‌چیز از تراشه نمی‌داند</h2>
-<p>حالا یک برنامهٔ PC می‌نویسیم که از همین درایور استفاده می‌کند. سه چیز را نشان می‌دهد: عملکرد عادی، LED فعال-پایین، و رفتار درایور وقتی سخت‌افزار خراب باشد.</p>
+<p>حالا یک برنامهٔ PC می‌نویسیم که از همین درایور استفاده می‌کند. چهار چیز را نشان می‌دهد: عملکرد عادی، LED فعال-پایین (بدون گلیچ هنگام راه‌اندازی)، خواندن یک دکمه با بالاکش، و رفتار درایور وقتی سخت‌افزار خراب باشد.</p>
 
 <div class="code" data-file="main.c" data-lang="c" data-verify="make" data-project="layered" id="p6">
 <pre>
@@ -461,9 +488,20 @@ int main(void)
     led_t ext;
     const led_config_t ext_cfg = { .pin = HAL_PIN('B', 0), .active_low = true };
     led_init(&amp;ext, &amp;hal_gpio_mock_ops, &amp;ext_cfg);
+    printf("ext pin right after init = %d (active-low LED is off)\n",
+           (int)hal_gpio_mock_level(ext_cfg.pin));
     led_on(&amp;ext);
     printf("ext pin level = %d (active-low LED is on)\n",
            (int)hal_gpio_mock_level(ext_cfg.pin));
+
+    uint8_t b1 = HAL_PIN('C', 13);
+    hal_level_t level = HAL_LOW;
+    hal_gpio_mock_ops.init_input(b1, HAL_PULL_UP);
+    hal_gpio_mock_ops.read(b1, &amp;level);
+    printf("B1 released = %d\n", (int)level);
+    hal_gpio_mock_set_input(b1, HAL_LOW);
+    hal_gpio_mock_ops.read(b1, &amp;level);
+    printf("B1 pressed  = %d\n", (int)level);
 
     hal_gpio_mock_fail_writes(1);
     led_status_t st = led_off(&amp;ld2);
@@ -484,11 +522,12 @@ int main(void)
   <li data-lines="8-9"><b class="what">LD2 روی PA5.</b> پیکربندی با مقداردهی نامزد، مقدار ثابت (<code>const</code>).</li>
   <li data-lines="11-14"><b class="what">راه‌اندازی با بررسی نتیجه.</b> حتی روی PC هم بررسی می‌کنیم؛ همین عادت روی برد جان می‌دهد.</li>
   <li data-lines="15-18"><b class="what">روشن، دو بار toggle.</b> روشن ← خاموش ← روشن. پس در انتها روشن است.</li>
-  <li data-lines="20-25"><b class="what">LED دوم، فعال-پایین.</b> روی PB0. روشن‌کردنش باید پایه را <b>LOW</b> کند.
-    <span class="why">همین یک دقیقه‌ی آزمایش روی PC، خطای «LED برعکس روشن می‌شود» را پیش از دیدن برد نشان می‌دهد.</span></li>
-  <li data-lines="27-31"><b class="what">تزریق خطا.</b> نوشتن را خراب می‌کنیم و <code>led_off</code> را صدا می‌زنیم. انتظار: کد خطا، و LED هنوز «روشن» گزارش شود چون واقعا خاموش نشده است.</li>
-  <li data-lines="33-35"><b class="what">پایهٔ ناموجود.</b> پایهٔ ۹۹ در mock وجود ندارد؛ باید خطای آرگومان برگردد.</li>
-  <li data-lines="37-38"><b class="what">شمارش نوشتن‌ها.</b> تست خودکار می‌تواند تعداد دفعات نوشتن را هم بررسی کند.</li>
+  <li data-lines="20-27"><b class="what">LED دوم، فعال-پایین.</b> روی PB0. <b>درست بعد از <code>led_init</code></b> سطح پایه HIGH است (خاموش؛ هرگز LOW نشده بود)، و روشن‌کردنش پایه را <b>LOW</b> می‌کند.
+    <span class="why">همین یک دقیقه‌ی آزمایش روی PC، خطای «LED برعکس روشن می‌شود» و «LED هنگام راه‌اندازی چشمک می‌زند» را پیش از دیدن برد نشان می‌دهد.</span></li>
+  <li data-lines="29-36"><b class="what">ورودی: دکمهٔ B1.</b> PC13 را با بالاکش ورودی می‌کنیم؛ رها = ۱. <code>hal_gpio_mock_set_input</code> «انگشت روی دکمه» را شبیه‌سازی می‌کند (پایین‌کشیدن)؛ <code>read</code> حالا ۰ می‌دهد.</li>
+  <li data-lines="38-42"><b class="what">تزریق خطا.</b> نوشتن را خراب می‌کنیم و <code>led_off</code> را صدا می‌زنیم. انتظار: کد خطا، و LED هنوز «روشن» گزارش شود چون واقعا خاموش نشده است.</li>
+  <li data-lines="44-46"><b class="what">پایهٔ ناموجود.</b> پایهٔ ۹۹ در mock وجود ندارد؛ باید خطای آرگومان برگردد.</li>
+  <li data-lines="48-49"><b class="what">شمارش نوشتن‌ها.</b> تست خودکار می‌تواند تعداد دفعات نوشتن را هم بررسی کند.</li>
 </ol>
 
 <h2 id="build">ساختن: یک <span class="en">Makefile</span>، دو کامپایلر</h2>
@@ -531,32 +570,34 @@ $ make
 gcc -std=c11 -Wall -Wextra -o app main.c led.c hal_gpio_mock.c
 arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -c -o led_arm.o led.c
 $ ./app
-[mock] PA5 = output
-[mock] PA5 &lt;- LOW
+[mock] PA5 = output, starts LOW
 [mock] PA5 &lt;- HIGH
 [mock] PA5 &lt;- LOW
 [mock] PA5 &lt;- HIGH
 LD2 is on
-[mock] PB0 = output
-[mock] PB0 &lt;- HIGH
+[mock] PB0 = output, starts HIGH
+ext pin right after init = 1 (active-low LED is off)
 [mock] PB0 &lt;- LOW
 ext pin level = 0 (active-low LED is on)
-led_off on broken bus -> 2, LD2 still on
-led_init on pin 99 -> 1
-total writes: 6
+[mock] PC13 = input
+B1 released = 1
+B1 pressed  = 0
+led_off on broken bus -&gt; 2, LD2 still on
+led_init on pin 99 -&gt; 1
+total writes: 4
 </pre>
 
-<p>خروجی را با برنامه تطبیق بده: <code>led_init</code> اول پایه را خروجی می‌کند و آن را «خاموش» می‌نویسد (<code>PA5 &lt;- LOW</code>)؛ سپس روشن (HIGH)، toggle به خاموش (LOW) و باز toggle به روشن (HIGH). برای LED فعال-پایین روی PB0، «خاموش» یعنی HIGH و «روشن» یعنی LOW: دقیقا همان دو خط. در پایان، ۶ نوشتن موفق ثبت شده (۴ تا برای LD2، ۲ تا برای LED خارجی)؛ نوشتنِ خراب‌شده و پایهٔ ۹۹ شمرده نمی‌شوند.</p>
+<p>خروجی را با برنامه تطبیق بده: <code>led_init</code> پایه را با سطح «خاموش» خروجی می‌کند (<code>PA5 = output, starts LOW</code>)؛ سپس روشن (HIGH)، toggle به خاموش (LOW) و باز toggle به روشن (HIGH). برای LED فعال-پایین روی PB0، «خاموش» یعنی HIGH؛ پس پایه از همان لحظهٔ اول HIGH است (<code>starts HIGH</code>) و هیچ‌وقت پالس LOW نمی‌گیرد. «روشن» یعنی LOW. دکمهٔ PC13 با بالاکش رها = ۱ و فشرده = ۰ می‌خواند. در پایان، ۴ نوشتن موفق ثبت شده (۳ تا برای LD2، ۱ تا برای LED خارجی)؛ سطح اولیه با <code>init_output</code> نوشته می‌شود و جزو «نوشتن‌ها» حساب نمی‌شود؛ نوشتنِ خراب‌شده و پایهٔ ۹۹ هم شمرده نمی‌شوند.</p>
 
 <div class="widget" data-w="mem" data-config='{"title":"قطبیت LED: led_on روی LED فعال-پایین","code":["bool on = true;","bool high = (on != active_low);","write(pin, high ? HAL_HIGH : HAL_LOW);"],"intro":"فرض کن active_low = true. روی بعدی بزن و ببین چرا پایه LOW می‌شود.","cells":[{"addr":"0x20000000","name":"active_low","val":1,"kind":"var"},{"addr":"0x20000004","name":"on","val":null,"kind":"var"},{"addr":"0x20000008","name":"high","val":null,"kind":"var"},{"addr":"0x2000000C","name":"pin_level","val":null,"kind":"var"}],"steps":[{"line":0,"set":{"1":1},"hot":[1],"say":"می‌خواهیم LED <b>روشن</b> شود: on = 1. قطبیت LED فعال-پایین است (active_low = 1)."},{"line":1,"set":{"2":0},"hot":[2],"say":"on != active_low یعنی 1 != 1 که نادرست است، پس high = 0. یعنی «برای روشن‌شدن این LED باید ولتاژ پایین باشد»."},{"line":2,"set":{"3":0},"hot":[3],"say":"سطح 0 (HAL_LOW) نوشته شد. جریان از +V از راه LED به پایه می‌رسد و LED روشن می‌شود. اگر active_low صفر بود، همین‌جا سطح 1 می‌شد."}]}'></div>
 
 <h2 id="stm32">backend دوم: رجیستر خام STM32</h2>
-<p>حالا «نیروگاه» واقعی. همان سه تابع قرارداد، این بار با رجیستر <b>STM32F411</b> (همان‌هایی که در درس <a href="5-2.html">۵.۲</a> دیدی): <code>RCC_AHB1ENR</code> برای روشن‌کردن ساعت پورت، <code>MODER</code> برای خروجی‌کردن و <code>BSRR</code> برای نوشتن بی‌خطر (بدون خواندن-تغییر-نوشتن). چون شمارهٔ پایه را <code>پورت×۱۶+پین</code> تعریف کردیم، هر تابع پورت و پین را با <code>/</code> و <code>%</code> بیرون می‌کشد. پورت‌ها هر کدام <code>0x400</code> بایت آن‌طرف‌تر هستند: GPIOA در <code>0x40020000</code>، GPIOB در <code>0x40020400</code> و…</p>
+<p>حالا «نیروگاه» واقعی. همان چهار تابع قرارداد، این بار با رجیستر <b>STM32F411</b> (همان‌هایی که در درس <a href="5-2.html">۵.۲</a> دیدی): <code>RCC_AHB1ENR</code> برای روشن‌کردن ساعت پورت، <code>MODER</code> برای خروجی/ورودی‌کردن، <code>PUPDR</code> برای مقاومت داخلی و <code>BSRR</code> برای نوشتن بی‌خطر (بدون خواندن-تغییر-نوشتن). چون شمارهٔ پایه را <code>پورت×۱۶+پین</code> تعریف کردیم، هر تابع پورت و پین را با <code>/</code> و <code>%</code> بیرون می‌کشد. پورت‌ها هر کدام <code>0x400</code> بایت آن‌طرف‌تر هستند: GPIOA در <code>0x40020000</code>، GPIOB در <code>0x40020400</code> و…</p>
 
-<p>این بلاک‌ها یک پروژهٔ جدا هستند و با کامپایلر ARM بررسی می‌شوند. دو هدر اول (<code>hal_gpio.h</code> و <code>led.h</code>) عینا همان فایل‌های بالا هستند و فقط برای اینکه این پروژه مستقل کامپایل شود در اینجا تکرار شده‌اند:</p>
+<p>این بلاک‌ها یک پروژهٔ جدا هستند و (با یک Makefile در پایان همین بخش) با کامپایلر ARM ساخته و لینک می‌شوند. دو هدر اول (<code>hal_gpio.h</code> و <code>led.h</code>) عینا همان فایل‌های بالا هستند و فقط برای اینکه این پروژه مستقل کامپایل شود در اینجا تکرار شده‌اند:</p>
 
 <details><summary>دو هدر بالا، برای وارسی تکرار شده‌اند</summary>
-<div class="code" data-file="hal_gpio.h" data-lang="c" data-verify="arm" data-project="stm32">
+<div class="code" data-file="hal_gpio.h" data-lang="c" data-verify="make" data-project="stm32">
 <pre>
 #ifndef HAL_GPIO_H
 #define HAL_GPIO_H
@@ -577,16 +618,26 @@ typedef enum {
     HAL_HIGH = 1
 } hal_level_t;
 
-/* قرارداد: هر backend این سه تابع را می‌دهد */
+typedef enum {
+    HAL_PULL_NONE = 0,
+    HAL_PULL_UP,
+    HAL_PULL_DOWN
+} hal_pull_t;
+
+/* قرارداد: هر backend این چهار تابع را می‌دهد.
+   init_output: سطح اولیه را «پیش از» خروجی‌شدن پایه می‌نویسد (بدون گلیچ).
+   init_input:  پایه را ورودی می‌کند و مقاومت داخلی را تنظیم می‌کند.
+   read:        سطح «واقعی» پایه را می‌دهد، روی ورودی و روی خروجی. */
 typedef struct {
-    hal_status_t (*init_output)(uint8_t pin);
+    hal_status_t (*init_output)(uint8_t pin, hal_level_t initial);
+    hal_status_t (*init_input)(uint8_t pin, hal_pull_t pull);
     hal_status_t (*write)(uint8_t pin, hal_level_t level);
     hal_status_t (*read)(uint8_t pin, hal_level_t *level);
 } hal_gpio_ops_t;
 
 #endif
 </pre></div>
-<div class="code" data-file="led.h" data-lang="c" data-verify="arm" data-project="stm32">
+<div class="code" data-file="led.h" data-lang="c" data-verify="make" data-project="stm32">
 <pre>
 #ifndef LED_H
 #define LED_H
@@ -623,7 +674,7 @@ bool led_is_on(const led_t *led);
 </pre></div>
 </details>
 
-<div class="code" data-file="hal_gpio_stm32.h" data-lang="c" data-verify="arm" data-project="stm32" id="s1">
+<div class="code" data-file="hal_gpio_stm32.h" data-lang="c" data-verify="make" data-project="stm32" id="s1">
 <pre>
 #ifndef HAL_GPIO_STM32_H
 #define HAL_GPIO_STM32_H
@@ -638,7 +689,7 @@ extern const hal_gpio_ops_t hal_gpio_stm32_ops;
   <li data-lines="6"><b class="what">همان شکل mock.</b> فقط یک جدول عملیات از بیرون دیده می‌شود.</li>
 </ol>
 
-<div class="code" data-file="hal_gpio_stm32.c" data-lang="c" data-verify="arm" data-project="stm32" id="s2">
+<div class="code" data-file="hal_gpio_stm32.c" data-lang="c" data-verify="make" data-project="stm32" id="s2">
 <pre>
 #include "hal_gpio_stm32.h"
 
@@ -648,24 +699,16 @@ extern const hal_gpio_ops_t hal_gpio_stm32_ops;
 #define RCC_AHB1ENR      REG32(0x40023830u)
 #define GPIO_BASE(port)  (0x40020000u + 0x400u * (port))
 #define GPIO_MODER(port) REG32(GPIO_BASE(port) + 0x00u)
+#define GPIO_PUPDR(port) REG32(GPIO_BASE(port) + 0x0Cu)
 #define GPIO_IDR(port)   REG32(GPIO_BASE(port) + 0x10u)
 #define GPIO_BSRR(port)  REG32(GPIO_BASE(port) + 0x18u)
 
 #define MAX_PORT 4u                     /* GPIOA تا GPIOE */
 
-static hal_status_t stm32_init_output(uint8_t pin)
+static void clock_on(uint32_t port)
 {
-    uint32_t port = pin / 16u;
-    uint32_t n = pin % 16u;
-
-    if (port &gt; MAX_PORT) {
-        return HAL_ERR_PARAM;
-    }
     RCC_AHB1ENR |= (1u &lt;&lt; port);            /* ساعت پورت را روشن کن */
     (void)RCC_AHB1ENR;                      /* خواندن ساختگی: تأخیر کوتاه */
-    GPIO_MODER(port) = (GPIO_MODER(port) &amp; ~(3u &lt;&lt; (2u * n)))
-                     | (1u &lt;&lt; (2u * n));    /* 01 = خروجی */
-    return HAL_OK;
 }
 
 static hal_status_t stm32_write(uint8_t pin, hal_level_t level)
@@ -677,6 +720,37 @@ static hal_status_t stm32_write(uint8_t pin, hal_level_t level)
         return HAL_ERR_PARAM;
     }
     GPIO_BSRR(port) = (level == HAL_HIGH) ? (1u &lt;&lt; n) : (1u &lt;&lt; (n + 16u));
+    return HAL_OK;
+}
+
+static hal_status_t stm32_init_output(uint8_t pin, hal_level_t initial)
+{
+    uint32_t port = pin / 16u;
+    uint32_t n = pin % 16u;
+
+    if (port &gt; MAX_PORT) {
+        return HAL_ERR_PARAM;
+    }
+    clock_on(port);
+    (void)stm32_write(pin, initial);        /* اول سطح، بعد خروجی: بدون گلیچ */
+    GPIO_MODER(port) = (GPIO_MODER(port) &amp; ~(3u &lt;&lt; (2u * n)))
+                     | (1u &lt;&lt; (2u * n));    /* 01 = خروجی */
+    return HAL_OK;
+}
+
+static hal_status_t stm32_init_input(uint8_t pin, hal_pull_t pull)
+{
+    uint32_t port = pin / 16u;
+    uint32_t n = pin % 16u;
+    uint32_t pupd = (pull == HAL_PULL_UP) ? 1u : (pull == HAL_PULL_DOWN) ? 2u : 0u;
+
+    if (port &gt; MAX_PORT) {
+        return HAL_ERR_PARAM;
+    }
+    clock_on(port);
+    GPIO_MODER(port) &amp;= ~(3u &lt;&lt; (2u * n));  /* 00 = ورودی */
+    GPIO_PUPDR(port) = (GPIO_PUPDR(port) &amp; ~(3u &lt;&lt; (2u * n)))
+                     | (pupd &lt;&lt; (2u * n));  /* 00 هیچ، 01 بالاکش، 10 پایین‌کش */
     return HAL_OK;
 }
 
@@ -693,6 +767,7 @@ static hal_status_t stm32_read(uint8_t pin, hal_level_t *level)
 
 const hal_gpio_ops_t hal_gpio_stm32_ops = {
     .init_output = stm32_init_output,
+    .init_input = stm32_init_input,
     .write = stm32_write,
     .read = stm32_read,
 };
@@ -700,21 +775,25 @@ const hal_gpio_ops_t hal_gpio_stm32_ops = {
 <ol class="walk" data-for="s2">
   <li data-lines="5"><b class="what">ماکروی رجیستر.</b> آدرس را به اشاره‌گر <code>volatile</code> تبدیل می‌کند و <code>*</code> می‌گذارد؛ پس می‌توان آن را مثل متغیر نوشت و خواند (درس <a href="3-6.html">۳.۶</a>).</li>
   <li data-lines="6"><b class="what">رجیستر ساعت.</b> <code>RCC_AHB1ENR</code> آفست <code>0x30</code> از <code>0x40023800</code> است؛ بیت <i>n</i> ساعت پورت <i>n</i> را روشن می‌کند (بیت ۰ = GPIOA).</li>
-  <li data-lines="7-10"><b class="what">آدرس محاسبه‌شده.</b> پایهٔ هر پورت = <code>0x40020000 + 0x400 × شمارهٔ پورت</code>. سه رجیستر لازم: <code>MODER</code> (+0x00)، <code>IDR</code> (+0x10)، <code>BSRR</code> (+0x18).
+  <li data-lines="7-11"><b class="what">آدرس محاسبه‌شده.</b> پایهٔ هر پورت = <code>0x40020000 + 0x400 × شمارهٔ پورت</code>. چهار رجیستر لازم: <code>MODER</code> (+0x00)، <code>PUPDR</code> (+0x0C)، <code>IDR</code> (+0x10)، <code>BSRR</code> (+0x18).
     <span class="why">ماکرو با آرگومان است تا بشود هر پورت را انتخاب کرد؛ ولی چون آرگومان یک بار ارزیابی می‌شود و عبارت ساده است، خطر «ارزیابی دوباره» (درس ۴.۱) وجود ندارد.</span></li>
-  <li data-lines="12"><b class="what">پورت‌های معتبر.</b> A تا E (۰ تا ۴). GPIOH هم روی F411 هست ولی در طراحی ساده‌مان نمی‌گذاریم؛ در تمرین ۳ فکرش را می‌کنی.</li>
-  <li data-lines="14-27"><b class="what">خروجی‌کردن.</b> پورت و پین را جدا می‌کند، ساعت را روشن می‌کند، یک بار همان رجیستر را می‌خواند (تأخیر کوتاه تا ساعت پایدار شود) و دو بیت <code>MODER</code> پین را روی <code>01</code> (خروجی) می‌گذارد.
-    <span class="why">اول دو بیت را با ماسک صفر می‌کند (<code>~(3u &lt;&lt; 2n)</code>) و بعد <code>01</code> می‌نویسد. اگر ماسک نباشد، بیت‌های قبلی پین ممکن است بمانند و حالت اشتباه شود (درس ۳.۱).</span></li>
-  <li data-lines="29-39"><b class="what">نوشتن با BSRR.</b> برای HIGH بیت <i>n</i> و برای LOW بیت <i>n+16</i> را یک می‌کند. بیت‌های صفر هیچ اثری ندارند.
+  <li data-lines="13"><b class="what">پورت‌های معتبر.</b> A تا E (۰ تا ۴). GPIOH هم روی F411 هست ولی در طراحی ساده‌مان نمی‌گذاریم؛ در تمرین ۳ فکرش را می‌کنی.</li>
+  <li data-lines="15-19"><b class="what">روشن‌کردن ساعت.</b> یک تابع کوچک که هم برای ورودی هم برای خروجی لازم است: ساعت پورت را روشن می‌کند و یک بار همان رجیستر را می‌خواند (تأخیر کوتاه تا ساعت پایدار شود).
+    <span class="why">بدون ساعت، خواندن <code>IDR</code> همیشه صفر است و نوشتن بی‌اثر (همان تلهٔ درس ۵.۲). برای ورودی هم باید روشن شود: دکمهٔ PC13 به ساعت GPIOC نیاز دارد.</span></li>
+  <li data-lines="21-31"><b class="what">نوشتن با BSRR.</b> برای HIGH بیت <i>n</i> و برای LOW بیت <i>n+16</i> را یک می‌کند. بیت‌های صفر هیچ اثری ندارند.
     <span class="why">BSRR نوشتنی است و «اتمی» عمل می‌کند؛ یعنی خواندن-تغییر-نوشتن لازم نیست و وقفه وسط کار هیچ پینِ دیگری را خراب نمی‌کند (درس ۳.۶ و ۵.۳).</span></li>
-  <li data-lines="41-50"><b class="what">خواندن.</b> <code>IDR</code> را می‌خواند و بیت پین را جدا می‌کند.</li>
-  <li data-lines="52-56"><b class="what">جدول عملیات.</b> سه تابع <code>static</code> و یک جدول عمومی. <b>هیچ</b> کد دیگر در پروژه نام <code>stm32_write</code> را نمی‌بیند.</li>
+  <li data-lines="33-46"><b class="what">خروجی‌کردن با سطح اولیه.</b> پورت و پین را جدا می‌کند، ساعت را روشن می‌کند، <b>اول سطح اولیه را با BSRR می‌نویسد</b> و بعد دو بیت <code>MODER</code> را روی <code>01</code> (خروجی) می‌گذارد.
+    <span class="why">ترتیب عمدی است: بعد از reset، <code>ODR</code> صفر است. اگر اول <code>MODER</code> را خروجی کنیم، پایه یک لحظه LOW می‌شود؛ برای LED فعال-پایین یا CS یک تراشه این یک پالس ناخواسته است. اول ODR (از راه BSRR)، بعد MODER.</span></li>
+  <li data-lines="48-62"><b class="what">ورودی‌کردن.</b> دو بیت <code>MODER</code> را <code>00</code> (ورودی) و دو بیت <code>PUPDR</code> را بر اساس مقاومت می‌گذارد: <code>00</code> بدون، <code>01</code> بالاکش، <code>10</code> پایین‌کش.
+    <span class="why">PC13 روی Nucleo یک مقاومت بیرونی دارد؛ ولی برای دکمهٔ دلخواه روی بردبورد باید بالاکش داخلی را روشن کنی. بدون ماسک (<code>~(3u &lt;&lt; 2n)</code>) بیت‌های قبلی می‌مانند.</span></li>
+  <li data-lines="64-73"><b class="what">خواندن.</b> <code>IDR</code> را می‌خواند و بیت پین را جدا می‌کند. روی پایهٔ خروجی هم سطح واقعی خط را می‌دهد.</li>
+  <li data-lines="75-80"><b class="what">جدول عملیات.</b> چهار تابع <code>static</code> و یک جدول عمومی. <b>هیچ</b> کد دیگر در پروژه نام <code>stm32_write</code> را نمی‌بیند.</li>
 </ol>
 
 <div class="widget" data-w="bits" data-width="32" data-reg="GPIOA_BSRR" data-value="0" data-title="GPIOA_BSRR برای PA5: کدام بیت روشن می‌کند، کدام خاموش؟ (فقط نوشتنی است؛ بیت‌ها را خودت بزن)" data-fields='[{"name":"BS5","hi":5,"lo":5},{"name":"BR5","hi":21,"lo":21}]'></div>
 <p>بیت ۵ را یک کن: <code>0x00000020</code> = «PA5 را بالا ببر». بیت ۲۱ (۵+۱۶) را یک کن: <code>0x00200000</code> = «PA5 را پایین بیاور». هر دو را با هم یک کنی، بنا به RM0383 «Set» برنده است. برای همین backend فقط یکی را می‌نویسد.</p>
 
-<div class="code" data-file="main_board.c" data-lang="c" data-verify="arm" data-project="stm32" id="s3">
+<div class="code" data-file="main_board.c" data-lang="c" data-verify="make" data-project="stm32" id="s3">
 <pre>
 #include &lt;stdint.h&gt;
 
@@ -753,17 +832,63 @@ int main(void)
   <li data-lines="23-26"><b class="what">حلقهٔ اصلی.</b> <code>led_toggle</code> و صبر. همان منطقی که روی PC آزمایش کردیم.</li>
 </ol>
 
-<div class="callout info"><div class="ct">برای اجرا روی برد چه کم است؟</div>
+<p>برای اینکه این پروژه واقعا روی برد برود، فایل‌های مشترک قبلی را کنارش بگذار: <code>startup.c</code> و <code>link.ld</code> (درس <a href="5-2.html">۵.۲</a>)، <code>vectors.c</code> (جدول کامل ۵.۱) و <code>led.c</code> (همین درس). بقیه را Makefile می‌سازد:</p>
+
+<div class="code" data-file="Makefile" data-lang="make" data-verify="make" data-project="stm32" data-needs="5-1/boot/vectors.c 5-2/bare/startup.c 5-2/bare/link.ld 5-7/layered/led.c" id="s4">
+<pre>
+CC      = arm-none-eabi-gcc
+CFLAGS  = -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -Og
+LDFLAGS = -nostdlib -T link.ld
+OBJS    = main_board.o led.o hal_gpio_stm32.o startup.o vectors.o
+
+all: board.bin
+
+board.elf: $(OBJS) link.ld
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS)
+
+board.bin: board.elf
+	arm-none-eabi-objcopy -O binary $&lt; $@
+
+%.o: %.c hal_gpio.h led.h hal_gpio_stm32.h
+	$(CC) $(CFLAGS) -c -o $@ $&lt;
+
+.PRECIOUS: %.o %.elf
+
+clean:
+	rm -f *.o *.elf *.bin
+</pre></div>
+<ol class="walk" data-for="s4">
+  <li data-lines="1-4"><b class="what">متغیرها.</b> مثل ۵.۲. فهرست <code>OBJS</code> سه فایل این درس (<code>main_board</code>، <code>led</code>، <code>hal_gpio_stm32</code>) به‌علاوهٔ فایل‌های شروع (<code>startup</code>، <code>vectors</code>) است.</li>
+  <li data-lines="6-10"><b class="what">لینک و BIN.</b> یک <code>board.elf</code> که با <code>objcopy</code> به <code>board.bin</code> برای ریختن روی Flash درمی‌آید.</li>
+  <li data-lines="12-13"><b class="what">کامپایل.</b> هر <code>.o</code> از <code>.c</code> خودش و سه هدر؛ تغییر قرارداد همه‌چیز را دوباره می‌سازد.</li>
+  <li data-lines="15-18"><b class="what">میانی‌ها و پاک‌سازی.</b> مثل ۵.۲.</li>
+</ol>
+<p>ساخت واقعی (خروجی <span class="en">arm-none-eabi-gcc 13.2.1</span>؛ <code>-Og</code>):</p>
+<pre class="term" data-nocheck>
+$ make
+$ arm-none-eabi-size board.elf
+   text	   data	    bss	    dec	    hex	filename
+    992	      0	      0	    992	    3e0	board.elf
+$ arm-none-eabi-nm board.elf | grep -i 'hal_gpio_stm32_ops\|main$\|led_init\|Reset_H'
+080001b8 T main
+08000214 T led_init
+0800038c T Reset_Handler
+080003d0 T hal_gpio_stm32_ops
+$ arm-none-eabi-objdump -s -j .isr_vector board.elf | sed -n 4,5p
+Contents of section .isr_vector:
+ 8000000 00000220 8d030008 cd030008 cd030008  ... ............
+</pre>
+<p>کلمهٔ دوم <code>0x0800038d</code> = <code>Reset_Handler</code> (<code>0x0800038c</code>) با بیت Thumb است؛ پس ELF کامل و قابل‌فلش ساخته شده است. (این‌جا ساخته و وارسی شد؛ روی برد واقعی در این محیط اجرا نکردیم. اگر LED چشمک نزد، فهرست وارسی درس <a href="5-2.html">۵.۲</a> را ببین.)</p>
 <p>این بلاک‌ها «کامپایل» می‌شوند، ولی فایل قابل‌فلش نیستند: کنارشان باید <b>startup</b> و <b>linker script</b> درس <a href="5-1.html">۵.۱</a> باشد. Makefile درس ۵.۲ را با این سه فایل (<code>led.c</code>، <code>hal_gpio_stm32.c</code>، <code>main_board.c</code>) گسترش بده و همان فرایند ساخت و فلش را اجرا کن.</p></div>
 
 <pre class="term" data-nocheck>
 $ arm-none-eabi-size led_arm.o hal_gpio_stm32.o main_board.o
    text	   data	    bss	    dec	    hex	filename
-    374	      0	      0	    374	    176	led_arm.o
-    324	      0	      0	    324	    144	hal_gpio_stm32.o
+    360	      0	      0	    360	    168	led_arm.o
+    548	      0	      0	    548	    224	hal_gpio_stm32.o
     104	      0	      0	    104	     68	main_board.o
 </pre>
-<p>کل لایه‌بندی کمتر از ۸۰۰ بایت کد ARM است؛ از ۵۱۲ کیلوبایت Flash خیلی کم. هزینهٔ کمی که در برابر قابلیت آزمایش روی PC و پورت‌شدن به تراشهٔ دیگر می‌پردازی.</p>
+<p>کل لایه‌بندی (بدون بهینه‌سازی) حدود ۱ کیلوبایت کد ARM است؛ از ۵۱۲ کیلوبایت Flash خیلی کم. هزینهٔ کمی که در برابر قابلیت آزمایش روی PC و پورت‌شدن به تراشهٔ دیگر می‌پردازی.</p>
 
 <h2 id="path">یک فراخوانی از بالا تا پایین</h2>
 <p>حالا مسیر یک دستور را دنبال کن: <code>led_on(&amp;ld2)</code> روی برد واقعی و روی PC.</p>
@@ -816,20 +941,42 @@ $ arm-none-eabi-size led_arm.o hal_gpio_stm32.o main_board.o
 #include "driver/gpio.h"
 #include "hal_gpio.h"
 
-#define ESP_MAX_GPIO 39
-
-static hal_status_t esp_init_output(uint8_t pin)
+static hal_status_t esp_init_output(uint8_t pin, hal_level_t initial)
 {
-    if (pin &gt; ESP_MAX_GPIO) {
+    if (!GPIO_IS_VALID_OUTPUT_GPIO(pin)) {
         return HAL_ERR_PARAM;
     }
-    return (gpio_set_direction((gpio_num_t)pin, GPIO_MODE_OUTPUT) == ESP_OK)
-               ? HAL_OK : HAL_ERR_PARAM;
+    gpio_num_t g = (gpio_num_t)pin;
+
+    if (gpio_reset_pin(g) != ESP_OK ||
+        gpio_set_level(g, (uint32_t)initial) != ESP_OK ||
+        gpio_set_direction(g, GPIO_MODE_INPUT_OUTPUT) != ESP_OK) {
+        return HAL_ERR_IO;
+    }
+    return HAL_OK;
+}
+
+static hal_status_t esp_init_input(uint8_t pin, hal_pull_t pull)
+{
+    if (!GPIO_IS_VALID_GPIO(pin)) {
+        return HAL_ERR_PARAM;
+    }
+    gpio_num_t g = (gpio_num_t)pin;
+    gpio_pull_mode_t mode = (pull == HAL_PULL_UP) ? GPIO_PULLUP_ONLY
+                          : (pull == HAL_PULL_DOWN) ? GPIO_PULLDOWN_ONLY
+                          : GPIO_FLOATING;
+
+    if (gpio_reset_pin(g) != ESP_OK ||
+        gpio_set_direction(g, GPIO_MODE_INPUT) != ESP_OK ||
+        gpio_set_pull_mode(g, mode) != ESP_OK) {
+        return HAL_ERR_IO;
+    }
+    return HAL_OK;
 }
 
 static hal_status_t esp_write(uint8_t pin, hal_level_t level)
 {
-    if (pin &gt; ESP_MAX_GPIO) {
+    if (!GPIO_IS_VALID_OUTPUT_GPIO(pin)) {
         return HAL_ERR_PARAM;
     }
     return (gpio_set_level((gpio_num_t)pin, (uint32_t)level) == ESP_OK)
@@ -838,7 +985,7 @@ static hal_status_t esp_write(uint8_t pin, hal_level_t level)
 
 static hal_status_t esp_read(uint8_t pin, hal_level_t *level)
 {
-    if (pin &gt; ESP_MAX_GPIO || level == NULL) {
+    if (!GPIO_IS_VALID_GPIO(pin) || level == NULL) {
         return HAL_ERR_PARAM;
     }
     *level = gpio_get_level((gpio_num_t)pin) ? HAL_HIGH : HAL_LOW;
@@ -847,18 +994,20 @@ static hal_status_t esp_read(uint8_t pin, hal_level_t *level)
 
 const hal_gpio_ops_t hal_gpio_esp32_ops = {
     .init_output = esp_init_output,
+    .init_input = esp_init_input,
     .write = esp_write,
     .read = esp_read,
 };
 </pre></div>
 <ol class="walk" data-for="e1">
   <li data-lines="1-2"><b class="what">دو هدر.</b> درایور GPIO فریم‌ورک و قرارداد خودمان. این تنها فایلی است که <code>driver/gpio.h</code> را می‌بیند.</li>
-  <li data-lines="4"><b class="what">حد پایه‌ها.</b> ESP32 کلاسیک GPIO0 تا GPIO39 دارد (بعضی فقط ورودی‌اند).
-    <span class="why">شمارهٔ ورودی را پیش از تبدیل به <code>gpio_num_t</code> بررسی می‌کنیم؛ تا مقدار بی‌معنی به فریم‌ورک نرسد.</span></li>
-  <li data-lines="6-13"><b class="what">خروجی‌کردن.</b> <code>gpio_set_direction</code> یک <code>esp_err_t</code> برمی‌گرداند (<code>ESP_OK</code> یعنی موفق؛ درس <a href="5-6.html">۵.۶</a>). آن را به کد وضعیت HAL ترجمه می‌کنیم: پایهٔ فقط‌ورودی خطا می‌دهد و ما آن را «پارامتر اشتباه» می‌دانیم.</li>
-  <li data-lines="15-22"><b class="what">نوشتن.</b> <code>gpio_set_level</code> با عدد ۰ یا ۱. چون <code>HAL_LOW</code> و <code>HAL_HIGH</code> دقیقا ۰ و ۱ هستند، تبدیل ساده است.</li>
-  <li data-lines="24-31"><b class="what">خواندن.</b> <code>gpio_get_level</code> عدد صحیح برمی‌گرداند.</li>
-  <li data-lines="33-37"><b class="what">جدول عملیات.</b> همان شکل mock و STM32.</li>
+  <li data-lines="4-17"><b class="what">خروجی‌کردن با سطح اولیه.</b> <code>GPIO_IS_VALID_OUTPUT_GPIO</code> (ماکروی ESP-IDF) پایه‌هایی را که اصلا خروجی نیستند رد می‌کند (مثل GPIO34 تا 39 که فقط ورودی‌اند، یا شمارهٔ ۲۰ و ۲۴ و ۲۸ تا ۳۱ که روی ESP32 کلاسیک در دسترس نیستند). بعد <code>gpio_reset_pin</code> پایه را از هر عملکرد قبلی (مثل UART یا JTAG) جدا می‌کند و <b>اول سطح</b> را می‌نویسد، سپس جهت را <code>GPIO_MODE_INPUT_OUTPUT</code> می‌گذارد.
+    <span class="why">چرا <code>INPUT_OUTPUT</code> و نه <code>OUTPUT</code>؟ در حالت فقط-خروجی بافر ورودی پایه خاموش است و <code>gpio_get_level</code> همیشه ۰ می‌دهد (مستندات ESP-IDF)؛ پس <code>read</code> روی پایهٔ خروجی با mock و STM32 فرق می‌کرد. با <code>INPUT_OUTPUT</code> قرارداد «<code>read</code> سطح واقعی می‌دهد» روی هر سه یکسان است. ترجمهٔ خطا: خطای فریم‌ورک ← <code>HAL_ERR_IO</code>.</span></li>
+  <li data-lines="19-35"><b class="what">ورودی‌کردن.</b> <code>HAL_PULL_UP</code> ← <code>GPIO_PULLUP_ONLY</code>، <code>HAL_PULL_DOWN</code> ← <code>GPIO_PULLDOWN_ONLY</code>، وگرنه <code>GPIO_FLOATING</code>.
+    <span class="why">پایه‌های ۳۴ تا ۳۹ ESP32 مقاومت داخلی ندارند؛ برای آن‌ها باید مقاومت بیرونی بگذاری (درخواست بالاکش روی آن‌ها اثری ندارد).</span></li>
+  <li data-lines="37-44"><b class="what">نوشتن.</b> <code>gpio_set_level</code> با عدد ۰ یا ۱. چون <code>HAL_LOW</code> و <code>HAL_HIGH</code> دقیقا ۰ و ۱ هستند، تبدیل ساده است. پایهٔ نامعتبر <code>HAL_ERR_PARAM</code> می‌گیرد (نه <code>HAL_ERR_IO</code>)؛ همان که mock و STM32 هم می‌دهند.</li>
+  <li data-lines="46-53"><b class="what">خواندن.</b> <code>gpio_get_level</code> عدد صحیح برمی‌گرداند.</li>
+  <li data-lines="55-60"><b class="what">جدول عملیات.</b> همان شکل mock و STM32.</li>
 </ol>
 
 <p>مقایسهٔ این سه backend یک‌جا:</p>
@@ -867,6 +1016,8 @@ const hal_gpio_ops_t hal_gpio_esp32_ops = {
 <tbody>
 <tr><td>شمارهٔ پایه</td><td><code>پورت×۱۶+پین</code></td><td><code>پورت×۱۶+پین</code></td><td>شمارهٔ GPIO</td></tr>
 <tr><td>«نوشتن»</td><td>آرایه در RAM + چاپ</td><td>نوشتن در <code>BSRR</code></td><td><code>gpio_set_level</code></td></tr>
+<tr><td>سطح اولیه بدون گلیچ</td><td>ذخیره قبل از «خروجی»</td><td>BSRR قبل از MODER</td><td><code>gpio_set_level</code> قبل از جهت</td></tr>
+<tr><td><code>read</code> روی پایهٔ خروجی</td><td>آخرین سطح نوشته‌شده</td><td><code>IDR</code></td><td>فقط با <code>GPIO_MODE_INPUT_OUTPUT</code></td></tr>
 <tr><td>خطا</td><td>قابل تزریق</td><td>فقط بررسی محدوده</td><td>ترجمهٔ <code>esp_err_t</code></td></tr>
 <tr><td>فقط برای</td><td>آزمایش و شبیه‌سازی</td><td>برد Nucleo-F411RE</td><td>DevKit ESP32</td></tr>
 <tr><td>خط‌های تغییر در <code>led.c</code></td><td>۰</td><td>۰</td><td>۰</td></tr>
@@ -905,15 +1056,15 @@ int main(void)
 <pre class="term" data-kind="err" data-from="bad_sig.c">
 bad_sig.c:13:42: error: initialization of 'int (*)(uint8_t,  int)' {aka 'int (*)(unsigned char,  int)'} from incompatible pointer type 'void (*)(uint8_t,  int)' {aka 'void (*)(unsigned char,  int)'} [-Werror=incompatible-pointer-types]
 </pre>
-<p>پیام می‌گوید «مقداردهی اشاره‌گر <code>int (*)(...)</code> با <code>void (*)(...)</code> ناسازگار است». بدون <code>-Werror=incompatible-pointer-types</code> نسخه‌های قدیمی‌تر gcc فقط هشدار می‌دادند؛ به همین دلیل همیشه با <code>-Wall -Wextra</code> کامپایل کن و هشدارها را جدی بگیر.</p>
+<p>پیام می‌گوید «مقداردهی اشاره‌گر <code>int (*)(...)</code> با <code>void (*)(...)</code> ناسازگار است». بدون <code>-Werror=incompatible-pointer-types</code> در gcc نسخه‌های قبل از ۱۴ فقط هشدار می‌گیری (از gcc ۱۴ به بعد خودش خطاست)؛ به همین دلیل همیشه با <code>-Wall -Wextra</code> کامپایل کن و هشدارها را جدی بگیر.</p>
 
 <h2 id="const-flash">جدول عملیات کجا می‌نشیند؟</h2>
 <p>یادت هست در درس <a href="3-5.html">۳.۵</a> گفتیم متغیر سراسری <code>const</code> به Flash می‌رود و متغیر عادیِ مقدار‌دار در RAM جا می‌گیرد؟ جدول عملیات هم همین‌طور است. بررسی خروجی واقعی کامپایلر:</p>
 <pre class="term" data-nocheck>
 $ arm-none-eabi-objdump -t hal_gpio_stm32.o | grep ops
-00000000 g     O .rodata	0000000c hal_gpio_stm32_ops
+00000000 g     O .rodata	00000010 hal_gpio_stm32_ops
 </pre>
-<p>خط را بخوان: جدول در بخش <code>.rodata</code> (فقط‌خواندنی، در Flash) نشسته و ۱۲ بایت است: سه اشاره‌گر × ۴ بایت. اگر <code>const</code> را بردارید، به بخش <code>.data</code> می‌رود و هم در Flash هم در RAM یک کپی می‌گیرد؛ ۱۲ بایت RAM هدر می‌رود و بدتر، یک باگ می‌تواند اشاره‌گر تابع را عوض کند و برنامه را به جای اشتباه بپراند. <b>هر جدول عملیات را <code>const</code> بگیر.</b></p>
+<p>خط را بخوان: جدول در بخش <code>.rodata</code> (فقط‌خواندنی، در Flash) نشسته و ۱۶ بایت است: چهار اشاره‌گر × ۴ بایت. اگر <code>const</code> را بردارید، به بخش <code>.data</code> می‌رود و هم در Flash هم در RAM یک کپی می‌گیرد؛ ۱۶ بایت RAM هدر می‌رود و بدتر، یک باگ می‌تواند اشاره‌گر تابع را عوض کند و برنامه را به جای اشتباه بپراند. <b>هر جدول عملیات را <code>const</code> بگیر.</b></p>
 
 <p>یک نگاه به رابطهٔ فایل‌ها هم بینداز؛ پیکان «include می‌کند» است:</p>
 <figure><div class="frame">

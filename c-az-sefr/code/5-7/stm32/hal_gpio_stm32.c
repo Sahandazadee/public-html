@@ -6,24 +6,16 @@
 #define RCC_AHB1ENR      REG32(0x40023830u)
 #define GPIO_BASE(port)  (0x40020000u + 0x400u * (port))
 #define GPIO_MODER(port) REG32(GPIO_BASE(port) + 0x00u)
+#define GPIO_PUPDR(port) REG32(GPIO_BASE(port) + 0x0Cu)
 #define GPIO_IDR(port)   REG32(GPIO_BASE(port) + 0x10u)
 #define GPIO_BSRR(port)  REG32(GPIO_BASE(port) + 0x18u)
 
 #define MAX_PORT 4u                     /* GPIOA تا GPIOE */
 
-static hal_status_t stm32_init_output(uint8_t pin)
+static void clock_on(uint32_t port)
 {
-    uint32_t port = pin / 16u;
-    uint32_t n = pin % 16u;
-
-    if (port > MAX_PORT) {
-        return HAL_ERR_PARAM;
-    }
     RCC_AHB1ENR |= (1u << port);            /* ساعت پورت را روشن کن */
     (void)RCC_AHB1ENR;                      /* خواندن ساختگی: تأخیر کوتاه */
-    GPIO_MODER(port) = (GPIO_MODER(port) & ~(3u << (2u * n)))
-                     | (1u << (2u * n));    /* 01 = خروجی */
-    return HAL_OK;
 }
 
 static hal_status_t stm32_write(uint8_t pin, hal_level_t level)
@@ -35,6 +27,37 @@ static hal_status_t stm32_write(uint8_t pin, hal_level_t level)
         return HAL_ERR_PARAM;
     }
     GPIO_BSRR(port) = (level == HAL_HIGH) ? (1u << n) : (1u << (n + 16u));
+    return HAL_OK;
+}
+
+static hal_status_t stm32_init_output(uint8_t pin, hal_level_t initial)
+{
+    uint32_t port = pin / 16u;
+    uint32_t n = pin % 16u;
+
+    if (port > MAX_PORT) {
+        return HAL_ERR_PARAM;
+    }
+    clock_on(port);
+    (void)stm32_write(pin, initial);        /* اول سطح، بعد خروجی: بدون گلیچ */
+    GPIO_MODER(port) = (GPIO_MODER(port) & ~(3u << (2u * n)))
+                     | (1u << (2u * n));    /* 01 = خروجی */
+    return HAL_OK;
+}
+
+static hal_status_t stm32_init_input(uint8_t pin, hal_pull_t pull)
+{
+    uint32_t port = pin / 16u;
+    uint32_t n = pin % 16u;
+    uint32_t pupd = (pull == HAL_PULL_UP) ? 1u : (pull == HAL_PULL_DOWN) ? 2u : 0u;
+
+    if (port > MAX_PORT) {
+        return HAL_ERR_PARAM;
+    }
+    clock_on(port);
+    GPIO_MODER(port) &= ~(3u << (2u * n));  /* 00 = ورودی */
+    GPIO_PUPDR(port) = (GPIO_PUPDR(port) & ~(3u << (2u * n)))
+                     | (pupd << (2u * n));  /* 00 هیچ، 01 بالاکش، 10 پایین‌کش */
     return HAL_OK;
 }
 
@@ -51,6 +74,7 @@ static hal_status_t stm32_read(uint8_t pin, hal_level_t *level)
 
 const hal_gpio_ops_t hal_gpio_stm32_ops = {
     .init_output = stm32_init_output,
+    .init_input = stm32_init_input,
     .write = stm32_write,
     .read = stm32_read,
 };
