@@ -354,13 +354,14 @@
   }
 
   /* ---------- جستجو ---------- */
-  var SI = null, sov = null;
+  var SI = null, sov = null, sPrev = null;
+  function closeSearch() { if (!sov) return; sov.classList.remove("open"); main.inert = false; if (sPrev && sPrev.focus) sPrev.focus(); }
   function norm(s) { return String(s).replace(/ي/g, "ی").replace(/ك/g, "ک").replace(/[\u200c\u064B-\u065F]/g, "").replace(/[۰-۹]/g, function (d) { return "۰۱۲۳۴۵۶۷۸۹".indexOf(d); }).toLowerCase(); }
   function openSearch() {
     if (!sov) {
       sov = el("div", { "class": "search-ov", role: "dialog", "aria-modal": "true", "aria-label": "جستجو" }, '<div class="search-box"><input type="search" placeholder="جستجو در همه درس‌ها… (مثلا: volatile)" aria-label="عبارت جستجو"><div class="search-res" role="listbox"></div></div>');
       document.body.appendChild(sov);
-      sov.addEventListener("click", function (e) { if (e.target === sov) sov.classList.remove("open"); });
+      sov.addEventListener("click", function (e) { if (e.target === sov) closeSearch(); });
       var inp = sov.querySelector("input"), res = sov.querySelector(".search-res"), sel = -1;
       var run = function () {
         var q = norm(inp.value).trim(); if (!q) { res.innerHTML = '<p style="padding:8px 12px;color:var(--mute)">یک واژه بنویس. مثلا «اشاره‌گر»، «volatile» یا «HardFault».</p>'; return; }
@@ -386,24 +387,38 @@
       run();
       fetch("assets/search-fa.json").then(function (r) { return r.json(); }).then(function (j) { SI = j; run(); }).catch(function () { });
     }
-    sov.classList.add("open"); var i2 = sov.querySelector("input"); i2.focus(); i2.select();
+    sPrev = document.activeElement; sov.classList.add("open"); main.inert = true; var i2 = sov.querySelector("input"); i2.focus(); i2.select();
   }
   document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") { if (sov && sov.classList.contains("open")) sov.classList.remove("open"); closePop(); if (document.body.classList.contains("nav-open")) setNav(false); var z = document.querySelector(".zoom"); if (z) z.remove(); }
+    if (e.key === "Escape") { if (sov && sov.classList.contains("open")) closeSearch(); closePop(); if (document.body.classList.contains("nav-open")) setNav(false); var z = document.querySelector(".zoom"); if (z) { z.remove(); if (window.__zf) window.__zf.focus(); } }
     if (e.key === "/" && !/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || "") && !e.ctrlKey && !e.metaKey) { e.preventDefault(); openSearch(); }
   });
 
   /* ---------- بزرگ‌نمایی شکل‌ها ---------- */
   article.querySelectorAll("figure .frame").forEach(function (f) {
     var s = f.querySelector("svg"); if (!s || f.closest(".hero")) return; f.setAttribute("tabindex", "0"); f.setAttribute("title", "برای بزرگ‌نمایی بزن");
-    var zoom = function () { var z = el("div", { "class": "zoom", role: "dialog", "aria-label": "شکل بزرگ" }, "<div></div>"); z.firstChild.appendChild(s.cloneNode(true)); z.addEventListener("click", function () { z.remove(); }); document.body.appendChild(z); };
-    f.addEventListener("click", zoom); f.addEventListener("keydown", function (e) { if (e.key === "Enter") zoom(); });
+    var zoom = function () {
+      var z = el("div", { "class": "zoom", role: "dialog", "aria-modal": "true", "aria-label": "شکل بزرگ (برای بستن Esc یا لمس)", tabindex: "-1" }, "<div></div>");
+      z.firstChild.appendChild(s.cloneNode(true)); window.__zf = f;
+      z.addEventListener("click", function () { z.remove(); f.focus(); });
+      document.body.appendChild(z); z.focus();
+    };
+    f.setAttribute("role", "group"); f.setAttribute("aria-label", (s.getAttribute("aria-label") || "شکل") + " (قابل اسکرول؛ Enter برای بزرگ‌نمایی)");
+    f.addEventListener("click", zoom); f.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); zoom(); } });
   });
   article.querySelectorAll("[data-mascot]").forEach(function (m) { m.innerHTML = mascot(m.getAttribute("data-mascot")); });
   article.querySelectorAll(".callout.coach").forEach(function (c) { c.insertAdjacentHTML("afterbegin", mascot("think")); });
   article.querySelectorAll(".callout.warn").forEach(function (c) { if (!c.querySelector(".mascot")) { /* هشدار بدون شخصیت می‌ماند تا شلوغ نشود */ } });
 
   article.querySelectorAll("figure .frame svg").forEach(function (s) { var vb = (s.getAttribute("viewBox") || "").split(/[\s,]+/); if (vb.length === 4 && !s.closest(".hero")) s.style.setProperty("--svg-w", Math.round(+vb[2] * 0.82) + "px"); });
+  article.querySelectorAll("figure .frame").forEach(function (f) {
+    if (f.closest(".hero") || !f.querySelector("svg")) return;
+    function chk() { f.classList.toggle("scrolls", f.scrollWidth > f.clientWidth + 8); }
+    var h = document.createElement("div"); h.className = "fig-hint"; h.setAttribute("aria-hidden", "true");
+    h.textContent = "↔ برای دیدن همهٔ شکل، آن را به چپ و راست بکش یا برای بزرگ‌نمایی بزن";
+    f.insertBefore(h, f.firstChild); chk(); addEventListener("resize", chk);
+    f.addEventListener("scroll", function () { f.classList.add("scrolled"); }, { once: true, passive: true });
+  });
   article.querySelectorAll(".table-wrap,.code pre").forEach(function (x) { x.setAttribute("tabindex", "0"); x.setAttribute("role", "region"); x.setAttribute("aria-label", x.classList.contains("table-wrap") ? "جدول قابل اسکرول" : "کد قابل اسکرول"); });
 
   /* ---------- ابزارک‌های تعاملی ---------- */
