@@ -24,12 +24,26 @@ static q15_t q15_mul(q15_t a, q15_t b)
 static q16_t q16_mul(q16_t a, q16_t b)
 {
     int64_t p = (int64_t)a * b;             // Q32 در ۶۴ بیت
-    return (q16_t)(p >> 16);
+    return (q16_t)((p + 32768) >> 16);      // گرد کردن؛ >> روی منفی در GCC حسابی است
 }
 
 static q16_t q16_div(q16_t a, q16_t b)
 {
+    if (b == 0) {                           // تقسیم بر صفر: اشباع، نه کرش
+        return (a < 0) ? INT32_MIN : INT32_MAX;
+    }
     return (q16_t)(((int64_t)a * 65536) / b);   // اول بزرگ کن، بعد تقسیم
+}
+
+/* چاپ بدون float؛ علامت را جدا می‌کنیم تا منفی‌ها هم درست چاپ شوند */
+static void q16_print(q16_t v)
+{
+    int64_t m = v;                          // در ۶۴ بیت منفی کردن امن است
+    if (m < 0) {
+        putchar('-');
+        m = -m;
+    }
+    printf("%d.%03d", (int)(m >> 16), (int)(((m & 0xFFFF) * 1000) >> 16));
 }
 
 int main(void)
@@ -46,8 +60,13 @@ int main(void)
     q16_t a = (q16_t)(3.25 * 65536);        // 3.25
     q16_t b = (q16_t)(2.5  * 65536);        // 2.5
     q16_t c = q16_mul(a, b);                // 8.125
+    q16_t n = q16_mul(a, -b);               // -8.125
     printf("q16: %d * %d -> %d\n", a, b, c);
-    printf("as text: %d.%03d\n", c >> 16, ((c & 0xFFFF) * 1000) >> 16);
+    printf("as text: ");
+    q16_print(c);
+    printf("\nas text: ");
+    q16_print(n);
+    printf("\nnaive  : %d.%03d (wrong)\n", n >> 16, ((n & 0xFFFF) * 1000) >> 16);
     printf("q16: %d / %d -> %d\n", c, b, q16_div(c, b));
     return 0;
 }

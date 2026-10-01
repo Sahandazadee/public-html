@@ -6,7 +6,7 @@ int main(void)
     char cmd[] = "start";
     char name[8];
 
-    strcpy(name, "Sahand Azadee");
+    strcpy(name, "Nasrin Moradi");
     if (cmd == "start") {
         printf("go, %s\n", name);
     }

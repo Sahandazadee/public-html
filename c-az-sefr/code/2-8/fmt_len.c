@@ -14,6 +14,5 @@ int main(void)
     printf("hex32     : 0x%08" PRIX32 "\n", (uint32_t)0xBEEF);
     printf("long long : %lld\n", huge);
     printf("size_t    : %zu\n", bytes);
-    printf("as uchar  : %hhu\n", 300);
     return 0;
 }

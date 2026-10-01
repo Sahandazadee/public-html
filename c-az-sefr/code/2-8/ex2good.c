@@ -5,7 +5,7 @@ int main(void)
 {
     char cmd[] = "start";
     char name[8];
-    strncpy(name, "Sahand", sizeof(name) - 1);
+    strncpy(name, "Nasrin", sizeof(name) - 1);
     name[sizeof(name) - 1] = '\0';
 
     if (strcmp(cmd, "start") == 0) {
