@@ -225,27 +225,14 @@ bad_offset.c:13:1: error: static assertion failed: "BSRR offset"
 </pre>
 
 <h2 id="startup">شروع و پایان: startup و linker script</h2>
-<p>برد بعد از روشن‌شدن نمی‌داند <code>main</code> کجاست. چیزی باید <b>قبل از main</b> اجرا شود: کدی که حافظه را آماده کند. اسم این کد <span class="term" data-t="startup">startup</span> است و همراهش یک فایل ساختِ حافظه به اسم linker script. درس <a href="5-1.html">۵.۱</a> این دو را کامل توضیح می‌دهد. برای اینکه این درس خودش تنها بایستد، نسخهٔ کوچک کارآمد آن‌ها را اینجا می‌آوریم. اگر ۵.۱ را نخوانده‌ای، فعلا با این دو فایل مثل یک «جعبهٔ سیاه مطمئن» رفتار کن.</p>
+<p>برد بعد از روشن‌شدن نمی‌داند <code>main</code> کجاست. چیزی باید <b>قبل از main</b> اجرا شود: کدی که حافظه را آماده کند. اسم این کد <span class="term" data-t="startup">startup</span> است و همراهش یک فایل ساختِ حافظه به اسم linker script. درس <a href="5-1.html">۵.۱</a> این دو را کامل توضیح می‌دهد. برای اینکه این درس راه بیفتد، نسخهٔ کوچک <code>startup.c</code> و <code>link.ld</code> را اینجا می‌آوریم و جدول برداری را از ۵.۱ برمی‌داریم. اگر ۵.۱ را نخوانده‌ای، فعلا با این فایل‌ها مثل یک «جعبهٔ سیاه مطمئن» رفتار کن (ولی <code>vectors.c</code> را حتما از آن درس بردار).</p>
 
-<div class="code" data-file="startup.c" data-lang="c" data-verify="make" data-project="bare" id="start">
+<div class="code" data-file="startup.c" data-lang="c" data-verify="make" data-project="bare" data-needs="5-1/boot/vectors.c" id="start">
 <pre>
 #include &lt;stdint.h&gt;
 
-extern uint32_t _estack, _sidata, _sdata, _edata, _sbss, _ebss;
+extern uint32_t _sidata, _sdata, _edata, _sbss, _ebss;
 int main(void);
-
-void Reset_Handler(void);
-void Default_Handler(void);
-void NMI_Handler(void)       __attribute__((weak, alias("Default_Handler")));
-void HardFault_Handler(void) __attribute__((weak, alias("Default_Handler")));
-
-__attribute__((section(".isr_vector"), used))
-void (*const vector_table[])(void) = {
-    (void (*)(void))&amp;_estack,   // کلمهٔ ۰: مقدار اولیهٔ SP
-    Reset_Handler,              // کلمهٔ ۱: نقطهٔ شروع
-    NMI_Handler,                // کلمهٔ ۲
-    HardFault_Handler,          // کلمهٔ ۳
-};
 
 void Reset_Handler(void)
 {
@@ -260,29 +247,19 @@ void Reset_Handler(void)
     for (;;) {
     }
 }
-
-void Default_Handler(void)
-{
-    for (;;) {
-    }
-}
 </pre></div>
 <ol class="walk" data-for="start">
-  <li data-lines="3"><b class="what">نمادهای linker script.</b> <code>_estack</code>، <code>_sdata</code>، <code>_edata</code>، <code>_sidata</code>، <code>_sbss</code>، <code>_ebss</code> متغیر واقعی نیستند؛ <b>مرزهای حافظه‌اند</b> که linker می‌سازد. فقط <b>آدرسشان</b> به‌کار می‌آید (<code>&amp;_sdata</code>).</li>
-  <li data-lines="4,6-7"><b class="what">اعلان‌ها.</b> <code>main</code>، <code>Reset_Handler</code> (اولین کد بعد از روشن‌شدن) و <code>Default_Handler</code> (جایگزین وقفه‌هایی که کسی ننوشته).</li>
-  <li data-lines="8-9"><b class="what">نام‌های ضعیف.</b> <code>weak, alias</code> یعنی «اگر کسی <code>NMI_Handler</code> را جدی تعریف نکرد، همین <code>Default_Handler</code> را بردار». تعریف واقعی همیشه برنده است.
-    <span class="why">در درس <a href="5-3.html">۵.۳</a> فقط با نوشتن تابعی همنام، ISR را جایگزین می‌کنیم.</span></li>
-  <li data-lines="11-12,17"><b class="what">جدول برداری در Flash.</b> آرایهٔ <code>const</code> از اشاره‌گر تابع، با <code>section(".isr_vector")</code> که linker آن را اول Flash (<code>0x08000000</code>) می‌گذارد. <code>used</code> یعنی «حذفش نکن».
-    <span class="why">سخت‌افزار Cortex-M بعد از ریست این جدول را از ابتدای Flash می‌خواند؛ کسی «صدایش نمی‌زند».</span></li>
-  <li data-lines="13-14"><b class="what">دو کلمهٔ اول.</b> کلمهٔ ۰: مقدار اولیهٔ <code>SP</code> (آخرین آدرس RAM؛ پشته به پایین رشد می‌کند). کلمهٔ ۱: آدرس <code>Reset_Handler</code>، جایی که CPU می‌پرد.</li>
-  <li data-lines="15-16"><b class="what">استثناهای ۲ و ۳.</b> NMI و HardFault؛ فعلا هر دو به حلقهٔ بی‌نهایت می‌روند.</li>
-  <li data-lines="19-20,31"><b class="what">Reset_Handler.</b> اولین تابعی که CPU اجرا می‌کند.</li>
-  <li data-lines="21-24"><b class="what">کپی مقدار اولیهٔ .data.</b> مقدار اولیهٔ سراسری‌های مقداردار در Flash است؛ اینجا به RAM کپی می‌شود.
+  <li data-lines="3"><b class="what">نمادهای linker script.</b> <code>_sdata</code>، <code>_edata</code>، <code>_sidata</code>، <code>_sbss</code>، <code>_ebss</code> متغیر واقعی نیستند؛ <b>مرزهای حافظه‌اند</b> که linker می‌سازد. فقط <b>آدرسشان</b> به‌کار می‌آید (<code>&amp;_sdata</code>).</li>
+  <li data-lines="4"><b class="what">اعلان main.</b> برنامهٔ ما در فایل دیگری است.</li>
+  <li data-lines="6,17"><b class="what">Reset_Handler.</b> اولین تابعی که CPU اجرا می‌کند. (آدرسش را جدول برداری می‌دهد؛ پایین‌تر.)</li>
+  <li data-lines="8-11"><b class="what">کپی مقدار اولیهٔ .data.</b> مقدار اولیهٔ سراسری‌های مقداردار در Flash است؛ اینجا به RAM کپی می‌شود.
     <span class="why">RAM بعد از روشن‌شدن آشغال است؛ بدون این کپی <code>int x = 5;</code> سراسری ۵ نمی‌بود (درس <a href="3-5.html">۳.۵</a>). امروز چنین متغیری نداریم ولی کد باید آماده باشد.</span></li>
-  <li data-lines="25-27"><b class="what">صفر کردن .bss.</b> سراسری‌های بی‌مقدار باید صفر باشند؛ قانون C.</li>
-  <li data-lines="28-30"><b class="what">صدا زدن main.</b> حالا حافظه آماده است. اگر main برگشت در حلقه می‌مانیم: روی MCU سیستم‌عاملی نیست که منتظرش باشد.</li>
-  <li data-lines="33-37"><b class="what">Default_Handler.</b> جای امن برای وقفه‌های ناخواسته: در حلقه می‌ماند تا با دیباگر ببینی کجا افتاده‌ای.</li>
+  <li data-lines="12-14"><b class="what">صفر کردن .bss.</b> سراسری‌های بی‌مقدار باید صفر باشند؛ قانون C.</li>
+  <li data-lines="15-17"><b class="what">صدا زدن main.</b> حالا حافظه آماده است. اگر main برگشت در حلقه می‌مانیم: روی MCU سیستم‌عاملی نیست که منتظرش باشد.</li>
 </ol>
+
+<div class="callout warn"><div class="ct">جدول برداری را این‌جا دوباره ننوشتیم: از ۵.۱ کپی کن</div>
+<p>جدول برداری (<code>g_vectors</code>) و <code>Default_Handler</code> در فایل <code>vectors.c</code> درس <a href="5-1.html">۵.۱</a> هستند (پوشهٔ <code>code/5-1/boot</code>). همان فایل را <b>عینا</b> کنار <code>startup.c</code> بگذار. این درس فقط <code>blink</code> و <code>button</code> و <code>toggle</code> دارد و وقفه‌ای فعال نمی‌کند، ولی همین فایل در ۵.۳ و ۵.۴ و ۵.۵ هم لازم می‌شود: جدولی که <b>همهٔ</b> وقفه‌های F411 را دارد (از جمله <code>SysTick_Handler</code> و <code>USART2_IRQHandler</code>). نسخهٔ قدیمیِ چهارکلمه‌ای که فقط SP و Reset و NMI و HardFault داشت روی برد واقعی در وقفهٔ اول به آدرس آشغال می‌پرید؛ نیازی به آن نیست.</p></div>
 
 <div class="code" data-file="link.ld" data-lang="ld" data-verify="make" data-project="bare" id="ld">
 <pre>
@@ -340,7 +317,7 @@ SECTIONS
 </ol>
 
 <div class="callout deep"><div class="ct">زیر کاپوت: چرا <code>Reset_Handler</code> در C نوشته شد؟</div>
-<p>فایل‌های startup رسمی ST معمولا با اسمبلی نوشته شده‌اند، ولی همین کار در C هم شدنی است، به‌شرطی که تا وقتی حافظه آماده نشده، فقط از متغیرهای محلی استفاده کنیم. در <code>Reset_Handler</code> ما متغیر سراسری نخوانده و ننوشته‌ایم. نکتهٔ ظریف دیگر: اگر با <code>-O2</code> کامپایل کنی، ممکن است gcc حلقه‌ای را که صفر می‌نویسد به تابع <code>memset</code> تبدیل کند، و چون <code>-nostdlib</code> داری، لینک خطای <code>undefined reference to memset</code> بدهد. ما با <code>-Og</code> ساختیم و مشکلی نداشتیم؛ راه‌حل حرفه‌ای در ۵.۱ می‌آید.</p></div>
+<p>فایل‌های startup رسمی ST معمولا با اسمبلی نوشته شده‌اند، ولی همین کار در C هم شدنی است، به‌شرطی که تا وقتی حافظه آماده نشده، فقط از متغیرهای محلی استفاده کنیم. در <code>Reset_Handler</code> ما متغیر سراسری نخوانده و ننوشته‌ایم. نکتهٔ ظریف دیگر: اگر با <code>-O2</code> کامپایل کنی، ممکن است gcc حلقه‌ای را که صفر می‌نویسد به تابع <code>memset</code> تبدیل کند، و چون <code>-nostdlib</code> داری، لینک خطای <code>undefined reference to memset</code> بدهد. ما با <code>-Og</code> ساختیم و مشکلی نداشتیم. توجه: <code>-ffreestanding</code> فقط همین حلقه‌ها را امن می‌کند؛ اگر جایی <code>struct</code> بزرگی را کپی یا صفر کنی باز هم <code>memcpy</code>/<code>memset</code> می‌خواهد. راه‌حلش (دو تابع کوچک) در بخش «تله‌ها»ی ۵.۱ آمده است.</p></div>
 
 <h2 id="blink">اولین برنامهٔ واقعی: چشمک LD2</h2>
 <p>حالا همهٔ قطعات آماده‌اند. برنامه‌ای که فقط خودش را به هدر و startup تکیه می‌دهد:</p>
@@ -453,7 +430,7 @@ PROGS   = blink button toggle
 
 all: $(PROGS:=.bin)
 
-%.elf: %.o startup.o link.ld
+%.elf: %.o startup.o vectors.o link.ld
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(filter %.o,$^)
 
 %.bin: %.elf
@@ -472,7 +449,7 @@ clean:
     <span class="why">بدون <code>-nostdlib</code>، linker دنبال startup و libc استاندارد رایانه‌ات می‌گردد که برای این تراشه وجود ندارد.</span></li>
   <li data-lines="4"><b class="what">فهرست برنامه‌ها.</b> سه برنامه؛ اگر چهارمی اضافه کنی فقط همین خط عوض می‌شود.</li>
   <li data-lines="6"><b class="what">هدف پیش‌فرض.</b> <code>$(PROGS:=.bin)</code> یعنی به هر اسم <code>.bin</code> بچسبان: <code>blink.bin button.bin toggle.bin</code>. با نوشتن <code>make</code> همهٔ این‌ها ساخته می‌شوند.</li>
-  <li data-lines="8-9"><b class="what">قانون لینک.</b> هر <code>X.elf</code> از <code>X.o</code> به‌اضافهٔ <code>startup.o</code> ساخته می‌شود. <code>$@</code> = خود هدف، <code>$(filter %.o,$^)</code> = فقط فایل‌های <code>.o</code> از پیش‌نیازها (تا <code>link.ld</code> به‌عنوان ورودی کامپایلر نرود).
+  <li data-lines="8-9"><b class="what">قانون لینک.</b> هر <code>X.elf</code> از <code>X.o</code> به‌اضافهٔ <code>startup.o</code> و <code>vectors.o</code> (جدول برداری ۵.۱) ساخته می‌شود. <code>$@</code> = خود هدف، <code>$(filter %.o,$^)</code> = فقط فایل‌های <code>.o</code> از پیش‌نیازها (تا <code>link.ld</code> به‌عنوان ورودی کامپایلر نرود).
     <span class="why">پیش‌نیاز بودن <code>link.ld</code> باعث می‌شود اگر آن را عوض کردی، دوباره لینک شود.</span></li>
   <li data-lines="11-12"><b class="what">ELF به BIN.</b> <code>objcopy -O binary</code> فقط بایت‌هایی را که باید در Flash بروند بیرون می‌کشد (بدون اطلاعات دیباگ).</li>
   <li data-lines="14-15"><b class="what">کامپایل هر فایل.</b> هر <code>X.c</code> به <code>X.o</code>. اگر <code>stm32f4.h</code> عوض شود همهٔ <code>.o</code> ها دوباره ساخته می‌شوند. <code>$&lt;</code> = اولین پیش‌نیاز (خود <code>.c</code>).</li>

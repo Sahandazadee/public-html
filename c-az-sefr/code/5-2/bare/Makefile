@@ -5,7 +5,7 @@ PROGS   = blink button toggle
 
 all: $(PROGS:=.bin)
 
-%.elf: %.o startup.o link.ld
+%.elf: %.o startup.o vectors.o link.ld
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(filter %.o,$^)
 
 %.bin: %.elf
