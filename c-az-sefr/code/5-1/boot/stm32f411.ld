@@ -61,4 +61,7 @@ SECTIONS
 
     /* بررسی زمان لینک: حداقل ۱ کیلوبایت RAM برای پشته بماند */
     ASSERT(_ebss + 0x400 <= _estack, "RAM is too full: less than 1 KiB left for the stack")
+
+    /* مرز پایین ناحیهٔ پشته: از _sstack تا _estack (برای اندازه‌گیری/رنگ‌آمیزی پشته در درس ۶.۱) */
+    _sstack = _ebss;
 }

@@ -492,6 +492,9 @@ SECTIONS
 
     /* بررسی زمان لینک: حداقل ۱ کیلوبایت RAM برای پشته بماند */
     ASSERT(_ebss + 0x400 &lt;= _estack, "RAM is too full: less than 1 KiB left for the stack")
+
+    /* مرز پایین ناحیهٔ پشته: از _sstack تا _estack (برای اندازه‌گیری/رنگ‌آمیزی پشته در درس ۶.۱) */
+    _sstack = _ebss;
 }
 </pre></div>
 <ol class="walk" data-for="l1">
@@ -515,6 +518,8 @@ SECTIONS
   <li data-lines="60"><b class="what">دور ریختن.</b> بخش‌هایی که به کارمان نمی‌آیند (اطلاعات استثنا و رشتهٔ نسخهٔ کامپایلر).</li>
   <li data-lines="62-63"><b class="what">بررسی زمان لینک.</b> <code>ASSERT</code> شرط را موقع لینک می‌سنجد: انتهای <code>.bss</code> به‌اضافهٔ ۱ کیلوبایت باید از <code>_estack</code> کمتر باشد. وگرنه لینک متوقف و پیام چاپ می‌شود.
     <span class="why">پشته و متغیرهای سراسری از دو سوی RAM به هم نزدیک می‌شوند. این بررسی خیلی زود می‌گوید جایی برای پشته نمانده، به‌جای اینکه ماه‌ها بعد برنامه بی‌دلیل خراب شود.</span></li>
+  <li data-lines="65-66"><b class="what">نماد <code>_sstack</code>.</b> پایین ناحیهٔ پشته را علامت می‌زند: درست بعد از <code>.bss</code>. پس ناحیهٔ پشته از <code>_sstack</code> تا <code>_estack</code> است.
+    <span class="why">در درس <a href="6-1.html">۶.۱</a> برای اندازه‌گیری مصرف پشته آن را با یک الگو «رنگ» می‌کنیم و به مرز پایین نیاز داریم. مرز بالا (<code>_estack</code>) را هم‌اکنون داری. توجه: این رنگ‌آمیزی را هرگز تا <code>_estack</code> نکن؛ <code>Reset_Handler</code> همین حالا روی بخش بالای همین ناحیه قاب پشته دارد و پاک کردنش برنامه را می‌ترکاند. فقط از <code>_sstack</code> تا کمی پایین‌تر از SP فعلی را رنگ کن (جزئیات در ۶.۱).</span></li>
 </ol>
 
 <div class="callout tip"><div class="ct">VMA و LMA در یک جمله</div>
@@ -563,7 +568,7 @@ void Reset_Handler(void)
   <li data-lines="3-5"><b class="what">نمادهای مرزی.</b> ابتدا و انتهای <code>.data</code> و <code>.bss</code>، و آدرس تصویر <code>.data</code> در Flash. همه از اسکریپت لینکر می‌آیند.
     <span class="why">فقط لینکر می‌داند بعد از چیدن همهٔ فایل‌ها هر بخش دقیقا کجا افتاده. پس خودش نشانه‌گذاری می‌کند و ما با <code>&amp;</code> «آدرسِ» نشانه‌ها کار می‌کنیم (درس <a href="3-5.html">۳.۵</a>).</span></li>
   <li data-lines="7"><b class="what">پروتوتایپ main.</b> تا کامپایلر بداند <code>main</code> چیست.</li>
-  <li data-lines="9-16"><b class="what">راه‌اندازی اولیهٔ سیستم.</b> تابعی که کارهای سخت‌افزاری قبل از <code>main</code> را می‌کند. در Cortex-M4 <b>اگر</b> با <code>-mfloat-abi=hard</code> ساخته شود، دسترسی به واحد اعشاری (FPU) را باز می‌کند.
+  <li data-lines="9-16"><b class="what">راه‌اندازی اولیهٔ سیستم.</b> تابعی که کارهای سخت‌افزاری قبل از <code>main</code> را می‌کند. در Cortex-M4 <b>اگر</b> با <code>-mfloat-abi=hard</code> (یا <code>softfp</code>) ساخته شود، دسترسی به واحد اعشاری (FPU) را باز می‌کند.
     <span class="why">در درس <a href="4-7.html">۴.۷</a> گفتیم FPU بعد از reset خاموش است؛ نوشتن در <code>CPACR</code> (آدرس <code>0xE000ED88</code>) بیت‌های ۲۰ تا ۲۳ آن را روشن می‌کند. <code>dsb</code> و <code>isb</code> اطمینان می‌دهند نوشتن تمام شده و خط لولهٔ CPU پاک شده باشد. با ساخت پیش‌فرض ما (بدون FPU) این #if کامپایل نمی‌شود.</span></li>
   <li data-lines="18-19,33"><b class="what">تابع اصلی.</b> ‏<code>Reset_Handler</code> اولین تابع C برنامه است. ورودی و خروجی ندارد (کسی نیست که صدایش بزند یا نتیجه‌اش را بگیرد).</li>
   <li data-lines="20-21"><b class="what">دو اشاره‌گر.</b> ‏<code>src</code> از تصویر Flash شروع می‌کند و <code>dst</code> از ابتدای <code>.data</code> در RAM.</li>
@@ -690,7 +695,7 @@ int main(void)
 <pre class="term" data-nocheck data-from="main.c">
 $ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -nostdlib -T stm32f411.ld -o out.elf vectors.c startup.c main.c
 </pre>
-<p>اگر همه‌چیز درست باشد، هیچ خروجی و هیچ هشداری نمی‌بینی و <code>out.elf</code> ساخته می‌شود.</p>
+<p>اگر همه‌چیز درست باشد، هیچ خروجی و هیچ هشداری نمی‌بینی و <code>out.elf</code> ساخته می‌شود. (اعداد <code>size</code> و آدرس‌های این درس با همین فرمان، یعنی بدون <code>-O</code> (همان <code>-O0</code>)، گرفته شده‌اند؛ با <code>-Og</code> یا <code>-O2</code> کمی فرق می‌کنند.)</p>
 <ol class="steps">
   <li><b><code>-mcpu=cortex-m4 -mthumb</code></b> کد برای هستهٔ M4 با دستورهای Thumb.</li>
   <li><b><code>-ffreestanding</code></b> «محیط ما کتابخانهٔ C استاندارد و سیستم‌عامل ندارد».</li>
@@ -772,13 +777,14 @@ $ arm-none-eabi-nm -n out.elf
 20000004 B g_total
 20000008 B g_ticks
 2000000c B _ebss
+2000000c B _sstack
 20020000 R _estack
 </pre>
 <p>با <code>-n</code> بر اساس آدرس مرتب شده. حرف وسط نوع نماد است: <code>T</code> کد، <code>R</code> ثابت فقط‌خواندنی، <code>D</code> داده با مقدار اولیه، <code>B</code> bss، <code>W</code> نماد weak و <code>A</code> مقدار مطلق. چند مشاهده:</p>
 <ul>
   <li><code>_sidata</code> = <code>0x08000274</code> (Flash)، <code>_sdata</code> = <code>0x20000000</code> و <code>_edata</code> = <code>0x20000004</code> (RAM). اختلاف <code>_edata - _sdata</code> = ۴ بایت = یک کلمهٔ <code>.data</code> (<code>g_counter</code>).</li>
   <li><code>_sbss</code> و <code>_ebss</code>: ۸ بایت با هم فاصله دارند = <code>g_total</code> و <code>g_ticks</code>.</li>
-  <li><code>_estack</code> = <code>0x20020000</code>.</li>
+  <li><code>_sstack</code> = <code>_ebss</code> = <code>0x2000000c</code> و <code>_estack</code> = <code>0x20020000</code>: ناحیهٔ پشته از اولی تا دومی است (نزدیک ۱۲۸ کیلوبایت منهای ۱۲ بایت).</li>
   <li>همهٔ handler های weak به یک آدرس (<code>0x08000198</code>) اشاره می‌کنند: <code>Default_Handler</code>. ولی <code>SysTick_Handler</code> آدرس خودش را دارد، <code>0x08000210</code> (نوع <code>T</code>، قوی)!</li>
 </ul>
 
@@ -855,7 +861,7 @@ $ arm-none-eabi-objdump -d out.elf   (فقط ابتدای Reset_Handler و ثا�
 
 volatile uint32_t g_button_events;
 
-/* تعریف قوی: جای نسخهٔ weak را می‌گیرد (پاک کردن پرچم EXTI در درس 5-3) */
+/* تعریف قوی: جای نسخهٔ weak را می‌گیرد (پاک کردن پرچم EXTI در درس ۵.۳) */
 void EXTI15_10_IRQHandler(void)
 {
     g_button_events++;
@@ -973,7 +979,7 @@ $ arm-none-eabi-nm z.elf | grep -i 'mem[cs]\|clear'
 <p>یک آرایهٔ ۱۲۷ کیلوبایتی سراسری اضافه کنیم (<code>char big[127*1024];</code>):</p>
 <pre class="term" data-nocheck data-from="startup.c">
 $ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -std=gnu11 -Wall -Wextra -ffreestanding -nostdlib -T stm32f411.ld -o big.elf vectors.c startup.c main.c big.c
-ld: RAM is too full: less than 1 KiB left for the stack
+ld: RAM is too full: less than 1 KiB left for the stack   (مسیر کامل ld کوتاه شده)
 collect2: error: ld returned 1 exit status
 </pre>
 <p>پیام <code>ASSERT</code> ما را می‌بینی. بدون آن بررسی، برنامه لینک می‌شد و پشته وسط <code>.bss</code> می‌افتاد؛ نتیجه: خرابی‌های مرموز.</p>
@@ -1036,7 +1042,7 @@ collect2: error: ld returned 1 exit status
 </div><figcaption>زنجیرهٔ بوت. آدرس‌های نشان‌داده‌شده همان طرح پیش‌فرض ESP-IDF برای ESP32 کلاسیک‌اند.</figcaption></figure>
 <ol class="steps">
   <li><b>کد ROM.</b> بعد از reset، پردازنده اول کدی را اجرا می‌کند که در خود تراشه ثبت شده و عوض نمی‌شود. این کد بر پایهٔ پایه‌های strapping (مثلا GPIO0) تصمیم می‌گیرد آیا وارد حالت دانلود شود یا از Flash بوت کند.</li>
-  <li><b>bootloader مرحلهٔ دوم.</b> ROM آن را از Flash (آفست <code>0x1000</code> برای ESP32) در RAM بار می‌کند. bootloader <span class="term" data-t="partitiontable">جدول پارتیشن</span> را (آفست <code>0x8000</code>) می‌خواند تا بفهمد برنامه کجاست، تصویر را وارسی می‌کند و بخش‌های آن را در جای درستشان بار می‌کند.</li>
+  <li><b>bootloader مرحلهٔ دوم.</b> ROM آن را از Flash (آفست <code>0x1000</code> برای ESP32 کلاسیک؛ در ESP32-S3 و C3 این آفست <code>0x0</code> است) در RAM بار می‌کند. bootloader <span class="term" data-t="partitiontable">جدول پارتیشن</span> را (آفست <code>0x8000</code>) می‌خواند تا بفهمد برنامه کجاست، تصویر را وارسی می‌کند و بخش‌های آن را در جای درستشان بار می‌کند.</li>
   <li><b>شروع برنامه.</b> کد راه‌اندازی ESP-IDF: heap، FreeRTOS، و بعد شروع scheduler.</li>
   <li><b><code>app_main()</code>.</b> در یک task به نام «main» اجرا می‌شود. <code>app_main</code> مثل <code>main</code> در STM32 نیست: می‌تواند برگردد و task تمام شود. (درس <a href="5-6.html">۵.۶</a>)</li>
 </ol>
@@ -1324,7 +1330,7 @@ $ arm-none-eabi-objdump -s -j .isr_vector ex3.elf | grep '^ 80000e0'
 
 volatile uint32_t g_button_events;
 
-/* تعریف قوی: جای نسخهٔ weak را می‌گیرد (پاک کردن پرچم EXTI در درس 5-3) */
+/* تعریف قوی: جای نسخهٔ weak را می‌گیرد (پاک کردن پرچم EXTI در درس ۵.۳) */
 void EXTI15_10_IRQHandler(void)
 {
     g_button_events++;
