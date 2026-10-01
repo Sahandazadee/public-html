@@ -37,11 +37,14 @@ void light_init(light_t *l)
 {
     l->state = S_RED;
     l->remaining = duration[S_RED];
-    entry_action[S_RED]();
+    if (entry_action[S_RED] != NULL) { entry_action[S_RED](); }
 }
 
 void light_dispatch(light_t *l, light_event_t ev)
 {
+    if ((unsigned)l->state >= S_COUNT || (unsigned)ev >= E_COUNT) {
+        return;                         // بیرون از جدول: نادیده
+    }
     light_state_t next = next_state[l->state][ev];
     if (next != l->state) {
         go_to(l, next);
@@ -61,5 +64,5 @@ void light_tick(light_t *l)
 const char *light_state_name(light_state_t s)
 {
     static const char *const names[S_COUNT] = { "GREEN", "YELLOW", "RED" };
-    return names[s];
+    return ((unsigned)s < S_COUNT) ? names[s] : "?";
 }

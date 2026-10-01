@@ -211,19 +211,23 @@ void turnstile_handle(turnstile_t *t, turn_event_t ev)
             t-&gt;coins++;                 // سکهٔ اضافه: می‌گیریم، حالت عوض نمی‌شود
         }
         break;
+
+    default:                            // مقدار خراب (باگ، bit-flip): امن‌ترین حالت
+        t-&gt;state = ST_LOCKED;
+        break;
     }
 }
 
 const char *turn_state_name(turn_state_t s)
 {
     static const char *const names[] = { "LOCKED", "UNLOCKED" };
-    return names[s];
+    return ((unsigned)s &lt; sizeof names / sizeof names[0]) ? names[s] : "?";
 }
 
 const char *turn_event_name(turn_event_t e)
 {
     static const char *const names[] = { "COIN", "PUSH" };
-    return names[e];
+    return ((unsigned)e &lt; sizeof names / sizeof names[0]) ? names[e] : "?";
 }
 </pre></div>
 <ol class="walk" data-for="tsc">
@@ -233,8 +237,10 @@ const char *turn_event_name(turn_event_t e)
   <li data-lines="13-18"><b class="what">حالت LOCKED.</b> اگر سکه آمد: یک سکه بشمار (عمل) و برو به <code>UNLOCKED</code> (گذار). هر رویداد دیگر (هل دادن) بی‌اثر است و حالت عوض نمی‌شود.
     <span class="why">هر <code>case</code> با <code>break</code> تمام می‌شود. بدون آن اجرا به <code>case</code> بعدی می‌ریزد (fall-through) که در تمرین ۲ خرابکاری‌اش را می‌بینی.</span></li>
   <li data-lines="20-27"><b class="what">حالت UNLOCKED.</b> هل دادن: یک نفر رد شد، بشمار و قفل کن. سکهٔ اضافه: فقط بشمار.</li>
-  <li data-lines="31-41"><b class="what">نام‌ها برای چاپ.</b> آرایه‌ای از رشته‌ها که با خود <code>enum</code> اندیس می‌خورد.
-    <span class="why">این کار به این دلیل درست است که ترتیب نام‌ها با ترتیب <code>enum</code> یکی است. اگر حالت جدیدی وسط اضافه کنی، باید نام را هم در همان جا اضافه کنی.</span></li>
+  <li data-lines="29-31"><b class="what">حالت ناشناخته: <code>default</code>.</b> اگر <code>state</code> به هر دلیل مقداری بیرون <code>enum</code> بگیرد (سرریز بافر همسایه، bit-flip، فراموشی <code>init</code>)، ماشین به امن‌ترین حالت برمی‌گردد.
+    <span class="why">بدون <code>default</code> ماشین بی‌صدا «هیچ‌کاری» می‌کرد و تا ابد گیر می‌ماند. در دستگاهی که موتور یا قفل دارد، حالت خراب را باید صریح به یک حالت امن (یا حالت خطا) ببری. نکته: با <code>default</code> دیگر کامپایلر برای <code>case</code> فراموش‌شده هشدار <code>-Wswitch</code> نمی‌دهد؛ پس این‌جا که همهٔ حالت‌ها نوشته شده‌اند فقط برای داده‌ی خراب است.</span></li>
+  <li data-lines="35-45"><b class="what">نام‌ها برای چاپ.</b> آرایه‌ای از رشته‌ها که با خود <code>enum</code> اندیس می‌خورد.
+    <span class="why">این کار به این دلیل درست است که ترتیب نام‌ها با ترتیب <code>enum</code> یکی است. اگر حالت جدیدی وسط اضافه کنی، باید نام را هم در همان جا اضافه کنی. شرط <code>&lt;</code> اندازه از خواندن بیرون آرایه (رفتار تعریف‌نشده) جلوگیری می‌کند و برای مقدار خراب <code>"?"</code> برمی‌گرداند.</span></li>
 </ol>
 
 <p>حالا برنامهٔ آزمایش. نکتهٔ مهم: <b>رویدادها را از یک آرایه می‌خوانیم</b>، نه از سخت‌افزار. به این ترتیب هر سناریو، هر بار یکسان تکرار می‌شود و می‌شود خروجی را وارسی کرد.</p>
@@ -375,11 +381,14 @@ void light_init(light_t *l)
 {
     l-&gt;state = S_RED;
     l-&gt;remaining = duration[S_RED];
-    entry_action[S_RED]();
+    if (entry_action[S_RED] != NULL) { entry_action[S_RED](); }
 }
 
 void light_dispatch(light_t *l, light_event_t ev)
 {
+    if ((unsigned)l-&gt;state &gt;= S_COUNT || (unsigned)ev &gt;= E_COUNT) {
+        return;                         // بیرون از جدول: نادیده
+    }
     light_state_t next = next_state[l-&gt;state][ev];
     if (next != l-&gt;state) {
         go_to(l, next);
@@ -399,7 +408,7 @@ void light_tick(light_t *l)
 const char *light_state_name(light_state_t s)
 {
     static const char *const names[S_COUNT] = { "GREEN", "YELLOW", "RED" };
-    return names[s];
+    return ((unsigned)s &lt; S_COUNT) ? names[s] : "?";
 }
 </pre></div>
 <ol class="walk" data-for="trc">
@@ -412,12 +421,12 @@ const char *light_state_name(light_state_t s)
     <span class="why">این همان «جدول اشاره‌گر به تابع» درس <a href="4-3.html">۴.۳</a> است، با ایندکس‌کردن توسط <code>enum</code>. قبل از صدا زدن باید <code>NULL</code> را چک کنیم، وگرنه برنامه از کار می‌افتد.</span></li>
   <li data-lines="24-34"><b class="what">تابع go_to.</b> چهار قدم به این ترتیب: (۱) عمل خروج حالت فعلی، (۲) عوض کردن حالت، (۳) بار کردن مهلت حالت جدید، (۴) عمل ورود حالت جدید.
     <span class="why">جای همهٔ گذارها فقط یکی است. اگر بخواهیم مثلا هر گذار را لاگ کنیم، فقط همین‌جا می‌نویسیم.</span></li>
-  <li data-lines="36-41"><b class="what">شروع.</b> از حالت قرمز شروع می‌کنیم و عمل ورودش را اجرا می‌کنیم.</li>
-  <li data-lines="43-49"><b class="what">ارسال رویداد.</b> حالت بعدی را از جدول می‌خوانیم و فقط اگر با حالت فعلی فرق داشت، گذار را انجام می‌دهیم. رویدادی که حالت را عوض نمی‌کند، هیچ عملی هم اجرا نمی‌کند (نه خروج و نه ورود).
+  <li data-lines="36-41"><b class="what">شروع.</b> از حالت قرمز شروع می‌کنیم و عمل ورودش را (با بررسی <code>NULL</code>، مثل <code>go_to</code>) اجرا می‌کنیم.</li>
+  <li data-lines="43-52"><b class="what">ارسال رویداد.</b> اول بررسی می‌کند حالت و رویداد داخل جدول باشند (وگرنه اندیس بیرون آرایه می‌خواند). بعد حالت بعدی را از جدول می‌خوانیم و فقط اگر با حالت فعلی فرق داشت، گذار را انجام می‌دهیم. رویدادی که حالت را عوض نمی‌کند، هیچ عملی هم اجرا نمی‌کند (نه خروج و نه ورود).
     <span class="why">اگر این شرط را نمی‌گذاشتیم، دکمهٔ عابر در حالت زرد مهلت را دوباره ۲ می‌کرد و می‌توانست زرد را برای همیشه نگه دارد.</span></li>
-  <li data-lines="51-59"><b class="what">تابع tick.</b> یک تیک از مهلت کم می‌کند و وقتی به صفر رسید، رویداد «مهلت تمام شد» را می‌فرستد.
+  <li data-lines="54-62"><b class="what">تابع tick.</b> یک تیک از مهلت کم می‌کند و وقتی به صفر رسید، رویداد «مهلت تمام شد» را می‌فرستد.
     <span class="why">مهلت هم یک رویداد است؛ برای همین ماشین با <code>E_TIMEOUT</code> رفتار یکسانی با بقیهٔ رویدادها دارد.</span></li>
-  <li data-lines="61-65"><b class="what">نام حالت.</b> برای چاپ.</li>
+  <li data-lines="64-68"><b class="what">نام حالت.</b> برای چاپ؛ مقدار خارج از محدوده <code>"?"</code> می‌دهد.</li>
 </ol>
 
 <div class="code" data-file="main.c" data-lang="c" data-verify="host" data-project="traffic" id="trm">
@@ -660,6 +669,11 @@ btn_event_t button_step(button_t *b, bool raw_pressed)
             ev = BTN_EV_RELEASE;
         }
         break;
+
+    default:                                    // حالت خراب: بازگشت به رها
+        b-&gt;state = BTN_RELEASED;
+        b-&gt;count = 0;
+        break;
     }
     return ev;
 }
@@ -669,7 +683,7 @@ const char *button_state_name(btn_state_t s)
     static const char *const names[] = {
         "RELEASED", "PRESS_CANDIDATE", "PRESSED", "RELEASE_CANDIDATE"
     };
-    return names[s];
+    return ((unsigned)s &lt; sizeof names / sizeof names[0]) ? names[s] : "?";
 }
 </pre></div>
 <ol class="walk" data-for="btc">
@@ -679,8 +693,9 @@ const char *button_state_name(btn_state_t s)
     <span class="why">عملگر <code>++b-&gt;count</code> اول یکی اضافه می‌کند و بعد مقایسه می‌شود؛ پس نمونهٔ اول (که در RELEASED شمرده شد) هم جزو سه‌تا حساب می‌شود.</span></li>
   <li data-lines="30-35"><b class="what">حالت PRESSED.</b> تا وقتی «پایین» است هیچ اتفاقی نمی‌افتد. اولین نمونهٔ «بالا» شروع کاندید رها شدن است.</li>
   <li data-lines="37-44"><b class="what">حالت RELEASE_CANDIDATE.</b> اگر دوباره پایین شد، پرش بوده و برمی‌گردیم به فشرده. اگر بالا ماند و به سه رسید، رها شد و <code>RELEASE</code> صادر می‌شود.</li>
-  <li data-lines="46"><b class="what">برگرداندن رویداد.</b> در بیشتر tick‌ها «هیچ» است.</li>
-  <li data-lines="49-55"><b class="what">نام حالت‌ها.</b> برای چاپ.</li>
+  <li data-lines="46-49"><b class="what">حالت خراب: <code>default</code>.</b> اگر <code>state</code> مقدار ناشناخته داشت، ماشین به حالت «رها شده» برمی‌گردد و شمارنده صفر می‌شود.</li>
+  <li data-lines="51"><b class="what">برگرداندن رویداد.</b> در بیشتر tick‌ها «هیچ» است.</li>
+  <li data-lines="54-60"><b class="what">نام حالت‌ها.</b> برای چاپ؛ مقدار خارج از محدوده <code>"?"</code> می‌دهد، نه خواندن بیرون آرایه.</li>
 </ol>
 
 <div class="code" data-file="main.c" data-lang="c" data-verify="host" data-project="debounce" id="btm">
@@ -970,6 +985,8 @@ static garage_state_t handle(garage_state_t s, garage_event_t ev)
             return G_OPENING;               // مانع: برگرد و باز کن
         }
         break;
+    default:                                // مقدار خراب: به حالت امن (بسته)
+        return G_CLOSED;
     }
     return s;                               // رویدادی که این حالت نمی‌شناسد: نادیده
 }
@@ -998,9 +1015,10 @@ int main(void)
   <li data-lines="12-26"><b class="what">سه حالت اول.</b> هر کدام فقط یک گذار دارند. اگر شرط برقرار نبود، به <code>break</code> می‌رسند و به پایین تابع می‌روند.</li>
   <li data-lines="27-34"><b class="what">حالت CLOSING.</b> دو گذار: به پایان رسید ← بسته؛ مانع ← دوباره باز.
     <span class="why">مانع یک ویژگی ایمنی است: در حال بسته شدن اگر چیزی (یا کسی) در مسیر باشد، باید فورا برگردد.</span></li>
-  <li data-lines="36"><b class="what">رویداد ناشناخته.</b> حالت را عوض نمی‌کنیم.</li>
-  <li data-lines="41-45"><b class="what">سناریو.</b> ۸ رویداد که دکمهٔ اضافی و مانع را هم امتحان می‌کنند.</li>
-  <li data-lines="47-51"><b class="what">حلقه.</b> حالت بعدی را از تابع می‌گیرد، چاپ می‌کند و جایگزین حالت فعلی می‌کند.</li>
+  <li data-lines="35-36"><b class="what">حالت خراب: <code>default</code>.</b> اگر <code>s</code> مقداری بیرون <code>enum</code> داشته باشد (حافظهٔ خراب)، به یک حالت امن می‌رویم، نه اینکه ماشین بی‌صدا گیر کند. برای درِ واقعی «امن» یعنی تصمیم طراحی؛ اینجا «بسته».</li>
+  <li data-lines="38"><b class="what">رویداد ناشناخته.</b> حالت را عوض نمی‌کنیم.</li>
+  <li data-lines="43-47"><b class="what">سناریو.</b> ۸ رویداد که دکمهٔ اضافی و مانع را هم امتحان می‌کنند.</li>
+  <li data-lines="49-53"><b class="what">حلقه.</b> حالت بعدی را از تابع می‌گیرد، چاپ می‌کند و جایگزین حالت فعلی می‌کند.</li>
 </ol>
 <pre class="term" data-from="garage.c">
 $ gcc -std=c11 -Wall -Wextra -o garage garage.c
@@ -1204,6 +1222,9 @@ static presult_t feed(parser_t *p, char c)
             return R_BAD;
         }
         break;
+    default:                                // حالت خراب: از نو شروع
+        p-&gt;state = P_WAIT_START;
+        break;
     }
     return R_NONE;
 }
@@ -1234,7 +1255,8 @@ int main(void)
     <span class="why">۵ رقم حداکثر ۹۹۹۹۹ است که در <code>unsigned</code> ۳۲ بیتی جا می‌شود. بدون این حد، فریمی بلند می‌توانست سرریز کند (درس ۲.۲).</span></li>
   <li data-lines="27-29"><b class="what">پایان درست.</b> خط جدید با حداقل یک رقم: به حالت انتظار برمی‌گردیم و <code>R_OK</code> می‌دهیم.</li>
   <li data-lines="30-34"><b class="what">هر چیز دیگر.</b> نویسهٔ نامعتبر، خط جدید بدون رقم، یا رقم ششم: فریم خراب.</li>
-  <li data-lines="41-51"><b class="what">آزمایش.</b> رشته‌ای پر از فریم سالم، خراب و آشغال؛ هر بایت به <code>feed</code> می‌رود.</li>
+  <li data-lines="35-37"><b class="what">حالت خراب: <code>default</code>.</b> مقدار ناشناخته در <code>state</code> را به حالت انتظار برمی‌گرداند تا پارسر با اولین <code>$</code> بعدی دوباره سالم شود.</li>
+  <li data-lines="44-54"><b class="what">آزمایش.</b> رشته‌ای پر از فریم سالم، خراب و آشغال؛ هر بایت به <code>feed</code> می‌رود.</li>
 </ol>
 <pre class="term" data-from="uart_parse.c">
 $ gcc -std=c11 -Wall -Wextra -o uart_parse uart_parse.c

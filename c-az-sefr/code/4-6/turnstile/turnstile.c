@@ -25,17 +25,21 @@ void turnstile_handle(turnstile_t *t, turn_event_t ev)
             t->coins++;                 // سکهٔ اضافه: می‌گیریم، حالت عوض نمی‌شود
         }
         break;
+
+    default:                            // مقدار خراب (باگ، bit-flip): امن‌ترین حالت
+        t->state = ST_LOCKED;
+        break;
     }
 }
 
 const char *turn_state_name(turn_state_t s)
 {
     static const char *const names[] = { "LOCKED", "UNLOCKED" };
-    return names[s];
+    return ((unsigned)s < sizeof names / sizeof names[0]) ? names[s] : "?";
 }
 
 const char *turn_event_name(turn_event_t e)
 {
     static const char *const names[] = { "COIN", "PUSH" };
-    return names[e];
+    return ((unsigned)e < sizeof names / sizeof names[0]) ? names[e] : "?";
 }

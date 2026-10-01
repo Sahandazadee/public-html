@@ -42,6 +42,11 @@ btn_event_t button_step(button_t *b, bool raw_pressed)
             ev = BTN_EV_RELEASE;
         }
         break;
+
+    default:                                    // حالت خراب: بازگشت به رها
+        b->state = BTN_RELEASED;
+        b->count = 0;
+        break;
     }
     return ev;
 }
@@ -51,5 +56,5 @@ const char *button_state_name(btn_state_t s)
     static const char *const names[] = {
         "RELEASED", "PRESS_CANDIDATE", "PRESSED", "RELEASE_CANDIDATE"
     };
-    return names[s];
+    return ((unsigned)s < sizeof names / sizeof names[0]) ? names[s] : "?";
 }

@@ -32,6 +32,9 @@ static presult_t feed(parser_t *p, char c)
             return R_BAD;
         }
         break;
+    default:                                // حالت خراب: از نو شروع
+        p->state = P_WAIT_START;
+        break;
     }
     return R_NONE;
 }

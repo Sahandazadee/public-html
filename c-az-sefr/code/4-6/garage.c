@@ -32,6 +32,8 @@ static garage_state_t handle(garage_state_t s, garage_event_t ev)
             return G_OPENING;               // مانع: برگرد و باز کن
         }
         break;
+    default:                                // مقدار خراب: به حالت امن (بسته)
+        return G_CLOSED;
     }
     return s;                               // رویدادی که این حالت نمی‌شناسد: نادیده
 }
