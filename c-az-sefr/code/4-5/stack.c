@@ -6,7 +6,7 @@
 
 typedef struct {
     int16_t  item[STACK_MAX];
-    uint8_t  top;               // تعداد عنصرهای موجود = اندیس خانهٔ خالی بعدی
+    uint8_t  top;               // تعداد عنصرهای موجود = ایندکس خانهٔ خالی بعدی
 } lifo_t;
 
 static bool lifo_push(lifo_t *s, int16_t v)
