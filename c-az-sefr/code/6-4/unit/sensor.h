@@ -4,8 +4,8 @@
 #include <stdint.h>
 
 #define SENSOR_ADDR            0x76U    /* آدرس I2C */
-#define SENSOR_REG_ID          0xD0U    /* ثبات شناسهٔ تراشه */
-#define SENSOR_CHIP_ID         0x60U    /* مقداری که باید در آن ثبات باشد */
+#define SENSOR_REG_ID          0xD0U    /* رجیستر شناسهٔ تراشه */
+#define SENSOR_CHIP_ID         0x60U    /* مقداری که باید در آن رجیستر باشد */
 #define SENSOR_RETRIES         3U
 #define SENSOR_RETRY_DELAY_MS  2U
 

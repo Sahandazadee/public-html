@@ -6,7 +6,7 @@
 
 typedef enum { TX_OK = 0, TX_TIMEOUT } tx_status_t;
 
-static volatile uint32_t fake_sr;       // ثبات ساختگی (روی MCU: آدرس واقعی)
+static volatile uint32_t fake_sr;       // رجیستر ساختگی (روی MCU: آدرس واقعی)
 
 static tx_status_t wait_txe(volatile uint32_t *sr, uint32_t limit)
 {

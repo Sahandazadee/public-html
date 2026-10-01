@@ -10,7 +10,7 @@ static void uart_send(const uint8_t *data, size_t len)
 {
     for (size_t i = 0; i < len; i++) {
         while ((*USART2_SR & TXE_BIT) == 0u) {
-            // منتظر خالی شدن ثبات ارسال
+            // منتظر خالی شدن رجیستر ارسال
         }
         *USART2_DR = data[i];
     }

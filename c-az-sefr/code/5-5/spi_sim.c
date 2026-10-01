@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-/* --- سمت slave (شبیه‌سازی): یک ثبات شیفت هشت‌بیتی --- */
+/* --- سمت slave (شبیه‌سازی): یک رجیستر شیفت هشت‌بیتی --- */
 static uint8_t s_shift;                 // آنچه slave می‌فرستد
 static uint8_t s_in;                    // آنچه slave دریافت می‌کند
 static int s_miso;                      // سیم MISO

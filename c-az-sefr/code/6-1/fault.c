@@ -1,6 +1,6 @@
 #include <stdint.h>
 
-/* ثبات‌های SCB: وضعیت خطاها */
+/* رجیستر‌های SCB: وضعیت خطاها */
 #define SCB_CFSR (*(volatile uint32_t *)0xE000ED28u)
 #define SCB_BFAR (*(volatile uint32_t *)0xE000ED38u)
 

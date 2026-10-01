@@ -50,7 +50,7 @@ static void test_correct_chip_id_gives_ok(void)
     TEST_ASSERT_EQUAL_INT(SENSOR_OK, sensor_probe(&bus));
     TEST_ASSERT_EQUAL_INT(1, mock.calls);
     TEST_ASSERT_EQUAL_HEX(0x76, mock.last_dev);     // آدرس درست صدا زده شد؟
-    TEST_ASSERT_EQUAL_HEX(0xD0, mock.last_reg);     // ثبات درست خوانده شد؟
+    TEST_ASSERT_EQUAL_HEX(0xD0, mock.last_reg);     // رجیستر درست خوانده شد؟
     TEST_ASSERT_EQUAL_INT(0, total_delay_ms);
 }
 
