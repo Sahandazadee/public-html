@@ -1,10 +1,10 @@
 #include <stdio.h>
 #include <stdint.h>
 
-// هر پین دو بیت دارد: بیت‌های (2*pin+1 .. 2*pin)
+// هر پایه دو بیت دارد: بیت‌های (2*pin+1 .. 2*pin)
 static uint32_t set_mode(uint32_t moder, unsigned pin, uint32_t mode)
 {
-    moder &= ~(3U << (pin * 2U));           // دو بیت پین را پاک کن
+    moder &= ~(3U << (pin * 2U));           // دو بیت پایه را پاک کن
     moder |= (mode << (pin * 2U));          // حالت جدید را بگذار
     return moder;
 }
