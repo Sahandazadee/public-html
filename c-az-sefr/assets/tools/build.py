@@ -104,7 +104,7 @@ def norm_out(s):
 # ---------------------------------------------------------------- verify
 def verify(only):
     lessons, _ = course_ids(); bad = 0; total = 0
-    files = sorted(ROOT.glob("[0-9]-[0-9]*.html"))
+    files = sorted(ROOT.glob("[0-9]-[0-9]*.html")) + [p for p in (ROOT / "troubleshooting.html",) if p.exists()]
     for f in files:
         lid = f.stem
         if only and lid not in only: continue
