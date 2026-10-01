@@ -14,7 +14,7 @@
   make        اجرای make در پوشهٔ پروژه (Makefile هم یکی از بلاک‌های data-project باشد)
   arm         arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -ffreestanding -c (فقط کامپایل)
   frag        فقط برای مستندسازی؛ بررسی نمی‌شود
-ویژگی‌های اختیاری: data-project=نام (چند فایل با هم)، data-cflags، data-libs، data-stdin، data-exit=کد خروج مورد انتظار، data-nocheck (خروجی مقایسه نشود)
+ویژگی‌های اختیاری: data-needs="درس/پوشه/فایل" (کپی فایل مشترک از code/ کنار پروژه)، data-project=نام (چند فایل با هم)، data-cflags، data-libs، data-stdin، data-exit=کد خروج مورد انتظار، data-nocheck (خروجی مقایسه نشود)
 """
 import sys, os, re, json, subprocess, tempfile, shutil, html
 from html.parser import HTMLParser
@@ -129,6 +129,14 @@ def verify(only):
                     dst.mkdir(parents=True, exist_ok=True)
                     (dst / fn).write_text(clean(c["text"]) + "\n", encoding="utf-8")
                     if fn.endswith(".c"): srcs.append(fn)
+                # data-needs="5-1/boot/vectors.c ...": فایل مشترک از درس دیگر (نسبت به code/) کنار پروژه کپی می‌شود
+                for c in cs:
+                    for rel in c["attrs"].get("data-needs", "").split():
+                        src_f = ROOT / "code" / rel
+                        if not src_f.exists(): print(f"[{lid}] ✗ {name}: data-needs پیدا نشد: {rel}"); bad += 1; continue
+                        (work / src_f.name).write_bytes(src_f.read_bytes())
+                        if c["attrs"].get("data-project"): (outdir / c["attrs"]["data-project"] / src_f.name).write_bytes(src_f.read_bytes())
+                        if src_f.suffix == ".c" and src_f.name not in srcs: srcs.append(src_f.name)
                 if mode == "make":
                     r = run(["make"], work, timeout=60)
                     if r.returncode != 0 or (r.stderr.strip() and "data-warn-ok" not in cs[0]["attrs"]): print(f"[{lid}] ✗ {name}: make\n{r.stdout}{r.stderr}"); bad += 1
