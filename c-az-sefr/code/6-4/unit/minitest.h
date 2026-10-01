@@ -37,8 +37,8 @@ static inline void mt_run(const char *file, int line, const char *name, void (*f
     mt.name = name;
     mt.run++;
     mt.failed_now = 0;
-    setUp();
     if (setjmp(mt.env) == 0) {
+        setUp();
         fn();
     }
     tearDown();
