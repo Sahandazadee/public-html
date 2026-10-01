@@ -9,8 +9,8 @@
 #endif
 #define RB_MASK (RB_SIZE - 1U)
 
-_Static_assert((RB_SIZE & RB_MASK) == 0U && RB_SIZE <= 32768U,
-               "RB_SIZE must be a power of two, at most 32768");
+_Static_assert(RB_SIZE >= 2U && (RB_SIZE & RB_MASK) == 0U && RB_SIZE <= 32768U,
+               "RB_SIZE must be a power of two, 2..32768");
 
 typedef struct {
     volatile uint8_t  data[RB_SIZE];
