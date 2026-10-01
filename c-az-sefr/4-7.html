@@ -544,6 +544,50 @@ sum = 3000
 <p>GCC و Clang توابع داخلی <code>__builtin_add_overflow(a, b, &amp;result)</code> و مشابه برای ضرب و تفریق دارند که سرریز را با دستور درست پردازنده تشخیص می‌دهند. وقتی فقط به کامپایلرهای GCC/Clang کار می‌کنی، خواناتر و سریع‌تر از کد دستی‌اند (اما استاندارد C11 نیستند و در MISRA ممنوع می‌شوند).</p>
 <p>روی Cortex-M4 دستورهای اشباع سخت‌افزاری مثل <code>SSAT</code> و <code>USAT</code> هم هست (CMSIS آن‌ها را به‌شکل <code>__SSAT</code> و <code>__USAT</code> عرضه می‌کند). Cortex-M0 این دستورها را ندارد و کد C بالا لازم است.</p></div>
 
+<div class="callout warn"><div class="ct">دو تلهٔ نهان: ضرب دو <code>uint16_t</code> و مقایسهٔ علامت‌دار با بی‌علامت</div>
+<p>بالا دیدی <code>uint8_t</code> پیش از جمع به <code>int</code> ارتقا می‌یابد و به همین خاطر سرریز نمی‌کند. همین قاعده برای <code>uint16_t</code> <b>خطرناک</b> می‌شود: روی Cortex-M و ESP32 که <code>int</code> سی‌ودو بیتی است، <code>a * b</code> با دو <code>uint16_t</code> هر دو را به <b><code>int</code> علامت‌دار</b> تبدیل می‌کند. حاصل‌ضرب <code>65535 × 65535 = 4294836225</code> از بیشینهٔ <code>int</code> (۲۱۴۷۴۸۳۶۴۷) بیشتر است؛ پس <b>سرریز علامت‌دار = رفتار تعریف‌نشده</b> (UBSan دقیقا همین را گزارش می‌دهد؛ درس <a href="6-2.html">۶.۲</a>). با بهینه‌سازی، نتیجه پیش‌بینی‌ناپذیر می‌شود. در کد ADC/DSP که دو مقدار ۱۶ بیتی را ضرب می‌کنی، این تله واقعی است. <b>قاعده:</b> قبل از ضرب، دست‌کم یک طرف را به <code>uint32_t</code> ببر.</p>
+<p>تلهٔ دوم: وقتی <code>int</code> و <code>unsigned</code> را مقایسه کنی، <code>int</code> به بی‌علامت تبدیل می‌شود و ‏<code>-1</code> می‌شود ۴۲۹۴۹۶۷۲۹۵. برای Python‌کار که «عدد، عدد است» غافلگیرکننده است (و حلقهٔ <code>for (size_t i = n - 1; i &gt;= 0; i--)</code> هرگز تمام نمی‌شود، چون <code>size_t</code> هیچ‌وقت منفی نمی‌شود). همین مشکل در ماکرو <code>MAX(-1, 1u)</code> درس <a href="4-1.html">۴.۱</a> بود. کامپایلر با <code>-Wsign-compare</code> (داخل <code>-Wextra</code>) هشدار می‌دهد؛ هشدار را جدی بگیر.</p></div>
+<div class="code" data-file="traps.c" data-lang="c" data-verify="host" data-warn-ok id="codetraps">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+int main(void)
+{
+    uint16_t a = 65535, b = 65535;
+
+    /* a * b به‌تنهایی: هر دو به int (علامت‌دار ۳۲ بیتی) ارتقا می‌یابند و جا نمی‌شود = UB */
+    uint32_t good = (uint32_t)a * b;        // یک طرف را قبل از ضرب پهن کن
+    printf("good = %lu\n", (unsigned long)good);
+
+    int i = -1;
+    unsigned u = 1u;
+    printf("-1 &lt; 1u : %d\n", i &lt; u);        // -1 به unsigned تبدیل می‌شود
+
+    size_t n = 3;
+    for (size_t k = n; k-- &gt; 0; ) {         // شمارش معکوس امن با بی‌علامت
+        printf("k=%zu\n", k);
+    }
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="codetraps">
+  <li data-lines="6"><b class="what">دو مقدار ۱۶ بیتی بیشینه.</b> بیشترین مقدار <code>uint16_t</code>؛ بدترین حالت برای ضرب.</li>
+  <li data-lines="8-10"><b class="what">ضرب امن.</b> <code>(uint32_t)a</code> را قبل از ضرب می‌گیریم؛ پس <code>b</code> هم به <code>uint32_t</code> ارتقا می‌یابد و ضرب بی‌علامت ۳۲ بیتی است (که سرریزش هم تعریف‌شده است).
+    <span class="why">اگر می‌نوشتی <code>uint32_t bad = a * b;</code> ضرب در <code>int</code> علامت‌دار انجام می‌شد و تبدیل به <code>uint32_t</code> دیر بود. این خطای رایج را اینجا عمدا اجرا نکردیم، چون رفتار تعریف‌نشده است.</span></li>
+  <li data-lines="12-14"><b class="what">مقایسه.</b> <code>-1 &lt; 1u</code> نادرست (۰) است، چون ‏<code>-1</code> به <code>unsigned</code> تبدیل می‌شود. کامپایلر هشدار <code>-Wsign-compare</code> می‌دهد (در این بلاک عمدا پذیرفته شده است).</li>
+  <li data-lines="16-19"><b class="what">شمارش معکوس امن.</b> <code>k-- &gt; 0</code> اول شرط را با مقدار فعلی می‌سنجد و بعد کم می‌کند؛ پس <code>k</code> هیچ‌وقت زیر صفر نمی‌رود.</li>
+</ol>
+<pre class="term" data-from="traps.c">
+$ gcc -std=c11 -Wall -Wextra -o traps traps.c
+$ ./traps
+good = 4294836225
+-1 &lt; 1u : 0
+k=2
+k=1
+k=0
+</pre>
+
 <h2 id="round">تقسیم، شیفت و گرد کردن</h2>
 <p>در C99 به بعد تقسیم صحیح <b>به سمت صفر</b> بریده می‌شود: <code>7/2 = 3</code> و <code>-7/2 = -3</code> (نه ‏−۴). ولی شیفت به راست یک عدد منفی، <b>به سمت منفی‌بی‌نهایت</b> می‌رود (روی GCC و همهٔ ARMها): <code>-7 &gt;&gt; 1 = -4</code>. پس «شیفت به‌جای تقسیم بر دو» برای اعداد منفی <b>یکی نیست</b>.</p>
 <div class="callout warn"><div class="ct">شیفت راست علامت‌دار رفتار «تعریف‌شده توسط پیاده‌ساز» دارد</div>
@@ -607,6 +651,56 @@ div_round_s(-7,2) = -4
 div_round_s(-9,4) = -2
 pct trunc = 37, pct round = 38
 </pre>
+
+<h3 id="pydiv">Python ↔ C: تقسیم و باقیمانده</h3>
+<p>Python <code>//</code> را به سمت <b>منفی‌بی‌نهایت</b> گرد می‌کند و باقیماندهٔ <code>%</code> هم‌علامت مقسوم‌علیه است. C تقسیم را به سمت <b>صفر</b> می‌برد و باقیمانده هم‌علامت مقسوم است. فقط برای مثبت‌ها یکی‌اند:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>عبارت</th><th>Python</th><th>C (int)</th></tr></thead>
+<tbody>
+<tr><td><code>7 / 2</code></td><td><code>3.5</code> (float)</td><td><code>3</code> (تقسیم صحیح)</td></tr>
+<tr><td><code>-7 // 2</code> یا <code>-7 / 2</code> در C</td><td><code>-4</code></td><td><code>-3</code></td></tr>
+<tr><td><code>-7 % 2</code></td><td><code>1</code></td><td><code>-1</code></td></tr>
+<tr><td><code>-7 &gt;&gt; 1</code></td><td><code>-4</code></td><td><code>-4</code> (در GCC؛ تعریف‌شده توسط پیاده‌ساز)</td></tr>
+<tr><td><code>divmod(-7, 2)</code></td><td><code>(-4, 1)</code></td><td>باید جدا بنویسی: <code>(-3, -1)</code></td></tr>
+<tr><td>اندازهٔ عدد</td><td>بی‌کران</td><td>۸/۱۶/۳۲/۶۴ بیت؛ سرریز دارد</td></tr>
+</tbody></table></div>
+<p>در C همیشه <code>(a / b) * b + a % b == a</code> برقرار است. اگر باقیمانده‌ای «هم‌علامت مخرج» (مثل Python) می‌خواهی، مثلا برای اندیس چرخشی با گام منفی، خودت اصلاح کن:</p>
+<div class="code" data-file="modc.c" data-lang="c" data-verify="host" id="codemod">
+<pre>
+#include &lt;stdio.h&gt;
+#include &lt;limits.h&gt;
+
+int main(void)
+{
+    int a = -7, b = 2;
+
+    printf("C      : %d / %d = %d, %d %% %d = %d\n", a, b, a / b, a, b, a % b);
+    printf("check  : (a/b)*b + a%%b = %d\n", (a / b) * b + a % b);
+
+    int py_mod = ((a % b) + b) % b;         // مثل Python، برای b مثبت
+    printf("py-like: %d\n", py_mod);
+
+    printf("INT_MIN = %d\n", INT_MIN);
+    return 0;
+}
+</pre></div>
+<ol class="walk" data-for="codemod">
+  <li data-lines="6-9"><b class="what">تقسیم و باقیمانده در C.</b> ‏<code>-7 / 2 = -3</code> و ‏<code>-7 % 2 = -1</code>؛ و رابطهٔ تقسیم برقرار است: ‏<code>(-3)*2 + (-1) = -7</code>.
+    <span class="why">در <code>printf</code> برای چاپ خود علامت <code>%</code> باید <code>%%</code> بنویسی.</span></li>
+  <li data-lines="11-12"><b class="what">باقیمانده به‌سبک Python.</b> یک بار دیگر <code>b</code> را اضافه می‌کنیم و دوباره باقیمانده می‌گیریم؛ نتیجه برای <code>b</code> مثبت همیشه بین ۰ و <code>b-1</code> است.</li>
+  <li data-lines="14"><b class="what">کوچک‌ترین <code>int</code>.</b> ‏<code>INT_MIN</code> قرینه ندارد: ‏<code>-INT_MIN</code> و ‏<code>abs(INT_MIN)</code> و ‏<code>INT_MIN / -1</code> همه سرریز علامت‌دار (رفتار تعریف‌نشده) هستند. قبل از قدرمطلق گرفتن از ورودی نامطمئن، <code>INT_MIN</code> را کنار بگذار یا در <code>int64_t</code> کار کن (مثل <code>q16_print</code> بالا).</li>
+</ol>
+<pre class="term" data-from="modc.c">
+$ gcc -std=c11 -Wall -Wextra -o modc modc.c
+$ ./modc
+C      : -7 / 2 = -3, -7 % 2 = -1
+check  : (a/b)*b + a%b = -7
+py-like: 1
+INT_MIN = -2147483648
+</pre>
+
+<div class="callout warn"><div class="ct">از <code>float</code> به عدد صحیح: بریدن، گرد کردن، و خارج از بازه</div>
+<p>در Python <code>int(2.7)</code> می‌شود ۲ و <code>round(2.7)</code> می‌شود ۳. در C تبدیل <code>(int)2.7f</code> هم به سمت صفر می‌برد (۲)، و <code>(int)-2.7f</code> می‌شود <code>-2</code> (نه ‏−۳). برای گرد کردن واقعی از <code>lroundf()</code> (در <code>math.h</code>) استفاده کن. اگر مقدار <code>float</code> در بازهٔ نوع مقصد نگنجد (مثلا <code>(int)3.0e10f</code> یا <code>NaN</code>)، <b>رفتار تعریف‌نشده</b> است؛ پس قبل از تبدیل، با مقایسه به بازه برش بزن. در سطح پروژه هم دو چیز را بدان: ثابت‌های بدون پسوند <code>f</code> (مثل <code>0.1</code>) <code>double</code> هستند و می‌توانند حساب را نرم‌افزاری کنند؛ گزینهٔ GCC به نام <code>-fsingle-precision-constant</code> این را عوض می‌کند، و گزینهٔ <code>-ffast-math</code> قاعده‌های دقیق IEEE را شل می‌کند (مثلا ترتیب جمع، <code>NaN</code>)؛ فقط وقتی استفاده کن که آثارش را می‌دانی.</p></div>
 
 <h2 id="lut">جدول جستجو و درون‌یابی</h2>
 <p>محاسبهٔ <code>sin(x)</code> با سری‌های ریاضی (یا <code>sinf()</code> کتابخانه‌ای) برای میکروکنترلر گران است. جایگزین قدیمی و مؤثر: <b>یک بار حساب کن، در جدول <code>const</code> بگذار، هر بار فقط بخوان</b> (<span class="term" data-t="lookuptable">جدول جستجو</span>؛ جدول در Flash می‌ماند و RAM را نمی‌گیرد، درس <a href="3-5.html">۳.۵</a>).</p>

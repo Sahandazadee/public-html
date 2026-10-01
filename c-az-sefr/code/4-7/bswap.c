@@ -20,7 +20,7 @@ int main(void)
     uint32_t v = 0x12345678u;
     const uint8_t *b = (const uint8_t *)&v;     /* دید بایتی به همان حافظه */
 
-    printf("bytes in memory: %02X %02X %02X %02X\n", b[0], b[1], b[2], b[3]);
+    printf("bytes in memory: %02X %02X %02X %02X\n", (unsigned)b[0], (unsigned)b[1], (unsigned)b[2], (unsigned)b[3]);
     printf("swap32(0x12345678) = 0x%08lX\n", (unsigned long)swap32(v));
     printf("builtin            = 0x%08lX\n", (unsigned long)__builtin_bswap32(v));
 
