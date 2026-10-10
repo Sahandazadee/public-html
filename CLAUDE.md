@@ -14,3 +14,6 @@
   unless the user asks; review only the files touched in this task.
 - Fix only what was asked. Ask before any multi-file or multi-chapter change.
 - Keep replies short. Do not paste file contents or long diffs into chat.
+
+## ESP32 Masterclass (`esp32-masterclass/`)
+- Before any change, read `esp32-masterclass/PROJECT_GUIDE.md` (architecture, content rules, pin plan, verification).
