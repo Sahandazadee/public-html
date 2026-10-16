@@ -26,6 +26,14 @@ import com.getcapacitor.annotation.PermissionCallback;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
+import java.security.KeyStore;
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyPermanentlyInvalidatedException;
+import android.security.keystore.KeyProperties;
 
 /**
  * Offline-only native helpers: save files to Documents/PhoneBook (survives uninstall),
@@ -39,8 +47,6 @@ import java.io.OutputStream;
 )
 public class NativeBridge extends Plugin {
     private static final String REL_DIR = "Documents/PhoneBook";
-    private static final int AUTHENTICATORS =
-        BiometricManager.Authenticators.BIOMETRIC_STRONG | BiometricManager.Authenticators.BIOMETRIC_WEAK;
 
     // ---------- save to public Documents/PhoneBook ----------
     @PluginMethod
@@ -144,41 +150,121 @@ public class NativeBridge extends Plugin {
         }
     }
 
-    // ---------- biometrics ----------
+    // ---------- biometrics: the data key is sealed by a hardware (Keystore) key that needs a fingerprint ----------
+    private static final String KS = "AndroidKeyStore";
+    private static final String ALIAS = "pb_bio_dek_v1";
+    private static final int STRONG = BiometricManager.Authenticators.BIOMETRIC_STRONG;
+
+    private SecretKey bioKey(boolean createFresh) throws Exception {
+        KeyStore ks = KeyStore.getInstance(KS);
+        ks.load(null);
+        if (createFresh && ks.containsAlias(ALIAS)) ks.deleteEntry(ALIAS);
+        if (ks.containsAlias(ALIAS)) return (SecretKey) ks.getKey(ALIAS, null);
+        KeyGenerator kg = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KS);
+        KeyGenParameterSpec.Builder b = new KeyGenParameterSpec.Builder(ALIAS,
+            KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256)
+            .setUserAuthenticationRequired(true)
+            .setInvalidatedByBiometricEnrollment(true);
+        if (Build.VERSION.SDK_INT >= 30) b.setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG);
+        kg.init(b.build());
+        return kg.generateKey();
+    }
+
     @PluginMethod
     public void biometricAvailable(PluginCall call) {
-        int res = BiometricManager.from(getContext()).canAuthenticate(AUTHENTICATORS);
+        int res = BiometricManager.from(getContext()).canAuthenticate(STRONG);
         JSObject ret = new JSObject();
         ret.put("available", res == BiometricManager.BIOMETRIC_SUCCESS);
         call.resolve(ret);
     }
 
-    @PluginMethod
-    public void biometricAuth(final PluginCall call) {
+    private void prompt(final PluginCall call, final Cipher cipher, final String title, final java.util.function.Consumer<Cipher> done) {
         final FragmentActivity act = getActivity();
-        getActivity().runOnUiThread(() -> {
+        act.runOnUiThread(() -> {
             try {
-                BiometricPrompt prompt = new BiometricPrompt(act, ContextCompat.getMainExecutor(act),
+                BiometricPrompt p = new BiometricPrompt(act, ContextCompat.getMainExecutor(act),
                     new BiometricPrompt.AuthenticationCallback() {
                         @Override
-                        public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result) {
-                            call.resolve();
+                        public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult r) {
+                            try { done.accept(r.getCryptoObject().getCipher()); }
+                            catch (Exception e) { call.reject("Biometric failed: " + e.getMessage()); }
                         }
                         @Override
-                        public void onAuthenticationError(int code, CharSequence msg) {
-                            call.reject(String.valueOf(msg));
-                        }
+                        public void onAuthenticationError(int code, CharSequence msg) { call.reject(String.valueOf(msg)); }
                     });
                 BiometricPrompt.PromptInfo info = new BiometricPrompt.PromptInfo.Builder()
-                    .setTitle(call.getString("title", "Unlock PhoneBook"))
+                    .setTitle(title)
                     .setNegativeButtonText("Use PIN")
-                    .setAllowedAuthenticators(AUTHENTICATORS)
+                    .setAllowedAuthenticators(STRONG)
                     .build();
-                prompt.authenticate(info);
+                p.authenticate(info, new BiometricPrompt.CryptoObject(cipher));
             } catch (Exception e) {
                 call.reject("Biometric failed: " + e.getMessage());
             }
         });
+    }
+
+    /** Seal the data key with a fresh fingerprint-bound key. Returns base64(iv + ciphertext). */
+    @PluginMethod
+    public void biometricEnroll(final PluginCall call) {
+        final String dek = call.getString("dek");
+        if (dek == null) { call.reject("dek required"); return; }
+        try {
+            final Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
+            c.init(Cipher.ENCRYPT_MODE, bioKey(true));
+            prompt(call, c, "Confirm fingerprint", (cipher) -> {
+                try {
+                    byte[] ct = cipher.doFinal(Base64.decode(dek, Base64.NO_WRAP));
+                    byte[] iv = cipher.getIV();
+                    byte[] out = new byte[iv.length + ct.length];
+                    System.arraycopy(iv, 0, out, 0, iv.length);
+                    System.arraycopy(ct, 0, out, iv.length, ct.length);
+                    JSObject r = new JSObject();
+                    r.put("blob", Base64.encodeToString(out, Base64.NO_WRAP));
+                    call.resolve(r);
+                } catch (Exception e) { call.reject("Seal failed: " + e.getMessage()); }
+            });
+        } catch (Exception e) {
+            call.reject("Biometric failed: " + e.getMessage());
+        }
+    }
+
+    /** Fingerprint → release the data key. */
+    @PluginMethod
+    public void biometricUnlock(final PluginCall call) {
+        final String blob = call.getString("blob");
+        if (blob == null) { call.reject("blob required"); return; }
+        try {
+            final byte[] all = Base64.decode(blob, Base64.NO_WRAP);
+            final Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
+            c.init(Cipher.DECRYPT_MODE, bioKey(false), new GCMParameterSpec(128, all, 0, 12));
+            prompt(call, c, "Unlock PhoneBook", (cipher) -> {
+                try {
+                    byte[] raw = cipher.doFinal(all, 12, all.length - 12);
+                    JSObject r = new JSObject();
+                    r.put("dek", Base64.encodeToString(raw, Base64.NO_WRAP));
+                    call.resolve(r);
+                } catch (Exception e) { call.reject("Unseal failed: " + e.getMessage()); }
+            });
+        } catch (KeyPermanentlyInvalidatedException e) {
+            deleteBioKey();
+            call.reject("invalidated");
+        } catch (Exception e) {
+            call.reject("Biometric failed: " + e.getMessage());
+        }
+    }
+
+    private void deleteBioKey() {
+        try { KeyStore ks = KeyStore.getInstance(KS); ks.load(null); if (ks.containsAlias(ALIAS)) ks.deleteEntry(ALIAS); } catch (Exception ignored) { }
+    }
+
+    @PluginMethod
+    public void biometricReset(PluginCall call) {
+        deleteBioKey();
+        call.resolve();
     }
 
     // ---------- screen security ----------

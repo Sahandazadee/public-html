@@ -19,8 +19,12 @@
 
     box.append(sec('Backup & transfer'), h('div', { class: 'box' },
       link('💾', 'Backup & export', 'JSON · TXT · CSV · VCF · PDF · JPG', PB.openBackup),
-      link('📥', 'Restore / import', 'From a backup (.json) or contacts file (.vcf / .csv)', PB.openRestore),
-      sw('🛡', 'Automatic backup', S.lastAutoBackup ? 'Last: ' + S.lastAutoBackup : 'Saves to Documents/PhoneBook after every change', S.autoBackup, () => { S.autoBackup = !S.autoBackup; PB.saveSettings(); PB.refresh(); if (S.autoBackup) PB.autoBackup(); })));
+      link('📥', 'Restore / import', 'Encrypted backup (.json), or contacts (.vcf / .csv)', PB.openRestore),
+      link('🔐', 'Backup password', PB.bk ? 'Set · backups are encrypted' : 'Not set — required for encrypted backups', async () => { if (await PB.setupBackupPassword(!!PB.bk)) PB.refresh(); }),
+      sw('🛡', 'Automatic encrypted backup', !PB.bk ? 'Needs a backup password' : S.lastAutoBackup ? 'Last: ' + S.lastAutoBackup : 'Saves to Documents/PhoneBook after every change', S.autoBackup && !!PB.bk, async () => {
+        if (!PB.bk) { if (!(await PB.setupBackupPassword(false))) return; S.autoBackup = true; } else S.autoBackup = !S.autoBackup;
+        PB.saveSettings(); PB.refresh(); if (S.autoBackup) PB.autoBackup();
+      })));
 
     box.append(sec('Organize'), h('div', { class: 'box' },
       link('🏷', 'Categories', PB.data.cats.length + ' categories', PB.openCategories),
@@ -28,14 +32,18 @@
       link('🗑', 'Trash', trash ? trash + ' item(s) · auto-deleted after 30 days' : 'Empty', PB.openTrash)));
 
     box.append(sec('Security'), h('div', { class: 'box' },
-      link('🔑', 'Change PIN', '', async () => { if (await verifyPin()) { const p = await PB.setupPin(false); if (p) { await setPin(p); PB.toast('PIN changed'); } } }),
-      sw('🖐', 'Fingerprint unlock', PB.native() ? 'Use biometrics instead of the PIN' : 'Available in the Android app', S.bio, async () => {
+      link('🔑', 'Change PIN', 'Your data stays encrypted with the new PIN', async () => { if (await verifyPin()) { const p = await PB.setupPin(false); if (p) { await PB.setPin(p); PB.toast('PIN changed'); } } }),
+      sw('🖐', 'Fingerprint unlock', PB.native() ? 'Key is sealed in the phone\'s secure hardware' : 'Available in the Android app', S.bio, async () => {
         const n = PB.native();
-        if (S.bio) { S.bio = false; PB.saveSettings(); PB.refresh(); return; }
+        if (S.bio) { S.bio = false; S.bioBlob = null; PB.saveSettings(); try { n && await n.biometricReset(); } catch (e) {} PB.refresh(); return; }
         if (!n) { PB.toast('Only on the Android app'); return; }
         const r = await n.biometricAvailable();
-        if (!r.available) { PB.toast('No fingerprint enrolled on this phone'); return; }
-        try { await n.biometricAuth({ title: 'Confirm fingerprint' }); S.bio = true; PB.saveSettings(); PB.refresh(); } catch (e) { PB.toast('Not enabled'); }
+        if (!r.available) { PB.toast('No strong fingerprint enrolled on this phone'); return; }
+        try {
+          const raw = new Uint8Array(await crypto.subtle.exportKey('raw', PB.dek));
+          const res = await n.biometricEnroll({ dek: PB.b64e(raw) });
+          S.bioBlob = res.blob; S.bio = true; PB.saveSettings(); PB.refresh();
+        } catch (e) { PB.toast('Fingerprint not enabled'); }
       }),
       sw('📵', 'Hide in Recents / block screenshots', '', S.secure !== false, () => { S.secure = S.secure === false; PB.saveSettings(); PB.applyTheme(); PB.refresh(); }),
       h('button', { class: 'link', onclick: lockDelayPicker }, h('i', null, '⏱'), h('div', { class: 'grow' }, 'Auto-lock', h('small', null, S.lockDelay ? 'After ' + S.lockDelay / 1000 + ' s in background' : 'Immediately when you leave the app')))));
@@ -53,16 +61,11 @@
   };
 
   async function verifyPin() {
-    const r = await PB.pinScreen({ title: 'Enter PIN', sub: 'Confirm it is you', cancel: true,
-      verify: async (p) => ((await PB.hashPin(p, PB.settings.pinSalt)) === PB.settings.pinHash ? true : 'Wrong PIN') });
+    const r = await PB.pinScreen({ title: 'Enter PIN', sub: 'Confirm it is you', min: 4, cancel: true, throttle: true,
+      verify: async (p) => ((await PB.unwrapPin(p)) ? true : 'Wrong PIN') });
     return r != null;
   }
-  async function setPin(p) {
-    PB.settings.pinSalt = PB.uid() + PB.uid();
-    PB.settings.pinHash = await PB.hashPin(p, PB.settings.pinSalt);
-    PB.settings.fails = 0; PB.saveSettings();
-  }
-  PB.setPin = setPin;
+
   function lockDelayPicker() {
     const body = h('div'); const s = PB.sheet('Auto-lock', body);
     body.append(h('div', { class: 'box' }, [[0, 'Immediately'], [30000, 'After 30 seconds'], [60000, 'After 1 minute'], [300000, 'After 5 minutes']].map(([v, t]) =>
@@ -73,20 +76,22 @@
   PB.openBackup = function () {
     const pg = PB.page('Backup & export');
     const info = h('div', { class: 'box' }, h('div', { class: 'fld' }, h('div', { class: 'mini' }, '📂'), h('div', { class: 'grow' }, h('span', { class: 'v' }, PB.native() ? 'Documents/PhoneBook' : 'Downloads folder'),
-      h('span', { class: 'k' }, 'Files saved here stay on your phone even if you uninstall the app. Copy them to a computer over USB or a file manager.'))));
-    const fmts = [['json', 'JSON', 'Full backup · can be restored', true], ['txt', 'TXT', 'Readable text file', true], ['csv', 'CSV', 'Opens in Excel / Sheets', true], ['vcf', 'VCF', 'Import into any phonebook', true], ['pdf', 'PDF', 'Printable document', true], ['jpg', 'JPG', 'Image pages', false]];
+      h('span', { class: 'k' }, 'Files saved here stay on your phone even if you uninstall the app. Copy them to a computer over USB or a file manager. Only the 🔒 JSON backup is encrypted — TXT, CSV, VCF, PDF and JPG are readable by anyone who gets the file.'))));
+    const fmts = [['json', '🔒 JSON', 'Encrypted full backup · restorable', true], ['txt', 'TXT', 'Readable text · NOT encrypted', true], ['csv', 'CSV', 'Excel / Sheets · NOT encrypted', true], ['vcf', 'VCF', 'Any phonebook · NOT encrypted', true], ['pdf', 'PDF', 'Printable · NOT encrypted', true], ['jpg', 'JPG', 'Image pages · NOT encrypted', false]];
     const N = PB.liveEntries().length;
     const grid = h('div', { class: 'fmts' }, fmts.map(([k, t, d, canShare]) => h('div', { class: 'fmt' }, h('b', null, t), h('small', null, d),
       h('div', { class: 'two' },
-        h('button', { onclick: async (ev) => { const b = ev.currentTarget; b.textContent = '…'; try { await new Promise((r) => setTimeout(r, 30)); const p = await PB.exportAs(k); p.length && PB.toast('Saved → ' + p[0] + (p.length > 1 ? ' (+' + (p.length - 1) + ')' : '')); } catch (e) { PB.toast('Failed: ' + (e.message || e)); } b.textContent = 'Save'; } }, 'Save'),
-        canShare ? h('button', { class: 'g', onclick: async () => { try { await shareFormat(k); } catch (e) { PB.toast('Failed: ' + (e.message || e)); } } }, 'Share') : null))));
+        h('button', { onclick: async (ev) => { const b = ev.currentTarget; if (!(await plainOk(k))) return; b.textContent = '…'; try { await new Promise((r) => setTimeout(r, 30)); const p = await PB.exportAs(k); p.length && PB.toast('Saved → ' + p[0] + (p.length > 1 ? ' (+' + (p.length - 1) + ')' : '')); } catch (e) { PB.toast('Failed: ' + (e.message || e)); } b.textContent = 'Save'; } }, 'Save'),
+        canShare ? h('button', { class: 'g', onclick: async () => { if (!(await plainOk(k))) return; try { await shareFormat(k); } catch (e) { PB.toast('Failed: ' + (e.message || e)); } } }, 'Share') : null))));
     pg.body.append(info, h('div', { class: 'sec' }, N + ' item(s) will be exported'), grid);
   };
+  const plainOk = (k) => (k === 'json' ? Promise.resolve(true) : PB.confirm('Not encrypted', 'This file will be readable by anyone who gets it (other apps, a computer, whoever you share it with). Use the 🔒 JSON backup for a private copy.', 'I understand'));
   async function shareFormat(k) {
     const list = PB.liveEntries(); if (!list.length) { PB.toast('Nothing to export'); return; }
     const enc = new TextEncoder(), base = 'PhoneBook-' + PB.stamp();
-    const bytes = k === 'json' ? enc.encode(PB.buildJSON()) : k === 'txt' ? enc.encode(PB.buildTXT(list)) : k === 'csv' ? enc.encode(PB.buildCSV(list)) : k === 'vcf' ? enc.encode(PB.buildVCF(list)) : PB.buildPDF(list);
-    PB.busy(); await PB.shareOut({ title: 'PhoneBook backup', name: base + '.' + k, bytes });
+    if (k === 'json' && !PB.bk && !(await PB.setupBackupPassword(false))) return;
+    const bytes = k === 'json' ? enc.encode(await PB.buildEncryptedJSON()) : k === 'txt' ? enc.encode(PB.buildTXT(list)) : k === 'csv' ? enc.encode(PB.buildCSV(list)) : k === 'vcf' ? enc.encode(PB.buildVCF(list)) : PB.buildPDF(list);
+    PB.busy(); await PB.shareOut({ title: 'PhoneBook backup', name: base + (k === 'json' ? '-ENCRYPTED' : '') + '.' + k, bytes });
   }
 
   /* ---------- restore / import ---------- */
@@ -98,6 +103,7 @@
       try {
         if (mode === 'replace' && f.name.toLowerCase().endsWith('.json') && !(await PB.confirm('Replace everything?', 'Current data will be replaced by the backup.', 'Replace', true))) return;
         const r = await PB.importFile(f, mode);
+        if (r.cancelled) { file.value = ''; return; }
         PB.toast(r.kind === 'json' ? 'Restored ' + r.count + ' item(s)' : 'Imported ' + r.count + ' contact(s)' + (r.skipped ? ', skipped ' + r.skipped + ' duplicates' : ''));
         PB.closeOverlay(pg.el);
       } catch (e) { PB.toast('Could not read file: ' + (e.message || e)); }
@@ -107,7 +113,7 @@
     const draw = () => seg.replaceChildren(...[['merge', 'Merge (keep both)'], ['replace', 'Replace all']].map(([k, t]) => h('button', { class: mode === k ? 'on' : '', onclick: () => { mode = k; draw(); } }, t)));
     draw();
     pg.body.append(
-      h('div', { class: 'box' }, h('div', { class: 'fld' }, h('div', { class: 'mini' }, 'ℹ️'), h('div', { class: 'grow' }, h('span', { class: 'v' }, 'Choose a file'), h('span', { class: 'k' }, 'Backups are in Documents/PhoneBook (pick the .json file). You can also import .vcf (from your old phonebook: Contacts → Export) or .csv.')))),
+      h('div', { class: 'box' }, h('div', { class: 'fld' }, h('div', { class: 'mini' }, 'ℹ️'), h('div', { class: 'grow' }, h('span', { class: 'v' }, 'Choose a file'), h('span', { class: 'k' }, 'Backups are in Documents/PhoneBook (pick the …ENCRYPTED.json file; you will be asked for the backup password). You can also import .vcf (from your old phonebook: Contacts → Export) or .csv.')))),
       h('div', { class: 'sec' }, 'For JSON backups'), seg,
       h('button', { class: 'btn', onclick: () => { PB.busy(); file.click(); } }, '📂 Choose file…'), file);
   };

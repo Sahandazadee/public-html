@@ -106,6 +106,46 @@
     });
     return out.join('\r\n') + '\r\n';
   };
+  /* ---------- encrypted backups (AES-256-GCM, key from the backup password) ---------- */
+  PB.envelope = async function (plainText, key, saltB64, iter) {
+    const ct = await PB.seal(key, PB.te.encode(plainText));
+    return JSON.stringify({ app: 'PhoneBookEnc', v: 1, cipher: 'AES-256-GCM', kdf: 'PBKDF2-SHA256', iter, salt: saltB64, data: PB.b64e(ct) });
+  };
+  PB.buildEncryptedJSON = () => {
+    if (!PB.bk) throw new Error('Set a backup password first');
+    return PB.envelope(PB.buildJSON(), PB.bk, PB.settings.bsalt, PB.settings.biter);
+  };
+  PB.decryptEnvelope = async function (text, password) {
+    const j = JSON.parse(text);
+    if (j.app !== 'PhoneBookEnc') throw new Error('Not an encrypted PhoneBook file');
+    try {
+      const key = await PB.kdf(password, PB.b64d(j.salt), j.iter);
+      return PB.td.decode(await PB.open(key, PB.b64d(j.data)));
+    } catch (e) { throw new Error('Wrong password or damaged file'); }
+  };
+  /* Set / change the backup password. Resolves true when set. */
+  PB.setupBackupPassword = async function (changing) {
+    const ok = await PB.confirm(changing ? 'Change backup password?' : 'Backup password',
+      'Your backup files are encrypted with this password.\n\n• Use at least 8 characters (a phrase is best).\n• If you forget it, backups can NOT be opened — nobody can recover them, not even the developer.\n• Write it down and keep it somewhere safe.' + (changing ? '\n• Older backups still need the OLD password.' : ''), 'Continue');
+    if (!ok) return false;
+    for (;;) {
+      const a = await PB.prompt('Backup password', '', 'At least 8 characters', 'password');
+      if (a == null) return false;
+      if (a.length < 8) { PB.toast('Too short — use 8 or more characters'); continue; }
+      const b = await PB.prompt('Repeat backup password', '', 'Type it again', 'password');
+      if (b == null) return false;
+      if (a !== b) { PB.toast('Passwords do not match'); continue; }
+      const salt = PB.rand(16), key = await PB.kdf(a, salt, PB.ITER);
+      const raw = new Uint8Array(await crypto.subtle.exportKey('raw', key));
+      PB.settings.bsalt = PB.b64e(salt); PB.settings.biter = PB.ITER;
+      PB.settings.wbk = PB.b64e(await PB.seal(PB.dek, raw));
+      PB.saveSettings(); PB.bk = key;
+      PB.toast('Backup password set');
+      PB.autoBackup && PB.autoBackup();
+      return true;
+    }
+  };
+
   PB.buildJSON = () => JSON.stringify({ app: 'PhoneBook', version: 1, exported: new Date().toISOString(), data: PB.data }, null, 1);
 
   /* ---------- PDF / JPG (canvas → JPEG; Persian shaping handled by the WebView) ---------- */
@@ -201,7 +241,10 @@
     if (!list.length) { PB.toast('Nothing to export'); return []; }
     const base = 'PhoneBook-' + stamp();
     const paths = [];
-    if (fmt === 'json') paths.push(await PB.saveOut(base + '.json', enc.encode(PB.buildJSON())));
+    if (fmt === 'json') {
+      if (!PB.bk && !(await PB.setupBackupPassword(false))) return [];
+      paths.push(await PB.saveOut(base + '-ENCRYPTED.json', enc.encode(await PB.buildEncryptedJSON())));
+    }
     else if (fmt === 'txt') paths.push(await PB.saveOut(base + '.txt', enc.encode(PB.buildTXT(list))));
     else if (fmt === 'csv') paths.push(await PB.saveOut(base + '.csv', enc.encode(PB.buildCSV(list))));
     else if (fmt === 'vcf') paths.push(await PB.saveOut(base + '.vcf', enc.encode(PB.buildVCF(list))));
@@ -212,11 +255,11 @@
 
   /* ---------- auto backup (native only; survives uninstall in Documents/PhoneBook) ---------- */
   PB.autoBackup = async function () {
-    if (!PB.settings.autoBackup || !PB.native() || !PB.data.entries.length) return;
+    if (!PB.settings.autoBackup || !PB.native() || !PB.bk || !PB.data.entries.length) return;
     try {
       const d = new Date(), p = (n) => String(n).padStart(2, '0');
       const day = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
-      await PB.saveOut('PhoneBook-auto-' + day + '.json', enc.encode(PB.buildJSON()));
+      await PB.saveOut('PhoneBook-auto-' + day + '-ENCRYPTED.json', enc.encode(await PB.buildEncryptedJSON()));
       PB.settings.lastAutoBackup = d.toLocaleString(); PB.saveSettings(); PB.emit('backupstatus');
     } catch (e) { /* ignore */ }
   };
@@ -323,9 +366,16 @@
   };
 
   PB.importFile = async function (file, mode) {
-    const text = await file.text();
+    let text = await file.text();
     const name = file.name.toLowerCase();
-    if (name.endsWith('.json') || text.trim().startsWith('{')) return { kind: 'json', count: PB.mergeJSON(text, mode || 'merge') };
+    if (name.endsWith('.json') || text.trim().startsWith('{')) {
+      if (/"app"\s*:\s*"PhoneBookEnc"/.test(text)) {
+        const pw = await PB.prompt('Backup password', '', 'Password used for this backup', 'password');
+        if (pw == null) return { kind: 'json', count: 0, cancelled: true };
+        text = await PB.decryptEnvelope(text, pw);
+      }
+      return { kind: 'json', count: PB.mergeJSON(text, mode || 'merge') };
+    }
     let list = name.endsWith('.csv') ? PB.parseCSV(text) : PB.parseVCF(text);
     if (!list.length && /BEGIN:VCARD/i.test(text)) list = PB.parseVCF(text);
     const have = new Set(PB.data.entries.filter((e) => !e.deletedAt).flatMap((e) => e.phones.map((p) => PB.digits(p.value))).filter(Boolean));

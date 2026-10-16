@@ -2,6 +2,7 @@
 import { createRequire } from 'module';
 const { chromium } = createRequire(import.meta.url)(process.env.PW_PATH || 'playwright');
 import fs from 'fs';
+import nodeCrypto from 'crypto';
 const out = process.env.SHOTS || '/tmp/pbshots'; fs.mkdirSync(out, { recursive: true });
 const errors = []; let fails = 0;
 const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++; };
@@ -16,11 +17,22 @@ const pin = async (p) => { for (const d of p) await page.click(`#lock .pad butto
 
 // --- setup PIN
 await shot('01-setup');
-await pin('1234'); await page.click('#lock .btn');
+await pin('123456'); await page.click('#lock .btn');
 await page.waitForSelector('#lock h2:text("Confirm PIN")');
-await pin('1234'); await page.click('#lock .btn');
+await pin('123456'); await page.click('#lock .btn');
 await page.waitForSelector('.top');
 ok(true, 'PIN setup → main screen');
+// backup password offered at first run
+await page.waitForSelector('.dlg:has-text("Encrypted backups")');
+await page.click('.dlg .btn:text-is("Set password")');
+await page.click('.dlg .btn:text-is("Continue")');
+await page.fill('.dlg input', 'short'); await page.click('.dlg .btn:text-is("Save")');
+await page.waitForSelector('#toast.show:has-text("Too short")');
+await page.fill('.dlg input', 'correct horse battery'); await page.click('.dlg .btn:text-is("Save")');
+await page.waitForSelector('.dlg h3:text("Repeat backup password")');
+await page.fill('.dlg input', 'correct horse battery'); await page.click('.dlg .btn:text-is("Save")');
+await page.waitForSelector('.dlg', { state: 'detached' });
+ok(true, 'backup password set');
 await shot('02-empty');
 
 // --- add Persian contact
@@ -90,9 +102,15 @@ await page.click('.nav button[data-tab=settings]');
 await shot('10-settings');
 await page.click('.link:has-text("Backup & export")');
 await shot('11-backup');
-const exp = async (label) => { const [d] = await Promise.all([page.waitForEvent('download'), page.click(`.fmt:has(b:text-is("${label}")) .two button:first-child`)]); const p = `${out}/${d.suggestedFilename()}`; await d.saveAs(p); return p; };
-const pj = await exp('JSON'); const j = JSON.parse(fs.readFileSync(pj, 'utf8'));
-ok(j.data.entries.length === 4 && j.data.entries.some((e) => e.first === 'علی'), 'JSON backup has 4 entries incl. Persian');
+const exp = async (label) => { const dl = page.waitForEvent('download'); await page.click(`.fmt:has(b:text-is("${label}")) .two button:first-child`); if (!label.includes('JSON')) await page.click('.dlg .btn:text-is("I understand")'); const d = await dl; const p = `${out}/${d.suggestedFilename()}`; await d.saveAs(p); return p; };
+const pj = await exp('🔒 JSON'); const envTxt = fs.readFileSync(pj, 'utf8');
+ok(pj.endsWith('-ENCRYPTED.json') && !envTxt.includes('رضایی') && !envTxt.includes('Sara') && !envTxt.includes('Miller'), 'exported JSON is encrypted (no names in file)');
+const env = JSON.parse(envTxt);
+const dec = (pw) => { const key = nodeCrypto.pbkdf2Sync(pw.normalize('NFKC'), Buffer.from(env.salt, 'base64'), env.iter, 32, 'sha256'); const all = Buffer.from(env.data, 'base64'); const d = nodeCrypto.createDecipheriv('aes-256-gcm', key, all.subarray(0, 12)); d.setAuthTag(all.subarray(all.length - 16)); return Buffer.concat([d.update(all.subarray(12, all.length - 16)), d.final()]).toString('utf8'); };
+const j = JSON.parse(dec('correct horse battery'));
+ok(j.data.entries.length === 4 && j.data.entries.some((e) => e.first === 'علی'), 'independent Node decrypt with password: 4 entries incl. Persian');
+let wrongFailed = false; try { dec('wrong password!'); } catch (e) { wrongFailed = true; }
+ok(wrongFailed && env.iter >= 600000 && env.cipher === 'AES-256-GCM', 'wrong password rejected; PBKDF2 iter ' + env.iter);
 const pt = await exp('TXT'); ok(fs.readFileSync(pt, 'utf8').includes('۰۹۱۲۳۴۵۶۷۸۹'), 'TXT contains Persian digits');
 const pc = await exp('CSV'); ok(fs.readFileSync(pc, 'utf8').includes('Sara'), 'CSV has rows');
 const pv = await exp('VCF'); ok(fs.readFileSync(pv, 'utf8').split('BEGIN:VCARD').length === 4, 'VCF has 3 cards');
@@ -106,6 +124,12 @@ await page.click('.link:has-text("Restore / import")');
 await page.click('.seg button:has-text("Replace all")');
 await page.setInputFiles('input[type=file]', pj);
 await page.click('.dlg .btn:text-is("Replace")');
+await page.fill('.dlg input', 'wrong password!'); await page.click('.dlg .btn:text-is("Save")');
+await page.waitForSelector('#toast.show:has-text("Wrong password")');
+ok(true, 'restore with wrong password is refused');
+await page.setInputFiles('input[type=file]', pj);
+await page.click('.dlg .btn:text-is("Replace")');
+await page.fill('.dlg input', 'correct horse battery'); await page.click('.dlg .btn:text-is("Save")');
 await page.waitForSelector('.top');
 await page.click('.nav button[data-tab=contacts]');
 ok((await page.locator('.row-item').count()) === 4, 'restore from JSON keeps 4 items');
@@ -135,10 +159,38 @@ await page.click('.nav button[data-tab=contacts]'); await shot('15-dark-list');
 
 // --- lock on reload, wrong then right PIN
 await page.reload(); await page.waitForSelector('#lock');
-await pin('9999'); await page.click('#lock .btn'); await page.waitForSelector('#lock p:has-text("Wrong")');
+await pin('999999'); await page.click('#lock .btn'); await page.waitForSelector('#lock p:has-text("Wrong")');
 await shot('16-wrong-pin');
-await pin('1234'); await page.click('#lock .btn'); await page.waitForSelector('.top');
+await pin('123456'); await page.click('#lock .btn'); await page.waitForSelector('.top');
 ok((await page.locator('.row-item').count()) === 4, 'data persists after reload + unlock');
+
+
+// --- plaintext must not be in storage
+const store = await page.evaluate(() => JSON.stringify(Object.assign({}, localStorage)));
+ok(!store.includes('رضایی') && !store.includes('Miller') && !store.includes('ali@example.com') && !store.includes('0935'), 'localStorage holds no readable contact data');
+ok(!('pb_data_v1' in JSON.parse(store)) && 'pb_data_v2' in JSON.parse(store), 'only encrypted data blob stored');
+ok(!/"pinHash":"[0-9a-f]{10}/.test(store), 'no PIN hash stored');
+
+// --- legacy migration (v1 unencrypted build → encrypted)
+const ctx2 = await browser.newContext({ viewport: { width: 390, height: 800 }, hasTouch: true, isMobile: true });
+const p2 = await ctx2.newPage(); const errs2 = [];
+p2.on('pageerror', (e) => errs2.push(e.message));
+const salt = 'legacysalt'; let hh = nodeCrypto.createHash('sha256').update(salt + ':' + '4321').digest(); for (let i = 0; i < 2000; i++) hh = nodeCrypto.createHash('sha256').update(hh).digest();
+await p2.addInitScript(([hash, salt]) => {
+  if (localStorage.getItem('pb_seeded')) return; localStorage.setItem('pb_seeded', '1');
+  localStorage.setItem('pb_settings_v1', JSON.stringify({ pinHash: hash, pinSalt: salt }));
+  localStorage.setItem('pb_data_v1', JSON.stringify({ v: 1, folders: [], cats: [{ id: 'c1', name: 'Old', color: '#fff' }], entries: [{ id: 'x1', type: 'contact', first: 'Legacy', last: 'Person', company: '', jobTitle: '', phones: [{ label: 'Mobile', value: '111' }], emails: [], addresses: [], website: '', birthday: '', notes: '', title: '', text: '', categoryId: '', folderId: '', fav: false, created: 1, updated: 1, deletedAt: null }] }));
+}, [hh.toString('hex'), salt]);
+await p2.goto('http://localhost:8123/index.html');
+for (const d of '4321') await p2.click(`#lock .pad button:text-is("${d}")`); await p2.click('#lock .btn');
+await p2.waitForSelector('.row-item:has-text("Legacy Person")');
+const st2 = await p2.evaluate(() => JSON.stringify(Object.assign({}, localStorage)));
+ok(!st2.includes('Legacy') && !st2.includes('pb_data_v1') && !st2.includes('"pinHash":"') , 'legacy data migrated and encrypted, plaintext removed');
+await p2.reload();
+for (const d of '4321') await p2.click(`#lock .pad button:text-is("${d}")`); await p2.click('#lock .btn');
+await p2.waitForSelector('.row-item:has-text("Legacy Person")');
+ok(errs2.length === 0, 'migrated data opens with same PIN after restart');
+await ctx2.close();
 
 ok(errors.length === 0, 'no console/page errors ' + (errors.length ? JSON.stringify(errors) : ''));
 await browser.close();

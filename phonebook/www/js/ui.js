@@ -27,36 +27,44 @@
     clearTimeout(tt); tt = setTimeout(() => t.classList.remove('show'), 2600);
   };
 
-  /* ---------- overlay stack tied to history so Android Back closes the top overlay ---------- */
+  /* ---------- overlay stack ----------
+     One history "sentinel" entry exists while any overlay is open, so Android Back closes the top
+     overlay instead of leaving the app. Programmatic closes never touch history unless the last
+     overlay closes (then the sentinel is removed with one history.back()). */
   const stack = [];
-  let closing = 0;
+  let sentinel = false, expected = 0;
+  function pushSentinel() { history.pushState({ pb: 1 }, ''); sentinel = true; }
   PB.openOverlay = function (el, onClose) {
     document.getElementById('overlays').append(el);
     stack.push({ el, onClose });
-    history.pushState({ pb: stack.length }, '');
+    if (!sentinel && !expected) pushSentinel();
     return el;
-  };
-  PB.closeOverlay = function (el) {
-    el = el || (stack.length && stack[stack.length - 1].el);
-    if (!el || !stack.some((s) => s.el === el)) return;
-    removeEntry(el);
-    closing++;
-    history.back();
   };
   function removeEntry(el) {
     const i = stack.findIndex((s) => s.el === el);
-    if (i < 0) return;
+    if (i < 0) return false;
     const [s] = stack.splice(i, 1);
     s.el.remove(); s.onClose && s.onClose();
+    return true;
   }
+  function dropSentinelIfIdle() {
+    if (!stack.length && sentinel) { sentinel = false; expected++; history.back(); }
+  }
+  PB.closeOverlay = function (el) {
+    el = el || (stack.length && stack[stack.length - 1].el);
+    if (!el || !removeEntry(el)) return;
+    dropSentinelIfIdle();
+  };
   window.addEventListener('popstate', () => {
-    if (closing) { closing--; return; }
+    if (expected > 0) { expected--; if (stack.length && !sentinel && !expected) pushSentinel(); return; }
+    sentinel = false; // the user's Back consumed it
     const s = stack.pop();
     if (s) { s.el.remove(); s.onClose && s.onClose(); }
+    if (stack.length) pushSentinel();
   });
   PB.closeAll = function () {
     while (stack.length) { const s = stack.pop(); s.el.remove(); }
-    closing = 0;
+    dropSentinelIfIdle();
   };
 
   /* full screen page with gradient bar */
@@ -95,10 +103,10 @@
     });
   };
   /* text prompt → Promise<string|null> */
-  PB.prompt = function (title, value, placeholder) {
+  PB.prompt = function (title, value, placeholder, type) {
     return new Promise((res) => {
       let done = false;
-      const inp = h('input', { class: 'inp', dir: 'auto', value: value || '', placeholder: placeholder || '', style: 'border:1.5px solid var(--line);border-radius:14px;margin-bottom:14px' });
+      const inp = h('input', { class: 'inp', type: type || 'text', autocomplete: 'off', dir: 'auto', value: value || '', placeholder: placeholder || '', style: 'border:1.5px solid var(--line);border-radius:14px;margin-bottom:14px' });
       const fin = (v) => { if (done) return; done = true; PB.closeOverlay(wrap); res(v); };
       const wrap = h('div', { class: 'ov sheetwrap', style: 'justify-content:center;z-index:60', onclick: (e) => e.target === wrap && fin(null) },
         h('div', { class: 'dlg' }, h('h3', null, title), inp,

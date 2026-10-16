@@ -6,31 +6,36 @@
   const coll = new Intl.Collator(['en', 'fa'], { sensitivity: 'base', numeric: true });
 
   /* =============== LOCK / PIN =============== */
+  // o: { title, sub, min, okText, verify(pin)->true|string, bio:()=>Promise, forgot, cancel }
   PB.pinScreen = function (o) {
     return new Promise((resolve) => {
-      let pin = '';
+      let pin = '', busy = false;
+      const min = o.min || 4;
       const dots = h('div', { class: 'dots' });
       const msg = h('p', null, o.sub || '');
       const okBtn = h('button', { class: 'btn', style: 'margin-top:18px;min-width:230px' }, o.okText || 'Unlock');
       const draw = () => {
-        dots.replaceChildren(...Array.from({ length: Math.max(4, pin.length) }, (_, i) => h('i', { class: i < pin.length ? 'f' : '' })));
-        okBtn.style.opacity = pin.length >= 4 ? 1 : 0.4;
+        dots.replaceChildren(...Array.from({ length: Math.max(min, pin.length) }, (_, i) => h('i', { class: i < pin.length ? 'f' : '' })));
+        okBtn.style.opacity = pin.length >= min ? 1 : 0.4;
       };
       const wrong = (t) => { msg.textContent = t || 'Wrong PIN'; dots.classList.remove('shake'); void dots.offsetWidth; dots.classList.add('shake'); pin = ''; draw(); };
       const submit = async () => {
-        if (pin.length < 4) return;
+        if (pin.length < min || busy) return;
         const locked = (PB.settings.lockUntil || 0) - Date.now();
-        if (o.verify && locked > 0) { wrong('Too many attempts. Wait ' + Math.ceil(locked / 1000) + 's'); return; }
-        const r = o.verify ? await o.verify(pin) : true;
+        if (o.verify && o.throttle && locked > 0) { wrong('Too many attempts. Wait ' + Math.ceil(locked / 1000) + 's'); return; }
+        busy = true; okBtn.textContent = '…'; msg.textContent = 'Checking…';
+        await new Promise((r) => setTimeout(r, 20));
+        let r; try { r = o.verify ? await o.verify(pin) : true; } catch (e) { r = 'Error: ' + e.message; }
+        busy = false; okBtn.textContent = o.okText || 'Unlock';
         if (r === true) { el.remove(); resolve(pin); } else wrong(typeof r === 'string' ? r : undefined);
       };
       okBtn.onclick = submit;
-      const key = (d) => h('button', { onclick: () => { if (pin.length < 6) { pin += d; draw(); msg.textContent = o.sub || ''; if (pin.length === 6) submit(); } } }, d);
-      const bioBtn = h('button', { class: 't', onclick: () => tryBio(), 'aria-label': 'Fingerprint' }, o.bio ? '🖐' : '');
+      const key = (d) => h('button', { onclick: () => { if (!busy && pin.length < 12) { pin += d; draw(); msg.textContent = o.sub || ''; } } }, d);
       const tryBio = async () => {
-        const n = PB.native(); if (!n || !o.bio) return;
-        try { await n.biometricAuth({ title: 'Unlock PhoneBook' }); el.remove(); resolve('bio'); } catch (e) { /* use PIN */ }
+        if (!o.bio || busy) return;
+        try { if (await o.bio()) { el.remove(); resolve('bio'); } } catch (e) { /* user chose PIN */ }
       };
+      const bioBtn = h('button', { class: 't', onclick: tryBio, 'aria-label': 'Fingerprint' }, o.bio ? '🖐' : '');
       const pad = h('div', { class: 'pad' }, ['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(key), bioBtn, key('0'),
         h('button', { class: 't', 'aria-label': 'Delete', onclick: () => { pin = pin.slice(0, -1); draw(); } }, '⌫'));
       const el = h('div', { id: 'lock' },
@@ -46,19 +51,36 @@
     });
   };
 
+  PB.bioUnlock = async function () {
+    const n = PB.native(), S = PB.settings;
+    if (!n || !S.bio || !S.bioBlob) return false;
+    try {
+      const r = await n.biometricUnlock({ blob: S.bioBlob });
+      PB.dek = await PB.rawKey(PB.b64d(r.dek));
+      return true;
+    } catch (e) {
+      if (String(e.message || e).indexOf('invalidated') >= 0) {
+        S.bio = false; S.bioBlob = null; PB.saveSettings();
+        PB.toast('Fingerprints changed — use your PIN, then re-enable fingerprint in Settings');
+      }
+      throw e;
+    }
+  };
   PB.unlock = function () {
+    const S = PB.settings;
     return PB.pinScreen({
-      title: 'PhoneBook', sub: 'Enter your PIN', bio: PB.settings.bio,
+      title: 'PhoneBook', sub: 'Enter your PIN', min: 4, throttle: true,
+      bio: S.bio && S.bioBlob && PB.native() ? PB.bioUnlock : null,
       verify: async (pin) => {
-        const hsh = await PB.hashPin(pin, PB.settings.pinSalt);
-        if (hsh === PB.settings.pinHash) { PB.settings.fails = 0; PB.settings.lockUntil = 0; PB.saveSettings(); return true; }
-        PB.settings.fails = (PB.settings.fails || 0) + 1;
-        if (PB.settings.fails >= 5) PB.settings.lockUntil = Date.now() + 30000 * (PB.settings.fails - 4);
+        if (await PB.verifyOrUnwrap(pin)) { S.fails = 0; S.lockUntil = 0; PB.saveSettings(); return true; }
+        S.fails = (S.fails || 0) + 1;
+        if (S.fails >= 5) S.lockUntil = Date.now() + 30000 * (S.fails - 4);
         PB.saveSettings();
-        return PB.settings.fails >= 5 ? 'Too many attempts. Try again soon.' : 'Wrong PIN (' + PB.settings.fails + '/5)';
+        return S.fails >= 5 ? 'Too many attempts. Try again soon.' : 'Wrong PIN (' + S.fails + '/5)';
       },
       forgot: async () => {
-        if (await PB.confirm('Reset app?', 'Without the PIN the only way in is to erase everything inside the app.\nYour backup files in Documents/PhoneBook stay safe and can be restored.', 'Erase & reset', true)) {
+        if (await PB.confirm('Reset app?', 'Without the PIN your data cannot be opened — it is encrypted. The only way in is to erase everything inside the app.\nBackup files in Documents/PhoneBook stay safe and can be restored with your backup password.', 'Erase & reset', true)) {
+          const n = PB.native(); if (n) { try { await n.biometricReset(); } catch (e) {} }
           localStorage.clear(); location.reload();
         }
       },
@@ -67,9 +89,9 @@
   /* ask for a new PIN twice → resolves with pin or null */
   PB.setupPin = async function (first) {
     for (;;) {
-      const a = await PB.pinScreen({ title: first ? 'Welcome to PhoneBook' : 'New PIN', sub: 'Choose a PIN (4–6 digits)', okText: 'Next', cancel: !first });
+      const a = await PB.pinScreen({ title: first ? 'Welcome to PhoneBook' : 'New PIN', sub: 'Choose a PIN (6–12 digits). It encrypts your data.', min: 6, okText: 'Next', cancel: !first });
       if (a == null) return null;
-      const b = await PB.pinScreen({ title: 'Confirm PIN', sub: 'Enter the same PIN again', okText: 'Save PIN', cancel: !first, verify: async (p) => (p === a ? true : 'PINs do not match') });
+      const b = await PB.pinScreen({ title: 'Confirm PIN', sub: 'Enter the same PIN again', min: 6, okText: 'Save PIN', cancel: !first, verify: async (p) => (p === a ? true : 'PINs do not match') });
       if (b != null) return a;
       if (!first) return null;
     }
