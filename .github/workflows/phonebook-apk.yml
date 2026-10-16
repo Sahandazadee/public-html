@@ -1,0 +1,69 @@
+name: Build PhoneBook APK
+
+on:
+  push:
+    branches: [master]
+    paths: ['phonebook/**', '.github/workflows/phonebook-apk.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: phonebook
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: phonebook/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Check JS syntax
+        run: npm run check
+
+      - name: Sync web app into the Android project
+        run: npx cap sync android
+
+      - name: Build signed APK
+        working-directory: phonebook/android
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Verify the APK has NO internet permission
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          AAPT2=$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)
+          "$AAPT2" dump permissions "$APK" | tee perms.txt
+          if grep -q "android.permission.INTERNET" perms.txt; then echo "::error::INTERNET permission found"; exit 1; fi
+          cp "$APK" PhoneBook.apk
+
+      - name: Keep APK as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhoneBook-apk
+          path: phonebook/PhoneBook.apk
+
+      - name: Publish release (stable download link)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete phonebook-latest --yes --cleanup-tag || true
+          gh release create phonebook-latest PhoneBook.apk \
+            --title "PhoneBook (Android APK)" \
+            --notes "Offline phonebook for Android. Download PhoneBook.apk, open it on your phone and allow installing from this source. No internet permission. Built from commit ${GITHUB_SHA::7}." \
+            --target "$GITHUB_SHA"
