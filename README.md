@@ -16,6 +16,7 @@
 | **KiCad 9 Tutorial** | kicad-9-tutorial/ | [open](https://sahandazadee.github.io/public-html/kicad-9-tutorial/) | 11 درس، FA/EN |
 | **C برای میکروکنترلر** | c-az-sefr/ | [open](https://sahandazadee.github.io/public-html/c-az-sefr/) | 39 درس + جعبه‌ابزار، واژه‌نامه، برگه خلاصه، عیب‌یابی و منابع؛ C از صفر تا رجیستر و وقفه روی STM32 و ESP32 (ESP-IDF)؛ فارسی RTL؛ همه کدها با کامپایلر واقعی وارسی شده‌اند |
 | **ESP32 Persian Masterclass** | esp32-masterclass/ | [open](https://sahandazadee.github.io/public-html/esp32-masterclass/) | 24 درس ESP32 از صفر تا IoT (کارگاه عملی، موتورها، FreeRTOS/OTA، همه مدل‌های ESP32) + نقشه پایه، واژه‌نامه، جعبه‌ابزار و لیست خرید، برگه خلاصه PDF؛ دوزبانه فارسی و انگلیسی با دکمه تغییر زبان |
+| **MY PUZZLE** | my-puzzle/ | [open](https://sahandazadee.github.io/public-html/my-puzzle/) | بازی پازل سه‌بعدی: ۱۰ عکس، ۵۴/۹۶/۱۵۰ قطعه، روبیک ۱۰×۱۰ با امتیاز؛ انگلیسی |
 
 ---
 

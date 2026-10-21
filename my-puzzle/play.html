@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Play — MY PUZZLE</title>
+<meta name="description" content="Assemble a real 3D jigsaw puzzle made from a stunning photograph.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+<style>
+  body { overflow: hidden; height: 100dvh; background: #17141f; }
+  .stage { position: fixed; inset: var(--header-h) 0 0 0; background: radial-gradient(120% 90% at 50% 40%, #2a2537 0%, #16131d 70%); }
+  #jig-canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; cursor: grab; }
+  #jig-canvas.dragging { cursor: grabbing; }
+  .topbar {
+    position: absolute; top: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; gap: 10px;
+    align-items: center; pointer-events: none; color: #f3f1f8;
+  }
+  .topbar > * { pointer-events: auto; }
+  .title-chip { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .title-chip a {
+    width: 40px; height: 40px; flex: none; border-radius: 50%; display: grid; place-items: center;
+    background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12);
+  }
+  .title-chip a svg { width: 18px; height: 18px; }
+  .title-chip h1 { margin: 0; font-size: 18px; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .title-chip p { margin: 0; font-size: 12px; color: #a19db2; }
+  .pstats { display: flex; gap: 8px; }
+  .pstats div {
+    background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.1); border-radius: 14px;
+    padding: 6px 12px; text-align: center; min-width: 72px; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  }
+  .pstats b { display: block; font-size: 16px; font-variant-numeric: tabular-nums; }
+  .pstats span { font-size: 10px; color: #a19db2; letter-spacing: .1em; text-transform: uppercase; }
+  .progress { position: absolute; left: 0; right: 0; top: 0; height: 3px; background: rgba(255,255,255,.06); }
+  .progress i { display: block; height: 100%; width: 0; background: var(--grad); transition: width .4s; }
+  .toolbar {
+    position: absolute; left: 50%; bottom: max(14px, env(safe-area-inset-bottom)); transform: translateX(-50%);
+    display: flex; gap: 6px; padding: 6px; border-radius: 999px;
+    background: rgba(28, 25, 38, .78); border: 1px solid rgba(255,255,255,.1);
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); box-shadow: 0 12px 40px rgba(0,0,0,.4);
+  }
+  .tbtn {
+    height: 42px; min-width: 42px; padding: 0 14px; border-radius: 999px; border: 0; cursor: pointer;
+    background: transparent; color: #e9e6f2; display: inline-flex; gap: 8px; align-items: center; justify-content: center;
+    font-weight: 600; font-size: 13px; transition: background .2s;
+  }
+  .tbtn:hover { background: rgba(255,255,255,.08); }
+  .tbtn.on { background: #f3f1f8; color: #16141f; }
+  .tbtn svg { width: 18px; height: 18px; flex: none; }
+  .preview {
+    position: absolute; inset: 70px 16px 84px; display: none; place-items: center; pointer-events: none; z-index: 5;
+  }
+  .preview.show { display: grid; animation: fade .2s; }
+  .preview img { max-width: 100%; max-height: 100%; border-radius: 14px; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
+  .loader {
+    position: absolute; inset: 0; display: grid; place-items: center; color: #f3f1f8; z-index: 6;
+    background: radial-gradient(120% 90% at 50% 40%, #2a2537 0%, #16131d 70%); transition: opacity .5s;
+  }
+  .loader.hide { opacity: 0; pointer-events: none; }
+  .loader .ring { width: 54px; height: 54px; border-radius: 50%; border: 3px solid rgba(255,255,255,.12); border-top-color: #ff4d6d; animation: spin 1s linear infinite; margin: 0 auto 14px; }
+  .loader p { margin: 0; color: #a19db2; font-size: 14px; text-align: center; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .level-list { display: grid; gap: 10px; margin: 18px 0 6px; text-align: left; }
+  .level-opt {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-radius: 16px;
+    background: var(--bg); border: 2px solid transparent; cursor: pointer; transition: border-color .2s, transform .15s;
+  }
+  .level-opt:hover { border-color: var(--accent-2); transform: translateY(-1px); }
+  .level-opt b { font-size: 16px; }
+  .level-opt small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .level-opt .pts { font-weight: 700; font-size: 13px; color: var(--accent-2); white-space: nowrap; }
+  .modal .cover { width: 100%; aspect-ratio: 3 / 2; object-fit: cover; border-radius: 16px; display: block; margin-bottom: 16px; background: var(--bg); }
+  .modal .credit { font-size: 12px; color: var(--muted); margin: 12px 0 0; }
+  .modal .credit a { text-decoration: underline; }
+  @media (max-width: 640px) {
+    .pstats div { min-width: 0; padding: 5px 9px; }
+    .pstats .hide-sm { display: none; }
+    .tbtn span { display: none; }
+    .tbtn { padding: 0 12px; }
+  }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./assets/vendor/three.module.min.js" } }
+</script>
+</head>
+<body>
+<main class="stage">
+  <canvas id="jig-canvas" aria-label="3D jigsaw puzzle table"></canvas>
+  <div class="progress"><i id="bar"></i></div>
+  <div class="topbar">
+    <div class="title-chip">
+      <a href="./" aria-label="Back to all puzzles"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></a>
+      <div><h1 id="p-title">Puzzle</h1><p id="p-sub"></p></div>
+    </div>
+    <div class="pstats">
+      <div><b id="p-placed">0/0</b><span>Placed</span></div>
+      <div class="hide-sm"><b id="p-moves">0</b><span>Moves</span></div>
+      <div><b id="p-time">00:00</b><span>Time</span></div>
+    </div>
+  </div>
+  <div class="preview" id="preview"><img id="preview-img" alt="Finished picture preview"></div>
+  <div class="toolbar">
+    <button class="tbtn" id="t-preview" title="Hold to preview the finished picture">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg><span>Preview</span>
+    </button>
+    <button class="tbtn on" id="t-ghost" title="Show a faint guide image on the board">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 16 5-5 4 4 3-3 6 6"/></svg><span>Guide</span>
+    </button>
+    <button class="tbtn" id="t-edges" title="Pull the edge pieces closer to the board">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg><span>Edges</span>
+    </button>
+    <button class="tbtn" id="t-scatter" title="Scatter the loose pieces again">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg><span>Shuffle</span>
+    </button>
+    <button class="tbtn" id="t-fit" title="Fit the whole table on screen">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M8 11h6"/></svg><span>Fit</span>
+    </button>
+    <button class="tbtn" id="t-sound" title="Sound on/off">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>
+    </button>
+  </div>
+  <div class="loader" id="loader"><div><div class="ring"></div><p id="loader-text">Preparing the table…</p></div></div>
+</main>
+<script type="module" src="assets/js/jigsaw.js"></script>
+</body>
+</html>
