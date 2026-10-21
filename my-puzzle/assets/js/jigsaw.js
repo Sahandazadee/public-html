@@ -5,7 +5,7 @@
 
 import * as THREE from '../vendor/three.module.min.js';
 import { makeRenderer, esc, getName, mountHeader, addScore, loadStore, saveStore, formatTime, confetti, openModal, closeModal, toast } from './common.js';
-import { PUZZLES, LEVELS, imageUrl, thumbUrl } from './puzzles.js';
+import { PUZZLES, LEVELS, imageUrl, thumbUrl, creditText } from './puzzles.js';
 
 const nameReady = mountHeader('puzzles');
 
@@ -64,6 +64,7 @@ function pickLevel() {
   const m = openModal(`
     <img class="cover" src="${thumbUrl(puzzle.id)}" alt="${puzzle.title}">
     <h2>${puzzle.title}</h2><p>${puzzle.place}</p>
+    <p class="credit" style="margin:-10px 0 4px">${creditText(puzzle)}</p>
     <div class="level-list">${opts}</div>`);
   document.querySelector('.modal-backdrop').onclick = null; // a level must be chosen
   m.querySelectorAll('.level-opt').forEach(el => el.onclick = () => {
@@ -533,7 +534,7 @@ function win() {
     confetti();
     const idx = PUZZLES.indexOf(puzzle);
     const next = PUZZLES[(idx + 1) % PUZZLES.length];
-    const credit = puzzle.credit ? `<p class="credit">Photo: ${puzzle.source ? `<a href="${puzzle.source}" target="_blank" rel="noopener">${puzzle.credit}</a>` : puzzle.credit}</p>` : '';
+    const credit = `<p class="credit">${creditText(puzzle)}</p>`;
     openModal(`
       <h2>Bravo, ${esc(getName())}!</h2>
       <p>${puzzle.title} is complete · ${level.pieces} pieces</p>
