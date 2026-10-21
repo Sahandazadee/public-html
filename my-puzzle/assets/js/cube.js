@@ -2,9 +2,8 @@
 // Every outer cubie is one instance of a single InstancedMesh (fast: 2 draw calls in total).
 // A turn rotates every cubie whose coordinate along the turn axis equals the chosen layer.
 
-import * as THREE from 'three';
-import { OrbitControls } from '../vendor/OrbitControls.js';
-import { mountHeader, addScore, loadStore, saveStore, toast, formatTime, confetti, openModal, closeModal } from './common.js';
+import * as THREE from '../vendor/three.module.min.js';
+import { makeRenderer, esc, getName, mountHeader, addScore, loadStore, saveStore, toast, formatTime, confetti, openModal, closeModal } from './common.js';
 
 mountHeader('cube');
 
@@ -22,7 +21,7 @@ const AXES = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.
 
 // ---------- Scene ----------
 const canvas = document.getElementById('cube-canvas');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+const renderer = makeRenderer(THREE.WebGLRenderer, { canvas, antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -36,13 +35,26 @@ scene.add(new THREE.HemisphereLight(0xffffff, 0x8877aa, 1.6));
 const key = new THREE.DirectionalLight(0xffffff, 2.2); key.position.set(10, 18, 14); scene.add(key);
 const rim = new THREE.DirectionalLight(0xb9a8ff, 1.0); rim.position.set(-14, -6, -10); scene.add(rim);
 
-const controls = new OrbitControls(camera, canvas);
-controls.enableDamping = true;
-controls.dampingFactor = 0.08;
-controls.enablePan = false;
-controls.rotateSpeed = 0.7;
-controls.minDistance = 16;
-controls.maxDistance = 70;
+// Camera rig: the camera circles the cube freely in every direction (no "poles"),
+// so the whole cube can be spun like a ball. q = camera orientation, r = distance.
+camera.lookAt(0, 0, 0);
+const rig = { q: camera.quaternion.clone(), r: camera.position.length(), fitR: 40, vx: 0, vy: 0 };
+const Y_AXIS = new THREE.Vector3(0, 1, 0), X_AXIS = new THREE.Vector3(1, 0, 0);
+const tmpQ = new THREE.Quaternion();
+function applyRig() {
+  camera.position.set(0, 0, rig.r).applyQuaternion(rig.q);
+  camera.quaternion.copy(rig.q);
+}
+// dx, dy in screen pixels: dragging right spins the cube right, dragging down tips it toward you.
+function rotateView(dx, dy) {
+  const k = 0.0065;
+  rig.q.multiply(tmpQ.setFromAxisAngle(Y_AXIS, -dx * k)).multiply(tmpQ.setFromAxisAngle(X_AXIS, -dy * k)).normalize();
+  applyRig();
+}
+function zoomView(factor) {
+  rig.r = THREE.MathUtils.clamp(rig.r * factor, N * 1.9, rig.fitR * 2.2);
+  applyRig();
+}
 
 // ---------- Geometry ----------
 function roundedRect(size, r) {
@@ -204,21 +216,62 @@ function toScreen(v) {
   return new THREE.Vector2((p.x + 1) / 2 * r.width, (1 - p.y) / 2 * r.height);
 }
 
-// Listener is added before OrbitControls handles the same event, so we can switch orbit off for cube drags.
+// Gestures
+// - one finger on a sticker: turn that layer
+// - one finger on the background (or any finger in Rotate mode): spin the whole cube
+// - two fingers anywhere: spin with the middle point, pinch to zoom
+// - mouse wheel: zoom
+const pts = new Map();   // pointerId -> last {x, y}
+let mode = null;         // 'turn' | 'view' | 'multi'
+let pinchD = 0, viewOnly = false;
+
+function centroid() {
+  let x = 0, y = 0;
+  for (const p of pts.values()) { x += p.x; y += p.y; }
+  return { x: x / pts.size, y: y / pts.size };
+}
+function spread() {
+  const [a, b] = [...pts.values()];
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
 canvas.addEventListener('pointerdown', (ev) => {
-  if (state === 'scrambling' || state === 'solving') { controls.enabled = false; return; }
-  const hit = hitTest(ev);
-  if (hit) {
-    controls.enabled = false;
-    gesture = { x: ev.clientX, y: ev.clientY, ...hit, id: ev.pointerId };
-    canvas.setPointerCapture(ev.pointerId);
-  } else {
-    controls.enabled = true;
+  canvas.setPointerCapture(ev.pointerId);
+  pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  rig.vx = rig.vy = 0;
+  if (pts.size >= 2) {
+    gesture = null; // a second finger cancels a layer turn that has not happened yet
+    mode = 'multi';
+    pinchD = spread();
+    return;
   }
-}, { capture: true });
+  const busy = state === 'scrambling' || state === 'solving';
+  const hit = (!busy && !viewOnly && ev.button !== 2) ? hitTest(ev) : null;
+  if (hit) { mode = 'turn'; gesture = { x: ev.clientX, y: ev.clientY, ...hit, id: ev.pointerId }; }
+  else { mode = 'view'; }
+});
 
 canvas.addEventListener('pointermove', (ev) => {
-  if (!gesture || ev.pointerId !== gesture.id) return;
+  const last = pts.get(ev.pointerId);
+  if (!last) return;
+  if (mode === 'multi' && pts.size >= 2) {
+    const c0 = centroid();
+    pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    const c1 = centroid();
+    rotateView(c1.x - c0.x, c1.y - c0.y);
+    const d = spread();
+    if (pinchD > 0 && d > 0) zoomView(pinchD / d);
+    pinchD = d;
+    return;
+  }
+  const dx = ev.clientX - last.x, dy = ev.clientY - last.y;
+  pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  if (mode === 'view') {
+    rotateView(dx, dy);
+    rig.vx = dx; rig.vy = dy; // remembered for a little momentum after release
+    return;
+  }
+  if (mode !== 'turn' || !gesture || ev.pointerId !== gesture.id) return;
   const drag = new THREE.Vector2(ev.clientX - gesture.x, ev.clientY - gesture.y);
   if (drag.length() < 12) return;
   const base = toScreen(gesture.point);
@@ -244,9 +297,24 @@ canvas.addEventListener('pointermove', (ev) => {
   gesture = null;
 });
 
-function endGesture() { gesture = null; setTimeout(() => { controls.enabled = true; }, 0); }
-canvas.addEventListener('pointerup', endGesture);
-canvas.addEventListener('pointercancel', endGesture);
+function endPointer(ev) {
+  pts.delete(ev.pointerId);
+  if (gesture && gesture.id === ev.pointerId) gesture = null;
+  if (pts.size === 1 && mode === 'multi') { mode = 'view'; rig.vx = rig.vy = 0; }
+  if (pts.size === 0) { if (mode !== 'view') rig.vx = rig.vy = 0; mode = null; }
+}
+canvas.addEventListener('pointerup', endPointer);
+canvas.addEventListener('pointercancel', endPointer);
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+canvas.addEventListener('wheel', (ev) => { ev.preventDefault(); zoomView(Math.exp(ev.deltaY * 0.0012)); }, { passive: false });
+
+// Rotate mode: one finger always spins the whole cube (handy on small phones).
+const modeBtn = document.getElementById('b-mode');
+modeBtn.addEventListener('click', () => {
+  viewOnly = !viewOnly;
+  modeBtn.classList.toggle('on', viewOnly);
+  toast(viewOnly ? 'Rotate mode: one finger spins the whole cube.' : 'Turn mode: drag a sticker to turn its layer.');
+});
 
 // ---------- Controls ----------
 const elMoves = document.getElementById('s-moves');
@@ -333,7 +401,7 @@ function win() {
   const levelLabel = L.label;
   activeLevel = null; state = 'idle'; history.length = 0; userStack.length = 0;
   openModal(`
-    <h2>Perfect match!</h2>
+    <h2>Perfect match, ${esc(getName())}!</h2>
     <p>${levelLabel} cube solved. Every face is a single color.</p>
     <div class="stats">
       <div class="stat"><b>${formatTime(secs)}</b><span>Time</span></div>
@@ -353,19 +421,35 @@ function resize() {
   const r = canvas.parentElement.getBoundingClientRect();
   renderer.setSize(r.width, r.height, false);
   camera.aspect = r.width / r.height;
+  // Free area for the cube: below the stats (on portrait screens) and above the button bar.
+  const hud = document.querySelector('.hud').getBoundingClientRect();
+  const bar = document.querySelector('.controls').getBoundingClientRect();
+  const top = camera.aspect < 1 ? hud.bottom - r.top + 8 : 8;
+  const bottom = bar.top - r.top - 8;
+  const freeH = Math.max(120, bottom - top);
+  // Shift the picture so the cube sits in the middle of that free area.
+  const shift = (top + bottom) / 2 - r.height / 2;
+  camera.setViewOffset(r.width, r.height, 0, -shift, r.width, r.height);
   camera.updateProjectionMatrix();
-  // Keep the whole cube in view on narrow (portrait) screens.
-  const need = (N * (camera.aspect < 1 ? 2.0 : 2.35)) / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / Math.min(1, camera.aspect);
-  const d = camera.position.length();
-  if (Math.abs(d - need) > 0.5 && !resize.done) { camera.position.setLength(need); resize.done = true; }
+  // Distance that keeps the whole cube (about 1.75 × N wide from any angle) inside the free area.
+  const tanH = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  const D = N * 1.75;
+  const fit = Math.max(D * r.height / (2 * tanH * freeH), D / (2 * tanH * camera.aspect)) * 1.04;
+  const zoomed = rig.r / rig.fitR;
+  rig.fitR = fit;
+  rig.r = resize.done ? fit * zoomed : fit;
+  resize.done = true;
+  applyRig();
 }
-addEventListener('resize', () => { resize.done = false; resize(); });
+addEventListener('resize', resize);
+addEventListener('orientationchange', () => setTimeout(resize, 250));
 resize();
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(resize); // button bar size changes once the font loads
 syncInstances();
 updateHud();
 
 // Small hook used by automated tests only.
-window.__cubeTest = { enqueue, isSolved, scrambleMoves: () => history.slice() };
+window.__cubeTest = { enqueue, isSolved, scrambleMoves: () => history.slice(), rig: () => ({ r: rig.r, q: rig.q.toArray().map(v => +v.toFixed(3)) }) };
 
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
@@ -382,6 +466,10 @@ renderer.setAnimationLoop(() => {
     elapsed = (performance.now() - startTime) / 1000;
     elTime.textContent = formatTime(elapsed);
   }
-  controls.update();
+  // Momentum: the cube keeps spinning briefly after a flick, then slows down.
+  if (!mode && (Math.abs(rig.vx) > 0.05 || Math.abs(rig.vy) > 0.05)) {
+    rotateView(rig.vx, rig.vy);
+    rig.vx *= 0.92; rig.vy *= 0.92;
+  }
   renderer.render(scene, camera);
 });

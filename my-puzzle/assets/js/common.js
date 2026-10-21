@@ -30,7 +30,67 @@ function renderScore(value, bump) {
   if (bump) { el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump'); }
 }
 
+// Creates the 3D renderer. If the phone or browser has no WebGL, show a clear message instead of a blank page.
+export function makeRenderer(Renderer, opts) {
+  try {
+    return new Renderer(opts);
+  } catch (e) {
+    const box = document.createElement('div');
+    box.style.cssText = 'position:fixed;inset:0;display:grid;place-items:center;padding:24px;text-align:center;z-index:200;background:var(--bg);color:var(--text)';
+    box.innerHTML = '<div><h2>3D is not available</h2><p style="color:var(--muted)">This browser could not start 3D graphics. Please update it, or try Chrome or Safari.</p><a class="btn" href="./">Back to MY PUZZLE</a></div>';
+    document.body.appendChild(box);
+    throw e;
+  }
+}
+
+// Escape text typed by the player before it goes into HTML.
+export function esc(text) {
+  return String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// Player name: kept in the saved store. `memoryName` is the fallback when storage is blocked.
+let memoryName = '';
+export function getName() { return loadStore().name || memoryName || 'Player'; }
+function hasName() { return !!(loadStore().name || memoryName); }
+function setName(name) {
+  memoryName = name;
+  const store = loadStore(); store.name = name; saveStore(store);
+  const el = document.querySelector('.pname');
+  if (el) el.textContent = name;
+  const av = document.querySelector('.avatar');
+  if (av) av.textContent = [...name][0].toUpperCase();
+}
+
+// Asks for the name. First time it cannot be skipped; later it is an "edit" dialog.
+export function askName(required) {
+  return new Promise((resolve) => {
+    const current = hasName() ? getName() : '';
+    const m = openModal(`
+      <div class="welcome-mark"><i></i><i></i><i></i><i></i></div>
+      <h2>${required ? 'Welcome to MY PUZZLE' : 'Change your name'}</h2>
+      <p>${required ? 'What should we call you?' : 'This name appears at the top of every page.'}</p>
+      <form class="name-form" autocomplete="off">
+        <input id="name-input" type="text" maxlength="20" placeholder="Your name" value="${esc(current)}" dir="auto"
+               autocomplete="nickname" autocapitalize="words" enterkeyhint="go" required aria-label="Your name">
+        <button class="btn grad" type="submit">${required ? 'Let’s play' : 'Save'}</button>
+      </form>`);
+    const bd = document.querySelector('.modal-backdrop');
+    if (required) bd.onclick = null; // must enter a name first
+    const input = m.querySelector('#name-input');
+    setTimeout(() => input.focus(), 60);
+    m.querySelector('form').onsubmit = (e) => {
+      e.preventDefault();
+      const name = input.value.replace(/\s+/g, ' ').trim().slice(0, 20);
+      if (!name) { input.focus(); return; }
+      setName(name);
+      closeModal();
+      resolve(name);
+    };
+  });
+}
+
 // Header is the same on every page; `active` highlights the current nav link.
+// Returns a promise that resolves once the player has a name.
 export function mountHeader(active) {
   const header = document.createElement('header');
   header.className = 'site-header';
@@ -41,13 +101,20 @@ export function mountHeader(active) {
     </a>
     <nav class="nav">
       <a href="./" class="${active === 'puzzles' ? 'active' : ''}">Puzzles</a>
-      <a href="cube.html" class="${active === 'cube' ? 'active' : ''}">Cube 10×10</a>
+      <a href="cube.html" class="${active === 'cube' ? 'active' : ''}">Cube<span class="long"> 10×10</span></a>
     </nav>
-    <div class="score-pill" title="Total score">
-      <span class="star">★</span><b>0</b><small>pts</small>
-    </div>`;
+    <button class="score-pill" type="button" title="Your name and total score. Tap to change your name.">
+      <span class="avatar">?</span><span class="pname" dir="auto"></span>
+      <span class="sep"></span>
+      <span class="star">★</span><b>0</b>
+    </button>`;
   document.body.prepend(header);
   renderScore(loadStore().score, false);
+  header.querySelector('.score-pill').onclick = () => {
+    if (!document.querySelector('.modal-backdrop.open')) askName(false);
+  };
+  if (hasName()) { setName(getName()); return Promise.resolve(getName()); }
+  return askName(true);
 }
 
 let toastTimer;

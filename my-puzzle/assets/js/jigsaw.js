@@ -3,11 +3,11 @@
 // jigsaw outline whose top face samples the photo at the piece's home position, so pieces
 // fit together exactly. Pieces that touch correctly join into a "cluster" and move together.
 
-import * as THREE from 'three';
-import { mountHeader, addScore, loadStore, saveStore, formatTime, confetti, openModal, closeModal, toast } from './common.js';
+import * as THREE from '../vendor/three.module.min.js';
+import { makeRenderer, esc, getName, mountHeader, addScore, loadStore, saveStore, formatTime, confetti, openModal, closeModal, toast } from './common.js';
 import { PUZZLES, LEVELS, imageUrl, thumbUrl } from './puzzles.js';
 
-mountHeader('puzzles');
+const nameReady = mountHeader('puzzles');
 
 const params = new URLSearchParams(location.search);
 const puzzle = PUZZLES.find(p => p.id === params.get('id')) || PUZZLES[0];
@@ -19,7 +19,7 @@ const BOARD_W = 15, BOARD_H = 10; // 3:2, matches the photos
 
 // ---------- Renderer, scene, camera ----------
 const canvas = document.getElementById('jig-canvas');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+const renderer = makeRenderer(THREE.WebGLRenderer, { canvas, antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -42,14 +42,17 @@ scene.add(new THREE.HemisphereLight(0xffffff, 0x3a3150, 1.35));
 const sun = new THREE.DirectionalLight(0xfff3e6, 2.1);
 sun.position.set(-8, -10, 26);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+// Smaller shadow map on phones keeps the frame rate smooth.
+const small = Math.min(screen.width, screen.height) < 600;
+sun.shadow.mapSize.set(small ? 1024 : 2048, small ? 1024 : 2048);
 sun.shadow.bias = -0.0015;
 sun.shadow.normalBias = 0.06;
 scene.add(sun, sun.target);
 
 // ---------- Level selection ----------
 let level = LEVELS.find(l => l.pieces === Number(params.get('n')));
-if (level) start(); else pickLevel();
+// Wait for the player's name (asked on the first visit) before showing the level picker.
+nameReady.then(() => { if (level) start(); else pickLevel(); });
 
 function pickLevel() {
   const best = (loadStore().puzzles[puzzle.id]) || {};
@@ -532,8 +535,8 @@ function win() {
     const next = PUZZLES[(idx + 1) % PUZZLES.length];
     const credit = puzzle.credit ? `<p class="credit">Photo: ${puzzle.source ? `<a href="${puzzle.source}" target="_blank" rel="noopener">${puzzle.credit}</a>` : puzzle.credit}</p>` : '';
     openModal(`
-      <h2>Masterpiece complete!</h2>
-      <p>${puzzle.title} · ${level.pieces} pieces</p>
+      <h2>Bravo, ${esc(getName())}!</h2>
+      <p>${puzzle.title} is complete · ${level.pieces} pieces</p>
       <div class="stats">
         <div class="stat"><b>${formatTime(secs)}</b><span>Time</span></div>
         <div class="stat"><b>${moves}</b><span>Moves</span></div>
